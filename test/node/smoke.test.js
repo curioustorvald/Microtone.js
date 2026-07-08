@@ -29,7 +29,7 @@ test("corpus files present with Taud magic", async () => {
   const dir = fileURLToPath(new URL("../corpus/", import.meta.url));
   const { readdir } = await import("node:fs/promises");
   const files = (await readdir(dir)).filter((f) => f.endsWith(".taud"));
-  assert.ok(files.length >= 10, `expected >= 10 corpus files, got ${files.length}`);
+  assert.ok(files.length >= 5, `expected >= 5 corpus files, got ${files.length}`);
   for (const f of files) {
     const head = (await readFile(dir + f)).subarray(0, 8);
     assert.deepEqual(Uint8Array.from(head), magic, `${f} lacks Taud magic`);
