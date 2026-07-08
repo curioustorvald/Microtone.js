@@ -21,18 +21,25 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
 
 - Full Taud engine implementation (taud.js)
   - [x] M0 scaffold: repo layout, vendored fflate/fzstd, corpus, smoke tests
-  - [ ] M1 JVM PCM oracle (in tsvm repo: `devtests/webconf/RenderDumpTest.java`,
-        modelled on `devtests/ixmp/IxmpFileTest.java`) — U8 PCM + pre-dither
-        float32 tap dumps for the corpus
-  - [ ] M2 format layer: compress sniff (gzip/zstd in, gzip out), 256-B inst +
-        Ixmp codec, taud-parse, taud-write; round-trip tests on corpus;
-        `tools/inspect-taud.js` vs `taud_inspect.py`
-  - [ ] M3 engine port E1–E11 (constants/minifloat/rng → tables → inst →
-        voice/state → sampler/filter → envelope → trigger → effects →
-        row/tick → mixer → facade) + conformance vs M1 dumps
-        (float tap ≤1e-6; U8 ≥99.9% exact ±1 LSB) + unit tests for:
-        zero-dur env nodes, seedPfRole, key-lift, fast-fade, NNA ghost copies
-        biquad state, meta KEY_OFF fade, S$Dx inst re-bind
+  - [x] M1 JVM PCM oracle: `tsvm/devtests/webconf/RenderDumpTest.java` — U8 PCM
+        + pre-dither float32 tap dumps; interrupts the adapter render threads
+        and drives generateTrackerAudio synchronously; double-run determinism
+        check (4THSYM is NONDETERMINISTIC — vol/pan swing). Regenerate refs
+        into `test/reference/` (gitignored) with the recipe in that file.
+        NOTE: build tsvm_core from CURRENT sources first (out/production can
+        be stale; kotlinc CLI works — see devtests/ixmp/README.md classpath).
+  - [x] M2 format layer: compress sniff (gzip/zstd in, gzip out), taud-parse,
+        taud-write; round-trip tests green on corpus; `tools/inspect-taud.js`
+        cross-checked vs `taud_inspect.py`
+  - [x] M3 engine port E1–E11 — **BIT-EXACT vs the JVM oracle** on all 6
+        deterministic corpus songs (20 s each, f32 AND dithered U8): WHEN,
+        slumberjack, changing_waves, Insaniq2, DOOM-E1M1, flourish.
+        `node tools/render-taud.js` (~70-90× realtime), `tools/compare-pcm.js`,
+        `test/node/conformance.test.js` (auto-skips without reference dumps).
+        Still TODO from the M3 list: targeted unit tests for the known-subtle
+        scenarios (zero-dur env nodes, seedPfRole, key-lift, fast-fade, NNA
+        ghost biquad copy, meta KEY_OFF fade, S$Dx re-bind) — the corpus
+        conformance covers most of these end-to-end already
   - [ ] M4 AudioWorklet + protocol + `player.html` (≈ playtaud)
 - full Microtone web application
   - [ ] M5 document model + ops/undo/sync + app shell + Timeline view
