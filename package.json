@@ -1,0 +1,11 @@
+{
+  "name": "microtone-js",
+  "version": "0.1.0",
+  "description": "Web port of the TSVM Taud tracker engine and the Microtone tracker",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "serve": "python3 -m http.server 8737"
+  }
+}

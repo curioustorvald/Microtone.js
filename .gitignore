@@ -1,0 +1,5 @@
+node_modules/
+*.pcm
+*.wav
+test/reference/
+.DS_Store
