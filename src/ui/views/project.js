@@ -2,7 +2,9 @@
 // (eager-synced via ops), tuning display, project metadata. Reference:
 // taut.js VIEW_PROJECT. Pitch-table retune is an M8 item.
 
-import { setSongScalarOp } from "../../doc/ops.js";
+import { setSongScalarOp, retuneOp } from "../../doc/ops.js";
+import { pitchTablePresets, presetForNotation, retuneNearest } from "../pitchtables.js";
+import { showModal } from "../widgets/modal.js";
 
 export class ProjectView {
   constructor(store, host) {
@@ -59,12 +61,19 @@ export class ProjectView {
     );
     this.root.appendChild(grid);
 
+    const preset = presetForNotation(sm?.notation ?? 120);
     const tuning = document.createElement("p");
     tuning.className = "dim";
     tuning.textContent =
       `Tuning: base note 0x${song.tuningBaseNote.toString(16).toUpperCase()} @ ${song.tuningFreq} Hz` +
-      (sm ? ` · notation ${sm.notation} · beat ${sm.beatPri}/${sm.beatSec}` : "") +
+      ` · pitch table: ${preset.name}` +
+      (sm ? ` · beat ${sm.beatPri}/${sm.beatSec}` : "") +
       ` · patterns: ${song.patterns.length} · cues used: ${song.lastUsedCue() + 1}`;
+    const retuneBtn = document.createElement("button");
+    retuneBtn.textContent = "Retune…";
+    retuneBtn.style.marginLeft = "0.8rem";
+    retuneBtn.addEventListener("click", () => this.openRetune(preset));
+    tuning.appendChild(retuneBtn);
     this.root.appendChild(tuning);
 
     const songsTable = document.createElement("table");
@@ -82,6 +91,45 @@ export class ProjectView {
     });
     songsTable.appendChild(tbody);
     this.root.appendChild(songsTable);
+  }
+
+  /** Retune dialog: snap every note onto a new pitch table (nearest-pitch).
+   *  Updates the song's sMet notation so display + future retunes follow. */
+  async openRetune(currentPreset) {
+    const store = this.store;
+    const result = await showModal({
+      title: "Retune all patterns",
+      body: `Current: ${currentPreset.name}. Notes snap to the nearest pitch of the new table; percussion instruments are skipped. One undo step.`,
+      fields: [{
+        name: "preset", label: "New pitch table", type: "select",
+        value: String(currentPreset.index),
+        options: Object.values(pitchTablePresets)
+          .filter((p) => p.table.length > 0)
+          .map((p) => ({ value: String(p.index), label: p.name })),
+      }],
+      okLabel: "Retune",
+    });
+    if (!result) return;
+    const newPreset = pitchTablePresets[parseInt(result.preset, 10)];
+    if (!newPreset || newPreset.index === currentPreset.index) return;
+
+    // Percussion slots: inst byte14 bit4 / meta byte0 bit1 (isPercussion getter).
+    const percSlots = new Uint8Array(1024);
+    for (const s of store.doc.usedInstrumentSlots()) {
+      if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
+    }
+    store.undo.apply(retuneOp(store.songIndex, newPreset, percSlots, retuneNearest));
+    // Record the new tuning in the song metadata (drives display + next retune).
+    if (!store.doc.meta.songMeta[store.songIndex]) {
+      store.doc.meta.songMeta[store.songIndex] =
+        { notation: newPreset.index, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" };
+    } else {
+      store.doc.meta.songMeta[store.songIndex].notation = newPreset.index;
+    }
+    store.doc.smetEdited = true;
+    store.pitchPreset = newPreset;
+    store.emit("doc"); // full redraw — many patterns changed
+    this.refresh();
   }
 
   frame() {}

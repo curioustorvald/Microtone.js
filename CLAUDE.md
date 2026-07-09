@@ -88,8 +88,33 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         (class display rules defeated the hidden attribute).
         Deferred to M8: envelope OFFSET editing (values only for now), sample
         editor modal, retune/pitch tables, New Project wizard, PNam/sMet editing.
-  - [ ] M8 polish: sample editor modal, .tsii/.tpif, 64-ch UX, autosave,
-        perf hardening, WAV export, optional SAB fast path
+  - [~] M8 polish (2026-07-09 batch DONE):
+        [x] envelope OFFSET dragging (2D node drag, minifloat-quantised,
+            one-op gestures via setEnvDragOp)
+        [x] WAV export (offline render on main thread via
+            src/audio/offline-render.js — shared with tools/render-taud.js;
+            16-bit stereo from the pre-dither f32 bus; Files view button)
+        [x] autosave (debounced 45 s → OPFS autosave/ dir) + recovery prompt
+            on boot; clean save removes the autosave
+        [x] targeted engine regression tests (engine-scenarios.test.js):
+            S$Dx fresh-channel re-bind, advancePfRole zero-skip + seed,
+            vol-env terminator freeze, ghostVoice biquad/env-view copy,
+            dither determinism. TEST-DATA GOTCHA: a synthetic inst record
+            with zeroed env bytes is a value-0 terminator → Schism cut rule
+            ramps the voice out instantly; set byte 21 = 0x3F.
+        [x] pitch tables (src/ui/pitchtables.js — data port of taut.js
+            pitchTablePresets; sMet notation IS the preset index) + Retune
+            popup (nearest-pitch method, percussion skip, single undo op);
+            Timeline shows degree·octave labels for off-12-EDO notes;
+            sMet regenerates on save ONLY when edited (smetEdited flag —
+            keeps unedited round-trips byte-exact)
+        [x] .tsii loading (replace bank in a loaded project / seed a new one)
+        [x] New Project wizard (32/64ch, BPM/speed, optional .tsii seed;
+            empty cells use 0xC0 vol/pan no-ops — converter convention)
+        [x] perf evidence: worst 5.3 ms/chunk (Onestop GM) vs 16 ms budget
+        Remaining: sample editor modal, .tpif companion loading, Pattern-
+        details view, delta/cadence/harmonic retune methods, taut accidental
+        glyphs for degree labels, SAB fast path, manual Firefox/Safari pass.
 
 Full plan with fidelity checkpoints and verification criteria:
 `~/.claude/plans/jazzy-singing-bee.md` (approved 2026-07-08).

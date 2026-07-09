@@ -4,7 +4,8 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
-import { noteToStr, hex2, volToStr, fxToStr } from "../notenames.js";
+import { noteToStr, noteCentsOff, hex2, volToStr, fxToStr } from "../notenames.js";
+import { noteDegreeLabel } from "../pitchtables.js";
 import {
   interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG, SUB_NIBBLES,
 } from "../edit.js";
@@ -385,7 +386,14 @@ export class TimelineView {
         const pattern = song.patterns[patNum];
         if (!pattern) continue;
         const cell = pattern[rowInCue];
-        const noteS = noteToStr(cell.note);
+        // Note display: 12-EDO name when the note sits on that grid; otherwise
+        // the active pitch table's degree·octave label; else the nearest name.
+        let noteS;
+        if (cell.note >= 0x20 && Math.abs(noteCentsOff(cell.note)) > 2) {
+          noteS = noteDegreeLabel(cell.note, store.pitchPreset) ?? noteToStr(cell.note);
+        } else {
+          noteS = noteToStr(cell.note);
+        }
         const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
         const volS = volToStr(cell.volume, cell.volumeEff);
         const fxS = fxToStr(cell.effect, cell.effectArg);

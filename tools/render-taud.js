@@ -9,74 +9,10 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseTaud } from "../src/format/taud-parse.js";
 import { TaudEngine } from "../src/engine/engine.js";
-import { TRACKER_CHUNK, SAMPLING_RATE, MAX_VOICES, NUM_VOICES } from "../src/engine/constants.js";
+import { SAMPLING_RATE } from "../src/engine/constants.js";
+import { loadIntoEngine, renderSong } from "../src/audio/offline-render.js";
 
-export function loadIntoEngine(eng, doc, songIndex = 0) {
-  if (doc.kind !== "taud") throw new Error("not a full .taud");
-  if (songIndex < 0 || songIndex >= doc.songs.length) throw new Error("songIndex out of range");
-  const song = doc.songs[songIndex];
-
-  eng.set64ChannelMode(doc.is64Channel);
-  eng.uploadSampleInstBlob(doc.sampleInstImage);
-
-  for (let p = 0; p < song.patterns.length; p++) eng.uploadPattern(p, song.patterns[p]);
-
-  const chans = doc.is64Channel ? MAX_VOICES : NUM_VOICES;
-  const cueBytes = new Uint8Array(chans * 2);
-  for (let c = 0; c < song.cues.length; c++) {
-    const words = song.cues[c];
-    for (let ch = 0; ch < chans; ch++) {
-      cueBytes[ch * 2] = words[ch] & 0xff;
-      cueBytes[ch * 2 + 1] = (words[ch] >>> 8) & 0xff;
-    }
-    eng.uploadCue(c, cueBytes);
-  }
-
-  // Playhead config — same order as taud.mjs uploadTaudFile / RenderDumpTest.
-  eng.setTrackerMode(0);
-  eng.setBPM(0, song.bpm);
-  eng.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
-  eng.setTrackerMixerFlags(0, song.globalFlags);
-  eng.setSongGlobalVolume(0, song.globalVolume);
-  eng.setSongMixingVolume(0, song.mixingVolume);
-  eng.setMasterVolume(0, 255);
-
-  for (const entry of doc.ixmp) eng.uploadInstrumentPatches(entry.instId, entry.blob);
-}
-
-export function renderSong(eng, seconds) {
-  const maxFrames = seconds * SAMPLING_RATE;
-  const nChunks = Math.ceil(maxFrames / TRACKER_CHUNK);
-  const u8out = new Uint8Array(nChunks * TRACKER_CHUNK * 2);
-  const f32out = new Float32Array(nChunks * TRACKER_CHUNK * 2);
-  const chunk = new Uint8Array(TRACKER_CHUNK * 2);
-  const ts = eng.playheads[0].trackerState;
-
-  eng.setCuePosition(0, 0);
-  eng.play(0);
-
-  let frames = 0;
-  let chunkIdx = 0;
-  let halted = false;
-  while (frames < maxFrames) {
-    if (!eng.isPlaying(0)) { halted = true; break; }
-    if (eng.renderChunk(0, chunk) === null) { halted = true; break; }
-    u8out.set(chunk, chunkIdx * TRACKER_CHUNK * 2);
-    for (let n = 0; n < TRACKER_CHUNK; n++) {
-      f32out[(chunkIdx * TRACKER_CHUNK + n) * 2] = ts.mixLeft[n];
-      f32out[(chunkIdx * TRACKER_CHUNK + n) * 2 + 1] = ts.mixRight[n];
-    }
-    frames += TRACKER_CHUNK;
-    chunkIdx++;
-  }
-
-  return {
-    u8: u8out.subarray(0, chunkIdx * TRACKER_CHUNK * 2),
-    f32: f32out.subarray(0, chunkIdx * TRACKER_CHUNK * 2),
-    frames,
-    halted,
-  };
-}
+export { loadIntoEngine, renderSong }; // back-compat for the conformance test
 
 const isMain = process.argv[1] && import.meta.url.endsWith(basename(process.argv[1]));
 if (isMain) {

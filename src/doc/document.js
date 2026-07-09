@@ -116,6 +116,7 @@ export class Document {
 
     this._instruments = null;     // lazily-decoded TaudInst[1024]
     this._instrumentsEdited = false; // when true, toBytes rebuilds the inst region
+    this.smetEdited = false;      // when true, toBytes regenerates the sMet section
   }
 
   get channelCount() { return this.is64Channel ? MAX_VOICES : NUM_VOICES; }
@@ -243,9 +244,39 @@ export class Document {
     this._instrumentsEdited = false;
   }
 
+  /** Regenerate the sMet section from meta.songMeta (writer format of
+   *  taud.mjs:555-570). Only called when metadata was edited, so unedited
+   *  documents keep their original section bytes (byte-exact round trips). */
+  _rebuildSMet() {
+    if (!this.smetEdited) return;
+    const enc = new TextEncoder();
+    const out = [];
+    const idxs = Object.keys(this.meta.songMeta).map(Number).sort((a, b) => a - b);
+    for (const idx of idxs) {
+      const m = this.meta.songMeta[idx];
+      const sub = [
+        m.notation & 0xff, (m.notation >>> 8) & 0xff,
+        (m.beatPri | 0) & 0xff, (m.beatSec | 0) & 0xff,
+        ...enc.encode(m.name ?? ""), 0,
+        ...enc.encode(m.composer ?? ""), 0,
+        ...enc.encode(m.copyright ?? ""), 0,
+      ];
+      out.push(idx & 0xff,
+        sub.length & 0xff, (sub.length >>> 8) & 0xff,
+        (sub.length >>> 16) & 0xff, (sub.length >>> 24) & 0xff,
+        ...sub);
+    }
+    const payload = Uint8Array.from(out);
+    const existing = this.projSections.findIndex((s) => s.fourcc === "sMet");
+    if (existing >= 0) this.projSections[existing] = { fourcc: "sMet", payload };
+    else this.projSections.push({ fourcc: "sMet", payload });
+    this.smetEdited = false;
+  }
+
   /** Re-serialise to .taud bytes (via the format layer). */
   toBytes() {
     this._rebuildInstRegion();
+    this._rebuildSMet();
     return writeTaud({
       kind: this.kind,
       is64Channel: this.is64Channel,
@@ -270,6 +301,24 @@ export class Document {
   /** Encode one pattern back to its 512-byte image (worklet sync). */
   patternBytes(songIdx, patIdx) {
     return encodePattern(this.songs[songIdx].patterns[patIdx]);
+  }
+
+  /** Parsed-shape view for offline rendering (offline-render.js) — includes
+   *  any instrument edits (rebuilds the image inst region first). */
+  toRenderable(songIndex) {
+    this._rebuildInstRegion();
+    const s = this.songs[songIndex];
+    return {
+      is64Channel: this.is64Channel,
+      sampleInstImage: this.sampleInstImage,
+      ixmp: this.ixmp,
+      songs: this.songs.map((song, i) => i === songIndex ? {
+        bpm: s.bpm, tickRate: s.tickRate, globalFlags: s.globalFlags,
+        globalVolume: s.globalVolume, mixingVolume: s.mixingVolume,
+        patterns: s.patterns.map((_, p) => this.patternBytes(songIndex, p)),
+        cues: s.cues,
+      } : null),
+    };
   }
 
   /** Encode one cue to its upload byte payload (worklet sync). */

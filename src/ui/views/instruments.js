@@ -4,8 +4,8 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setEnvPointOp } from "../../doc/ops.js";
-import { minifloatToDouble } from "../../engine/minifloat.js";
+import { setInstFieldOp, setEnvDragOp } from "../../doc/ops.js";
+import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
 
@@ -316,10 +316,20 @@ export class InstrumentsView {
     const { canvas, tabDef } = this.envCanvas;
     const rect = canvas.getBoundingClientRect();
     const h = canvas.clientHeight;
+    const idx = this.dragState.idx;
     const v = Math.round(((h - 14 - (e.clientY - rect.top)) / (h - 28)) * tabDef.max);
-    const value = Math.min(Math.max(v, 0), tabDef.max);
-    this.store.undo.apply(setEnvPointOp(
-      this.selected, tabDef.key, this.dragState.idx, { value }, this.dragState.gestureId));
+    const change = { value: Math.min(Math.max(v, 0), tabDef.max) };
+    // Horizontal drag re-times the PRECEDING segment (env[idx-1].offset),
+    // quantised to the ThreeFiveMiniUfloat grid. Node 0 is fixed at t=0.
+    if (idx > 0) {
+      const { w, times, total } = this.envGeometry();
+      const x = e.clientX - rect.left;
+      const wantTime = ((x - 10) / (w - 20)) * total;
+      const seg = Math.max(wantTime - times[idx - 1], 0);
+      change.prevOffset = minifloatFromDouble(seg);
+    }
+    this.store.undo.apply(setEnvDragOp(
+      this.selected, tabDef.key, idx, change, this.dragState.gestureId));
     this.drawEnvGraph();
   }
 

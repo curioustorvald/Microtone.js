@@ -20,9 +20,51 @@ export async function available() {
   }
 }
 
-async function projectsDir(create = true) {
+async function projectsDir(create = true, dirName = "projects") {
   if (_root === null) _root = await navigator.storage.getDirectory();
-  return _root.getDirectoryHandle("projects", { create });
+  return _root.getDirectoryHandle(dirName, { create });
+}
+
+// ── autosave dir (recovery copies, outside the project listing) ──
+
+export async function writeAutosave(name, bytes) {
+  const dir = await projectsDir(true, "autosave");
+  const handle = await dir.getFileHandle(name, { create: true });
+  if (typeof handle.createWritable === "function") {
+    const w = await handle.createWritable();
+    await w.write(bytes);
+    await w.close();
+  } else {
+    await workerWrite(name, bytes, "autosave");
+  }
+}
+
+export async function listAutosaves() {
+  try {
+    const dir = await projectsDir(false, "autosave");
+    const out = [];
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== "file") continue;
+      const f = await handle.getFile();
+      out.push({ name, size: f.size, mtime: f.lastModified });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export async function readAutosave(name) {
+  const dir = await projectsDir(false, "autosave");
+  const f = await (await dir.getFileHandle(name)).getFile();
+  return new Uint8Array(await f.arrayBuffer());
+}
+
+export async function removeAutosave(name) {
+  try {
+    const dir = await projectsDir(false, "autosave");
+    await dir.removeEntry(name);
+  } catch { /* absent is fine */ }
 }
 
 export async function list() {
@@ -72,7 +114,7 @@ export async function rename(oldName, newName) {
   await remove(oldName);
 }
 
-function workerWrite(name, bytes) {
+function workerWrite(name, bytes, dirName = "projects") {
   if (_worker === null) {
     _worker = new Worker(WORKER_URL, { type: "module" });
     _worker.onmessage = (e) => {
@@ -88,6 +130,6 @@ function workerWrite(name, bytes) {
     const id = ++_workerSeq;
     _workerPending.set(id, { resolve, reject });
     const copy = bytes.slice(); // transfer a private copy
-    _worker.postMessage({ id, name, bytes: copy.buffer }, [copy.buffer]);
+    _worker.postMessage({ id, name, dirName, bytes: copy.buffer }, [copy.buffer]);
   });
 }

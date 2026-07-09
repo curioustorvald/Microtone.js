@@ -98,6 +98,76 @@ export function setEnvPointOp(slot, envKey, idx, point, gestureId = null) {
   };
 }
 
+/** Envelope-node DRAG: one op for the 2D gesture — value of node idx plus the
+ *  duration of the preceding segment (env[idx-1].offset, minifloat index).
+ *  Single coalesce key so a drag is one undo step. */
+export function setEnvDragOp(slot, envKey, idx, change, gestureId = null) {
+  return {
+    type: "setEnvDrag",
+    slot, envKey, idx, change, gestureId,
+    coalesceKey: `envdrag:${slot}:${envKey}:${idx}`,
+    apply(doc) {
+      const env = doc.instruments[slot & 0x3ff][envKey];
+      const prev = {};
+      if (change.value !== undefined) {
+        prev.value = env[idx].value;
+        env[idx].value = change.value;
+      }
+      if (change.prevOffset !== undefined && idx > 0) {
+        prev.prevOffset = env[idx - 1].offset;
+        env[idx - 1].offset = change.prevOffset;
+      }
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setEnvDragOp(slot, envKey, idx, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
+/** Bulk note restore (the inverse of a retune): sets each {pat,row} note back. */
+export function restoreNotesOp(song, changes, gestureId = null) {
+  return {
+    type: "restoreNotes",
+    song, changes, gestureId,
+    coalesceKey: `retune:${song}`,
+    apply(doc) {
+      const s = doc.songs[song];
+      const inverse = [];
+      for (const c of changes) {
+        const cell = s.patterns[c.pat][c.row];
+        inverse.push({ pat: c.pat, row: c.row, prev: cell.note });
+        cell.note = c.prev;
+      }
+      doc.dirty = true;
+      return restoreNotesOp(song, inverse, gestureId);
+    },
+    dirty(doc) {
+      const pats = new Set(changes.map((c) => c.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
+  };
+}
+
+/** Retune every pattern note to a new pitch table (nearest-pitch snap). */
+export function retuneOp(song, newPreset, percSlots, retuneFn, gestureId = null) {
+  return {
+    type: "retune",
+    song, gestureId,
+    coalesceKey: `retune:${song}`,
+    apply(doc) {
+      const changes = retuneFn(doc.songs[song], newPreset, percSlots);
+      this._changes = changes;
+      doc.dirty = true;
+      return restoreNotesOp(song, changes, gestureId);
+    },
+    dirty(doc) {
+      const pats = new Set((this._changes ?? []).map((c) => c.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
+  };
+}
+
 /** Song-scope scalar (bpm, tickRate, globalVolume, mixingVolume, globalFlags, …). */
 export function setSongScalarOp(song, key, value, gestureId = null) {
   return {

@@ -19,6 +19,8 @@ import { SUB_NOTE } from "./edit.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showModal } from "./widgets/modal.js";
+import * as opfs from "../storage/opfs.js";
+import { presetForNotation } from "./pitchtables.js";
 
 const $ = (id) => document.getElementById(id);
 const store = new Store();
@@ -53,9 +55,6 @@ for (const ev of ["pointerdown", "keydown"]) {
 
 // ── document loading ──
 async function loadBytes(name, bytes) {
-  if (store.doc?.dirty) {
-    if (!confirm(`Discard unsaved changes to ${store.fileName ?? "the current project"}?`)) return;
-  }
   let parsed;
   try {
     parsed = parseTaud(bytes);
@@ -63,15 +62,49 @@ async function loadBytes(name, bytes) {
     $("stFile").textContent = `parse error: ${err.message}`;
     return;
   }
-  if (parsed.kind !== "taud") {
-    $("stFile").textContent = `.${parsed.kind} files need a project context (M8)`;
+
+  // .tsii = a sample+instrument bank. Into a loaded project it REPLACES the
+  // instrument domain (the taud.mjs "load the companion .tsii first" flow);
+  // standalone it seeds a new project.
+  if (parsed.kind === "tsii") {
+    if (store.doc) {
+      if (!confirm(`Replace this project's samples + instruments with the bank from ${name}?`)) return;
+      store.audio?.stop(0);
+      store.doc.sampleInstImage = parsed.sampleInstImage;
+      store.doc.ixmp = parsed.ixmp.map((e) => ({ instId: e.instId, count: e.count, blob: Uint8Array.from(e.blob) }));
+      store.doc._instruments = null; // re-decode from the new image
+      store.doc._instrumentsEdited = false;
+      // Carry the bank's name tables + Ixmp sections over; keep song sections.
+      store.doc.projSections = store.doc.projSections.filter(
+        (s) => !["INam", "SNam", "Ixmp"].includes(s.fourcc));
+      for (const s of parsed.projSections) {
+        if (["INam", "SNam", "Ixmp"].includes(s.fourcc)) {
+          store.doc.projSections.push({ fourcc: s.fourcc, payload: Uint8Array.from(s.payload) });
+        }
+      }
+      store.doc.dirty = true;
+      store.sync?.loadAll();
+      store.emit("doc");
+      updateStatus();
+    } else {
+      await newProject({ fromBank: parsed, bankName: name });
+    }
     return;
+  }
+  if (parsed.kind !== "taud") {
+    $("stFile").textContent = `.${parsed.kind} needs its companion .tsii loaded first (open the .tsii, then the .tpif — full support is future work)`;
+    return;
+  }
+
+  if (store.doc?.dirty) {
+    if (!confirm(`Discard unsaved changes to ${store.fileName ?? "the current project"}?`)) return;
   }
   store.audio?.stop(0);
   store.doc = new Document(parsed);
   store.fileName = name;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[0]?.notation ?? 120);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     store.emit("edit", dirty);
@@ -110,6 +143,115 @@ function updateStatus() {
 }
 store.on("saved", updateStatus);
 
+/** New Project wizard — optionally seeded from a .tsii instrument bank. */
+async function newProject({ fromBank = null, bankName = null } = {}) {
+  const result = await showModal({
+    title: fromBank ? `New project from ${bankName}` : "New project",
+    body: fromBank
+      ? "Starts an empty song over the bank's samples + instruments."
+      : "Starts an empty project (no samples — load a .tsii bank or import instruments later).",
+    fields: [
+      { name: "name", label: "Name", value: "untitled" },
+      { name: "channels", label: "Channels", type: "select", value: "32",
+        options: [{ value: "32", label: "32" }, { value: "64", label: "64" }] },
+      { name: "bpm", label: "BPM", type: "number", value: 125, min: 25, max: 535 },
+      { name: "speed", label: "Speed", type: "number", value: 6, min: 1, max: 127 },
+    ],
+    okLabel: "Create",
+  });
+  if (!result) return;
+  if (store.doc?.dirty) {
+    if (!confirm("Discard unsaved changes?")) return;
+  }
+  const is64 = result.channels === "64";
+  const chans = is64 ? 64 : 32;
+  const projName = result.name || "untitled";
+
+  // Empty pattern: vol/pan bytes 0xC0 (SEL_FINE-0 no-op — converter convention).
+  const emptyPat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { emptyPat[r * 8 + 3] = 0xc0; emptyPat[r * 8 + 4] = 0xc0; }
+  // Cue 0: one private pattern per channel (pattern n on channel n).
+  const cue0 = new Uint16Array(64).fill(0x7fff);
+  const patterns = [];
+  for (let ch = 0; ch < chans; ch++) {
+    cue0[ch] = ch;
+    patterns.push(Uint8Array.from(emptyPat));
+  }
+
+  const enc = new TextEncoder();
+  const projSections = [];
+  if (is64) {
+    const xhdr = new Uint8Array(256);
+    xhdr[0] = 0x01;
+    projSections.push({ fourcc: "xHDR", payload: xhdr });
+  }
+  if (fromBank) {
+    for (const s of fromBank.projSections) {
+      if (["INam", "SNam", "Ixmp"].includes(s.fourcc)) {
+        projSections.push({ fourcc: s.fourcc, payload: Uint8Array.from(s.payload) });
+      }
+    }
+  }
+  projSections.push({ fourcc: "PNam", payload: Uint8Array.from([...enc.encode(projName), 0]) });
+
+  const parsedShape = {
+    kind: "taud",
+    fmtVer: 2,
+    is64Channel: is64,
+    signature: "Microtone.js  ",
+    sampleInstImage: fromBank ? fromBank.sampleInstImage : new Uint8Array(8650752),
+    songs: [{
+      numVoices: chans,
+      numPats: patterns.length,
+      bpm: parseInt(result.bpm, 10) || 125,
+      tickRate: parseInt(result.speed, 10) || 6,
+      tuningBaseNote: 0xa000,
+      tuningFreq: 8363.0,
+      globalFlags: 0,
+      globalVolume: 0x80,
+      mixingVolume: 0x80,
+      numCuesStored: 1,
+      patterns,
+      cues: [cue0],
+    }],
+    projSections,
+    ixmp: fromBank ? fromBank.ixmp : [],
+    meta: {
+      projectName: projName,
+      songMeta: { 0: { notation: 120, beatPri: 4, beatSec: 16, name: projName, composer: "", copyright: "" } },
+    },
+  };
+  store.audio?.stop(0);
+  store.doc = new Document(parsedShape);
+  store.doc.smetEdited = true; // bake the fresh sMet on first save
+  store.doc.dirty = true;
+  store.fileName = null;
+  store.songIndex = 0;
+  store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+  store.pitchPreset = presetForNotation(120);
+  store.undo = new UndoStack(store.doc, (dirty) => {
+    store.sync?.onDirty(dirty);
+    store.emit("edit", dirty);
+    updateStatus();
+  });
+  store.sync = null;
+  if (store.audio) {
+    store.sync = new DocSync(store.audio, store.doc, 0);
+    store.sync.loadAll();
+  }
+  const sel = $("songSel");
+  sel.innerHTML = "";
+  const opt = document.createElement("option");
+  opt.value = 0;
+  opt.textContent = `0: ${projName}`;
+  sel.appendChild(opt);
+  $("emptyState").hidden = true;
+  showView("timeline");
+  updateStatus();
+  store.emit("doc");
+}
+
+$("newBtn").addEventListener("click", () => newProject());
 $("openBtn").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", async (e) => {
   const f = e.target.files[0];
@@ -128,6 +270,7 @@ window.addEventListener("beforeunload", (e) => {
 $("songSel").addEventListener("change", (e) => {
   store.songIndex = parseInt(e.target.value, 10);
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120);
   if (store.audio) {
     store.audio.stop(0);
     store.sync = new DocSync(store.audio, store.doc, store.songIndex);
@@ -146,6 +289,7 @@ const projectView = new ProjectView(store, $("projectHost"));
 const filesView = new FilesView(store, $("filesHost"), {
   openBytes: (name, bytes) => loadBytes(name, bytes),
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
+  songIndex: () => store.songIndex,
 });
 
 const PLACEHOLDER_TEXT = {
@@ -338,6 +482,45 @@ async function openGoto() {
     cuesView.invalidate();
   }
 }
+
+// ── autosave (debounced 45 s after the last edit) + recovery prompt ──
+let autosaveTimer = null;
+store.on("edit", () => {
+  if (autosaveTimer !== null) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(async () => {
+    autosaveTimer = null;
+    if (!store.doc?.dirty) return;
+    if (!(await opfs.available())) return;
+    const name = store.fileName ?? "untitled.taud";
+    try {
+      await opfs.writeAutosave(name, store.doc.toBytes());
+      console.info(`APP: autosaved ${name}`);
+    } catch (err) {
+      console.warn(`APP: autosave failed: ${err.message}`);
+    }
+  }, 45000);
+});
+store.on("saved", (name) => opfs.removeAutosave(name)); // clean save supersedes
+
+(async function offerRecovery() {
+  if (!(await opfs.available())) return;
+  const autosaves = await opfs.listAutosaves();
+  if (autosaves.length === 0) return;
+  const newest = autosaves.sort((a, b) => b.mtime - a.mtime)[0];
+  const result = await showModal({
+    title: "Recover unsaved work?",
+    body: `An autosave of "${newest.name}" from ${new Date(newest.mtime).toLocaleString()} exists.`,
+    fields: [],
+    okLabel: "Recover",
+  });
+  if (result) {
+    await loadBytes(newest.name, await opfs.readAutosave(newest.name));
+    store.doc.dirty = true; // recovered content is unsaved by definition
+    updateStatus();
+  } else {
+    for (const a of autosaves) await opfs.removeAutosave(a.name);
+  }
+})();
 
 // ── ?load= bootstrap (demo links; also drives the headless smoke test) ──
 const bootParams = new URLSearchParams(location.search);

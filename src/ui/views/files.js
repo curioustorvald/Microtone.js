@@ -4,6 +4,7 @@
 import * as opfs from "../../storage/opfs.js";
 import { pickFile, download } from "../../storage/import-export.js";
 import { showModal } from "../widgets/modal.js";
+import { renderToWav } from "../../audio/offline-render.js";
 
 export class FilesView {
   /**
@@ -29,7 +30,8 @@ export class FilesView {
     const saveAsBtn = mkBtn("Save As…", () => this.saveAs());
     const importBtn = mkBtn("Import…", () => this.import());
     const exportBtn = mkBtn("Export ⬇", () => this.export());
-    bar.append(saveBtn, saveAsBtn, importBtn, exportBtn);
+    const wavBtn = mkBtn("Export WAV…", () => this.exportWav());
+    bar.append(saveBtn, saveAsBtn, importBtn, exportBtn, wavBtn);
     this.root.appendChild(bar);
 
     if (!ok) {
@@ -116,6 +118,26 @@ export class FilesView {
     const { doc, fileName } = this.cb.currentDoc();
     if (!doc) return;
     download(doc.toBytes(), fileName ?? "untitled.taud");
+  }
+
+  /** Offline-render the current song through the engine → 16-bit stereo WAV. */
+  async exportWav() {
+    const { doc, fileName } = this.cb.currentDoc();
+    if (!doc) return;
+    const result = await showModal({
+      title: "Export WAV (offline render)",
+      body: "Renders through the same engine at 32 kHz. Songs that never HALT stop at the cap.",
+      fields: [{ name: "cap", label: "Max seconds", type: "number", value: 300, min: 1, max: 3600 }],
+      okLabel: "Render",
+    });
+    if (!result) return;
+    const cap = Math.min(Math.max(parseInt(result.cap || "300", 10), 1), 3600);
+    const songIndex = this.cb.songIndex?.() ?? 0;
+    const t0 = performance.now();
+    const wav = renderToWav(doc.toRenderable(songIndex), songIndex, cap);
+    console.info(`WAV render: ${wav.seconds.toFixed(1)}s in ${(performance.now() - t0).toFixed(0)}ms (halted=${wav.halted})`);
+    const base = (fileName ?? "untitled.taud").replace(/\.taud$/, "");
+    download(wav.bytes, `${base}.wav`);
   }
 }
 
