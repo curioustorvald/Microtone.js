@@ -52,8 +52,16 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         variants): playback advances correctly on all three paths.
         Manual listening test in a real browser still pending.
 - full Microtone web application
-  - [ ] M5 document model + ops/undo/sync + app shell + Timeline view
-        (read-only, follow mode, VU meters)
+  - [x] M5 document model + ops/undo/sync + app shell + Timeline view:
+        `src/doc/` (Document reuses the engine TaudPlayData cell codec;
+        invertible ops with dirty tags; gesture-coalescing UndoStack; DocSync
+        = cues/scalars eager, patterns lazy-flushed before play — taut.js
+        strategy), `index.html` + `src/ui/{app,store,notenames}.js` +
+        `views/timeline.js` (canvas, row-virtualised, follow mode, VU/pan
+        header meters, cue:row gutter). `?load=<url>` bootstraps a file
+        (demo links + headless smoke); `&autoplay=1` for testing.
+        GOTCHA fixed: ensureAudio is single-flight and OWNS DocSync creation —
+        concurrent init used to double-create AudioSystems and leave sync null.
   - [ ] M6 editing core: cell editing, jam keyboard, Cues view + CueCmd popup,
         scalars, undo/redo, OPFS save/load, import/export, New Project wizard,
         unsaved guard; exported .taud must play on desktop TSVM

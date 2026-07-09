@@ -1,0 +1,323 @@
+// Timeline view (F1) — the multi-voice pattern grid across the whole song,
+// canvas-rendered and row-virtualised. M5 scope: read-only navigation, follow
+// mode, per-channel VU/pan header meters, cue-boundary gutter. Feature
+// reference: taut.js VIEW_TIMELINE.
+
+import { PATTERN_EMPTY } from "../../engine/constants.js";
+import { noteToStr, hex2, volToStr, fxToStr } from "../notenames.js";
+
+const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
+const CHAR_W = 7.3;
+const ROW_H = 16;
+const HEADER_H = 44;   // channel header: number + VU + pan
+const GUTTER_W = 76;   // "cue:row | absrow"
+const CELL_CHARS = 16; // "C-4 01 v3F A0F00"
+const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
+
+export class TimelineView {
+  constructor(store, canvas) {
+    this.store = store;
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.scrollRow = 0;   // top visible absolute row (fractional while wheeling)
+    this.scrollCh = 0;    // leftmost visible channel
+    this.map = null;      // songMap cache
+    this.needsRedraw = true;
+    this.colors = null;
+
+    store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.invalidate(); });
+    store.on("edit", () => { this.map = null; this.invalidate(); });
+    store.on("cursor", () => this.invalidate());
+
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (e.shiftKey) this.scrollCh = clampInt(this.scrollCh + Math.sign(e.deltaY), 0, this.maxScrollCh());
+      else this.scrollBy(e.deltaY / ROW_H);
+    }, { passive: false });
+
+    canvas.addEventListener("pointerdown", (e) => this.onPointer(e));
+
+    new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  readColors() {
+    const css = getComputedStyle(document.documentElement);
+    const g = (name) => css.getPropertyValue(name).trim();
+    this.colors = {
+      bg: g("--bg"), panel: g("--panel"), panel2: g("--panel-2"),
+      fg: g("--fg"), dim: g("--dim"), accent: g("--accent"),
+      accent2: g("--accent-2"), meter: g("--meter"), meterBg: g("--meter-bg"),
+      border: g("--border"),
+      rowBeat: "#20242d", rowBar: "#262c38", playhead: "#3a3320",
+      cursor: "#28405c", cueLine: "#4a5364",
+    };
+  }
+
+  resize() {
+    const host = this.canvas.parentElement;
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(100, host.clientWidth * dpr);
+    this.canvas.height = Math.max(100, host.clientHeight * dpr);
+    this.canvas.style.width = host.clientWidth + "px";
+    this.canvas.style.height = host.clientHeight + "px";
+    this.dpr = dpr;
+    this.invalidate();
+  }
+
+  invalidate() { this.needsRedraw = true; }
+
+  visibleRows() { return Math.floor((this.canvas.height / this.dpr - HEADER_H) / ROW_H); }
+  visibleChans() { return Math.floor((this.canvas.width / this.dpr - GUTTER_W) / COL_W); }
+  maxScrollCh() {
+    const chans = this.store.doc?.channelCount ?? 32;
+    return Math.max(0, chans - this.visibleChans());
+  }
+
+  getMap() {
+    if (this.map === null && this.store.song) this.map = this.store.song.songMap();
+    return this.map;
+  }
+
+  scrollBy(rows) {
+    const map = this.getMap();
+    if (!map) return;
+    this.scrollRow = Math.max(0, Math.min(this.scrollRow + rows, map.totalRows - 4));
+    this.invalidate();
+  }
+
+  /** Centre an absolute row (follow mode / cursor jumps). */
+  centreRow(row) {
+    const map = this.getMap();
+    if (!map) return;
+    const want = row - this.visibleRows() / 2;
+    this.scrollRow = Math.max(0, Math.min(want, Math.max(0, map.totalRows - 4)));
+    this.invalidate();
+  }
+
+  /** Map absolute song row → {entry, rowInCue} via the song map. */
+  locate(absRow) {
+    const map = this.getMap();
+    if (!map || map.entries.length === 0) return null;
+    // linear scan is fine (≤ a few thousand cues); binary-search later if needed
+    for (let i = map.entries.length - 1; i >= 0; i--) {
+      const e = map.entries[i];
+      if (absRow >= e.startRow) {
+        const rowInCue = absRow - e.startRow;
+        if (rowInCue >= e.rowLimit) return null; // past end
+        return { entry: e, rowInCue };
+      }
+    }
+    return null;
+  }
+
+  onPointer(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (y < HEADER_H) return; // header clicks (mute) come with M6
+    const row = Math.floor(this.scrollRow) + Math.floor((y - HEADER_H) / ROW_H);
+    const ch = this.scrollCh + Math.floor((x - GUTTER_W) / COL_W);
+    const map = this.getMap();
+    if (!map || row < 0 || row >= map.totalRows) return;
+    const chans = this.store.doc.channelCount;
+    this.store.cursor = { row, ch: clampInt(ch, 0, chans - 1) };
+    this.store.emit("cursor");
+  }
+
+  moveCursor(dRow, dCh) {
+    const map = this.getMap();
+    if (!map) return;
+    const c = this.store.cursor;
+    const chans = this.store.doc.channelCount;
+    c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
+    c.ch = clampInt(c.ch + dCh, 0, chans - 1);
+    // keep cursor on-screen
+    const top = Math.floor(this.scrollRow);
+    const vis = this.visibleRows();
+    if (c.row < top) this.scrollRow = c.row;
+    else if (c.row >= top + vis) this.scrollRow = c.row - vis + 1;
+    if (c.ch < this.scrollCh) this.scrollCh = c.ch;
+    else if (c.ch >= this.scrollCh + this.visibleChans()) {
+      this.scrollCh = c.ch - this.visibleChans() + 1;
+    }
+    this.store.emit("cursor");
+  }
+
+  /** Per-frame: follow playback + repaint when needed. */
+  frame() {
+    const store = this.store;
+    if (!store.doc) return;
+    const audio = store.audio;
+    let playRow = -1;
+    if (audio && audio.isPlaying()) {
+      const map = this.getMap();
+      const cue = audio.getCuePosition();
+      const entry = map?.entries[cue];
+      if (entry) {
+        playRow = entry.startRow + Math.min(audio.getTrackerRow(), entry.rowLimit - 1);
+        if (store.follow) {
+          const centred = playRow - this.visibleRows() / 2;
+          const target = Math.max(0, Math.min(centred, map.totalRows - 4));
+          if (Math.abs(target - this.scrollRow) > 0.01) {
+            this.scrollRow = target;
+            this.needsRedraw = true;
+          }
+        }
+      }
+      this.needsRedraw = true; // meters + playhead move every frame while playing
+    }
+    if (this.needsRedraw) {
+      this.needsRedraw = false;
+      this.draw(playRow);
+    }
+  }
+
+  draw(playRow) {
+    if (!this.colors) this.readColors();
+    const { ctx, colors: C, store } = this;
+    const dpr = this.dpr;
+    const W = this.canvas.width / dpr;
+    const H = this.canvas.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+    const doc = store.doc;
+    const song = store.song;
+    if (!doc || !song) return;
+    const map = this.getMap();
+    const chans = doc.channelCount;
+    const visCh = Math.min(this.visibleChans() + 1, chans - this.scrollCh);
+    const visRows = this.visibleRows() + 1;
+    const top = Math.floor(this.scrollRow);
+    const audio = store.audio;
+
+    ctx.font = FONT;
+    ctx.textBaseline = "middle";
+
+    // ── channel headers: number, VU bar, pan tick ──
+    for (let i = 0; i < visCh; i++) {
+      const ch = this.scrollCh + i;
+      const x = GUTTER_W + i * COL_W;
+      ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
+      ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
+      ctx.fillStyle = C.dim;
+      ctx.textAlign = "left";
+      ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, 10);
+      // VU
+      const barX = x + 24;
+      const barW = COL_W - 32;
+      ctx.fillStyle = C.meterBg;
+      ctx.fillRect(barX, 6, barW, 8);
+      if (audio && audio.getVoiceActive(ch)) {
+        const vol = audio.getVoiceEffectiveVolume(ch);
+        ctx.fillStyle = C.meter;
+        ctx.fillRect(barX, 6, Math.round(barW * vol), 8);
+      }
+      // pan
+      ctx.fillStyle = C.meterBg;
+      ctx.fillRect(barX, 20, barW, 4);
+      const pan = audio ? audio.getVoiceEffectivePan(ch) / 255 : 0.5;
+      ctx.fillStyle = C.accent2;
+      ctx.fillRect(barX + pan * (barW - 3), 18, 3, 8);
+      // live note (small text under meters)
+      if (audio && audio.getVoiceActive(ch)) {
+        ctx.fillStyle = C.fg;
+        ctx.fillText(noteToStr(audio.getVoiceNote(ch)), x + 4, 34);
+        ctx.fillStyle = C.dim;
+        ctx.fillText(hex2(audio.getVoiceInstrument(ch)), x + 34, 34);
+      }
+    }
+
+    // ── rows ──
+    const cursor = store.cursor;
+    for (let r = 0; r < visRows; r++) {
+      const absRow = top + r;
+      const y = HEADER_H + r * ROW_H;
+      const loc = this.locate(absRow);
+      if (!loc) continue;
+      const { entry, rowInCue } = loc;
+
+      // row background banding: bar (16) > beat (4)
+      if (absRow === playRow) {
+        ctx.fillStyle = C.playhead;
+        ctx.fillRect(0, y, W, ROW_H);
+      } else if (rowInCue % 16 === 0) {
+        ctx.fillStyle = C.rowBar;
+        ctx.fillRect(GUTTER_W, y, W - GUTTER_W, ROW_H);
+      } else if (rowInCue % 4 === 0) {
+        ctx.fillStyle = C.rowBeat;
+        ctx.fillRect(GUTTER_W, y, W - GUTTER_W, ROW_H);
+      }
+
+      // cue boundary line
+      if (rowInCue === 0) {
+        ctx.strokeStyle = C.cueLine;
+        ctx.beginPath();
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(W, y + 0.5);
+        ctx.stroke();
+      }
+
+      // gutter: "cue:row"
+      ctx.textAlign = "left";
+      ctx.fillStyle = rowInCue === 0 ? C.accent : C.dim;
+      ctx.fillText(
+        `${entry.cue.toString(16).toUpperCase().padStart(3, "0")}:${rowInCue.toString().padStart(2, "0")}`,
+        6, y + ROW_H / 2);
+
+      // cells
+      for (let i = 0; i < visCh; i++) {
+        const ch = this.scrollCh + i;
+        const x = GUTTER_W + i * COL_W;
+        if (absRow === cursor.row && ch === cursor.ch) {
+          ctx.fillStyle = C.cursor;
+          ctx.fillRect(x - 2, y, COL_W - 2, ROW_H);
+        }
+        const patNum = entry.info ? (this.store.song.cues[entry.cue][ch] & 0x7fff) : PATTERN_EMPTY;
+        if (patNum === PATTERN_EMPTY) {
+          ctx.fillStyle = C.dim;
+          ctx.globalAlpha = 0.35;
+          ctx.fillText("···", x + 2, y + ROW_H / 2);
+          ctx.globalAlpha = 1;
+          continue;
+        }
+        const pattern = song.patterns[patNum];
+        if (!pattern) continue;
+        const cell = pattern[rowInCue];
+        const noteS = noteToStr(cell.note);
+        const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
+        const volS = volToStr(cell.volume, cell.volumeEff);
+        const fxS = fxToStr(cell.effect, cell.effectArg);
+
+        ctx.fillStyle = cell.note >= 0x20 ? C.fg : cell.note !== 0 ? C.accent : C.dim;
+        if (cell.note === 0) ctx.globalAlpha = 0.4;
+        ctx.fillText(noteS, x + 2, y + ROW_H / 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = cell.instrment !== 0 ? C.accent2 : C.dim;
+        if (cell.instrment === 0) ctx.globalAlpha = 0.4;
+        ctx.fillText(instS, x + 2 + 4 * CHAR_W, y + ROW_H / 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = volS === "···" ? C.dim : C.meter;
+        if (volS === "···") ctx.globalAlpha = 0.4;
+        ctx.fillText(volS, x + 2 + 7 * CHAR_W, y + ROW_H / 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
+        if (fxS === "·····") ctx.globalAlpha = 0.4;
+        ctx.fillText(fxS, x + 2 + 11 * CHAR_W, y + ROW_H / 2);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // gutter/header separators
+    ctx.strokeStyle = C.border;
+    ctx.beginPath();
+    ctx.moveTo(GUTTER_W - 4.5, 0);
+    ctx.lineTo(GUTTER_W - 4.5, H);
+    ctx.moveTo(0, HEADER_H - 1.5);
+    ctx.lineTo(W, HEADER_H - 1.5);
+    ctx.stroke();
+  }
+}
+
+function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Microtone.js</title>
+  <link rel="stylesheet" href="css/microtone.css" />
+</head>
+<body class="app-page">
+  <header class="topbar">
+    <span class="brand">Microtone<span class="brand-js">.js</span></span>
+    <div class="transport-controls">
+      <button id="playSong" title="Play from start (Shift+Space)">▶ Song</button>
+      <button id="playCue" title="Play from current cue">▶ Cue</button>
+      <button id="stopBtn" title="Stop (Space)">■</button>
+      <label class="chk"><input type="checkbox" id="follow" checked />follow</label>
+    </div>
+    <div class="pos">
+      <span>Cue <b id="posCue">–</b></span>
+      <span>Row <b id="posRow">–</b></span>
+      <span>BPM <b id="posBpm">–</b></span>
+      <span>Spd <b id="posSpd">–</b></span>
+    </div>
+    <div class="grow"></div>
+    <label>Song <select id="songSel"></select></label>
+    <button id="openBtn">Open…</button>
+    <input id="fileInput" type="file" accept=".taud,.tsii,.tpif" hidden />
+    <span id="audioBadge" class="badge">audio off</span>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-view="timeline" class="active">Timeline</button>
+    <button data-view="cues">Cues</button>
+    <button data-view="pattern">Patterns</button>
+    <button data-view="samples">Samples</button>
+    <button data-view="instruments">Instrmnt</button>
+    <button data-view="project">Project</button>
+    <button data-view="files">File</button>
+  </nav>
+
+  <main id="viewHost" class="view-host">
+    <div id="emptyState" class="empty-state">
+      <p><strong>Drop a .taud file anywhere</strong> or use Open…</p>
+    </div>
+    <canvas id="timeline" class="view-canvas" hidden></canvas>
+    <div id="placeholder" class="empty-state" hidden></div>
+  </main>
+
+  <footer class="statusbar">
+    <span id="stFile" class="dim">no file</span>
+    <span id="stDirty" class="dirty" hidden>●</span>
+    <div class="grow"></div>
+    <span id="stHint" class="dim">Space play/stop · arrows navigate · wheel scroll</span>
+  </footer>
+
+  <script type="module" src="src/ui/app.js"></script>
+</body>
+</html>
