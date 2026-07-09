@@ -23,23 +23,24 @@ import { hex4 } from "./notenames.js";
 export const NOTE_CELL_CHARS = 4;
 
 export const GLYPH = {
-  lineWidth: 1.5,
+  lineWidth: 1.3,
 
   // sentinels (fractions of the full 4-char cell)
   keyoffW: 0.76,      // box width
   keyoffH: 0.28,      // box height
   cutAmp: 0.17,       // ^^^ amplitude (of cell height)
-  cutPeaks: 3,
-  cutSpanX: [0.14, 0.86],
-  fadeAmp: 0.26,      // ~~~ amplitude
-  fadePeriods: 2,
+  cutPeaks: 4,
+  cutSpanX: [0.10, 0.90],
+  fadeAmp: 0.13,      // ~~~ amplitude
+  fadePeriods: 3,
   fadeSpanX: [0.12, 0.88],
 
   // sharp family (fractions of one accidental box)
-  sharpRise: 0.09,    // crossbar upward slant
+  sharpRise: 0.08,    // crossbar upward slant
   sharpBarX: [0.25, 0.75],
+  sharpStemX: [0.38, 0.62],
   sharpVertY: [0.16, 0.84],
-  sharpCrossY: [0.40, 0.66],
+  sharpCrossY: [0.36, 0.60],
 
   // flat family
   flatStemY: [0.12, 0.82],
@@ -113,7 +114,7 @@ function drawSharpBody(ctx, x, y, w, h, verticals) {
   const xR = x + w * GLYPH.sharpBarX[1];
   const vXs = [];
   for (let i = 0; i < verticals; i++) {
-    const t = verticals === 1 ? 0.5 : 0.35 + (0.30 * i) / (verticals - 1);
+    const t = (verticals === 1 || verticals === 3 && i === 1) ? 0.5 : (i === 0) ? GLYPH.sharpStemX[0] : GLYPH.sharpStemX[1];
     vXs.push(x + w * t);
   }
   ctx.beginPath();
@@ -325,7 +326,7 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
     // Kite: [tick][letter][compact accidental][octave]
     drawTickCode(ctx, symb.tick, x, y + 1, charW, rowH - 2);
     ctx.fillText(symb.letter, x + charW * 1.1, midY);
-    drawAccidental(ctx, symb.acc, x + charW * 2.05, y + 2, charW * 0.95, rowH - 4);
+    drawAccidental(ctx, symb.acc, x + charW * 1.8, y + 2, charW * 1.5, rowH - 4);
     ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
   } else {
     // Normal presets: [letter][ accidental spanning TWO cells ][octave]

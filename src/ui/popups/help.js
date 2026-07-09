@@ -9,7 +9,7 @@ export function showHelp() {
       <dl>
         <dt>Space</dt><dd>play from cursor / stop</dd>
         <dt>Shift+Space</dt><dd>play from start</dd>
-        <dt>F1…F7</dt><dd>views (Timeline, Cues, Patterns, Samples, Instrmnt, Project, File)</dd>
+        <dt>F1…F7</dt><dd>views (Timeline, Cues, Patterns, Samples, Instruments, Project, File)</dd>
         <dt>Insert</dt><dd>record mode on/off</dd>
         <dt>[ ]</dt><dd>octave down / up</dd>
         <dt>Enter</dt><dd>Timeline: pick up cell's instrument · Cues: command popup</dd>

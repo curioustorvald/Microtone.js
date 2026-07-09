@@ -3,3 +3,4 @@ node_modules/
 *.wav
 test/reference/
 .DS_Store
+CLAUDE.md

@@ -19,7 +19,7 @@
   --dim: #7a8290;           /* secondary text, empty cells */
   --accent: #ffc043;        /* amber: highlights, sentinels, off-grid notes */
   --accent-2: #78DCE7;      /* blue: instrument column, links, pan ticks */
-  --meter: #A8DC75;         /* green: VU bars, volume column, live dots */
+  --meter: #8be400;         /* green: VU bars, volume column, live dots */
   --meter-bg: #2a2f3a;      /* meter troughs */
   --border: #343a46;
 
@@ -75,8 +75,8 @@
 
   /* canvas: pattern grids */
   --cv-bg: #eceef2;
-  --cv-row-beat: #e2e5ec;
-  --cv-row-bar: #d6dbe5;
+  --cv-row-beat: #eef0f4;
+  --cv-row-bar: #e5e7ee;
   --cv-playhead: #f4e3b8;
   --cv-cursor: #c5d8ef;
   --cv-caret: #eed28f;

@@ -11,11 +11,44 @@ import { hex2, noteToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
 
 const ENV_TABS = [
-  { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env", max: 63 },
-  { key: "panEnvelopes", loopKey: "panEnvLoop", susKey: "panEnvSustainWord", label: "Pan env", max: 255 },
-  { key: "pfEnvelopes", loopKey: "pfEnvLoop", susKey: "pfEnvSustainWord", label: "PF env 1", max: 255 },
-  { key: "pf2Envelopes", loopKey: "pf2EnvLoop", susKey: "pf2EnvSustainWord", label: "PF env 2", max: 255 },
+  { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env",
+    max: 63, liveIdx: "getVoiceEnvVolIndex", liveTime: "getVoiceEnvVolTime" },
+  { key: "panEnvelopes", loopKey: "panEnvLoop", susKey: "panEnvSustainWord", label: "Pan env",
+    max: 255, liveIdx: "getVoiceEnvPanIndex", liveTime: "getVoiceEnvPanTime" },
 ];
+
+/**
+ * The instrument record carries TWO pitch/filter envelope slots (bytes 19..
+ * and 197..) whose ROLE — pitch or filter — is chosen by each slot's m-bit
+ * (LOOP-word bit 7), in no set order; when both claim one role the second
+ * slot wins (engine resolveActiveEnvelopes). The UI hides that quirk behind
+ * plain "Pitch" and "Filter" tabs (taut.js behaviour): each tab resolves the
+ * physical slot that currently HOLDS its role. When the role is absent, the
+ * tab targets a free slot (or the overridden loser) so that editing can
+ * claim it — the first drag sets the slot's P bit + m-bit for the role.
+ */
+function roleTabDef(inst, wantFilter) {
+  const SLOT1 = { key: "pfEnvelopes", loopKey: "pfEnvLoop", susKey: "pfEnvSustainWord" };
+  const SLOT2 = { key: "pf2Envelopes", loopKey: "pf2EnvLoop", susKey: "pf2EnvSustainWord" };
+  const role1 = envPresent(inst.pfEnvLoop) ? ((inst.pfEnvLoop >>> 7) & 1) === 1 : null;
+  const role2 = envPresent(inst.pf2EnvLoop) ? ((inst.pf2EnvLoop >>> 7) & 1) === 1 : null;
+  let slot, active;
+  if (role2 === wantFilter) { slot = SLOT2; active = true; }        // slot 2 wins
+  else if (role1 === wantFilter) { slot = SLOT1; active = true; }
+  else if (role1 === null && role2 === null) { slot = wantFilter ? SLOT2 : SLOT1; active = false; }
+  else if (role1 === null) { slot = SLOT1; active = false; }
+  else if (role2 === null) { slot = SLOT2; active = false; }
+  else { slot = SLOT1; active = false; }                            // both hold the other role → loser
+  return {
+    ...slot,
+    label: wantFilter ? "Filter env" : "Pitch env",
+    max: 255,
+    role: wantFilter ? "filter" : "pitch",
+    roleActive: active,
+    liveIdx: wantFilter ? "getVoiceEnvFilterIndex" : "getVoiceEnvPitchIndex",
+    liveTime: wantFilter ? "getVoiceEnvFilterTime" : "getVoiceEnvPitchTime",
+  };
+}
 
 export class InstrumentsView {
   constructor(store, host, jam) {
@@ -94,7 +127,8 @@ export class InstrumentsView {
     const inst = this.store.doc?.instruments[this.selected];
     const tabs = inst?.isMeta
       ? [["meta", "Layers"]]
-      : [["general", "General"], ...ENV_TABS.map((t, i) => [`env${i}`, t.label]), ["zones", "Zones"]];
+      : [["general", "General"], ["env0", "Vol env"], ["env1", "Pan env"],
+         ["pitch", "Pitch"], ["filter", "Filter"], ["zones", "Zones"]];
     for (const [key, label] of tabs) {
       const b = document.createElement("button");
       b.textContent = label;
@@ -113,6 +147,8 @@ export class InstrumentsView {
     this.panel.innerHTML = "";
     if (this.tab === "general") this.renderGeneral(inst);
     else if (this.tab.startsWith("env")) this.renderEnv(inst, ENV_TABS[parseInt(this.tab.slice(3), 10)]);
+    else if (this.tab === "pitch") this.renderEnv(inst, roleTabDef(inst, false));
+    else if (this.tab === "filter") this.renderEnv(inst, roleTabDef(inst, true));
     else if (this.tab === "zones") this.renderZones(inst);
     else if (this.tab === "meta") this.renderMeta(inst);
   }
@@ -215,7 +251,7 @@ export class InstrumentsView {
     const present = envPresent(loopWord);
     const mBit = (loopWord >> 7) & 1;
     head.innerHTML =
-      `${tabDef.label}: ${present ? "present" : "absent (P bit clear)"}` +
+      `${tabDef.label}: ${present ? "present" : "absent"}` +
       (tabDef.key.startsWith("pf") ? ` · role: <b>${mBit ? "FILTER" : "PITCH"}</b>` : "") +
       ` · loop 0x${loopWord.toString(16)} sustain 0x${susWord.toString(16)}` +
       ` — drag nodes to edit values`;

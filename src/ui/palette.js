@@ -94,7 +94,7 @@ export class CommandPalette {
         break;
       case SUB_INST:
         label("instrument");
-        hint("hex 00..FF · Enter = pick up from cell · wheel ±1 · Instrmnt tab selects the jam instrument");
+        hint("hex 00..FF · Enter = pick up from cell · wheel ±1 · Instruments tab selects the jam instrument");
         break;
       case SUB_VOL: {
         label("vol column");
