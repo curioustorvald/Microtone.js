@@ -14,6 +14,9 @@
       <button id="playCue" title="Play from current cue">▶ Cue</button>
       <button id="stopBtn" title="Stop (Space)">■</button>
       <label class="chk"><input type="checkbox" id="follow" checked />follow</label>
+      <button id="recBtn" class="rec on" title="Record mode (Insert)">⏺ rec</button>
+      <span class="dim">Oct <b id="octDisp">4</b></span>
+      <span class="dim">Inst <b id="instDisp">01</b></span>
     </div>
     <div class="pos">
       <span>Cue <b id="posCue">–</b></span>
@@ -43,6 +46,8 @@
       <p><strong>Drop a .taud file anywhere</strong> or use Open…</p>
     </div>
     <canvas id="timeline" class="view-canvas" hidden></canvas>
+    <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
+    <div id="filesHost" class="files-host" hidden></div>
     <div id="placeholder" class="empty-state" hidden></div>
   </main>
 

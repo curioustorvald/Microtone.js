@@ -62,9 +62,19 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         (demo links + headless smoke); `&autoplay=1` for testing.
         GOTCHA fixed: ensureAudio is single-flight and OWNS DocSync creation —
         concurrent init used to double-create AudioSystems and leave sync null.
-  - [ ] M6 editing core: cell editing, jam keyboard, Cues view + CueCmd popup,
-        scalars, undo/redo, OPFS save/load, import/export, New Project wizard,
-        unsaved guard; exported .taud must play on desktop TSVM
+  - [x] M6 editing core: `src/ui/edit.js` (PURE key interpreter — Node-tested;
+        sub-column/nibble cursor model, taut SC_JAM piano map via e.code,
+        current-inst auto-adopt), jam keyboard (`jam.js`), Timeline cell
+        editing + record mode (Insert toggles; amber caret), Cues view with
+        3-nibble pattern entry + CueCmd popup (BAK/FWD/JMP/LEN/HALT/HALT@
+        sign-bit repack), Ctrl+Z/Y undo/redo, OPFS storage
+        (`src/storage/opfs.js`, worker fallback for Safari sync-access) +
+        Files view + import/export + Ctrl+S + unsaved guards.
+        VERIFIED: browser edit smoke (test/browser/edit-smoke.html) PASS incl.
+        OPFS round-trip; web-edited WHEN.taud renders on the REAL JVM engine
+        and the JS engine matches it bit-exact.
+        Deferred to M7: Pattern-details view, New Project wizard (pointless
+        until sample import exists).
   - [ ] M7 Samples view (waveform + play blobs), Instruments view (envelope
         editors, meta layers, Ixmp visualiser + live overlay), Project view
         (pitch tables/retune, flags), Help/Goto/Retune/Flags popups

@@ -5,6 +5,27 @@
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
 import { noteToStr, hex2, volToStr, fxToStr } from "../notenames.js";
+import {
+  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG, SUB_NIBBLES,
+} from "../edit.js";
+import { setCellOp } from "../../doc/ops.js";
+
+// Cursor sub-position walk order within one channel: [sub, nib] pairs.
+const SUB_POSITIONS = [];
+for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
+  for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
+}
+// Character offset of each sub-position inside the 16-char cell.
+function subCharPos(sub, nib) {
+  switch (sub) {
+    case SUB_NOTE: return [0, 3];        // 3 chars wide
+    case SUB_INST: return [4 + nib, 1];
+    case SUB_VOL: return [8 + nib, 1];   // char 7 is the selector prefix
+    case SUB_FX_OP: return [11, 1];
+    case SUB_FX_ARG: return [12 + nib, 1];
+    default: return [0, 1];
+  }
+}
 
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.3;
@@ -117,11 +138,19 @@ export class TimelineView {
     const y = e.clientY - rect.top;
     if (y < HEADER_H) return; // header clicks (mute) come with M6
     const row = Math.floor(this.scrollRow) + Math.floor((y - HEADER_H) / ROW_H);
-    const ch = this.scrollCh + Math.floor((x - GUTTER_W) / COL_W);
+    const colIdx = Math.floor((x - GUTTER_W) / COL_W);
+    const ch = this.scrollCh + colIdx;
     const map = this.getMap();
     if (!map || row < 0 || row >= map.totalRows) return;
     const chans = this.store.doc.channelCount;
-    this.store.cursor = { row, ch: clampInt(ch, 0, chans - 1) };
+    // sub-position from the character offset within the cell
+    const charX = (x - GUTTER_W - colIdx * COL_W - 2) / CHAR_W;
+    let sub = SUB_NOTE, nib = 0;
+    if (charX >= 12) { sub = SUB_FX_ARG; nib = clampInt(Math.floor(charX - 12), 0, 3); }
+    else if (charX >= 11) { sub = SUB_FX_OP; }
+    else if (charX >= 7) { sub = SUB_VOL; nib = clampInt(Math.floor(charX - 8), 0, 1); }
+    else if (charX >= 4) { sub = SUB_INST; nib = clampInt(Math.floor(charX - 4), 0, 1); }
+    this.store.cursor = { row, ch: clampInt(ch, 0, chans - 1), sub, nib };
     this.store.emit("cursor");
   }
 
@@ -132,7 +161,29 @@ export class TimelineView {
     const chans = this.store.doc.channelCount;
     c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
     c.ch = clampInt(c.ch + dCh, 0, chans - 1);
-    // keep cursor on-screen
+    this.keepCursorVisible();
+    this.store.emit("cursor");
+  }
+
+  /** Move through sub-positions (nibble-level), wrapping across channels. */
+  moveSubCursor(dir) {
+    const c = this.store.cursor;
+    const chans = this.store.doc.channelCount;
+    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
+    if (idx < 0) idx = 0;
+    idx += dir;
+    if (idx < 0) {
+      if (c.ch > 0) { c.ch--; idx = SUB_POSITIONS.length - 1; } else idx = 0;
+    } else if (idx >= SUB_POSITIONS.length) {
+      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = SUB_POSITIONS.length - 1;
+    }
+    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    this.keepCursorVisible();
+    this.store.emit("cursor");
+  }
+
+  keepCursorVisible() {
+    const c = this.store.cursor;
     const top = Math.floor(this.scrollRow);
     const vis = this.visibleRows();
     if (c.row < top) this.scrollRow = c.row;
@@ -141,7 +192,52 @@ export class TimelineView {
     else if (c.ch >= this.scrollCh + this.visibleChans()) {
       this.scrollCh = c.ch - this.visibleChans() + 1;
     }
-    this.store.emit("cursor");
+  }
+
+  /** The pattern cell under the cursor, or null (empty cue slot / off-map). */
+  cursorCell() {
+    const { store } = this;
+    const loc = this.locate(store.cursor.row);
+    if (!loc) return null;
+    const patNum = store.song.cues[loc.entry.cue][store.cursor.ch] & 0x7fff;
+    if (patNum === PATTERN_EMPTY) return null;
+    const pattern = store.song.patterns[patNum];
+    if (!pattern) return null;
+    return { pat: patNum, rowInCue: loc.rowInCue, cell: pattern[loc.rowInCue] };
+  }
+
+  /**
+   * Record-mode key dispatch. Returns true when consumed. `jam` provides
+   * octave/currentInst context and auditions entered notes.
+   */
+  processEditKey(e, jam) {
+    const store = this.store;
+    if (!store.record) return false;
+    const target = this.cursorCell();
+    if (!target) return false;
+    const c = store.cursor;
+    const action = interpretEditKey(
+      { code: e.code, key: e.key }, c.sub, c.nib, target.cell,
+      { octave: jam.octave, currentInst: jam.currentInst });
+    if (!action) return false;
+
+    if (action.fields) {
+      store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, action.fields));
+    }
+    if (action.jamNote !== undefined && store.audio) {
+      store.audio.jamNote(0, c.ch, action.jamNote, jam.currentInst);
+    }
+    if (action.advanceNib) {
+      this.moveSubCursor(1);
+    } else if (action.advanceRow) {
+      c.nib = 0;
+      if (c.sub === SUB_INST || c.sub === SUB_VOL || c.sub === SUB_FX_ARG) {
+        c.nib = 0; // field complete: reset to its first nibble
+      }
+      this.moveCursor(store.editStep, 0);
+    }
+    this.invalidate();
+    return true;
   }
 
   /** Per-frame: follow playback + repaint when needed. */
@@ -273,6 +369,10 @@ export class TimelineView {
         if (absRow === cursor.row && ch === cursor.ch) {
           ctx.fillStyle = C.cursor;
           ctx.fillRect(x - 2, y, COL_W - 2, ROW_H);
+          // sub-column caret: amber in record mode, blue otherwise
+          const [cpos, cw] = subCharPos(cursor.sub ?? 0, cursor.nib ?? 0);
+          ctx.fillStyle = store.record ? "#6e5316" : "#2f5378";
+          ctx.fillRect(x + 2 + cpos * CHAR_W - 1, y, cw * CHAR_W + 2, ROW_H);
         }
         const patNum = entry.info ? (this.store.song.cues[entry.cue][ch] & 0x7fff) : PATTERN_EMPTY;
         if (patNum === PATTERN_EMPTY) {

@@ -1,0 +1,93 @@
+// OPFS virtual disk: projects live under <opfs>/projects/*.taud. Writes go
+// through createWritable when the browser has it (Chromium/Firefox) and fall
+// back to a worker + createSyncAccessHandle (Safari lacks main-thread
+// createWritable). Absent OPFS entirely (some private modes) the caller gets
+// available() === false and should degrade to in-memory + export-banner.
+
+const WORKER_URL = new URL("./opfs-worker.js", import.meta.url);
+
+let _root = null;
+let _worker = null;
+let _workerSeq = 0;
+const _workerPending = new Map();
+
+export async function available() {
+  try {
+    if (_root === null) _root = await navigator.storage.getDirectory();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function projectsDir(create = true) {
+  if (_root === null) _root = await navigator.storage.getDirectory();
+  return _root.getDirectoryHandle("projects", { create });
+}
+
+export async function list() {
+  try {
+    const dir = await projectsDir(false);
+    const out = [];
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== "file") continue;
+      const f = await handle.getFile();
+      out.push({ name, size: f.size, mtime: f.lastModified });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export async function read(name) {
+  const dir = await projectsDir(false);
+  const handle = await dir.getFileHandle(name);
+  const f = await handle.getFile();
+  return new Uint8Array(await f.arrayBuffer());
+}
+
+export async function write(name, bytes) {
+  const dir = await projectsDir(true);
+  const handle = await dir.getFileHandle(name, { create: true });
+  if (typeof handle.createWritable === "function") {
+    const w = await handle.createWritable();
+    await w.write(bytes);
+    await w.close();
+    return;
+  }
+  // Safari: sync access handles only exist in workers.
+  await workerWrite(name, bytes);
+}
+
+export async function remove(name) {
+  const dir = await projectsDir(false);
+  await dir.removeEntry(name);
+}
+
+export async function rename(oldName, newName) {
+  const bytes = await read(oldName);
+  await write(newName, bytes);
+  await remove(oldName);
+}
+
+function workerWrite(name, bytes) {
+  if (_worker === null) {
+    _worker = new Worker(WORKER_URL, { type: "module" });
+    _worker.onmessage = (e) => {
+      const { id, error } = e.data;
+      const pending = _workerPending.get(id);
+      if (!pending) return;
+      _workerPending.delete(id);
+      if (error) pending.reject(new Error(error));
+      else pending.resolve();
+    };
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++_workerSeq;
+    _workerPending.set(id, { resolve, reject });
+    const copy = bytes.slice(); // transfer a private copy
+    _worker.postMessage({ id, name, bytes: copy.buffer }, [copy.buffer]);
+  });
+}

@@ -170,3 +170,42 @@ select, input[type="range"] {
 }
 
 .dirty { color: var(--accent); }
+
+.rec { color: var(--dim); }
+.rec.on { color: #ff5c5c; border-color: #7a3434; }
+
+/* ── modal dialogs ── */
+.modal {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.4rem;
+  min-width: 320px;
+}
+.modal::backdrop { background: rgba(0, 0, 0, 0.55); }
+.modal h3 { margin-top: 0; }
+.modal-field { display: block; margin: 0.6rem 0; color: var(--dim); }
+.modal-field input, .modal-field select {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  margin-left: 0.5rem;
+}
+.modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
+/* ── files view ── */
+.files-host { position: absolute; inset: 0; overflow: auto; padding: 1rem; }
+.files-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.files-warn { color: #ffb0b0; }
+.files-table { border-collapse: collapse; width: 100%; }
+.files-table th, .files-table td {
+  text-align: left;
+  padding: 0.35rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+.files-table th { color: var(--dim); font-weight: normal; }
+.files-table td button { margin-right: 0.3rem; padding: 0.15rem 0.5rem; }
+.files-current { color: var(--accent); }

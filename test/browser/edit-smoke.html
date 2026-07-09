@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>edit smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script>
+    // Drives the real app through synthetic key events (same-origin iframe).
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const key = (win, code, key, opts = {}) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key, bubbles: true, ...opts }));
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key, bubbles: true, ...opts }));
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, timeline, jam } = win.__microtone;
+        log("app loaded, doc ready");
+
+        // Place cursor on a cell inside cue 0 / channel 0 / row 1.
+        store.cursor = { row: 1, ch: 0, sub: 0, nib: 0 };
+        const target = timeline.cursorCell();
+        const before = { note: target.cell.note, inst: target.cell.instrment };
+        jam.currentInst = 0x05;
+
+        key(win, "KeyA", "a"); // enter C-4 with inst 05
+        const after = timeline.cursorCell.call(timeline); // cursor moved; re-read pat
+        const cell = store.song.patterns[target.pat][target.rowInCue];
+        log(`note entry: note=0x${cell.note.toString(16)} inst=${cell.instrment} cursorRow=${store.cursor.row}`);
+        const entryOk = cell.note === 0x5000 && cell.instrment === 5 && store.cursor.row === 2;
+
+        key(win, "KeyZ", "z", { ctrlKey: true }); // undo
+        const undone = store.song.patterns[target.pat][target.rowInCue];
+        log(`undo: note=0x${undone.note.toString(16)} inst=${undone.inst ?? undone.instrment}`);
+        const undoOk = undone.note === before.note && undone.instrment === before.inst;
+
+        // Hex entry on the instrument column.
+        store.cursor = { row: 3, ch: 0, sub: 1, nib: 0 };
+        const t2 = timeline.cursorCell();
+        key(win, "Digit2", "2");
+        key(win, "KeyB", "b");
+        const instCell = store.song.patterns[t2.pat][t2.rowInCue];
+        log(`inst entry: inst=0x${instCell.instrment.toString(16)}`);
+        const instOk = instCell.instrment === 0x2b;
+
+        // Cues view: hex entry on a channel slot.
+        win.__microtone.store.view = "cues";
+        const cues = win.__microtone.cuesView;
+        cues.cursor = { cue: 2, col: 2, nib: 0 };
+        const wordBefore = store.song.cues[2][0];
+        cues.processKey({ code: "Digit0", key: "0" });
+        cues.processKey({ code: "Digit4", key: "4" });
+        cues.processKey({ code: "Digit2", key: "2" });
+        const wordAfter = store.song.cues[2][0];
+        log(`cue entry: 0x${wordBefore.toString(16)} → 0x${wordAfter.toString(16)}`);
+        const cueOk = (wordAfter & 0x7fff) === 0x042;
+
+        log(`dirty=${store.doc.dirty}`);
+
+        // OPFS round trip (same origin as the app).
+        const opfs = await import("../../src/storage/opfs.js");
+        let opfsOk = false;
+        if (await opfs.available()) {
+          const bytes = store.doc.toBytes();
+          await opfs.write("smoke-test.taud", bytes);
+          const back = await opfs.read("smoke-test.taud");
+          const listed = (await opfs.list()).some((e) => e.name === "smoke-test.taud");
+          opfsOk = listed && back.length === bytes.length;
+          await opfs.remove("smoke-test.taud");
+          log(`opfs round-trip: ${back.length} bytes, listed=${listed}`);
+        } else {
+          log("opfs unavailable in this browser profile");
+        }
+
+        const pass = entryOk && undoOk && instOk && cueOk && store.doc.dirty && opfsOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL entry=${entryOk} undo=${undoOk} inst=${instOk} cue=${cueOk} opfs=${opfsOk}`);
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>
