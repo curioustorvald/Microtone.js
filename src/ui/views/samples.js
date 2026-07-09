@@ -36,20 +36,34 @@ export class SamplesView {
   refresh() {
     const doc = this.store.doc;
     this.listEl.innerHTML = "";
+    this.rowEls = [];
     if (!doc) return;
     this.list = doc.sampleList();
     this.list.forEach((s, i) => {
       const row = document.createElement("div");
       row.className = "side-row" + (i === this.selected ? " sel" : "");
       row.innerHTML =
+        `<span class="dot"></span>` +
         `<span class="idx">${String(i).padStart(3, "0")}</span>` +
         `<span class="name">${escape(s.name || "(unnamed)")}</span>` +
         `<span class="dim">${(s.len / 1024).toFixed(1)}K</span>`;
       row.addEventListener("click", () => { this.selected = i; this.refresh(); });
       this.listEl.appendChild(row);
+      this.rowEls.push({ el: row, ptr: s.ptr });
     });
     this.updateInfo();
     this.drawWave();
+  }
+
+  /** Light the list rows of samples any voice is sounding right now. */
+  updateLiveDots() {
+    const audio = this.store.audio;
+    if (!audio || !this.rowEls) return;
+    const livePtrs = new Set();
+    for (let vi = 0; vi < 64; vi++) {
+      if (audio.getVoiceActive(vi)) livePtrs.add(audio.getVoiceSamplePtr(vi));
+    }
+    for (const r of this.rowEls) r.el.classList.toggle("live", livePtrs.has(r.ptr));
   }
 
   updateInfo() {
@@ -64,10 +78,11 @@ export class SamplesView {
       ` · used by ${s.users.map((u) => "$" + hex2(u)).join(" ")}`;
   }
 
-  /** Per-frame: live play blobs only need repaint while audio runs. */
+  /** Per-frame: live play cursors + list dots while audio runs. */
   frame() {
     if (!this.visible) return;
     if (this.store.audio?.isPlaying() || this.store.audio?.snapshot) this.drawWave();
+    this.updateLiveDots();
   }
 
   drawWave() {
@@ -112,7 +127,8 @@ export class SamplesView {
     }
     ctx.stroke();
 
-    // live play-position blobs
+    // live play-position cursors — vertical bars, matching the envelope
+    // graph's playback cursor style
     const audio = this.store.audio;
     if (audio) {
       ctx.fillStyle = "#f5a623";
@@ -122,9 +138,7 @@ export class SamplesView {
         const pos = audio.getVoiceSamplePos(vi);
         if (pos < 0 || pos > s.len) continue;
         const x = (pos / s.len) * w;
-        ctx.beginPath();
-        ctx.arc(x, h / 2, 5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(x - 1, 0, 2, h);
       }
     }
   }

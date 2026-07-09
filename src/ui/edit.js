@@ -10,10 +10,11 @@ import { MIDDLE_C } from "../engine/constants.js";
 export const SUB_NOTE = 0;
 export const SUB_INST = 1;
 export const SUB_VOL = 2;
-export const SUB_FX_OP = 3;
-export const SUB_FX_ARG = 4;
-export const NUM_SUBS = 5;
-export const SUB_NIBBLES = [1, 2, 2, 1, 4];
+export const SUB_PAN = 3;
+export const SUB_FX_OP = 4;
+export const SUB_FX_ARG = 5;
+export const NUM_SUBS = 6;
+export const SUB_NIBBLES = [1, 2, 2, 2, 1, 4];
 
 // Physical piano rows (KeyboardEvent.code → semitone offset from C).
 // White: a s d f g h j k → C D E F G A B +C; black: w e t y u.
@@ -107,6 +108,23 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
     return nib === 0
       ? { fields: { volume: val, volumeEff: sel }, advanceNib: true }
       : { fields: { volume: val, volumeEff: sel }, advanceRow: true };
+  }
+
+  if (sub === SUB_PAN) {
+    if (code === "Delete" || code === "Period") {
+      // pan-column no-op sentinel: SEL_FINE(3) with value 0
+      return { fields: { pan: 0, panEff: 3 }, advanceRow: true };
+    }
+    if (key === "+") return { fields: { panEff: 1 } }; // slide right
+    if (key === "-") return { fields: { panEff: 2 } }; // slide left
+    const d = hexDigit(key);
+    if (d < 0) return null;
+    const cur = cell.pan & 0x3f;
+    const sel = cell.panEff === 3 && cell.pan === 0 ? 0 : cell.panEff;
+    const val = nib === 0 ? (((d << 4) | (cur & 0x0f)) & 0x3f) : ((cur & 0x30) | d);
+    return nib === 0
+      ? { fields: { pan: val, panEff: sel }, advanceNib: true }
+      : { fields: { pan: val, panEff: sel }, advanceRow: true };
   }
 
   if (sub === SUB_FX_OP) {

@@ -52,6 +52,7 @@ export class InstrumentsView {
   refresh() {
     const doc = this.store.doc;
     this.listEl.innerHTML = "";
+    this.rowEls = [];
     if (!doc) return;
     for (const slot of doc.usedInstrumentSlots()) {
       const inst = doc.instruments[slot];
@@ -59,6 +60,7 @@ export class InstrumentsView {
       row.className = "side-row" + (slot === this.selected ? " sel" : "");
       const kind = inst.isMeta ? "META" : inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
       row.innerHTML =
+        `<span class="dot"></span>` +
         `<span class="idx">$${slot.toString(16).toUpperCase().padStart(3, "0")}</span>` +
         `<span class="name">${escape(doc.instrumentName(slot) || "(unnamed)")}</span>` +
         `<span class="badge-sm">${kind}</span>`;
@@ -68,9 +70,22 @@ export class InstrumentsView {
         this.refresh();
       });
       this.listEl.appendChild(row);
+      this.rowEls.push({ el: row, slot });
     }
     this.renderTabs();
     this.renderPanel();
+  }
+
+  /** Light the list rows of instruments any voice is playing right now.
+   *  A meta's layer children play sub-instrument slots, so those light too. */
+  updateLiveDots() {
+    const audio = this.store.audio;
+    if (!audio || !this.rowEls) return;
+    const liveSlots = new Set();
+    for (let vi = 0; vi < 64; vi++) {
+      if (audio.getVoiceActive(vi)) liveSlots.add(audio.getVoiceInstrument(vi));
+    }
+    for (const r of this.rowEls) r.el.classList.toggle("live", liveSlots.has(r.slot));
   }
 
   renderTabs() {
@@ -419,6 +434,7 @@ export class InstrumentsView {
       if (this.tab.startsWith("env") && this.envCanvas) this.drawEnvGraph();
       if (this.tab === "zones" && this.zoneCanvas) this.drawZones();
     }
+    this.updateLiveDots();
   }
 }
 

@@ -4,10 +4,10 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
-import { noteToStr, noteCentsOff, hex2, volToStr, fxToStr } from "../notenames.js";
-import { noteDegreeLabel } from "../pitchtables.js";
+import { noteToStr, noteCentsOff, hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
+import { noteDegreeLabel, stepNoteInTable } from "../pitchtables.js";
 import {
-  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG, SUB_NIBBLES,
+  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG, SUB_NIBBLES,
 } from "../edit.js";
 import { setCellOp } from "../../doc/ops.js";
 
@@ -16,16 +16,28 @@ const SUB_POSITIONS = [];
 for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
   for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
 }
-// Character offset of each sub-position inside the 16-char cell.
+// Character offset of each sub-position inside the 20-char cell:
+// "C-4 01 v3F p20 A0F00" → note 0-2, inst 4-5, vol 7-9, pan 11-13, fx 15-19.
 function subCharPos(sub, nib) {
   switch (sub) {
-    case SUB_NOTE: return [0, 3];        // 3 chars wide
+    case SUB_NOTE: return [0, 3];         // 3 chars wide
     case SUB_INST: return [4 + nib, 1];
-    case SUB_VOL: return [8 + nib, 1];   // char 7 is the selector prefix
-    case SUB_FX_OP: return [11, 1];
-    case SUB_FX_ARG: return [12 + nib, 1];
+    case SUB_VOL: return [8 + nib, 1];    // char 7 is the selector prefix
+    case SUB_PAN: return [12 + nib, 1];   // char 11 is the selector prefix
+    case SUB_FX_OP: return [15, 1];
+    case SUB_FX_ARG: return [16 + nib, 1];
     default: return [0, 1];
   }
+}
+
+/** Map a character offset within a cell to [sub, nib]. */
+function charToSub(charX) {
+  if (charX >= 16) return [SUB_FX_ARG, clampInt(Math.floor(charX - 16), 0, 3)];
+  if (charX >= 15) return [SUB_FX_OP, 0];
+  if (charX >= 11) return [SUB_PAN, clampInt(Math.floor(charX - 12), 0, 1)];
+  if (charX >= 7) return [SUB_VOL, clampInt(Math.floor(charX - 8), 0, 1)];
+  if (charX >= 4) return [SUB_INST, clampInt(Math.floor(charX - 4), 0, 1)];
+  return [SUB_NOTE, 0];
 }
 
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
@@ -33,7 +45,7 @@ const CHAR_W = 7.3;
 const ROW_H = 16;
 const HEADER_H = 44;   // channel header: number + VU + pan
 const GUTTER_W = 76;   // "cue:row | absrow"
-const CELL_CHARS = 16; // "C-4 01 v3F A0F00"
+const CELL_CHARS = 20; // "C-4 01 v3F p20 A0F00"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 
 export class TimelineView {
@@ -53,8 +65,13 @@ export class TimelineView {
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (e.shiftKey) this.scrollCh = clampInt(this.scrollCh + Math.sign(e.deltaY), 0, this.maxScrollCh());
-      else this.scrollBy(e.deltaY / ROW_H);
+      // Shift+wheel reports its delta in deltaX on most platforms.
+      const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      // Record mode: wheel over the CURSOR cell increments/decrements the
+      // hovered column (wheel up = +1); elsewhere the wheel scrolls.
+      if (this.store.record && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
+      if (e.shiftKey) this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
+      else this.scrollBy(d / ROW_H);
     }, { passive: false });
 
     canvas.addEventListener("pointerdown", (e) => this.onPointer(e));
@@ -138,21 +155,75 @@ export class TimelineView {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     if (y < HEADER_H) return; // header clicks (mute) come with M6
+    const hit = this.hitTest(x, y);
+    if (!hit) return;
+    this.store.cursor = hit;
+    this.store.emit("cursor");
+  }
+
+  /** Canvas-relative coords → {row, ch, sub, nib}, or null off-grid. */
+  hitTest(x, y) {
+    if (y < HEADER_H) return null;
     const row = Math.floor(this.scrollRow) + Math.floor((y - HEADER_H) / ROW_H);
     const colIdx = Math.floor((x - GUTTER_W) / COL_W);
     const ch = this.scrollCh + colIdx;
     const map = this.getMap();
-    if (!map || row < 0 || row >= map.totalRows) return;
+    if (!map || row < 0 || row >= map.totalRows || colIdx < 0) return null;
     const chans = this.store.doc.channelCount;
-    // sub-position from the character offset within the cell
     const charX = (x - GUTTER_W - colIdx * COL_W - 2) / CHAR_W;
-    let sub = SUB_NOTE, nib = 0;
-    if (charX >= 12) { sub = SUB_FX_ARG; nib = clampInt(Math.floor(charX - 12), 0, 3); }
-    else if (charX >= 11) { sub = SUB_FX_OP; }
-    else if (charX >= 7) { sub = SUB_VOL; nib = clampInt(Math.floor(charX - 8), 0, 1); }
-    else if (charX >= 4) { sub = SUB_INST; nib = clampInt(Math.floor(charX - 4), 0, 1); }
-    this.store.cursor = { row, ch: clampInt(ch, 0, chans - 1), sub, nib };
-    this.store.emit("cursor");
+    const [sub, nib] = charToSub(charX);
+    return { row, ch: clampInt(ch, 0, chans - 1), sub, nib };
+  }
+
+  /**
+   * Wheel-over-the-cursor-cell editing (record mode): the hovered column steps
+   * by one unit — notes by one degree of the ACTIVE pitch table (a quarter-tone
+   * in 24-TET, a semitone in 12-TET…), inst/vol/pan/fx by ±1. Consecutive
+   * ticks coalesce into one undo entry.
+   */
+  wheelEdit(e, dir) {
+    const store = this.store;
+    const rect = this.canvas.getBoundingClientRect();
+    const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) return false;
+    const c = store.cursor;
+    if (hit.row !== c.row || hit.ch !== c.ch) return false;
+    const target = this.cursorCell();
+    if (!target) return false;
+    const cell = target.cell;
+
+    let fields = null;
+    switch (hit.sub) {
+      case SUB_NOTE:
+        if (cell.note >= 0x20) {
+          fields = { note: stepNoteInTable(cell.note, store.pitchPreset, dir) };
+        }
+        break;
+      case SUB_INST:
+        fields = { instrment: clampInt(cell.instrment + dir, 0, 255) };
+        break;
+      case SUB_VOL:
+        fields = cell.volumeEff === 3 && cell.volume === 0
+          ? { volume: 0x20, volumeEff: 0 } // promote the no-op to a centre SET
+          : { volume: clampInt(cell.volume + dir, 0, 0x3f) };
+        break;
+      case SUB_PAN:
+        fields = cell.panEff === 3 && cell.pan === 0
+          ? { pan: 0x20, panEff: 0 }
+          : { pan: clampInt(cell.pan + dir, 0, 0x3f) };
+        break;
+      case SUB_FX_OP:
+        fields = { effect: clampInt(cell.effect + dir, 0, 35) };
+        break;
+      case SUB_FX_ARG:
+        fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) };
+        break;
+    }
+    if (fields === null) return false;
+    store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, fields,
+      `wheel:${target.pat}:${target.rowInCue}:${c.ch}:${hit.sub}`));
+    this.invalidate();
+    return true;
   }
 
   moveCursor(dRow, dCh) {
@@ -231,10 +302,7 @@ export class TimelineView {
     if (action.advanceNib) {
       this.moveSubCursor(1);
     } else if (action.advanceRow) {
-      c.nib = 0;
-      if (c.sub === SUB_INST || c.sub === SUB_VOL || c.sub === SUB_FX_ARG) {
-        c.nib = 0; // field complete: reset to its first nibble
-      }
+      c.nib = 0; // field complete: back to its first nibble
       this.moveCursor(store.editStep, 0);
     }
     this.invalidate();
@@ -396,6 +464,7 @@ export class TimelineView {
         }
         const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
         const volS = volToStr(cell.volume, cell.volumeEff);
+        const panS = panToStr(cell.pan, cell.panEff);
         const fxS = fxToStr(cell.effect, cell.effectArg);
 
         ctx.fillStyle = cell.note >= 0x20 ? C.fg : cell.note !== 0 ? C.accent : C.dim;
@@ -410,9 +479,13 @@ export class TimelineView {
         if (volS === "···") ctx.globalAlpha = 0.4;
         ctx.fillText(volS, x + 2 + 7 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
+        ctx.fillStyle = panS === "···" ? C.dim : "#d78ce6";
+        if (panS === "···") ctx.globalAlpha = 0.4;
+        ctx.fillText(panS, x + 2 + 11 * CHAR_W, y + ROW_H / 2);
+        ctx.globalAlpha = 1;
         ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
         if (fxS === "·····") ctx.globalAlpha = 0.4;
-        ctx.fillText(fxS, x + 2 + 11 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(fxS, x + 2 + 15 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
       }
     }

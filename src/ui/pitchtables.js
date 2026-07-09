@@ -64,6 +64,32 @@ export function noteDegreeLabel(note, preset) {
 }
 
 /**
+ * Step a note by `dir` (±1) degrees of the active pitch table: snap to the
+ * nearest degree, then move one table entry, wrapping across periods.
+ * 12-TET steps a semitone, 24-TET a quarter-tone, etc. The Raw preset
+ * (empty table) steps one raw 4096-TET unit.
+ */
+export function stepNoteInTable(note, preset, dir) {
+  if (!preset || preset.table.length === 0) {
+    return Math.min(Math.max(note + dir, 0x20), 0xffff);
+  }
+  const table = preset.table;
+  const rel = note - ANCHOR_NOTE;
+  let k = Math.floor(rel / preset.interval);
+  const inPeriod = rel - k * preset.interval;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < table.length; i++) {
+    const d = Math.abs(table[i] - inPeriod);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  let i = best + dir;
+  if (i < 0) { k--; i = table.length - 1; }
+  else if (i >= table.length) { k++; i = 0; }
+  const out = ANCHOR_NOTE + k * preset.interval + table[i];
+  return Math.min(Math.max(out, 0x20), 0xffff);
+}
+
+/**
  * Nearest-pitch retune of every pattern note in `song` from its current
  * tuning to `newPreset` — the 'pitch' method of taut.js retuneAllPatterns
  * (taut.js:522+), candidate generator ported verbatim. Percussion notes are

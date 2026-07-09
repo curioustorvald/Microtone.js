@@ -233,6 +233,16 @@ select, input[type="range"] {
 .side-row:hover { background: var(--panel-2); }
 .side-row.sel { background: #28405c; }
 .side-row .idx { color: var(--accent); font-family: monospace; }
+.side-row .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: transparent;
+  flex-shrink: 0;
+  align-self: center;
+  transition: background 80ms;
+}
+.side-row.live .dot { background: var(--meter); box-shadow: 0 0 6px var(--meter); }
 .side-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge-sm { color: var(--accent-2); font-size: 0.75rem; }
 .side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }

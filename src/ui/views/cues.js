@@ -60,8 +60,10 @@ export class CuesView {
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (e.shiftKey) this.scrollCh = Math.max(0, this.scrollCh + Math.sign(e.deltaY) * 2);
-      else this.scrollCue = Math.max(0, this.scrollCue + Math.sign(e.deltaY) * 3);
+      // Shift+wheel reports its delta in deltaX on most platforms.
+      const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (e.shiftKey) this.scrollCh = Math.max(0, this.scrollCh + Math.sign(d) * 2);
+      else this.scrollCue = Math.max(0, this.scrollCue + Math.sign(d) * 3);
       this.invalidate();
     }, { passive: false });
 

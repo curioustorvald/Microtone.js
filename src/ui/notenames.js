@@ -47,3 +47,10 @@ export function volToStr(volume, volumeEff) {
   const prefix = ["v", "+", "-", "f"][volumeEff];
   return prefix + hex2(volume);
 }
+
+/** Pan column: selector-prefixed hex (p set, › right, ‹ left, f fine). */
+export function panToStr(pan, panEff) {
+  if (panEff === 3 && pan === 0) return "···";
+  const prefix = ["p", "›", "‹", "f"][panEff];
+  return prefix + hex2(pan);
+}
