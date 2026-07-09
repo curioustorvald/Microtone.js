@@ -4,6 +4,7 @@
 // tab. Read-only in M7 (sample editor modal is an M8 item).
 
 import { hex2 } from "../notenames.js";
+import { themeColors } from "../theme.js";
 
 export class SamplesView {
   constructor(store, host) {
@@ -95,21 +96,22 @@ export class SamplesView {
     this.canvas.height = h * dpr;
     this.canvas.style.width = w + "px";
     this.canvas.style.height = h + "px";
+    const C = themeColors();
     const ctx = this.canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#1f232b";
+    ctx.fillStyle = C.cvBg;
     ctx.fillRect(0, 0, w, h);
     if (!s || !doc?.sampleBin) return;
     const bin = doc.sampleBin;
 
     // loop region shading
     if ((s.loopMode & 3) !== 0 && s.loopEnd > s.loopStart) {
-      ctx.fillStyle = "#26314a";
+      ctx.fillStyle = C.waveLoop;
       ctx.fillRect((s.loopStart / s.len) * w, 0, ((s.loopEnd - s.loopStart) / s.len) * w, h);
     }
 
     // min/max column waveform
-    ctx.strokeStyle = "#43d675";
+    ctx.strokeStyle = C.wave;
     ctx.beginPath();
     for (let x = 0; x < w; x++) {
       const a = s.ptr + Math.floor((x / w) * s.len);
@@ -131,7 +133,7 @@ export class SamplesView {
     // graph's playback cursor style
     const audio = this.store.audio;
     if (audio) {
-      ctx.fillStyle = "#f5a623";
+      ctx.fillStyle = C.playCursor;
       for (let vi = 0; vi < 64; vi++) {
         if (!audio.getVoiceActive(vi)) continue;
         if (audio.getVoiceSamplePtr(vi) !== s.ptr) continue;

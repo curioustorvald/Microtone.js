@@ -12,6 +12,7 @@ import {
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
 } from "../edit.js";
 import { setCellOp } from "../../doc/ops.js";
+import { themeColors } from "../theme.js";
 
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.3;
@@ -29,7 +30,6 @@ export class TimelineView {
     this.scrollCh = 0;    // leftmost visible channel
     this.map = null;      // songMap cache
     this.needsRedraw = true;
-    this.colors = null;
 
     store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.invalidate(); });
     store.on("edit", () => { this.map = null; this.invalidate(); });
@@ -50,19 +50,6 @@ export class TimelineView {
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     this.resize();
-  }
-
-  readColors() {
-    const css = getComputedStyle(document.documentElement);
-    const g = (name) => css.getPropertyValue(name).trim();
-    this.colors = {
-      bg: g("--bg"), panel: g("--panel"), panel2: g("--panel-2"),
-      fg: g("--fg"), dim: g("--dim"), accent: g("--accent"),
-      accent2: g("--accent-2"), meter: g("--meter"), meterBg: g("--meter-bg"),
-      border: g("--border"),
-      rowBeat: "#20242d", rowBar: "#262c38", playhead: "#3a3320",
-      cursor: "#28405c", cueLine: "#4a5364",
-    };
   }
 
   resize() {
@@ -311,8 +298,8 @@ export class TimelineView {
   }
 
   draw(playRow) {
-    if (!this.colors) this.readColors();
-    const { ctx, colors: C, store } = this;
+    const C = themeColors();
+    const { ctx, store } = this;
     const dpr = this.dpr;
     const W = this.canvas.width / dpr;
     const H = this.canvas.height / dpr;
@@ -414,7 +401,7 @@ export class TimelineView {
           ctx.fillRect(x - 2, y, COL_W - 2, ROW_H);
           // sub-column caret: amber in record mode, blue otherwise
           const [cpos, cw] = subCharPos(cursor.sub ?? 0, cursor.nib ?? 0);
-          ctx.fillStyle = store.record ? "#6e5316" : "#2f5378";
+          ctx.fillStyle = store.record ? C.caret : C.caretNav;
           ctx.fillRect(x + 2 + cpos * CHAR_W - 1, y, cw * CHAR_W + 2, ROW_H);
         }
         const patNum = entry.info ? (this.store.song.cues[entry.cue][ch] & 0x7fff) : PATTERN_EMPTY;
@@ -446,7 +433,7 @@ export class TimelineView {
         if (volS === "···") ctx.globalAlpha = 0.4;
         ctx.fillText(volS, x + 2 + 8 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = panS === "···" ? C.dim : "#d78ce6";
+        ctx.fillStyle = panS === "···" ? C.dim : C.colPan;
         if (panS === "···") ctx.globalAlpha = 0.4;
         ctx.fillText(panS, x + 2 + 12 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;

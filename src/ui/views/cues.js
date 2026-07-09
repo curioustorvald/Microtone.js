@@ -9,6 +9,7 @@ import { cueInfo } from "../../doc/document.js";
 import { INST_NOP, INST_GOBACK, INST_SKIP, INST_JUMP, INST_PATLEN, INST_HALTAT, INST_HALT } from "../../engine/state.js";
 import { setCueWordOp, setCueOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
+import { themeColors } from "../theme.js";
 
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.3;
@@ -53,7 +54,6 @@ export class CuesView {
     this.scrollCh = 0;
     this.cursor = { cue: 0, col: 0, nib: 0 }; // col: 0/1 = cmd words, 2+ = channel-2
     this.needsRedraw = true;
-    this.colors = null;
 
     store.on("doc", () => { this.cursor = { cue: 0, col: 0, nib: 0 }; this.scrollCue = 0; this.invalidate(); });
     store.on("edit", () => this.invalidate());
@@ -83,16 +83,6 @@ export class CuesView {
     this.canvas.style.height = host.clientHeight + "px";
     this.dpr = dpr;
     this.invalidate();
-  }
-
-  readColors() {
-    const css = getComputedStyle(document.documentElement);
-    const g = (n) => css.getPropertyValue(n).trim();
-    this.colors = {
-      bg: g("--bg"), panel: g("--panel"), panel2: g("--panel-2"), fg: g("--fg"),
-      dim: g("--dim"), accent: g("--accent"), accent2: g("--accent-2"),
-      border: g("--border"), cursor: "#28405c", caret: "#6e5316",
-    };
   }
 
   visibleRows() { return Math.floor((this.canvas.height / this.dpr - HEADER_H) / ROW_H); }
@@ -210,8 +200,8 @@ export class CuesView {
   }
 
   draw() {
-    if (!this.colors) this.readColors();
-    const { ctx, colors: C, store } = this;
+    const C = themeColors();
+    const { ctx, store } = this;
     const dpr = this.dpr ?? 1;
     const W = this.canvas.width / dpr;
     const H = this.canvas.height / dpr;
@@ -246,7 +236,7 @@ export class CuesView {
       const info = cueInfo(words);
 
       if (cueIdx === playCue) {
-        ctx.fillStyle = "#3a3320";
+        ctx.fillStyle = C.playhead;
         ctx.fillRect(0, y, W, ROW_H);
       } else if (cueIdx % 4 === 0) {
         ctx.fillStyle = C.panel;

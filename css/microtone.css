@@ -1,18 +1,95 @@
-/* Microtone.js — shared styling. Palette echoes the taut.js colour scheme
-   (dark slate ground, amber accents) via custom properties. */
+/* Microtone.js — shared styling.
+ *
+ * ══════════════════════════════════════════════════════════════════════
+ *  THEMES — every colour in the app (DOM *and* canvas) is defined here.
+ *  The canvas views read these variables through src/ui/theme.js, so a
+ *  change below is the only edit needed. Toggle: the ◐ button / data-theme
+ *  attribute on <html>.
+ * ══════════════════════════════════════════════════════════════════════ */
 
-:root {
-  --bg: #16181d;
-  --panel: #1f232b;
-  --panel-2: #262b35;
-  --fg: #d8dce4;
-  --dim: #7a8290;
-  --accent: #f5a623;
-  --accent-2: #4aa3ff;
-  --meter: #43d675;
-  --meter-bg: #2a2f3a;
+/* ── THEME: DARK (default) — taut.js-inspired slate + amber ───────────── */
+:root,
+:root[data-theme="dark"] {
+  /* chrome */
+  --bg: #16181d;            /* app background */
+  --panel: #1f232b;         /* bars, list panels, canvas panels */
+  --panel-2: #262b35;       /* buttons, inputs, alternating headers */
+  --fg: #d8dce4;            /* primary text / note glyphs */
+  --dim: #7a8290;           /* secondary text, empty cells */
+  --accent: #f5a623;        /* amber: highlights, sentinels, off-grid notes */
+  --accent-2: #4aa3ff;      /* blue: instrument column, links, pan ticks */
+  --meter: #43d675;         /* green: VU bars, volume column, live dots */
+  --meter-bg: #2a2f3a;      /* meter troughs */
   --border: #343a46;
+
+  /* status colours */
+  --ok-bg: #234d2c;   --ok-fg: #9df0ae;    /* "audio on" badge */
+  --err-bg: #5c2e2e;  --err-fg: #ffb0b0;   /* "audio off" badge, warnings */
+  --rec-fg: #ff5c5c;  --rec-border: #7a3434;
+
+  /* canvas: pattern grids (Timeline / Cues / Patterns) */
+  --cv-bg: #1f232b;         /* waveform / envelope canvas ground */
+  --cv-row-beat: #20242d;   /* primary beat row band */
+  --cv-row-bar: #262c38;    /* secondary beat row band */
+  --cv-playhead: #3a3320;   /* playing row */
+  --cv-cursor: #28405c;     /* cursor cell */
+  --cv-caret: #6e5316;      /* sub-column caret, record mode (amber) */
+  --cv-caret-nav: #2f5378;  /* sub-column caret, navigate mode (blue) */
+  --cv-cue-line: #4a5364;   /* cue boundary rule */
+  --cv-col-pan: #d78ce6;    /* pan column ink */
+
+  /* canvas: samples / instruments */
+  --cv-wave: #43d675;        /* waveform trace */
+  --cv-wave-loop: #26314a;   /* loop-region shading */
+  --cv-play-cursor: #f5a623; /* live play-position bars, envelope nodes */
+  --cv-env-line: #4aa3ff;    /* envelope polyline, zone strokes */
+  --cv-env-node: #f5a623;    /* envelope node dots */
+  --cv-env-sus: #2a3a2e;     /* sustain-region shading */
+  --cv-env-loop: #33314a44;  /* loop-region shading (translucent) */
+  --cv-live: #43d675;        /* live envelope cursor */
+
   font-family: system-ui, sans-serif;
+}
+
+/* ── THEME: LIGHT (preliminary — tune freely) ─────────────────────────── */
+:root[data-theme="light"] {
+  /* chrome */
+  --bg: #f2f3f6;
+  --panel: #e7e9ee;
+  --panel-2: #dbdfe7;
+  --fg: #24272e;
+  --dim: #69707d;
+  --accent: #af6f10;
+  --accent-2: #1d66b8;
+  --meter: #1c9450;
+  --meter-bg: #cfd4dd;
+  --border: #c2c7d1;
+
+  /* status colours */
+  --ok-bg: #d3ecd8;   --ok-fg: #1d6b32;
+  --err-bg: #f4d9d9;  --err-fg: #a03434;
+  --rec-fg: #c22f2f;  --rec-border: #d99d9d;
+
+  /* canvas: pattern grids */
+  --cv-bg: #eceef2;
+  --cv-row-beat: #e2e5ec;
+  --cv-row-bar: #d6dbe5;
+  --cv-playhead: #f4e3b8;
+  --cv-cursor: #c5d8ef;
+  --cv-caret: #eed28f;
+  --cv-caret-nav: #a9c8e8;
+  --cv-cue-line: #9aa3b4;
+  --cv-col-pan: #9c3fb4;
+
+  /* canvas: samples / instruments */
+  --cv-wave: #1c9450;
+  --cv-wave-loop: #ccd8ee;
+  --cv-play-cursor: #af6f10;
+  --cv-env-line: #1d66b8;
+  --cv-env-node: #af6f10;
+  --cv-env-sus: #d7e7d9;
+  --cv-env-loop: #c3c9e766;
+  --cv-live: #1c9450;
 }
 
 * { box-sizing: border-box; }
@@ -84,13 +161,13 @@ select, input[type="range"] {
 .status b { color: var(--fg); font-variant-numeric: tabular-nums; }
 
 .badge {
-  background: #5c2e2e;
-  color: #ffb0b0;
+  background: var(--err-bg);
+  color: var(--err-fg);
   border-radius: 4px;
   padding: 0.15rem 0.5rem;
   font-size: 0.85rem;
 }
-.badge.on { background: #234d2c; color: #9df0ae; }
+.badge.on { background: var(--ok-bg); color: var(--ok-fg); }
 
 #meters {
   width: 100%;
@@ -176,7 +253,7 @@ select, input[type="range"] {
 .dirty { color: var(--accent); }
 
 .rec { color: var(--dim); }
-.rec.on { color: #ff5c5c; border-color: #7a3434; }
+.rec.on { color: var(--rec-fg); border-color: var(--rec-border); }
 
 .wheelable {
   cursor: ns-resize;
@@ -241,7 +318,7 @@ select, input[type="range"] {
 /* ── files view ── */
 .files-host { position: absolute; inset: 0; overflow: auto; padding: 1rem; }
 .files-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-.files-warn { color: #ffb0b0; }
+.files-warn { color: var(--err-fg); }
 .files-table { border-collapse: collapse; width: 100%; }
 .files-table th, .files-table td {
   text-align: left;
@@ -269,7 +346,7 @@ select, input[type="range"] {
   align-items: baseline;
 }
 .side-row:hover { background: var(--panel-2); }
-.side-row.sel { background: #28405c; }
+.side-row.sel { background: var(--cv-cursor); }
 .side-row .idx { color: var(--accent); font-family: monospace; }
 .side-row .dot {
   width: 7px;

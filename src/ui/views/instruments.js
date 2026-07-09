@@ -8,6 +8,7 @@ import { setInstFieldOp, setEnvDragOp } from "../../doc/ops.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
+import { themeColors } from "../theme.js";
 
 const ENV_TABS = [
   { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env", max: 63 },
@@ -251,9 +252,10 @@ export class InstrumentsView {
     canvas.height = h * dpr;
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
+    const C = themeColors();
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#1f232b";
+    ctx.fillStyle = C.cvBg;
     ctx.fillRect(0, 0, w, h);
 
     const { times, total } = this.envGeometry();
@@ -268,11 +270,11 @@ export class InstrumentsView {
       ctx.fillStyle = color;
       ctx.fillRect(X(Math.min(s, 24)), 0, Math.max(X(Math.min(e, 24)) - X(Math.min(s, 24)), 2), h);
     };
-    shade(inst[tabDef.susKey], "#2a3a2e");
-    shade(inst[tabDef.loopKey], "#33314a44");
+    shade(inst[tabDef.susKey], C.envSus);
+    shade(inst[tabDef.loopKey], C.envLoop);
 
     // polyline + nodes
-    ctx.strokeStyle = "#4aa3ff";
+    ctx.strokeStyle = C.envLine;
     ctx.beginPath();
     for (let i = 0; i <= 24; i++) {
       const x = X(i);
@@ -281,7 +283,7 @@ export class InstrumentsView {
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    ctx.fillStyle = "#f5a623";
+    ctx.fillStyle = C.envNode;
     for (let i = 0; i <= 24; i++) {
       ctx.beginPath();
       ctx.arc(X(i), Y(env[i].value), 3.5, 0, Math.PI * 2);
@@ -291,7 +293,7 @@ export class InstrumentsView {
     // live playback cursors: voices playing this instrument
     const audio = this.store.audio;
     if (audio && tabDef.key === "volEnvelopes") {
-      ctx.fillStyle = "#43d675";
+      ctx.fillStyle = C.live;
       for (let vi = 0; vi < 64; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.selected) continue;
         const idx = audio.getVoiceEnvVolIndex(vi);
@@ -371,9 +373,10 @@ export class InstrumentsView {
     canvas.height = h * dpr;
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
+    const C = themeColors();
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#1f232b";
+    ctx.fillStyle = C.cvBg;
     ctx.fillRect(0, 0, w, h);
     const patches = inst.extraPatches ?? [];
     const X = (noteVal) => (noteVal / 0xffff) * w;
@@ -395,11 +398,14 @@ export class InstrumentsView {
       const pw = Math.max(X(p.pitchEnd) - x, 2);
       const ph = Math.max(Y(p.volumeStart) - y, 2);
       const live = liveKeys.has(`${p.samplePtr}:${p.sampleLength}`);
-      ctx.fillStyle = live ? "#f5a62388" : `hsla(${(i * 47) % 360} 50% 55% / 0.35)`;
+      ctx.globalAlpha = live ? 0.55 : 0.35;
+      ctx.fillStyle = live ? C.playCursor : `hsl(${(i * 47) % 360} 50% 55%)`;
       ctx.fillRect(x, y, pw, ph);
-      ctx.strokeStyle = live ? "#f5a623" : "#4aa3ff66";
+      ctx.globalAlpha = live ? 1 : 0.45;
+      ctx.strokeStyle = live ? C.playCursor : C.envLine;
       ctx.strokeRect(x + 0.5, y + 0.5, pw - 1, ph - 1);
-      ctx.fillStyle = "#d8dce4";
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = C.fg;
       ctx.font = "10px monospace";
       if (pw > 30) {
         ctx.fillText(`${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)}`, x + 2, y + 11);

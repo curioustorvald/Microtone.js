@@ -14,6 +14,7 @@ import {
 } from "../edit.js";
 import { setCellOp } from "../../doc/ops.js";
 import { CUE_EMPTY } from "../../format/taud-const.js";
+import { themeColors } from "../theme.js";
 
 const FONT = "13px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.9;
@@ -33,7 +34,6 @@ export class PatternView {
     this.scrollRow = 0;
     this.previewing = false;
     this.needsRedraw = true;
-    this.colors = null;
 
     this.root = document.createElement("div");
     this.root.className = "pattern-view";
@@ -252,17 +252,6 @@ export class PatternView {
     this.invalidate();
   }
 
-  readColors() {
-    const css = getComputedStyle(document.documentElement);
-    const g = (n) => css.getPropertyValue(n).trim();
-    this.colors = {
-      bg: g("--bg"), panel: g("--panel"), fg: g("--fg"), dim: g("--dim"),
-      accent: g("--accent"), accent2: g("--accent-2"), meter: g("--meter"),
-      border: g("--border"), cursor: "#28405c", caret: "#6e5316",
-      rowBeat: "#20242d", rowBar: "#262c38", playhead: "#3a3320", pan: "#d78ce6",
-    };
-  }
-
   frame() {
     if (!this.visible) return;
     const audio = this.store.audio;
@@ -272,8 +261,8 @@ export class PatternView {
   }
 
   draw() {
-    if (!this.colors) this.readColors();
-    const { ctx, colors: C, store } = this;
+    const C = themeColors();
+    const { ctx, store } = this;
     const dpr = this.dpr ?? 1;
     const W = this.canvas.width / dpr;
     const H = this.canvas.height / dpr;
@@ -335,7 +324,7 @@ export class PatternView {
       ctx.fillText(instS, x0 + 5 * CHAR_W, y + ROW_H / 2);
       ctx.fillStyle = volS === "···" ? C.dim : C.meter;
       ctx.fillText(volS, x0 + 8 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = panS === "···" ? C.dim : C.pan;
+      ctx.fillStyle = panS === "···" ? C.dim : C.colPan;
       ctx.fillText(panS, x0 + 12 * CHAR_W, y + ROW_H / 2);
       ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
       ctx.fillText(fxS, x0 + 16 * CHAR_W, y + ROW_H / 2);

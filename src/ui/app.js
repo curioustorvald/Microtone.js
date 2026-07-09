@@ -24,6 +24,17 @@ import { showHelp } from "./popups/help.js";
 import { showModal } from "./widgets/modal.js";
 import * as opfs from "../storage/opfs.js";
 import { presetForNotation } from "./pitchtables.js";
+import { initTheme, toggleTheme, onThemeChange } from "./theme.js";
+
+initTheme(); // before any canvas paints (saved choice ?? OS preference)
+{
+  // ?theme=dark|light overrides for this load (and persists like the toggle)
+  const t = new URLSearchParams(location.search).get("theme");
+  if (t === "dark" || t === "light") {
+    const { applyTheme } = await import("./theme.js");
+    applyTheme(t);
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 const store = new Store();
@@ -352,6 +363,17 @@ function setRecord(on) {
   patternView.invalidate();
 }
 $("recBtn").addEventListener("click", () => setRecord(!store.record));
+
+// ── theme toggle ──
+$("themeBtn").addEventListener("click", () => toggleTheme());
+onThemeChange(() => {
+  // repaint every canvas + refresh DOM views that cache colours implicitly
+  timeline.invalidate();
+  cuesView.invalidate();
+  patternView.invalidate();
+  if (store.view === "samples") samplesView.refresh();
+  if (store.view === "instruments") instrumentsView.renderPanel();
+});
 
 // ── toolbox (Timeline / Patterns) ──
 $("tbRetune").addEventListener("click", () => projectView.openRetune());
