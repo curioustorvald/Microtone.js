@@ -86,28 +86,36 @@ export function noteDegreeLabel(note, preset) {
 }
 
 /**
- * Resolve a playable note against a preset's symbol table.
- * Returns null when the preset has no syms, the note is off-grid (>±2 units)
- * or the period is out of display range; else
- *   {cjk, octave}                       for Shi'er lü tokens, or
- *   {tick, letter, acc, octave}         decoded from the 3-char token DSL.
+ * Resolve a playable note against a preset's symbol table. Always snaps to
+ * the NEAREST degree (wrap-aware); notes farther than ±2 units off the grid
+ * carry offGrid: true — "out of tune", painted yellow by the glyph painter.
+ * Returns null only when the preset has no syms (Raw) or the period is out
+ * of display range; else
+ *   {cjk, octave, offGrid}              for Shi'er lü tokens, or
+ *   {tick, letter, acc, octave, offGrid} decoded from the 3-char token DSL.
  */
 export function resolveNoteSymbol(note, preset) {
   if (!preset || !preset.sym || preset.table.length === 0) return null;
   const rel = note - ANCHOR_NOTE;
-  const k = Math.floor(rel / preset.interval);
+  let k = Math.floor(rel / preset.interval);
   const inPeriod = rel - k * preset.interval;
-  let best = -1, bestD = 3;
+  let best = 0, bestD = Infinity;
   for (let i = 0; i < preset.table.length; i++) {
     const d = Math.abs(preset.table[i] - inPeriod);
     if (d < bestD) { bestD = d; best = i; }
   }
-  if (best < 0) return null;
+  // The next period's root may be closer than the top table entry.
+  if (preset.interval - inPeriod < bestD) {
+    bestD = preset.interval - inPeriod;
+    best = 0;
+    k += 1;
+  }
   const octave = 4 + k;
   if (octave < 0 || octave > 9) return null;
+  const offGrid = bestD > 2;
   const token = preset.sym[best];
-  if (token.length === 1) return { cjk: token, octave };
-  return { tick: token[0], letter: token[1], acc: token[2], octave };
+  if (token.length === 1) return { cjk: token, octave, offGrid };
+  return { tick: token[0], letter: token[1], acc: token[2], octave, offGrid };
 }
 
 /**

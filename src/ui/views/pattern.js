@@ -102,18 +102,19 @@ export class PatternView {
   refreshBar() {
     const song = this.store.song;
     if (!song) return;
-    this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(3, "0");
+    // Pattern numbers are 4-digit hex, range 0000..7FFE.
+    this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
     const users = [];
     song.cues.forEach((words, c) => {
       for (let ch = 0; ch < this.store.doc.channelCount; ch++) {
         if ((words[ch] & 0x7fff) === this.patIdx && (words[ch] & 0x7fff) !== CUE_EMPTY) {
-          users.push(`${c.toString(16).toUpperCase().padStart(3, "0")}:${ch + 1}`);
+          users.push(`${c.toString(16).toUpperCase().padStart(4, "0")}:${ch + 1}`);
           break;
         }
       }
     });
     this.info.textContent =
-      ` of ${song.patterns.length.toString(16).toUpperCase()} · used by ` +
+      ` of ${song.patterns.length.toString(16).toUpperCase().padStart(4, "0")} · used by ` +
       (users.length ? `${users.length} cue(s): ${users.slice(0, 8).join(" ")}${users.length > 8 ? "…" : ""}` : "no cue");
   }
 
@@ -319,7 +320,8 @@ export class PatternView {
 
       const cell = pattern[row];
       paintNoteCell(ctx, cell.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,
-        { note: C.fg, sentinel: C.accent, dim: C.dim });
+        { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
+        store.rawNoteView);
       const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
       const volS = volToStr(cell.volume, cell.volumeEff);
       const panS = panToStr(cell.pan, cell.panEff);

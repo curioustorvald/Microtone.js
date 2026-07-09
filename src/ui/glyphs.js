@@ -2,82 +2,127 @@
 // font (tautfont_*.chr), redrawn as canvas paths so they scale with the cell
 // metrics. Renders the 4-char-wide note cell:
 //
-//   [tick][letter][accidental][octave]     tuned presets (Kite ticks lead)
+//   [letter][ accidental ×2 ][octave]      normal presets (taut layout —
+//                                          accidentals span TWO cells)
+//   [tick][letter][acc ×1][octave]         Kite notation (compact accidental)
 //   [  CJK char spanning 2  ][oct][ ]      Shi'er lü (conventional CJK font)
 //   [    sentinel vector, full width  ]    key-off / cut / fade / fast-fade
-//   [ raw hex4 ]                           Raw preset / off-grid notes
+//   [ IntH ] / [ hex4 ]                    interrupts / raw mode & no-preset
 //
-// Sentinel shapes (per spec): key-off = wide low-height rectangle box;
-// cut = vertically-centred CONNECTED ^^^; fade = centred connected
-// greater-amplitude ~~~; fast-fade = the fade mirrored vertically.
+// ── MANUAL TUNING ──
+// All glyph geometry lives in the GLYPH table below as fractions of the cell
+// box (x/w horizontal, y/h vertical). Tweak a number, reload
+// test/browser/glyph-gallery.html (it renders every glyph large), iterate.
+// Sentinel shapes per spec: key-off = wide low-height rectangle; cut =
+// connected vertically-centred ^^^; fade = connected greater-amplitude ~~~;
+// fast-fade = the CUT mirrored vertically (∨∨∨).
 
 import { resolveNoteSymbol } from "./pitchtables.js";
 import { hex4 } from "./notenames.js";
 
 export const NOTE_CELL_CHARS = 4;
 
-const LW = 1.3; // stroke width for glyph paths
+export const GLYPH = {
+  lineWidth: 1.3,
+
+  // sentinels (fractions of the full 4-char cell)
+  keyoffW: 0.66,      // box width
+  keyoffH: 0.28,      // box height
+  cutAmp: 0.17,       // ^^^ amplitude (of cell height)
+  cutPeaks: 3,
+  cutSpanX: [0.14, 0.86],
+  fadeAmp: 0.26,      // ~~~ amplitude
+  fadePeriods: 2,
+  fadeSpanX: [0.12, 0.88],
+
+  // sharp family (fractions of one accidental box)
+  sharpRise: 0.09,    // crossbar upward slant
+  sharpBarX: [0.18, 0.82],
+  sharpVertY: [0.16, 0.84],
+  sharpCrossY: [0.40, 0.66],
+
+  // flat family
+  flatStemY: [0.12, 0.82],
+  flatLoopTopY: 0.58,
+  flatSpan: 0.72,     // width used by the loop run (multi-flats divide this)
+
+  // double sharp (𝄪)
+  dsRadius: 0.24,     // of box width
+  dsDotSize: 0.36,    // serif dot size relative to radius
+
+  // Kite ticks
+  tickW: 0.32,
+  tickH: 0.16,
+  tickDoubleY: [0.36, 0.64],
+  bigDotR: 0.16,
+
+  // natural marker (the '-' in "C-")
+  naturalX: [0.30, 0.70],
+
+  // CJK font for Shi'er lü
+  cjkFont: '"Noto Sans CJK TC", "Noto Sans TC", "WenQuanYi Zen Hei", serif',
+};
 
 // ── sentinel vectors (span the whole cell width) ──
 
 function drawKeyOff(ctx, x, y, w, h) {
-  const bw = w * 0.66;
-  const bh = h * 0.28;
+  const bw = w * GLYPH.keyoffW;
+  const bh = h * GLYPH.keyoffH;
   ctx.strokeRect(x + (w - bw) / 2 + 0.5, y + (h - bh) / 2 + 0.5, bw, bh);
 }
 
-function drawCut(ctx, x, y, w, h) {
-  // connected ^^^ — three peaks, vertically centred
-  const amp = h * 0.17;
+function drawCut(ctx, x, y, w, h, mirrored) {
+  // connected ^^^ (mirrored = fast-fade's ∨∨∨), vertically centred
+  const amp = h * GLYPH.cutAmp * (mirrored ? -1 : 1);
   const cy = y + h / 2;
-  const x0 = x + w * 0.14;
-  const x1 = x + w * 0.86;
-  const peaks = 3;
-  const seg = (x1 - x0) / (peaks * 2);
+  const x0 = x + w * GLYPH.cutSpanX[0];
+  const x1 = x + w * GLYPH.cutSpanX[1];
+  const seg = (x1 - x0) / (GLYPH.cutPeaks * 2);
   ctx.beginPath();
   ctx.moveTo(x0, cy + amp);
-  for (let i = 0; i < peaks; i++) {
+  for (let i = 0; i < GLYPH.cutPeaks; i++) {
     ctx.lineTo(x0 + seg * (i * 2 + 1), cy - amp);
     ctx.lineTo(x0 + seg * (i * 2 + 2), cy + amp);
   }
   ctx.stroke();
 }
 
-function drawFade(ctx, x, y, w, h, mirrored) {
-  // connected ~~~ — two full sine periods, higher amplitude than the cut
-  const amp = h * 0.26 * (mirrored ? -1 : 1);
+function drawFade(ctx, x, y, w, h) {
+  // connected ~~~ — smooth wave, larger amplitude than the cut
+  const amp = h * GLYPH.fadeAmp;
   const cy = y + h / 2;
-  const x0 = x + w * 0.12;
-  const x1 = x + w * 0.88;
+  const x0 = x + w * GLYPH.fadeSpanX[0];
+  const x1 = x + w * GLYPH.fadeSpanX[1];
   const n = 32;
   ctx.beginPath();
   for (let i = 0; i <= n; i++) {
     const px = x0 + ((x1 - x0) * i) / n;
-    const py = cy - Math.sin((i / n) * Math.PI * 4) * amp;
+    const py = cy - Math.sin((i / n) * Math.PI * 2 * GLYPH.fadePeriods) * amp;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
   }
   ctx.stroke();
 }
 
-// ── accidentals (one char slot; normalized box with side padding) ──
+// ── accidentals, drawn inside a box (x, y, w, h) ──
 
 function drawSharpBody(ctx, x, y, w, h, verticals) {
   // verticals straight; crossbars slanted UPWARD to the right (♯, not #)
-  const rise = h * 0.09;
-  const xL = x + w * 0.18;
-  const xR = x + w * 0.82;
+  const rise = h * GLYPH.sharpRise;
+  const xL = x + w * GLYPH.sharpBarX[0];
+  const xR = x + w * GLYPH.sharpBarX[1];
   const vXs = [];
   for (let i = 0; i < verticals; i++) {
-    const t = verticals === 1 ? 0.5 : 0.3 + (0.4 * i) / (verticals - 1);
+    const t = verticals === 1 ? 0.5 : 0.32 + (0.36 * i) / (verticals - 1);
     vXs.push(x + w * t);
   }
   ctx.beginPath();
   for (const vx of vXs) {
-    ctx.moveTo(vx, y + h * 0.16);
-    ctx.lineTo(vx, y + h * 0.84);
+    ctx.moveTo(vx, y + h * GLYPH.sharpVertY[0]);
+    ctx.lineTo(vx, y + h * GLYPH.sharpVertY[1]);
   }
-  for (const cy of [y + h * 0.40, y + h * 0.66]) {
+  for (const cyf of GLYPH.sharpCrossY) {
+    const cy = y + h * cyf;
     ctx.moveTo(xL, cy + rise);
     ctx.lineTo(xR, cy - rise);
   }
@@ -86,20 +131,20 @@ function drawSharpBody(ctx, x, y, w, h, verticals) {
 
 function drawFlatBody(ctx, x, y, w, h, mirrored, count = 1) {
   // stem + right-facing loop (♭); mirrored = demiflat (loop opens left)
-  const span = w * 0.72;
+  const span = w * GLYPH.flatSpan;
   const each = span / count;
   for (let i = 0; i < count; i++) {
     const sx = mirrored
-      ? x + w * 0.86 - each * i
-      : x + w * 0.14 + each * i;
+      ? x + w * (0.5 + GLYPH.flatSpan / 2) - each * i - each * 0.15
+      : x + w * (0.5 - GLYPH.flatSpan / 2) + each * i + each * 0.15;
     const dir = mirrored ? -1 : 1;
     ctx.beginPath();
-    ctx.moveTo(sx, y + h * 0.12);
-    ctx.lineTo(sx, y + h * 0.82);
+    ctx.moveTo(sx, y + h * GLYPH.flatStemY[0]);
+    ctx.lineTo(sx, y + h * GLYPH.flatStemY[1]);
     ctx.bezierCurveTo(
-      sx + dir * each * 0.85, y + h * 0.52,
-      sx + dir * each * 0.55, y + h * 0.40,
-      sx, y + h * 0.58,
+      sx + dir * each * 0.85, y + h * (GLYPH.flatLoopTopY - 0.06),
+      sx + dir * each * 0.55, y + h * (GLYPH.flatLoopTopY - 0.18),
+      sx, y + h * GLYPH.flatLoopTopY,
     );
     ctx.stroke();
   }
@@ -112,46 +157,49 @@ function drawDoubleSharp(ctx, x, y, w, h, pair = false) {
     ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
     ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r);
     ctx.stroke();
-    const d = r * 0.36;
+    const d = r * GLYPH.dsDotSize;
     for (const [dx, dy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
       ctx.fillRect(cx + dx - d / 2, cy + dy - d / 2, d, d);
     }
   };
   const cy = y + h * 0.5;
   if (pair) {
-    draw(x + w * 0.3, cy, w * 0.17);
-    draw(x + w * 0.72, cy, w * 0.17);
+    draw(x + w * 0.28, cy, w * GLYPH.dsRadius * 0.62);
+    draw(x + w * 0.72, cy, w * GLYPH.dsRadius * 0.62);
   } else {
-    draw(x + w * 0.5, cy, w * 0.24);
+    draw(x + w * 0.5, cy, w * GLYPH.dsRadius);
   }
 }
 
 function drawTripleSharp(ctx, x, y, w, h) {
-  // ♯𝄪 compressed: small sharp left, small × right
-  drawSharpBody(ctx, x - w * 0.18, y + h * 0.06, w * 0.66, h * 0.88, 2);
-  const cx = x + w * 0.74;
+  // ♯𝄪 — with a two-cell box there is room for both halves
+  drawSharpBody(ctx, x, y, w * 0.52, h, 2);
+  const cx = x + w * 0.76;
   const cy = y + h * 0.5;
-  const r = w * 0.16;
+  const r = w * 0.13;
   ctx.beginPath();
   ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
   ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r);
   ctx.stroke();
+  const d = r * GLYPH.dsDotSize;
+  for (const [dx, dy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
+    ctx.fillRect(cx + dx - d / 2, cy + dy - d / 2, d, d);
+  }
 }
 
 function drawNatural(ctx, x, y, w, h) {
-  // degree marker for naturals: short centred dash (taut accnull idiom)
   ctx.beginPath();
-  ctx.moveTo(x + w * 0.28, y + h * 0.5);
-  ctx.lineTo(x + w * 0.72, y + h * 0.5);
+  ctx.moveTo(x + w * GLYPH.naturalX[0], y + h * 0.5);
+  ctx.lineTo(x + w * GLYPH.naturalX[1], y + h * 0.5);
   ctx.stroke();
 }
 
-// ── Kite ticks (one char slot) ──
+// ── Kite ticks ──
 
 function drawTick(ctx, x, y, w, h, up, double_) {
   const cx = x + w * 0.5;
-  const aw = w * 0.32;
-  const ah = h * 0.16;
+  const aw = w * GLYPH.tickW;
+  const ah = h * GLYPH.tickH;
   const draw = (cy) => {
     ctx.beginPath();
     if (up) {
@@ -166,8 +214,8 @@ function drawTick(ctx, x, y, w, h, up, double_) {
     ctx.stroke();
   };
   if (double_) {
-    draw(y + h * 0.36);
-    draw(y + h * 0.64);
+    draw(y + h * GLYPH.tickDoubleY[0]);
+    draw(y + h * GLYPH.tickDoubleY[1]);
   } else {
     draw(y + h * 0.5);
   }
@@ -175,7 +223,7 @@ function drawTick(ctx, x, y, w, h, up, double_) {
 
 function drawBigDot(ctx, x, y, w, h) {
   ctx.beginPath();
-  ctx.arc(x + w * 0.5, y + h * 0.5, Math.max(w, 4) * 0.16, 0, Math.PI * 2);
+  ctx.arc(x + w * 0.5, y + h * 0.5, Math.max(w, 4) * GLYPH.bigDotR, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -206,12 +254,12 @@ function drawTickCode(ctx, code, x, y, w, h) {
 }
 
 /**
- * Paint the 4-char note cell at (x, y). Uses the ambient ctx.font for text
- * slots (letters/digits) and vector paths for symbols. `palette` supplies
- * {note, sentinel, dim}; the cell renders in `palette.note` unless it is a
- * sentinel/empty.
+ * Paint the 4-char note cell at (x, y).
+ * palette: {note, sentinel, dim, offGrid} — off-grid ("out of tune") notes
+ * paint in palette.offGrid (taut's yellow). rawMode forces hex4 for playable
+ * notes (the taut rawNoteView toggle).
  */
-export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette) {
+export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, rawMode = false) {
   const cellW = charW * NOTE_CELL_CHARS;
   const midY = y + rowH / 2;
 
@@ -227,13 +275,13 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette) {
   if (note >= 0x0001 && note <= 0x0004) {
     ctx.strokeStyle = palette.sentinel;
     ctx.fillStyle = palette.sentinel;
-    ctx.lineWidth = LW;
+    ctx.lineWidth = GLYPH.lineWidth;
     ctx.lineJoin = "miter";
     switch (note) {
       case 0x0001: drawKeyOff(ctx, x, y, cellW, rowH); break;
-      case 0x0002: drawCut(ctx, x, y, cellW, rowH); break;
-      case 0x0003: drawFade(ctx, x, y, cellW, rowH, false); break;
-      case 0x0004: drawFade(ctx, x, y, cellW, rowH, true); break;
+      case 0x0002: drawCut(ctx, x, y, cellW, rowH, false); break;
+      case 0x0003: drawFade(ctx, x, y, cellW, rowH); break;
+      case 0x0004: drawCut(ctx, x, y, cellW, rowH, true); break; // cut, mirrored
     }
     return;
   }
@@ -243,37 +291,46 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette) {
     return;
   }
   if (note >= 0x0010 && note <= 0x001f) {
+    // taut notation: IntH, H = hex 0..F
     ctx.fillStyle = palette.sentinel;
-    ctx.fillText("In·" + (note - 0x0010).toString(16).toUpperCase(), x, midY);
+    ctx.fillText("Int" + (note - 0x0010).toString(16).toUpperCase(), x, midY);
     return;
   }
 
-  const symb = resolveNoteSymbol(note, preset);
+  const symb = rawMode ? null : resolveNoteSymbol(note, preset);
   if (symb === null) {
-    // Raw preset or off-grid note: honest 4-digit hex.
-    ctx.fillStyle = palette.dim;
+    ctx.fillStyle = rawMode ? palette.note : palette.dim;
     ctx.fillText(hex4(note), x, midY);
     return;
   }
 
-  ctx.fillStyle = palette.note;
-  ctx.strokeStyle = palette.note;
-  ctx.lineWidth = LW;
+  // "Out of tune" (off the preset's grid): taut paints it yellow.
+  const ink = symb.offGrid ? palette.offGrid : palette.note;
+  ctx.fillStyle = ink;
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = GLYPH.lineWidth;
   ctx.lineJoin = "miter";
 
   if (symb.cjk) {
     // Shi'er lü — conventional CJK font across two slots + octave digit.
     const prevFont = ctx.font;
-    ctx.font = `${Math.round(rowH - 3)}px "Noto Sans CJK TC", "Noto Sans TC", "WenQuanYi Zen Hei", serif`;
+    ctx.font = `${Math.round(rowH - 3)}px ${GLYPH.cjkFont}`;
     ctx.fillText(symb.cjk, x + charW * 0.1, midY + 0.5);
     ctx.font = prevFont;
     ctx.fillText(String(symb.octave), x + charW * 2.35, midY);
     return;
   }
 
-  // [tick][letter][accidental][octave]
-  drawTickCode(ctx, symb.tick, x, y + 1, charW, rowH - 2);
-  ctx.fillText(symb.letter, x + charW * 1.1, midY);
-  drawAccidental(ctx, symb.acc, x + charW * 2.05, y + 2, charW * 0.95, rowH - 4);
-  ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
+  if (symb.tick !== " ") {
+    // Kite: [tick][letter][compact accidental][octave]
+    drawTickCode(ctx, symb.tick, x, y + 1, charW, rowH - 2);
+    ctx.fillText(symb.letter, x + charW * 1.1, midY);
+    drawAccidental(ctx, symb.acc, x + charW * 2.05, y + 2, charW * 0.95, rowH - 4);
+    ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
+  } else {
+    // Normal presets: [letter][ accidental spanning TWO cells ][octave]
+    ctx.fillText(symb.letter, x + charW * 0.1, midY);
+    drawAccidental(ctx, symb.acc, x + charW * 1.05, y + 2, charW * 1.9, rowH - 4);
+    ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
+  }
 }

@@ -14,9 +14,9 @@ const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace"
 const CHAR_W = 7.3;
 const ROW_H = 16;
 const HEADER_H = 22;
-const GUTTER_W = 46;             // cue index
+const GUTTER_W = 52;             // cue index (4-digit hex)
 const CMD_W = Math.ceil(9 * CHAR_W); // "HALT@40 " per word
-const COL_W = Math.ceil(3 * CHAR_W) + 8; // 3 hex digits per channel
+const COL_W = Math.ceil(4 * CHAR_W) + 8; // 4 hex digits per channel (0000..7FFE)
 
 const INST_NAMES = {
   [INST_NOP]: "", [INST_HALT]: "HALT", [INST_HALTAT]: "HALT@",
@@ -151,15 +151,15 @@ export class CuesView {
     }
     const d = parseInt(e.key, 16);
     if (Number.isNaN(d) || e.key.length !== 1) return false;
-    // 3-nibble pattern entry (covers patterns 0..0xFFE; 15-bit values are
-    // reachable via the Patterns view later). An empty slot starts from 0.
+    // 4-nibble pattern entry (0000..7FFE; the top nibble masks to 15 bits).
+    // An empty slot starts from 0.
     const sign = words[ch] & 0x8000;
     let pat = words[ch] & 0x7fff;
     if (pat === CUE_EMPTY) pat = 0;
-    const shift = (2 - c.nib) * 4;
+    const shift = (3 - c.nib) * 4;
     pat = (pat & ~(0xf << shift)) | (d << shift);
     store.undo.apply(setCueWordOp(store.songIndex, c.cue, ch, sign | (pat & 0x7fff)));
-    if (c.nib === 2) { c.nib = 0; this.moveCursor(1, 0); }
+    if (c.nib === 3) { c.nib = 0; this.moveCursor(1, 0); }
     else { c.nib++; this.invalidate(); }
     return true;
   }
@@ -173,7 +173,7 @@ export class CuesView {
     const info = cueInfo(store.song.cues[c.cue]);
     const current = word === 0 ? info.inst0 : info.inst1;
     const result = await showModal({
-      title: `Cue ${c.cue.toString(16).toUpperCase()} — command word ${word + 1}`,
+      title: `Cue ${c.cue.toString(16).toUpperCase().padStart(4, "0")} — command word ${word + 1}`,
       body: "LEN/HALT@ take rows (1-64); BAK/FWD/JMP take a cue count/index.",
       fields: [
         { name: "kind", label: "Command", type: "select", value: kindOf(current), options: [
@@ -266,7 +266,7 @@ export class CuesView {
       }
 
       ctx.fillStyle = C.accent;
-      ctx.fillText(cueIdx.toString(16).toUpperCase().padStart(3, "0"), 6, y + ROW_H / 2);
+      ctx.fillText(cueIdx.toString(16).toUpperCase().padStart(4, "0"), 6, y + ROW_H / 2);
       ctx.fillStyle = info.inst0.type !== INST_NOP ? C.accent2 : C.dim;
       if (info.inst0.type === INST_NOP) ctx.globalAlpha = 0.35;
       ctx.fillText(instToStr(info.inst0), GUTTER_W + 4, y + ROW_H / 2);
@@ -283,11 +283,11 @@ export class CuesView {
         if (pat === CUE_EMPTY) {
           ctx.fillStyle = C.dim;
           ctx.globalAlpha = 0.3;
-          ctx.fillText("···", x, y + ROW_H / 2);
+          ctx.fillText("····", x, y + ROW_H / 2);
           ctx.globalAlpha = 1;
         } else {
           ctx.fillStyle = C.fg;
-          ctx.fillText(pat.toString(16).toUpperCase().padStart(3, "0"), x, y + ROW_H / 2);
+          ctx.fillText(pat.toString(16).toUpperCase().padStart(4, "0"), x, y + ROW_H / 2);
         }
       }
     }

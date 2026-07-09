@@ -12,7 +12,7 @@
 <body>
   <h3>sentinels: key-off · cut · fade · fast-fade | empty · reserved · interrupt</h3>
   <canvas id="sent" width="900" height="40"></canvas>
-  <h3>12-TET: C-4 C#4 D-4 … B-4 | raw/off-grid hex</h3>
+  <h3>12-TET: C-4 C#4 D-4 … B-4 | off-grid ("out of tune") = yellow nearest degree</h3>
   <canvas id="t12" width="900" height="40"></canvas>
   <h3>24-TET quarter-tones: C-4 Ct4 C#4 Dp4 D-4 Dt4 …</h3>
   <canvas id="t24" width="900" height="40"></canvas>
@@ -27,7 +27,7 @@
     import { pitchTablePresets, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 
     const CH = 13, RH = 26; // big cells for inspection
-    const PAL = { note: "#d8dce4", sentinel: "#f5a623", dim: "#7a8290" };
+    const PAL = { note: "#d8dce4", sentinel: "#f5a623", dim: "#7a8290", offGrid: "#f5a623" };
 
     function row(id, notes, preset) {
       const ctx = document.getElementById(id).getContext("2d");

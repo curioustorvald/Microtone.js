@@ -396,11 +396,11 @@ export class TimelineView {
         ctx.stroke();
       }
 
-      // gutter: "cue:row"
+      // gutter: "cue:row" (cue is 4-digit hex, range 0000..1FFF)
       ctx.textAlign = "left";
       ctx.fillStyle = rowInCue === 0 ? C.accent : C.dim;
       ctx.fillText(
-        `${entry.cue.toString(16).toUpperCase().padStart(3, "0")}:${rowInCue.toString().padStart(2, "0")}`,
+        `${entry.cue.toString(16).toUpperCase().padStart(4, "0")}:${rowInCue.toString().padStart(2, "0")}`,
         6, y + ROW_H / 2);
 
       // cells
@@ -429,7 +429,8 @@ export class TimelineView {
         // Note glyphs: taut-style vector accidentals/ticks/sentinels, CJK
         // Shi'er lü via a conventional font, hex4 for raw/off-grid notes.
         paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
-          { note: C.fg, sentinel: C.accent, dim: C.dim });
+          { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
+          store.rawNoteView);
         const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
         const volS = volToStr(cell.volume, cell.volumeEff);
         const panS = panToStr(cell.pan, cell.panEff);

@@ -65,11 +65,12 @@
         cues.cursor = { cue: 2, col: 2, nib: 0 };
         const wordBefore = store.song.cues[2][0];
         cues.processKey({ code: "Digit0", key: "0" });
+        cues.processKey({ code: "Digit0", key: "0" });
         cues.processKey({ code: "Digit4", key: "4" });
         cues.processKey({ code: "Digit2", key: "2" });
         const wordAfter = store.song.cues[2][0];
         log(`cue entry: 0x${wordBefore.toString(16)} → 0x${wordAfter.toString(16)}`);
-        const cueOk = (wordAfter & 0x7fff) === 0x042;
+        const cueOk = (wordAfter & 0x7fff) === 0x0042;
 
         log(`dirty=${store.doc.dirty}`);
 
