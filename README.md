@@ -1,5 +1,7 @@
 # Microtone.js
 
+![Microtone screenshot](Screenshot_20260710_013203.png)
+
 A web build of the **Microtone** tracker and the **Taud** audio engine from
 [TSVM](https://github.com/curioustorvald/tsvm). Two halves:
 
@@ -10,7 +12,11 @@ A web build of the **Microtone** tracker and the **Taud** audio engine from
 - **Microtone tracker** (`src/ui/`) — a native web rewrite of the tracker UI
   (the TSVM `taut.js` is the behavioural reference).
 
-## Running
+## Try it
+
+Simply visit **[microtone.curioustorvald.com](https://microtone.curioustorvald.com)** and start tracking; no strings attached.
+  
+## Running locally
 
 No build step. Serve the directory with any static file server:
 
