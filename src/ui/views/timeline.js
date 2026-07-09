@@ -418,7 +418,7 @@ export class TimelineView {
         // Note glyphs: taut-style vector accidentals/ticks/sentinels, CJK
         // Shi'er lü via a conventional font, hex4 for raw/off-grid notes.
         paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
-          { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
+          { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent },
           store.rawNoteView);
         const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
         const volS = volToStr(cell.volume, cell.volumeEff);

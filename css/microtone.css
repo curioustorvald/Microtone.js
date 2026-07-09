@@ -14,11 +14,12 @@
   --bg: #16181d;            /* app background */
   --panel: #1f232b;         /* bars, list panels, canvas panels */
   --panel-2: #262b35;       /* buttons, inputs, alternating headers */
-  --fg: #d8dce4;            /* primary text / note glyphs */
+  --fg: #e2e5eb;            /* primary text / note glyphs */
+  --fg2: #95a3bc;           /* key-offs */
   --dim: #7a8290;           /* secondary text, empty cells */
-  --accent: #f5a623;        /* amber: highlights, sentinels, off-grid notes */
-  --accent-2: #4aa3ff;      /* blue: instrument column, links, pan ticks */
-  --meter: #43d675;         /* green: VU bars, volume column, live dots */
+  --accent: #ffc043;        /* amber: highlights, sentinels, off-grid notes */
+  --accent-2: #78DCE7;      /* blue: instrument column, links, pan ticks */
+  --meter: #A8DC75;         /* green: VU bars, volume column, live dots */
   --meter-bg: #2a2f3a;      /* meter troughs */
   --border: #343a46;
 
@@ -36,7 +37,7 @@
   --cv-caret: #6e5316;      /* sub-column caret, record mode (amber) */
   --cv-caret-nav: #2f5378;  /* sub-column caret, navigate mode (blue) */
   --cv-cue-line: #4a5364;   /* cue boundary rule */
-  --cv-col-pan: #d78ce6;    /* pan column ink */
+  --cv-col-pan: #d08bff;    /* pan column ink */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -48,18 +49,20 @@
   --cv-env-loop: #33314a44;  /* loop-region shading (translucent) */
   --cv-live: #43d675;        /* live envelope cursor */
 
+  --brand: #ff4362;
   font-family: system-ui, sans-serif;
 }
 
 /* ── THEME: LIGHT (preliminary — tune freely) ─────────────────────────── */
 :root[data-theme="light"] {
   /* chrome */
-  --bg: #f2f3f6;
-  --panel: #e7e9ee;
-  --panel-2: #dbdfe7;
+  --bg: #fafbfd;
+  --panel: #f0f2f6;
+  --panel-2: #eceef3;
   --fg: #24272e;
+  --fg2: #656c7d;
   --dim: #69707d;
-  --accent: #af6f10;
+  --accent: #a44500;
   --accent-2: #1d66b8;
   --meter: #1c9450;
   --meter-bg: #cfd4dd;
@@ -90,6 +93,8 @@
   --cv-env-sus: #d7e7d9;
   --cv-env-loop: #c3c9e766;
   --cv-live: #1c9450;
+
+  --brand: #e2465d;
 }
 
 * { box-sizing: border-box; }
@@ -200,8 +205,8 @@ select, input[type="range"] {
   font-size: 0.85rem;
 }
 
-.brand { font-weight: bold; color: var(--accent); font-size: 1.05rem; }
-.brand-js { color: var(--dim); font-weight: normal; }
+.brand { font-weight: 900; color: var(--brand); font-size: 1.05rem; font-style: oblique; }
+.brand-js { color: var(--dim); font-weight: normal; font-style: normal; }
 
 .transport-controls { display: flex; gap: 0.3rem; align-items: center; }
 .chk { color: var(--dim); font-size: 0.85rem; display: flex; align-items: center; gap: 0.25rem; }

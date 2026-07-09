@@ -23,10 +23,10 @@ import { hex4 } from "./notenames.js";
 export const NOTE_CELL_CHARS = 4;
 
 export const GLYPH = {
-  lineWidth: 1.3,
+  lineWidth: 1.5,
 
   // sentinels (fractions of the full 4-char cell)
-  keyoffW: 0.66,      // box width
+  keyoffW: 0.76,      // box width
   keyoffH: 0.28,      // box height
   cutAmp: 0.17,       // ^^^ amplitude (of cell height)
   cutPeaks: 3,
@@ -37,14 +37,14 @@ export const GLYPH = {
 
   // sharp family (fractions of one accidental box)
   sharpRise: 0.09,    // crossbar upward slant
-  sharpBarX: [0.18, 0.82],
+  sharpBarX: [0.25, 0.75],
   sharpVertY: [0.16, 0.84],
   sharpCrossY: [0.40, 0.66],
 
   // flat family
   flatStemY: [0.12, 0.82],
   flatLoopTopY: 0.58,
-  flatSpan: 0.72,     // width used by the loop run (multi-flats divide this)
+  flatSpan: [0.62, 0.72, 0.82],     // width used by the loop run (multi-flats divide this)
 
   // double sharp (𝄪)
   dsRadius: 0.24,     // of box width
@@ -60,7 +60,7 @@ export const GLYPH = {
   naturalX: [0.30, 0.70],
 
   // CJK font for Shi'er lü
-  cjkFont: '"Noto Sans CJK TC", "Noto Sans TC", "WenQuanYi Zen Hei", serif',
+  cjkFont: '"Noto Sans CJK TC", "Noto Sans CJK", "WenQuanYi Zen Hei", sans-serif',
 };
 
 // ── sentinel vectors (span the whole cell width) ──
@@ -113,7 +113,7 @@ function drawSharpBody(ctx, x, y, w, h, verticals) {
   const xR = x + w * GLYPH.sharpBarX[1];
   const vXs = [];
   for (let i = 0; i < verticals; i++) {
-    const t = verticals === 1 ? 0.5 : 0.32 + (0.36 * i) / (verticals - 1);
+    const t = verticals === 1 ? 0.5 : 0.35 + (0.30 * i) / (verticals - 1);
     vXs.push(x + w * t);
   }
   ctx.beginPath();
@@ -131,12 +131,12 @@ function drawSharpBody(ctx, x, y, w, h, verticals) {
 
 function drawFlatBody(ctx, x, y, w, h, mirrored, count = 1) {
   // stem + right-facing loop (♭); mirrored = demiflat (loop opens left)
-  const span = w * GLYPH.flatSpan;
+  const span = w * GLYPH.flatSpan[count-1];
   const each = span / count;
   for (let i = 0; i < count; i++) {
     const sx = mirrored
-      ? x + w * (0.5 + GLYPH.flatSpan / 2) - each * i - each * 0.15
-      : x + w * (0.5 - GLYPH.flatSpan / 2) + each * i + each * 0.15;
+      ? x + w * (0.5 + GLYPH.flatSpan[count-1] / 2) - each * i - each * 0.15
+      : x + w * (0.5 - GLYPH.flatSpan[count-1] / 2) + each * i + each * 0.15;
     const dir = mirrored ? -1 : 1;
     ctx.beginPath();
     ctx.moveTo(sx, y + h * GLYPH.flatStemY[0]);
@@ -173,10 +173,10 @@ function drawDoubleSharp(ctx, x, y, w, h, pair = false) {
 
 function drawTripleSharp(ctx, x, y, w, h) {
   // ♯𝄪 — with a two-cell box there is room for both halves
-  drawSharpBody(ctx, x, y, w * 0.52, h, 2);
+  drawSharpBody(ctx, x, y, w * 0.72, h, 2);
   const cx = x + w * 0.76;
   const cy = y + h * 0.5;
-  const r = w * 0.13;
+  const r = w * 0.16;
   ctx.beginPath();
   ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
   ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r);
@@ -287,7 +287,7 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
   }
   if (note >= 0x0005 && note <= 0x000f) {
     ctx.fillStyle = palette.dim;
-    ctx.fillText("res·", x, midY);
+    ctx.fillText("rsvd", x, midY);
     return;
   }
   if (note >= 0x0010 && note <= 0x001f) {

@@ -6,7 +6,7 @@
 
 const VAR_KEYS = {
   // DOM palette (also used by canvas for text/accents)
-  bg: "--bg", panel: "--panel", panel2: "--panel-2", fg: "--fg", dim: "--dim",
+  bg: "--bg", panel: "--panel", panel2: "--panel-2", fg: "--fg", fg2: "--fg2", dim: "--dim",
   accent: "--accent", accent2: "--accent-2", meter: "--meter",
   meterBg: "--meter-bg", border: "--border",
   // canvas: grids
