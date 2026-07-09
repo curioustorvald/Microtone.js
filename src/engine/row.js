@@ -2,7 +2,7 @@
 // advanceTrackerCue (4101), resetPatternLoopState (4117), advanceRow (4343).
 
 import { PATTERN_EMPTY, NUM_PATTERNS, NUM_CUES } from "./constants.js";
-import { EffectOp } from "./tables.js";
+import { EffectOp, clamp } from "./tables.js";
 import { TaudPlayData, INST_GOBACK, INST_SKIP, INST_JUMP } from "./state.js";
 import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA,
@@ -11,8 +11,6 @@ import {
 import { applyKeyLift } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
-
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 export function applyTrackerRow(eng, ts, playhead) {
   const cue = eng.cueSheet[ts.cuePos];

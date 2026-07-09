@@ -1,0 +1,97 @@
+/* Microtone.js — shared styling. Palette echoes the taut.js colour scheme
+   (dark slate ground, amber accents) via custom properties. */
+
+:root {
+  --bg: #16181d;
+  --panel: #1f232b;
+  --panel-2: #262b35;
+  --fg: #d8dce4;
+  --dim: #7a8290;
+  --accent: #f5a623;
+  --accent-2: #4aa3ff;
+  --meter: #43d675;
+  --meter-bg: #2a2f3a;
+  --border: #343a46;
+  font-family: system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.player {
+  max-width: 1060px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+h1 { font-size: 1.4rem; }
+h1 .sub { color: var(--dim); font-weight: normal; font-size: 1rem; }
+
+.dim { color: var(--dim); }
+
+.drop {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  background: var(--panel);
+}
+.drop.hover { border-color: var(--accent); }
+
+.filebtn {
+  color: var(--accent-2);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.filebtn input { display: none; }
+
+.transport { margin-top: 1rem; }
+.transport .row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+button:hover { border-color: var(--accent); }
+button.big { font-size: 1.1rem; padding: 0.45rem 1.2rem; }
+
+select, input[type="range"] {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.status span { color: var(--dim); }
+.status b { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+.badge {
+  background: #5c2e2e;
+  color: #ffb0b0;
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+}
+.badge.on { background: #234d2c; color: #9df0ae; }
+
+#meters {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}

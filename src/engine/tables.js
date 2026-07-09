@@ -213,6 +213,6 @@ export function linearFreqSlideOnce(noteVal, slideArg) {
   return freqHzToNoteVal(newFreq);
 }
 
-export function clampInt(v, lo, hi) {
+export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }

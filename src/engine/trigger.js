@@ -7,12 +7,10 @@
 
 import { MAX_BG_VOICES } from "./constants.js";
 import { Voice } from "./voice.js";
-import { META_MIX_GAIN, attenGainOf, EffectOp } from "./tables.js";
+import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { computePlaybackRate } from "./sampler.js";
 import { random } from "./rng.js";
-
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /**
  * Snapshot the sample-scope state for voice from the base instrument or a

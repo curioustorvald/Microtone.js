@@ -8,6 +8,7 @@
 import { SAMPLING_RATE } from "./constants.js";
 import {
   lfoSample, amigaSlideTick, linearFreqSlideTick, noteValToFreqHz, freqHzToNoteVal,
+  clamp,
 } from "./tables.js";
 import { computePlaybackRate, startFastFade } from "./sampler.js";
 import { refreshVoiceFilter } from "./filter.js";
@@ -19,8 +20,6 @@ import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA, cutLayerChildren,
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
-
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 export function applyTrackerTick(eng, ts, playhead) {
   const tickSec = 2.5 / playhead.bpm;

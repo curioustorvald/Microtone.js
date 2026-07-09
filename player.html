@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Microtone.js Player</title>
+  <link rel="stylesheet" href="css/microtone.css" />
+</head>
+<body class="player-page">
+  <main class="player">
+    <h1>Microtone.js <span class="sub">Taud player</span></h1>
+
+    <section id="drop" class="drop">
+      <p><strong>Drop a .taud file</strong> or <label class="filebtn">browse<input id="file" type="file" accept=".taud,.tsii,.tpif" /></label></p>
+      <p id="fileinfo" class="dim">no file loaded</p>
+    </section>
+
+    <section class="transport" id="transport" hidden>
+      <div class="row">
+        <button id="play" class="big">▶ Play</button>
+        <button id="stopBtn" class="big">■ Stop</button>
+        <label>Song <select id="song"></select></label>
+        <button id="prevCue">|◀ cue</button>
+        <button id="nextCue">cue ▶|</button>
+        <label>Vol <input id="vol" type="range" min="0" max="255" value="255" /></label>
+      </div>
+      <div class="row status">
+        <span>Cue <b id="cue">0</b></span>
+        <span>Row <b id="rowIdx">0</b></span>
+        <span>BPM <b id="bpm">125</b></span>
+        <span>Speed <b id="speed">6</b></span>
+        <span id="audioState" class="badge">audio off — press any key</span>
+      </div>
+      <canvas id="meters" width="1024" height="260"></canvas>
+    </section>
+  </main>
+  <script type="module" src="src/ui/player.js"></script>
+</body>
+</html>

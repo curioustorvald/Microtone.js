@@ -6,12 +6,10 @@
 import { NUM_CUES, INTERP_A500, INTERP_A1200 } from "./constants.js";
 import {
   EffectOp, FINETUNE_OFFSET,
-  amigaSlideOnce, linearFreqSlideOnce,
+  amigaSlideOnce, linearFreqSlideOnce, clamp,
 } from "./tables.js";
 import { computePlaybackRate } from "./sampler.js";
 import { applyPastNoteAction } from "./trigger.js";
-
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /** Resolve a non-zero argument or recall from cohort memory. */
 export function resolveArg(arg, mem) { return arg !== 0 ? arg : mem; }

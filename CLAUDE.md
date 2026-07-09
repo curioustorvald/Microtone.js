@@ -40,7 +40,17 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         scenarios (zero-dur env nodes, seedPfRole, key-lift, fast-fade, NNA
         ghost biquad copy, meta KEY_OFF fade, S$Dx re-bind) — the corpus
         conformance covers most of these end-to-end already
-  - [ ] M4 AudioWorklet + protocol + `player.html` (≈ playtaud)
+  - [x] M4 AudioWorklet + protocol + `player.html` (≈ playtaud):
+        `src/worklet/{protocol,taud-processor}.js` (module worklet; committed
+        single-file fallback `taud-processor.bundle.js` — REGENERATE with
+        `node tools/make-worklet-bundle.js` after ANY engine change; the tool
+        requires plain `export`/`import{...}from"./x.js"` forms and unique
+        top-level names across engine files — that's why `clamp` lives in
+        tables.js), `src/audio/audio-system.js` (audio.*-shaped command +
+        snapshot-backed sync readbacks). Headless-Chromium-verified via
+        `test/browser/worklet-smoke.html` (+`?bundle=1` / `?rate=48000`
+        variants): playback advances correctly on all three paths.
+        Manual listening test in a real browser still pending.
 - full Microtone web application
   - [ ] M5 document model + ops/undo/sync + app shell + Timeline view
         (read-only, follow mode, VU meters)

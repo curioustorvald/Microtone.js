@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>worklet smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <script type="module">
+    // Headless smoke test: worklet module load, document upload, playback
+    // advance, snapshot flow. Results go to console (SMOKE: lines) and #out.
+    // Run: chromium --headless=new --autoplay-policy=no-user-gesture-required \
+    //        --enable-logging=stderr http://localhost:8737/test/browser/worklet-smoke.html
+    import { parseTaud } from "../../src/format/taud-parse.js";
+    import { AudioSystem } from "../../src/audio/audio-system.js";
+
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    try {
+      const params = new URLSearchParams(location.search);
+      const audio = new AudioSystem();
+      await audio.init({
+        snapshotIntervalMs: 16,
+        forceBundle: params.has("bundle"),
+        sampleRate: params.has("rate") ? parseInt(params.get("rate"), 10) : 32000,
+      });
+      log(`init ok — sampleRate=${audio.context.sampleRate} bundleFallback=${audio.usedBundleFallback}`);
+      await audio.resume();
+      log(`context state=${audio.context.state}`);
+
+      const resp = await fetch("../corpus/WHEN.taud");
+      const doc = parseTaud(new Uint8Array(await resp.arrayBuffer()));
+      log(`parsed WHEN.taud: songs=${doc.songs.length} pats=${doc.songs[0].patterns.length}`);
+
+      audio.loadDocument(doc, 0);
+      audio.play(0);
+      log("play sent");
+
+      await new Promise((r) => setTimeout(r, 2500));
+
+      const playing = audio.isPlaying();
+      const row = audio.getTrackerRow();
+      const cue = audio.getCuePosition();
+      const bpm = audio.getBPM();
+      let activeVoices = 0;
+      let volSum = 0;
+      for (let vi = 0; vi < 32; vi++) {
+        if (audio.getVoiceActive(vi)) {
+          activeVoices++;
+          volSum += audio.getVoiceEffectiveVolume(vi);
+        }
+      }
+      log(`after 2.5s: playing=${playing} cue=${cue} row=${row} bpm=${bpm} activeVoices=${activeVoices} volSum=${volSum.toFixed(2)}`);
+
+      const pass = playing && bpm === 134 && (cue > 0 || row > 0) && activeVoices > 0 && volSum > 0;
+      log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      document.title = pass ? "SMOKE-PASS" : "SMOKE-FAIL";
+    } catch (err) {
+      log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      document.title = "SMOKE-ERROR";
+    }
+  </script>
+</body>
+</html>
