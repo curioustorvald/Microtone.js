@@ -4,48 +4,20 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
-import { noteToStr, noteCentsOff, hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
-import { noteDegreeLabel, stepNoteInTable } from "../pitchtables.js";
+import { noteToStr, hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
+import { stepNoteInTable } from "../pitchtables.js";
+import { paintNoteCell } from "../glyphs.js";
 import {
-  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG, SUB_NIBBLES,
+  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
 } from "../edit.js";
 import { setCellOp } from "../../doc/ops.js";
-
-// Cursor sub-position walk order within one channel: [sub, nib] pairs.
-const SUB_POSITIONS = [];
-for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
-  for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
-}
-// Character offset of each sub-position inside the 20-char cell:
-// "C-4 01 v3F p20 A0F00" → note 0-2, inst 4-5, vol 7-9, pan 11-13, fx 15-19.
-function subCharPos(sub, nib) {
-  switch (sub) {
-    case SUB_NOTE: return [0, 3];         // 3 chars wide
-    case SUB_INST: return [4 + nib, 1];
-    case SUB_VOL: return [8 + nib, 1];    // char 7 is the selector prefix
-    case SUB_PAN: return [12 + nib, 1];   // char 11 is the selector prefix
-    case SUB_FX_OP: return [15, 1];
-    case SUB_FX_ARG: return [16 + nib, 1];
-    default: return [0, 1];
-  }
-}
-
-/** Map a character offset within a cell to [sub, nib]. */
-function charToSub(charX) {
-  if (charX >= 16) return [SUB_FX_ARG, clampInt(Math.floor(charX - 16), 0, 3)];
-  if (charX >= 15) return [SUB_FX_OP, 0];
-  if (charX >= 11) return [SUB_PAN, clampInt(Math.floor(charX - 12), 0, 1)];
-  if (charX >= 7) return [SUB_VOL, clampInt(Math.floor(charX - 8), 0, 1)];
-  if (charX >= 4) return [SUB_INST, clampInt(Math.floor(charX - 4), 0, 1)];
-  return [SUB_NOTE, 0];
-}
 
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.3;
 const ROW_H = 16;
 const HEADER_H = 44;   // channel header: number + VU + pan
 const GUTTER_W = 76;   // "cue:row | absrow"
-const CELL_CHARS = 20; // "C-4 01 v3F p20 A0F00"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 
 export class TimelineView {
@@ -454,38 +426,30 @@ export class TimelineView {
         const pattern = song.patterns[patNum];
         if (!pattern) continue;
         const cell = pattern[rowInCue];
-        // Note display: 12-EDO name when the note sits on that grid; otherwise
-        // the active pitch table's degree·octave label; else the nearest name.
-        let noteS;
-        if (cell.note >= 0x20 && Math.abs(noteCentsOff(cell.note)) > 2) {
-          noteS = noteDegreeLabel(cell.note, store.pitchPreset) ?? noteToStr(cell.note);
-        } else {
-          noteS = noteToStr(cell.note);
-        }
+        // Note glyphs: taut-style vector accidentals/ticks/sentinels, CJK
+        // Shi'er lü via a conventional font, hex4 for raw/off-grid notes.
+        paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
+          { note: C.fg, sentinel: C.accent, dim: C.dim });
         const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
         const volS = volToStr(cell.volume, cell.volumeEff);
         const panS = panToStr(cell.pan, cell.panEff);
         const fxS = fxToStr(cell.effect, cell.effectArg);
 
-        ctx.fillStyle = cell.note >= 0x20 ? C.fg : cell.note !== 0 ? C.accent : C.dim;
-        if (cell.note === 0) ctx.globalAlpha = 0.4;
-        ctx.fillText(noteS, x + 2, y + ROW_H / 2);
-        ctx.globalAlpha = 1;
         ctx.fillStyle = cell.instrment !== 0 ? C.accent2 : C.dim;
         if (cell.instrment === 0) ctx.globalAlpha = 0.4;
-        ctx.fillText(instS, x + 2 + 4 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(instS, x + 2 + 5 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = volS === "···" ? C.dim : C.meter;
         if (volS === "···") ctx.globalAlpha = 0.4;
-        ctx.fillText(volS, x + 2 + 7 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(volS, x + 2 + 8 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = panS === "···" ? C.dim : "#d78ce6";
         if (panS === "···") ctx.globalAlpha = 0.4;
-        ctx.fillText(panS, x + 2 + 11 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(panS, x + 2 + 12 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
         if (fxS === "·····") ctx.globalAlpha = 0.4;
-        ctx.fillText(fxS, x + 2 + 15 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(fxS, x + 2 + 16 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
       }
     }

@@ -1,7 +1,7 @@
 # Microtone.js
 
 A web build of the **Microtone** tracker and the **Taud** audio engine from
-[TSVM](../tsvm). Two halves:
+[TSVM](https://github.com/curioustorvald/tsvm). Two halves:
 
 - **Taud engine** (`src/engine/`) — a faithful JavaScript translation of the
   tracker engine in TSVM's `AudioAdapter.kt`, running inside an AudioWorklet.

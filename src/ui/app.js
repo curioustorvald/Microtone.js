@@ -10,6 +10,7 @@ import { AudioSystem } from "../audio/audio-system.js";
 import { Store } from "./store.js";
 import { TimelineView } from "./views/timeline.js";
 import { CuesView } from "./views/cues.js";
+import { PatternView } from "./views/pattern.js";
 import { FilesView } from "./views/files.js";
 import { SamplesView } from "./views/samples.js";
 import { InstrumentsView } from "./views/instruments.js";
@@ -283,6 +284,8 @@ $("songSel").addEventListener("change", (e) => {
 const jam = new JamKeyboard(store);
 const timeline = new TimelineView(store, $("timeline"));
 const cuesView = new CuesView(store, $("cuesCanvas"));
+const patternView = new PatternView(store, $("patternHost"), jam);
+window.__microtoneEnsureAudio = ensureAudio; // pattern preview needs lazy audio
 const samplesView = new SamplesView(store, $("samplesHost"));
 const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
 const projectView = new ProjectView(store, $("projectHost"));
@@ -292,10 +295,6 @@ const filesView = new FilesView(store, $("filesHost"), {
   songIndex: () => store.songIndex,
 });
 
-const PLACEHOLDER_TEXT = {
-  pattern: "Pattern editor — M8",
-};
-
 function showView(name) {
   store.view = name;
   for (const btn of $("tabs").children) {
@@ -303,15 +302,15 @@ function showView(name) {
   }
   $("timeline").hidden = name !== "timeline";
   $("cuesCanvas").hidden = name !== "cues";
+  $("patternHost").hidden = name !== "pattern";
   $("samplesHost").hidden = name !== "samples";
   $("instrumentsHost").hidden = name !== "instruments";
   $("projectHost").hidden = name !== "project";
   $("filesHost").hidden = name !== "files";
-  const ph = $("placeholder");
-  ph.hidden = !(name in PLACEHOLDER_TEXT) || !store.doc;
-  if (!ph.hidden) ph.textContent = PLACEHOLDER_TEXT[name];
+  $("placeholder").hidden = true;
   if (name === "timeline") timeline.resize();
   if (name === "cues") cuesView.resize();
+  name === "pattern" ? patternView.show() : patternView.hide();
   name === "samples" ? samplesView.show() : samplesView.hide();
   name === "instruments" ? instrumentsView.show() : instrumentsView.hide();
   name === "project" ? projectView.show() : projectView.hide();
@@ -409,6 +408,15 @@ window.addEventListener("keydown", (e) => {
 
   if (store.view === "cues") {
     if (cuesView.processKey(e)) { e.preventDefault(); return; }
+    return;
+  }
+
+  if (store.view === "pattern") {
+    if (patternView.processKey(e)) { e.preventDefault(); updateStatus(); return; }
+    // jam-only fallback on the note column / when record is off
+    if (!store.record || patternView.cursor.sub === SUB_NOTE) {
+      if (jam.down(e.code, e.repeat)) { e.preventDefault(); return; }
+    }
     return;
   }
 
@@ -553,6 +561,7 @@ function frame() {
   }
   if (store.view === "timeline") timeline.frame();
   if (store.view === "cues") cuesView.frame();
+  if (store.view === "pattern") patternView.frame();
   if (store.view === "samples") samplesView.frame();
   if (store.view === "instruments") instrumentsView.frame();
   requestAnimationFrame(frame);

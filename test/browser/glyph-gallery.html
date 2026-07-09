@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>glyph gallery</title>
+  <style>
+    body { background: #16181d; color: #d8dce4; font-family: monospace; padding: 16px; }
+    canvas { display: block; background: #1f232b; border: 1px solid #343a46; margin-bottom: 12px; }
+    h3 { color: #f5a623; margin: 10px 0 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h3>sentinels: key-off · cut · fade · fast-fade | empty · reserved · interrupt</h3>
+  <canvas id="sent" width="900" height="40"></canvas>
+  <h3>12-TET: C-4 C#4 D-4 … B-4 | raw/off-grid hex</h3>
+  <canvas id="t12" width="900" height="40"></canvas>
+  <h3>24-TET quarter-tones: C-4 Ct4 C#4 Dp4 D-4 Dt4 …</h3>
+  <canvas id="t24" width="900" height="40"></canvas>
+  <h3>53-TET Pythagorean multi-accidentals: C- B# A♯♯♯ E♭♭♭ D♭ C♯ B𝄪 F♭♭♭ E♭♭ D- C𝄪 B♯♯♯ F♭♭ E♭ D♯ C♯♯♯ G♭♭♭ (degrees 0..16)</h3>
+  <canvas id="t531" width="900" height="40"></canvas>
+  <h3>41-TET Kite ticks: ·C ↑C ⇊C# ↓C# ·C# ↑C# ↓D ·D ↑D ⇊D# ↓D# ·D# ↑D# ↓E ·E ↑E ⇈E</h3>
+  <canvas id="t410" width="900" height="40"></canvas>
+  <h3>Shi'er lü (十二律): 黃4 大4 太4 夾4 姑4 仲4 蕤4 林4 夷4 南4 無4 應4</h3>
+  <canvas id="t10123" width="900" height="40"></canvas>
+  <script type="module">
+    import { paintNoteCell } from "../../src/ui/glyphs.js";
+    import { pitchTablePresets, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
+
+    const CH = 13, RH = 26; // big cells for inspection
+    const PAL = { note: "#d8dce4", sentinel: "#f5a623", dim: "#7a8290" };
+
+    function row(id, notes, preset) {
+      const ctx = document.getElementById(id).getContext("2d");
+      ctx.font = "20px ui-monospace, monospace";
+      ctx.textBaseline = "middle";
+      notes.forEach((n, i) => paintNoteCell(ctx, n, preset, 8 + i * (CH * 4 + 12), 6, CH, RH, PAL));
+      console.log("GALLERY: drew " + id);
+    }
+
+    const p12 = pitchTablePresets[120];
+    const degreeNotes = (preset, count, from = 0) => {
+      const out = [];
+      for (let i = 0; i < count; i++) out.push(ANCHOR_NOTE + preset.table[(from + i) % preset.table.length]);
+      return out;
+    };
+
+    row("sent", [0x0001, 0x0002, 0x0003, 0x0004, 0x0000, 0x0007, 0x0015], p12);
+    row("t12", [...degreeNotes(p12, 12), 0x5042 /* off-grid → hex */], p12);
+    row("t24", degreeNotes(pitchTablePresets[240], 14), pitchTablePresets[240]);
+    row("t531", degreeNotes(pitchTablePresets[531], 17), pitchTablePresets[531]);
+    row("t410", degreeNotes(pitchTablePresets[410], 17), pitchTablePresets[410]);
+    row("t10123", degreeNotes(pitchTablePresets[10123], 12), pitchTablePresets[10123]);
+    console.log("GALLERY: done");
+  </script>
+</body>
+</html>

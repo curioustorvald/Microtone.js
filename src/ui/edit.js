@@ -16,6 +16,41 @@ export const SUB_FX_ARG = 5;
 export const NUM_SUBS = 6;
 export const SUB_NIBBLES = [1, 2, 2, 2, 1, 4];
 
+// ── shared cell layout (Timeline + Pattern views) ──
+// "♯C-4 01 v3F p20 A0F00": note glyphs 0-3, inst 5-6, vol 8-10, pan 12-14,
+// fx 16-20 → 21 chars per cell.
+export const CELL_CHARS = 21;
+
+/** Cursor sub-position walk order within one channel: [sub, nib] pairs. */
+export const SUB_POSITIONS = [];
+for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
+  for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
+}
+
+/** Character offset + width of a sub-position inside the cell. */
+export function subCharPos(sub, nib) {
+  switch (sub) {
+    case SUB_NOTE: return [0, 4];         // 4 glyph slots
+    case SUB_INST: return [5 + nib, 1];
+    case SUB_VOL: return [9 + nib, 1];    // char 8 is the selector prefix
+    case SUB_PAN: return [13 + nib, 1];   // char 12 is the selector prefix
+    case SUB_FX_OP: return [16, 1];
+    case SUB_FX_ARG: return [17 + nib, 1];
+    default: return [0, 1];
+  }
+}
+
+/** Map a character offset within a cell to [sub, nib]. */
+export function charToSub(charX) {
+  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+  if (charX >= 17) return [SUB_FX_ARG, clamp(Math.floor(charX - 17), 0, 3)];
+  if (charX >= 16) return [SUB_FX_OP, 0];
+  if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 13), 0, 1)];
+  if (charX >= 8) return [SUB_VOL, clamp(Math.floor(charX - 9), 0, 1)];
+  if (charX >= 5) return [SUB_INST, clamp(Math.floor(charX - 5), 0, 1)];
+  return [SUB_NOTE, 0];
+}
+
 // Physical piano rows (KeyboardEvent.code → semitone offset from C).
 // White: a s d f g h j k → C D E F G A B +C; black: w e t y u.
 export const JAM_SEMIS = Object.freeze({

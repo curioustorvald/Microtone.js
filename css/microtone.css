@@ -284,6 +284,26 @@ select, input[type="range"] {
 
 .project-view { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; max-width: 900px; }
 
+.pattern-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.8rem;
+}
+.pattern-view .files-bar { align-items: center; margin-bottom: 0.4rem; }
+.pat-input {
+  width: 4.5rem;
+  text-align: center;
+  font-family: monospace;
+  background: var(--panel-2);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem;
+}
+.pattern-canvas { flex: 1; border: 1px solid var(--border); border-radius: 6px; }
+
 .help-modal { max-width: 720px; }
 .help-cols { display: flex; gap: 2rem; }
 .help-cols dl { flex: 1; margin: 0; }

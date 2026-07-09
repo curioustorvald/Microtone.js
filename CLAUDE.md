@@ -112,9 +112,25 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         [x] New Project wizard (32/64ch, BPM/speed, optional .tsii seed;
             empty cells use 0xC0 vol/pan no-ops — converter convention)
         [x] perf evidence: worst 5.3 ms/chunk (Onestop GM) vs 16 ms budget
-        Remaining: sample editor modal, .tpif companion loading, Pattern-
-        details view, delta/cadence/harmonic retune methods, taut accidental
-        glyphs for degree labels, SAB fast path, manual Firefox/Safari pass.
+        [x] vector glyph engine (`src/ui/glyphs.js`) — the web equivalent of
+            tautfont: 4-char note cells [tick][letter][accidental][octave];
+            sentinels per spec (key-off box, connected ^^^, high-amplitude
+            ~~~, mirrored fast-fade); vector accidentals (slant-crossbar ♯,
+            ♭, demisharp = single-stroke ♯, demiflat = mirrored ♭, 𝄪, ♭♭,
+            ♯𝄪 triple, ♭♭♭, 𝄪𝄪 quad), Kite big-dot/up/down/double ticks;
+            Shi'er lü (黃大太夾姑仲蕤林夷南無應) via a conventional CJK font.
+            Per-preset sym tables transcribed from taut.js into a 3-char token
+            DSL in pitchtables.js (tick/letter/accidental); raw + off-grid
+            notes render hex4. Visual reference:
+            test/browser/glyph-gallery.html.
+        [x] Patterns tab (F3, `src/ui/views/pattern.js`): single-pattern
+            editor sharing the cell layout helpers (now in edit.js) + glyph
+            painter with the Timeline; used-by-cues info; Preview via the
+            device-only scratch cue 8191 with a HALT word (taut
+            PREVIEW_CUE_IDX idiom). Timeline note column widened 3→4 chars.
+        Remaining: sample editor modal, .tpif companion loading,
+        delta/cadence/harmonic retune methods, SAB fast path,
+        manual Firefox/Safari pass.
 
 Full plan with fidelity checkpoints and verification criteria:
 `~/.claude/plans/jazzy-singing-bee.md` (approved 2026-07-08).
