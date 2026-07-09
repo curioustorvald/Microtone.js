@@ -128,6 +128,19 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
             painter with the Timeline; used-by-cues info; Preview via the
             device-only scratch cue 8191 with a HALT word (taut
             PREVIEW_CUE_IDX idiom). Timeline note column widened 3→4 chars.
+        [x] font corrections (user review): accidentals span TWO cells
+            (Kite + Shi'er lü excepted), fast-fade = cut mirrored, IntH
+            interrupt labels, glyph geometry in the exported GLYPH tunables
+            (edit + reload test/browser/glyph-gallery.html), off-grid notes
+            snap to nearest degree and paint YELLOW, raw-hex is an explicit
+            toggle, pattern/cue numbers 4-digit hex
+        [x] GUI: toolbox row (Retune…/Raw toggle on Timeline+Patterns),
+            sMet beatPri/beatSec drive row banding + gutter highlights,
+            wheelable topbar (Oct/Inst step used slots/Spd live tick rate),
+            contextual command palette at screen bottom (sentinel inserts on
+            note col, vol/pan selector buttons, effect-opcode chooser with
+            tooltips, per-opcode argument docs on the arg column — FX_INFO
+            in src/ui/palette.js)
         Remaining: sample editor modal, .tpif companion loading,
         delta/cadence/harmonic retune methods, SAB fast path,
         manual Firefox/Safari pass.

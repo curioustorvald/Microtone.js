@@ -94,8 +94,10 @@ export class ProjectView {
   }
 
   /** Retune dialog: snap every note onto a new pitch table (nearest-pitch).
-   *  Updates the song's sMet notation so display + future retunes follow. */
-  async openRetune(currentPreset) {
+   *  Updates the song's sMet notation so display + future retunes follow.
+   *  Callable without an argument (toolbox button). */
+  async openRetune(currentPreset = presetForNotation(
+    this.store.doc?.meta.songMeta[this.store.songIndex]?.notation ?? 120)) {
     const store = this.store;
     const result = await showModal({
       title: "Retune all patterns",

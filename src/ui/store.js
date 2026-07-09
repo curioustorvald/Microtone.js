@@ -27,4 +27,13 @@ export class Store {
   }
 
   get song() { return this.doc?.songs[this.songIndex] ?? null; }
+
+  /** Row-highlight divisions from the song's sMet (defaults 4/16). */
+  beats() {
+    const sm = this.doc?.meta.songMeta[this.songIndex];
+    return {
+      pri: sm?.beatPri > 0 ? sm.beatPri : 4,
+      sec: sm?.beatSec > 0 ? sm.beatSec : 16,
+    };
+  }
 }

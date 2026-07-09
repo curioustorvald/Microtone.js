@@ -17,6 +17,8 @@ import { InstrumentsView } from "./views/instruments.js";
 import { ProjectView } from "./views/project.js";
 import { JamKeyboard } from "./jam.js";
 import { SUB_NOTE } from "./edit.js";
+import { CommandPalette } from "./palette.js";
+import { setCellOp } from "../doc/ops.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showModal } from "./widgets/modal.js";
@@ -300,6 +302,7 @@ function showView(name) {
   for (const btn of $("tabs").children) {
     btn.classList.toggle("active", btn.dataset.view === name);
   }
+  $("toolbox").hidden = !(name === "timeline" || name === "pattern") || !store.doc;
   $("timeline").hidden = name !== "timeline";
   $("cuesCanvas").hidden = name !== "cues";
   $("patternHost").hidden = name !== "pattern";
@@ -346,8 +349,79 @@ function setRecord(on) {
   $("recBtn").classList.toggle("on", on);
   timeline.invalidate();
   cuesView.invalidate();
+  patternView.invalidate();
 }
 $("recBtn").addEventListener("click", () => setRecord(!store.record));
+
+// ── toolbox (Timeline / Patterns) ──
+$("tbRetune").addEventListener("click", () => projectView.openRetune());
+store.rawNoteView = false;
+$("tbRaw").addEventListener("click", () => {
+  store.rawNoteView = !store.rawNoteView;
+  $("tbRaw").textContent = `Raw: ${store.rawNoteView ? "on" : "off"}`;
+  $("tbRaw").classList.toggle("active", store.rawNoteView);
+  timeline.invalidate();
+  patternView.invalidate();
+});
+
+// ── wheelable topbar controls (hover + wheel) ──
+function onWheelCtl(id, fn) {
+  $(id).addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+    fn(d < 0 ? 1 : -1);
+  }, { passive: false });
+}
+onWheelCtl("octCtl", (dir) => { jam.octaveDelta(dir); updateStatus(); });
+onWheelCtl("instCtl", (dir) => {
+  if (!store.doc) return;
+  // step through the USED instrument slots (wrap-free clamp at the ends)
+  const slots = store.doc.usedInstrumentSlots();
+  if (slots.length === 0) return;
+  let i = slots.indexOf(jam.currentInst);
+  if (i < 0) i = 0;
+  else i = Math.min(Math.max(i + dir, 0), slots.length - 1);
+  jam.currentInst = slots[i];
+  updateStatus();
+});
+onWheelCtl("spdCtl", (dir) => {
+  // live playback speed tweak (device only — the A effect can still override)
+  const audio = store.audio;
+  if (!audio) return;
+  const cur = audio.getTickRate() || store.song?.tickRate || 6;
+  audio.setTickRate(0, Math.min(Math.max(cur + dir, 1), 127));
+});
+
+// ── contextual command palette (screen bottom) ──
+function editContext() {
+  if (!store.doc || !store.record) return null;
+  if (store.view === "timeline") {
+    const target = timeline.cursorCell();
+    if (!target) return null;
+    return {
+      sub: store.cursor.sub,
+      cell: target.cell,
+      apply: (fields) => store.undo.apply(
+        setCellOp(store.songIndex, target.pat, target.rowInCue, fields)),
+    };
+  }
+  if (store.view === "pattern") {
+    const pattern = patternView.pattern();
+    if (!pattern) return null;
+    const row = patternView.cursor.row;
+    return {
+      sub: patternView.cursor.sub,
+      cell: pattern[row],
+      apply: (fields) => store.undo.apply(
+        setCellOp(store.songIndex, patternView.patIdx, row, fields)),
+    };
+  }
+  return null;
+}
+const palette = new CommandPalette($("cmdPalette"), editContext);
+for (const topic of ["cursor", "edit", "view", "doc"]) {
+  store.on(topic, () => palette.refresh());
+}
 
 // ── keyboard dispatch ──
 window.addEventListener("keydown", (e) => {

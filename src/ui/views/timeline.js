@@ -368,6 +368,7 @@ export class TimelineView {
 
     // ── rows ──
     const cursor = store.cursor;
+    const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
       const absRow = top + r;
       const y = HEADER_H + r * ROW_H;
@@ -375,14 +376,14 @@ export class TimelineView {
       if (!loc) continue;
       const { entry, rowInCue } = loc;
 
-      // row background banding: bar (16) > beat (4)
+      // row background banding from the song's beat divisions
       if (absRow === playRow) {
         ctx.fillStyle = C.playhead;
         ctx.fillRect(0, y, W, ROW_H);
-      } else if (rowInCue % 16 === 0) {
+      } else if (rowInCue % beats.sec === 0) {
         ctx.fillStyle = C.rowBar;
         ctx.fillRect(GUTTER_W, y, W - GUTTER_W, ROW_H);
-      } else if (rowInCue % 4 === 0) {
+      } else if (rowInCue % beats.pri === 0) {
         ctx.fillStyle = C.rowBeat;
         ctx.fillRect(GUTTER_W, y, W - GUTTER_W, ROW_H);
       }
@@ -396,9 +397,10 @@ export class TimelineView {
         ctx.stroke();
       }
 
-      // gutter: "cue:row" (cue is 4-digit hex, range 0000..1FFF)
+      // gutter: "cue:row" (cue is 4-digit hex); beat rows highlighted
       ctx.textAlign = "left";
-      ctx.fillStyle = rowInCue === 0 ? C.accent : C.dim;
+      ctx.fillStyle = rowInCue === 0 ? C.accent
+        : rowInCue % beats.pri === 0 ? C.fg : C.dim;
       ctx.fillText(
         `${entry.cue.toString(16).toUpperCase().padStart(4, "0")}:${rowInCue.toString().padStart(2, "0")}`,
         6, y + ROW_H / 2);

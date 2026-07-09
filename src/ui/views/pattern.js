@@ -81,6 +81,7 @@ export class PatternView {
       if (!hit) return;
       this.cursor = hit;
       this.invalidate();
+      this.store.emit("cursor");
     });
 
     new ResizeObserver(() => { if (this.visible) this.resize(); }).observe(this.root);
@@ -162,6 +163,7 @@ export class PatternView {
     if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
     else if (this.cursor.row >= this.scrollRow + vis) this.scrollRow = this.cursor.row - vis + 1;
     this.invalidate();
+    this.store.emit("cursor");
   }
 
   moveSubCursor(dir) {
@@ -170,6 +172,7 @@ export class PatternView {
     idx = clampInt(idx + dir, 0, SUB_POSITIONS.length - 1);
     [c.sub, c.nib] = SUB_POSITIONS[idx];
     this.invalidate();
+    this.store.emit("cursor");
   }
 
   /** View-specific keys; true when consumed. Called from the app dispatcher. */
@@ -294,6 +297,7 @@ export class PatternView {
 
     const vis = Math.floor(H / ROW_H) + 1;
     const x0 = GUTTER_W + 4;
+    const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < vis; r++) {
       const row = this.scrollRow + r;
       if (row > 63) break;
@@ -301,10 +305,10 @@ export class PatternView {
       if (row === playRow) {
         ctx.fillStyle = C.playhead;
         ctx.fillRect(0, y, W, ROW_H);
-      } else if (row % 16 === 0) {
+      } else if (row % beats.sec === 0) {
         ctx.fillStyle = C.rowBar;
         ctx.fillRect(0, y, W, ROW_H);
-      } else if (row % 4 === 0) {
+      } else if (row % beats.pri === 0) {
         ctx.fillStyle = C.rowBeat;
         ctx.fillRect(0, y, W, ROW_H);
       }
@@ -315,7 +319,8 @@ export class PatternView {
         ctx.fillStyle = store.record ? C.caret : C.cursor;
         ctx.fillRect(x0 + cpos * CHAR_W - 1, y, cw * CHAR_W + 2, ROW_H);
       }
-      ctx.fillStyle = row % 4 === 0 ? C.accent : C.dim;
+      ctx.fillStyle = row % beats.sec === 0 ? C.accent
+        : row % beats.pri === 0 ? C.fg : C.dim;
       ctx.fillText(String(row).padStart(2, "0"), 8, y + ROW_H / 2);
 
       const cell = pattern[row];

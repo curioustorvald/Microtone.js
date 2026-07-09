@@ -178,6 +178,44 @@ select, input[type="range"] {
 .rec { color: var(--dim); }
 .rec.on { color: #ff5c5c; border-color: #7a3434; }
 
+.wheelable {
+  cursor: ns-resize;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  transition: background 80ms;
+}
+.wheelable:hover { background: var(--panel-2); color: var(--fg); }
+
+.toolbox {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.3rem 0.8rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.toolbox button { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
+.toolbox button.active { color: var(--accent); border-color: var(--accent); }
+
+.cmd-palette {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.3rem 0.8rem;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  min-height: 2.1rem;
+}
+.cmd-palette button {
+  padding: 0.15rem 0.55rem;
+  font-size: 0.85rem;
+  font-family: monospace;
+}
+.cmd-palette button.active { color: var(--accent); border-color: var(--accent); }
+.pal-label { color: var(--accent); font-size: 0.8rem; margin-right: 0.3rem; }
+.pal-hint { color: var(--dim); font-size: 0.82rem; margin-left: 0.4rem; }
+
 /* ── modal dialogs ── */
 .modal {
   background: var(--panel);
