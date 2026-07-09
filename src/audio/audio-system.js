@@ -12,6 +12,8 @@ import {
   SNAP_INTERRUPT_MASK, SNAP_CHANNEL_COUNT, SNAP_HEADER_SIZE,
   SNAP_V_ACTIVE, SNAP_V_EFF_VOL, SNAP_V_EFF_PAN, SNAP_V_NOTE, SNAP_V_INST,
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
+  SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
+  SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_VOICE_STRIDE, SNAP_FLOATS,
 } from "../worklet/protocol.js";
 import { MAX_VOICES, NUM_VOICES } from "../engine/constants.js";
@@ -199,4 +201,12 @@ export class AudioSystem {
   getVoiceSamplePos(vi) { return this._v(vi, SNAP_V_SAMPLE_POS); }
   getVoiceSamplePtr(vi) { return this._v(vi, SNAP_V_SAMPLE_PTR); }
   getVoiceSampleLength(vi) { return this._v(vi, SNAP_V_SAMPLE_LEN); }
+  getVoiceEnvVolIndex(vi) { return this._v(vi, SNAP_V_ENV_VOL_IDX); }
+  getVoiceEnvVolTime(vi) { return this._v(vi, SNAP_V_ENV_VOL_TIME); }
+  getVoiceEnvPanIndex(vi) { return this._v(vi, SNAP_V_ENV_PAN_IDX); }
+  getVoiceEnvPanTime(vi) { return this._v(vi, SNAP_V_ENV_PAN_TIME); }
+  getVoiceEnvPitchIndex(vi) { return this._v(vi, SNAP_V_ENV_PITCH_IDX); }
+  getVoiceEnvPitchTime(vi) { return this._v(vi, SNAP_V_ENV_PITCH_TIME); }
+  getVoiceEnvFilterIndex(vi) { return this._v(vi, SNAP_V_ENV_FILTER_IDX); }
+  getVoiceEnvFilterTime(vi) { return this._v(vi, SNAP_V_ENV_FILTER_TIME); }
 }

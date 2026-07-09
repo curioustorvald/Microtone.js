@@ -46,6 +46,10 @@ export class DocSync {
         case "scalar":
           this.pushScalar(tag.key);
           break;
+        case "inst":
+          // Instruments sync eagerly — jam must always hear the current edit.
+          this.audio.uploadInstrument(tag.slot, this.doc.instRecordBytes(tag.slot));
+          break;
       }
     }
   }

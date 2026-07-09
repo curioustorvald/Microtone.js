@@ -5,7 +5,8 @@
 
 import { TaudPlayData } from "../engine/state.js";
 import { decodeInstWord, INST_PATLEN, INST_HALTAT, INST_HALT, INST_GOBACK, INST_SKIP, INST_JUMP } from "../engine/state.js";
-import { CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE } from "../format/taud-const.js";
+import { TaudInst, parsePatchesBlob } from "../engine/inst.js";
+import { CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { cueInstructionWords } from "../format/taud-parse.js";
 import { writeTaud } from "../format/taud-write.js";
 
@@ -93,6 +94,7 @@ export class Document {
   /** Build from the structure parseTaud returns. */
   constructor(parsed) {
     this.kind = parsed.kind;
+    this.fmtVer = parsed.fmtVer;
     this.is64Channel = parsed.is64Channel;
     this.signature = parsed.signature;
     this.sampleInstImage = parsed.sampleInstImage; // Uint8Array(8650752) | null
@@ -111,12 +113,139 @@ export class Document {
       songMeta: structuredClone(parsed.meta.songMeta),
     };
     this.dirty = false; // unsaved-changes flag (ops set it; save clears it)
+
+    this._instruments = null;     // lazily-decoded TaudInst[1024]
+    this._instrumentsEdited = false; // when true, toBytes rebuilds the inst region
   }
 
   get channelCount() { return this.is64Channel ? MAX_VOICES : NUM_VOICES; }
 
+  /** The 8 MB sample pool region of the image (view, not a copy). */
+  get sampleBin() {
+    return this.sampleInstImage?.subarray(0, SAMPLEBIN_SIZE) ?? null;
+  }
+
+  /**
+   * Decoded instruments (TaudInst[1024], engine class) with Ixmp patches
+   * attached — decoded lazily from the image. Instrument-scope ops mutate
+   * these; toBytes()/instRecordBytes() regenerate the byte view.
+   */
+  get instruments() {
+    if (this._instruments === null) {
+      const insts = new Array(1024);
+      const usedSlots = new Set();
+      const instRegion = this.sampleInstImage?.subarray(SAMPLEBIN_SIZE) ?? null;
+      const rec = new Uint8Array(256);
+      for (let s = 0; s < 1024; s++) {
+        const inst = new TaudInst(s);
+        if (instRegion !== null) {
+          const raw = instRegion.subarray(s * 256, (s + 1) * 256);
+          rec.set(raw);
+          inst.loadRecord(rec);
+          if (!raw.every((b) => b === 0)) usedSlots.add(s);
+        }
+        insts[s] = inst;
+      }
+      for (const e of this.ixmp) {
+        const patches = parsePatchesBlob(e.blob);
+        if (patches.length > 0) {
+          insts[e.instId & 0x3ff].extraPatches = patches;
+          usedSlots.add(e.instId & 0x3ff);
+        }
+      }
+      this._instruments = insts;
+      this._usedSlots = usedSlots;
+    }
+    return this._instruments;
+  }
+
+  /** Slots (0..1023) with content, ascending. Ops add edited slots via markInstUsed. */
+  usedInstrumentSlots() {
+    this.instruments; // ensure decoded
+    return [...this._usedSlots].sort((a, b) => a - b);
+  }
+
+  markInstUsed(slot) {
+    this.instruments;
+    this._usedSlots.add(slot & 0x3ff);
+    this._instrumentsEdited = true;
+  }
+
+  /** 0x1E-separated name-table lookup (INam / SNam / pNam). */
+  _nameTable(fourcc) {
+    const sec = this.projSections.find((s) => s.fourcc === fourcc);
+    if (!sec) return [];
+    const dec = new TextDecoder();
+    const parts = [];
+    let start = 0;
+    for (let i = 0; i <= sec.payload.length; i++) {
+      if (i === sec.payload.length || sec.payload[i] === 0x1e) {
+        parts.push(dec.decode(sec.payload.subarray(start, i)));
+        start = i + 1;
+      }
+    }
+    return parts;
+  }
+
+  instrumentName(slot) { return this._nameTable("INam")[slot] ?? ""; }
+  sampleName(index) { return this._nameTable("SNam")[index] ?? ""; }
+
+  /**
+   * Deduped sample census across base instruments + Ixmp patches, sorted by
+   * pool pointer: [{ptr, len, rate, loopStart, loopEnd, loopMode, users}].
+   * SNam names map by pool order (converter emission order).
+   */
+  sampleList() {
+    const byKey = new Map();
+    const add = (ptr, len, rate, loopStart, loopEnd, loopMode, user) => {
+      if (len <= 0) return;
+      const key = `${ptr}:${len}`;
+      let e = byKey.get(key);
+      if (!e) {
+        e = { ptr, len, rate, loopStart, loopEnd, loopMode, users: new Set() };
+        byKey.set(key, e);
+      }
+      e.users.add(user);
+    };
+    for (const s of this.usedInstrumentSlots()) {
+      const inst = this.instruments[s];
+      if (!inst.isMeta) {
+        add(inst.samplePtr, inst.sampleLength, inst.samplingRate,
+            inst.sampleLoopStart, inst.sampleLoopEnd, inst.loopMode, s);
+      }
+      if (inst.extraPatches !== null) {
+        for (const p of inst.extraPatches) {
+          add(p.samplePtr, p.sampleLength, p.samplingRate,
+              p.loopStart, p.loopEnd, p.loopMode, s);
+        }
+      }
+    }
+    const list = [...byKey.values()].sort((a, b) => a.ptr - b.ptr);
+    list.forEach((e, i) => { e.index = i; e.name = this.sampleName(i); e.users = [...e.users]; });
+    return list;
+  }
+
+  /** 256-byte record for slot, regenerated from the decoded TaudInst. */
+  instRecordBytes(slot) {
+    const inst = this.instruments[slot & 0x3ff];
+    const rec = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) rec[i] = inst.getByte(i);
+    return rec;
+  }
+
+  /** Fold decoded-instrument edits back into the image's inst region. */
+  _rebuildInstRegion() {
+    if (!this._instrumentsEdited || this.sampleInstImage === null) return;
+    const instRegion = this.sampleInstImage.subarray(SAMPLEBIN_SIZE);
+    for (let s = 0; s < 1024; s++) {
+      instRegion.set(this.instRecordBytes(s), s * 256);
+    }
+    this._instrumentsEdited = false;
+  }
+
   /** Re-serialise to .taud bytes (via the format layer). */
   toBytes() {
+    this._rebuildInstRegion();
     return writeTaud({
       kind: this.kind,
       is64Channel: this.is64Channel,

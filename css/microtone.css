@@ -17,6 +17,9 @@
 
 * { box-sizing: border-box; }
 
+/* display rules on classes must not defeat the hidden attribute */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -158,6 +161,7 @@ select, input[type="range"] {
   overflow: hidden;
 }
 .view-canvas { display: block; position: absolute; inset: 0; }
+.view-dom { position: absolute; inset: 0; }
 
 .empty-state {
   position: absolute;
@@ -209,3 +213,69 @@ select, input[type="range"] {
 .files-table th { color: var(--dim); font-weight: normal; }
 .files-table td button { margin-right: 0.3rem; padding: 0.15rem 0.5rem; }
 .files-current { color: var(--accent); }
+
+/* ── split views (Samples / Instruments) ── */
+.split-view { position: absolute; inset: 0; display: flex; }
+.side-list {
+  width: 300px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+.side-row {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  align-items: baseline;
+}
+.side-row:hover { background: var(--panel-2); }
+.side-row.sel { background: #28405c; }
+.side-row .idx { color: var(--accent); font-family: monospace; }
+.side-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge-sm { color: var(--accent-2); font-size: 0.75rem; }
+.side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }
+.detail-info { margin-bottom: 0.6rem; color: var(--dim); font-size: 0.9rem; }
+.detail-info b { color: var(--fg); }
+.wave-canvas {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  touch-action: none;
+}
+
+.subtabs { display: flex; gap: 2px; margin-bottom: 0.7rem; }
+.subtabs button { padding: 0.2rem 0.7rem; font-size: 0.85rem; color: var(--dim); }
+.subtabs button.active { color: var(--accent); border-color: var(--accent); }
+
+.inst-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.4rem 1rem;
+  margin-bottom: 0.8rem;
+}
+.inst-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--dim);
+  font-size: 0.88rem;
+  gap: 0.5rem;
+}
+.inst-field input, .inst-field select {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+  width: 7.5rem;
+}
+
+.project-view { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; max-width: 900px; }
+
+.help-modal { max-width: 720px; }
+.help-cols { display: flex; gap: 2rem; }
+.help-cols dl { flex: 1; margin: 0; }
+.help-cols dt { color: var(--accent); font-family: monospace; margin-top: 0.4rem; }
+.help-cols dd { margin: 0 0 0 0.2rem; color: var(--dim); font-size: 0.9rem; }

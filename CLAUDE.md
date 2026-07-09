@@ -75,9 +75,19 @@ the worklet converts to float and linear-resamples if the context isn't 32 kHz.
         and the JS engine matches it bit-exact.
         Deferred to M7: Pattern-details view, New Project wizard (pointless
         until sample import exists).
-  - [ ] M7 Samples view (waveform + play blobs), Instruments view (envelope
-        editors, meta layers, Ixmp visualiser + live overlay), Project view
-        (pitch tables/retune, flags), Help/Goto/Retune/Flags popups
+  - [x] M7 Samples view (deduped census from base insts + Ixmp patches, SNam
+        names by pool order, waveform + loop shading + live play blobs),
+        Instruments view (INam names, General tab with editable scalars via
+        setInstFieldOp, 4 envelope-graph tabs with vertical node dragging via
+        setEnvPointOp, Ixmp Zones map + live trigger overlay, Meta layer
+        table), Project view (tempo/volumes/flags editable), Help (?) and
+        Goto (Ctrl+G) popups. Document decodes instruments lazily into engine
+        TaudInst objects (shared parsePatchesBlob codec in engine/inst.js);
+        inst edits sync EAGERLY (uploadInstrument) and toBytes() rebuilds the
+        image's inst region. CSS gotcha fixed: `[hidden]{display:none!important}`
+        (class display rules defeated the hidden attribute).
+        Deferred to M8: envelope OFFSET editing (values only for now), sample
+        editor modal, retune/pitch tables, New Project wizard, PNam/sMet editing.
   - [ ] M8 polish: sample editor modal, .tsii/.tpif, 64-ch UX, autosave,
         perf hardening, WAV export, optional SAB fast path
 

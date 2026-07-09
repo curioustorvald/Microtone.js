@@ -58,6 +58,46 @@ export function setCueOp(song, cue, words, gestureId = null) {
   };
 }
 
+/** Instrument-scope field (TaudInst property, e.g. instGlobalVolume, defaultPan,
+ *  instrumentFlag, volumeFadeoutLow…). Dirty {kind:"inst", slot} → uploadInstrument. */
+export function setInstFieldOp(slot, key, value, gestureId = null) {
+  return {
+    type: "setInstField",
+    slot, key, value, gestureId,
+    coalesceKey: `inst:${slot}:${key}`,
+    apply(doc) {
+      const inst = doc.instruments[slot & 0x3ff];
+      const prev = inst[key];
+      inst[key] = value;
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setInstFieldOp(slot, key, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
+/** One envelope node on an instrument envelope array (volEnvelopes /
+ *  panEnvelopes / pfEnvelopes / pf2Envelopes): sets value and/or offset
+ *  (ThreeFiveMiniUfloat LUT index). */
+export function setEnvPointOp(slot, envKey, idx, point, gestureId = null) {
+  return {
+    type: "setEnvPoint",
+    slot, envKey, idx, point, gestureId,
+    coalesceKey: `env:${slot}:${envKey}:${idx}`,
+    apply(doc) {
+      const node = doc.instruments[slot & 0x3ff][envKey][idx];
+      const prev = { value: node.value, offset: node.offset };
+      if (point.value !== undefined) node.value = point.value;
+      if (point.offset !== undefined) node.offset = point.offset;
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setEnvPointOp(slot, envKey, idx, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
 /** Song-scope scalar (bpm, tickRate, globalVolume, mixingVolume, globalFlags, …). */
 export function setSongScalarOp(song, key, value, gestureId = null) {
   return {

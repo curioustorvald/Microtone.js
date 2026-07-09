@@ -11,9 +11,14 @@ import { Store } from "./store.js";
 import { TimelineView } from "./views/timeline.js";
 import { CuesView } from "./views/cues.js";
 import { FilesView } from "./views/files.js";
+import { SamplesView } from "./views/samples.js";
+import { InstrumentsView } from "./views/instruments.js";
+import { ProjectView } from "./views/project.js";
 import { JamKeyboard } from "./jam.js";
 import { SUB_NOTE } from "./edit.js";
 import { hex2 } from "./notenames.js";
+import { showHelp } from "./popups/help.js";
+import { showModal } from "./widgets/modal.js";
 
 const $ = (id) => document.getElementById(id);
 const store = new Store();
@@ -135,16 +140,16 @@ $("songSel").addEventListener("change", (e) => {
 const jam = new JamKeyboard(store);
 const timeline = new TimelineView(store, $("timeline"));
 const cuesView = new CuesView(store, $("cuesCanvas"));
+const samplesView = new SamplesView(store, $("samplesHost"));
+const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
+const projectView = new ProjectView(store, $("projectHost"));
 const filesView = new FilesView(store, $("filesHost"), {
   openBytes: (name, bytes) => loadBytes(name, bytes),
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
 });
 
 const PLACEHOLDER_TEXT = {
-  pattern: "Pattern editor — M7",
-  samples: "Samples view — M7",
-  instruments: "Instrument editor — M7",
-  project: "Project view — M7",
+  pattern: "Pattern editor — M8",
 };
 
 function showView(name) {
@@ -154,12 +159,18 @@ function showView(name) {
   }
   $("timeline").hidden = name !== "timeline";
   $("cuesCanvas").hidden = name !== "cues";
+  $("samplesHost").hidden = name !== "samples";
+  $("instrumentsHost").hidden = name !== "instruments";
+  $("projectHost").hidden = name !== "project";
   $("filesHost").hidden = name !== "files";
   const ph = $("placeholder");
   ph.hidden = !(name in PLACEHOLDER_TEXT) || !store.doc;
   if (!ph.hidden) ph.textContent = PLACEHOLDER_TEXT[name];
   if (name === "timeline") timeline.resize();
   if (name === "cues") cuesView.resize();
+  name === "samples" ? samplesView.show() : samplesView.hide();
+  name === "instruments" ? instrumentsView.show() : instrumentsView.hide();
+  name === "project" ? projectView.show() : projectView.hide();
   if (name === "files") filesView.refresh();
   store.emit("view");
 }
@@ -218,6 +229,16 @@ window.addEventListener("keydown", (e) => {
     filesView.save();
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
+    e.preventDefault();
+    openGoto();
+    return;
+  }
+  if (e.key === "?" && store.view !== "files") {
+    e.preventDefault();
+    showHelp();
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch (e.code) {
@@ -244,6 +265,12 @@ window.addEventListener("keydown", (e) => {
 
   if (store.view === "cues") {
     if (cuesView.processKey(e)) { e.preventDefault(); return; }
+    return;
+  }
+
+  if (store.view === "samples" || store.view === "instruments" || store.view === "project") {
+    // DOM views: piano keys jam on the cursor channel
+    if (jam.down(e.code, e.repeat)) { e.preventDefault(); return; }
     return;
   }
 
@@ -287,6 +314,31 @@ window.addEventListener("keydown", (e) => {
 
 window.addEventListener("keyup", (e) => jam.up(e.code));
 
+async function openGoto() {
+  if (!store.doc) return;
+  const result = await showModal({
+    title: "Go to",
+    fields: [
+      { name: "cue", label: "Cue (hex)", value: "0" },
+      { name: "row", label: "Row", type: "number", value: 0, min: 0, max: 63 },
+    ],
+    okLabel: "Go",
+  });
+  if (!result) return;
+  const cue = parseInt(result.cue || "0", 16);
+  const row = parseInt(result.row || "0", 10);
+  const map = store.song.songMap();
+  const entry = map.entries[Math.min(cue, map.entries.length - 1)];
+  if (!entry) return;
+  store.cursor.row = entry.startRow + Math.min(row, entry.rowLimit - 1);
+  timeline.centreRow(store.cursor.row);
+  store.emit("cursor");
+  if (store.view === "cues") {
+    cuesView.cursor.cue = entry.cue;
+    cuesView.invalidate();
+  }
+}
+
 // ── ?load= bootstrap (demo links; also drives the headless smoke test) ──
 const bootParams = new URLSearchParams(location.search);
 if (bootParams.has("load")) {
@@ -318,6 +370,8 @@ function frame() {
   }
   if (store.view === "timeline") timeline.frame();
   if (store.view === "cues") cuesView.frame();
+  if (store.view === "samples") samplesView.frame();
+  if (store.view === "instruments") instrumentsView.frame();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -14,7 +14,7 @@ import {
   SAMPLE_BIN_TOTAL, NUM_PATTERNS, NUM_CUES, NUM_VOICES, MAX_VOICES,
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
 } from "./constants.js";
-import { TaudInst, makeInstPatch, envPoint } from "./inst.js";
+import { TaudInst, parsePatchesBlob } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { generateTrackerAudio } from "./mixer.js";
@@ -122,77 +122,7 @@ export class TaudEngine {
    */
   uploadInstrumentPatches(slot, bytes) {
     const inst = this.instruments[slot & 0x3ff];
-    if (bytes.length < 31) { inst.extraPatches = null; return; }
-    const u8 = (o) => bytes[o] & 0xff;
-    const u16 = (o) => (bytes[o] & 0xff) | ((bytes[o + 1] & 0xff) << 8);
-    const s16 = (o) => { const v = u16(o); return v >= 0x8000 ? v - 0x10000 : v; };
-    const u32 = (o) =>
-      ((bytes[o] & 0xff) | ((bytes[o + 1] & 0xff) << 8) | ((bytes[o + 2] & 0xff) << 16)) +
-      (bytes[o + 3] & 0xff) * 0x1000000;
-
-    const patches = [];
-    let o = 0;
-    outer: while (o + 31 <= bytes.length) {
-      const ver = u8(o);
-      let p = o + 31;
-      let hasExtra = false, fadeoutStep = 0, extraCutoff = 0xff, extraResonance = 0xff;
-      let extraAttenOctet = 0, filterSfMode = false;
-      if ((ver & 0x80) !== 0) { // 'x' block (15 bytes)
-        if (p + 15 > bytes.length) break;
-        filterSfMode = (u8(p) & 0x01) !== 0;
-        fadeoutStep = u16(p + 8);
-        extraCutoff = u16(p + 10);
-        extraResonance = u16(p + 12);
-        extraAttenOctet = u8(p + 14);
-        hasExtra = true;
-        p += 15;
-      }
-      const readEnv = () => {
-        if (p + 54 > bytes.length) return null;
-        const loop = u16(p);
-        const sus = u16(p + 2);
-        const arr = new Array(25);
-        for (let k = 0; k < 25; k++) arr[k] = envPoint(u8(p + 4 + 2 * k), u8(p + 5 + 2 * k));
-        p += 54;
-        return { arr, loop, sus };
-      };
-      let volEnv = null, volLoop = 0, volSus = 0;
-      let panEnv = null, panLoop = 0, panSus = 0;
-      let filEnv = null, filLoop = 0, filSus = 0;
-      let pitEnv = null, pitLoop = 0, pitSus = 0;
-      if ((ver & 0x02) !== 0) { const e = readEnv(); if (e === null) break outer; volEnv = e.arr; volLoop = e.loop; volSus = e.sus; }
-      if ((ver & 0x04) !== 0) { const e = readEnv(); if (e === null) break outer; panEnv = e.arr; panLoop = e.loop; panSus = e.sus; }
-      if ((ver & 0x08) !== 0) { const e = readEnv(); if (e === null) break outer; filEnv = e.arr; filLoop = e.loop; filSus = e.sus; }
-      if ((ver & 0x10) !== 0) { const e = readEnv(); if (e === null) break outer; pitEnv = e.arr; pitLoop = e.loop; pitSus = e.sus; }
-      patches.push(makeInstPatch({
-        pitchStart: u16(o + 1),
-        pitchEnd: u16(o + 3),
-        volumeStart: u8(o + 5),
-        volumeEnd: u8(o + 6),
-        samplePtr: u32(o + 7),
-        sampleLength: u16(o + 11),
-        playStart: u16(o + 13),
-        loopStart: u16(o + 15),
-        loopEnd: u16(o + 17),
-        samplingRate: u16(o + 19),
-        sampleDetune: s16(o + 21),
-        loopMode: u8(o + 23),
-        defaultPan: u8(o + 24),
-        defaultNoteVolume: u8(o + 25),
-        vibratoSpeed: u8(o + 26),
-        vibratoSweep: u8(o + 27),
-        vibratoDepth: u8(o + 28),
-        vibratoRate: u8(o + 29),
-        vibratoWaveform: u8(o + 30),
-        volEnv, volEnvLoop: volLoop, volEnvSustain: volSus,
-        panEnv, panEnvLoop: panLoop, panEnvSustain: panSus,
-        filterEnv: filEnv, filterEnvLoop: filLoop, filterEnvSustain: filSus,
-        pitchEnv: pitEnv, pitchEnvLoop: pitLoop, pitchEnvSustain: pitSus,
-        hasExtra, fadeoutStep, filterSfMode,
-        extraCutoff, extraResonance, extraInitialAttenOctet: extraAttenOctet,
-      }));
-      o = p;
-    }
+    const patches = parsePatchesBlob(bytes);
     inst.extraPatches = patches.length === 0 ? null : patches;
   }
 
