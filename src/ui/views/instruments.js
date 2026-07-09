@@ -76,6 +76,10 @@ export class InstrumentsView {
 
     store.on("doc", () => { this.selected = 1; if (this.visible) this.refresh(); });
     store.on("edit", (tags) => {
+      // Suppress the rebuild WHILE an envelope node is being dragged — each
+      // drag step fires an inst edit, and re-rendering would detach the canvas
+      // (killing pointer capture). The graph repaints in-place via drawEnvGraph.
+      if (this.dragState) return;
       if (this.visible && tags?.some?.((t) => t.kind === "inst")) this.renderPanel();
     });
   }
@@ -249,23 +253,37 @@ export class InstrumentsView {
     const head = document.createElement("div");
     head.className = "detail-info";
     const present = envPresent(loopWord);
-    const mBit = (loopWord >> 7) & 1;
-    head.innerHTML =
-      `${tabDef.label}: ${present ? "present" : "absent"}` +
-      (tabDef.key.startsWith("pf") ? ` · role: <b>${mBit ? "FILTER" : "PITCH"}</b>` : "") +
-      ` · loop 0x${loopWord.toString(16)} sustain 0x${susWord.toString(16)}` +
-      ` — drag nodes to edit values`;
+    if (tabDef.role) {
+      // Pitch / Filter tab — the physical slot + its m-bit are hidden; the tab
+      // shows only whether this role is active. Editing an absent role claims
+      // a slot (drawEnvGraph writes the P bit + m-bit on the first drag).
+      head.innerHTML = tabDef.roleActive
+        ? `${tabDef.label} — drag nodes to edit`
+        : `${tabDef.label}: <b>none</b> — drag a node to add ${tabDef.role === "filter"
+            ? "a filter-cutoff modulation envelope" : "a pitch-bend envelope"}`;
+    } else {
+      head.innerHTML =
+        `${tabDef.label}: ${present ? "present" : "absent"}` +
+        ` · loop 0x${loopWord.toString(16)} sustain 0x${susWord.toString(16)}` +
+        ` — drag nodes to edit values`;
+    }
     this.panel.appendChild(head);
 
     const canvas = document.createElement("canvas");
     canvas.className = "wave-canvas";
     this.panel.appendChild(canvas);
-    this.envCanvas = { canvas, env, tabDef, inst };
+    this.envCanvas = { canvas, env, tabDef, inst, head };
     this.drawEnvGraph();
 
     canvas.addEventListener("pointerdown", (e) => this.envPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.envPointerMove(e));
-    canvas.addEventListener("pointerup", () => { this.dragState = null; });
+    canvas.addEventListener("pointerup", () => {
+      const dragged = this.dragState !== null;
+      this.dragState = null;
+      // Re-render was suppressed during the drag; settle header + tab state now
+      // (a role claim can change which slot each tab resolves to).
+      if (dragged) this.renderPanel();
+    });
   }
 
   envGeometry() {
@@ -326,14 +344,15 @@ export class InstrumentsView {
       ctx.fill();
     }
 
-    // live playback cursors: voices playing this instrument
+    // live playback cursor for THIS envelope's role — every tab (vol / pan /
+    // pitch / filter) has its own snapshot index+time accessor on tabDef.
     const audio = this.store.audio;
-    if (audio && tabDef.key === "volEnvelopes") {
+    if (audio && tabDef.liveIdx) {
       ctx.fillStyle = C.live;
       for (let vi = 0; vi < 64; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.selected) continue;
-        const idx = audio.getVoiceEnvVolIndex(vi);
-        const t = audio.getVoiceEnvVolTime(vi);
+        const idx = audio[tabDef.liveIdx](vi);
+        const t = audio[tabDef.liveTime](vi);
         if (idx < 0 || idx > 24) continue;
         const base = times[Math.min(idx, 24)];
         const x = 10 + (Math.min(base + t, total) / total) * (w - 20);
@@ -360,7 +379,18 @@ export class InstrumentsView {
     const hit = this.envHit(e);
     if (hit.idx < 0) return;
     this.envCanvas.canvas.setPointerCapture(e.pointerId);
-    this.dragState = { idx: hit.idx, gestureId: `envdrag${Date.now()}` };
+    const gestureId = `envdrag${Date.now()}`;
+    this.dragState = { idx: hit.idx, gestureId };
+    // Editing an inactive Pitch/Filter role first CLAIMS its slot: mark the
+    // envelope present (LOOP-word P bit 13) and assign the role via the m-bit
+    // (bit 7: set = filter, clear = pitch), as part of this drag's undo step.
+    const { tabDef, inst, head } = this.envCanvas;
+    if (tabDef.role && !tabDef.roleActive) {
+      const claimed = ((inst[tabDef.loopKey] | 0x2000) & ~0x80) | (tabDef.role === "filter" ? 0x80 : 0);
+      this.store.undo.apply(setInstFieldOp(this.selected, tabDef.loopKey, claimed, gestureId));
+      tabDef.roleActive = true;
+      if (head) head.innerHTML = `${tabDef.label} — drag nodes to edit`;
+    }
     this.envPointerMove(e);
   }
 

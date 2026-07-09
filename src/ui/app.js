@@ -644,7 +644,7 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, jam, loadBytes };
+window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, jam, loadBytes };
 
 // ── frame loop ──
 function frame() {
