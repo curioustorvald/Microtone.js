@@ -683,7 +683,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .help-cols dt { color: var(--accent); font-family: "Roboto Mono", monospace; margin-top: 0.4rem; }
 .help-cols dd { margin: 0 0 0 0.2rem; color: var(--dim); font-size: 0.9rem; }
 
-.project-view h3 {
+.proj-title {
   font-variation-settings:
     "wdth" 100.0;
 }

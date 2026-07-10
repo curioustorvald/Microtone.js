@@ -90,43 +90,6 @@ export class FilesView {
       table.appendChild(tbody);
       this.root.appendChild(table);
     }
-
-    if (doc) this.renderSongList(doc);
-  }
-
-  /** Current project's songs, each with its Rename button (the rename UI
-   *  lives here rather than loose on the topbar). */
-  renderSongList(doc) {
-    const head = document.createElement("h3");
-    head.className = "files-songs-head";
-    head.textContent = t("files.songsHead");
-    this.root.appendChild(head);
-
-    const table = document.createElement("table");
-    table.className = "files-table";
-    table.innerHTML =
-      `<thead><tr><th>${t("files.colSong")}</th><th>${t("files.colName")}</th>` +
-      `<th>${t("files.colVoices")}</th><th>${t("files.colPatterns")}</th><th></th></tr></thead>`;
-    const tbody = document.createElement("tbody");
-    doc.songs.forEach((s, i) => {
-      const tr = document.createElement("tr");
-      const nm = unescapeName(doc.meta.songMeta[i]?.name ?? "");
-      tr.innerHTML =
-        `<td class="${i === this.cb.songIndex() ? "files-current" : ""}">${i}</td>` +
-        `<td>${escapeHtml(nm || "(unnamed)")}</td>` +
-        `<td>${s.numVoices}</td><td>${s.patterns.length}</td>`;
-      const td = document.createElement("td");
-      const rn = mkBtn(t("common.rename"), async () => {
-        await this.cb.renameSong(i);
-        this.refresh();
-      });
-      rn.title = t("song.renameBtnTitle");
-      td.appendChild(rn);
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    this.root.appendChild(table);
   }
 
   async save() {
