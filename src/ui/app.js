@@ -154,8 +154,22 @@ function updateStatus() {
   $("stDirty").hidden = !doc?.dirty;
   $("octDisp").textContent = jam.octave;
   $("instDisp").textContent = hex2(jam.currentInst);
+  updateUndoUI();
+}
+
+function updateUndoUI() {
+  const u = store.undo;
+  const canU = !!u?.canUndo();
+  const canR = !!u?.canRedo();
+  $("undoBtn").disabled = !canU;
+  $("redoBtn").disabled = !canR;
+  const nU = u?.undoStack.length ?? 0;
+  const nR = u?.redoStack.length ?? 0;
+  $("undoStat").textContent = nU || nR ? `${nU}/${nR}` : "";
+  $("undoStat").title = `${nU} undo · ${nR} redo`;
 }
 store.on("saved", updateStatus);
+store.on("edit", updateUndoUI);
 
 /** New Project wizard — optionally seeded from a .tsii instrument bank. */
 async function newProject({ fromBank = null, bankName = null } = {}) {
@@ -281,8 +295,22 @@ window.addEventListener("beforeunload", (e) => {
   if (store.doc?.dirty) e.preventDefault();
 });
 
-$("songSel").addEventListener("change", (e) => {
-  store.songIndex = parseInt(e.target.value, 10);
+function rebuildSongList() {
+  const sel = $("songSel");
+  sel.innerHTML = "";
+  store.doc.songs.forEach((song, i) => {
+    const opt = document.createElement("option");
+    const sm = store.doc.meta.songMeta[i];
+    opt.value = i;
+    opt.textContent = sm?.name ? `${i}: ${sm.name}` : `song ${i}`;
+    sel.appendChild(opt);
+  });
+  sel.value = store.songIndex;
+}
+
+function selectSong(index) {
+  store.songIndex = Math.min(Math.max(index, 0), store.doc.songs.length - 1);
+  $("songSel").value = store.songIndex;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
   store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120);
   if (store.audio) {
@@ -291,7 +319,17 @@ $("songSel").addEventListener("change", (e) => {
     store.sync.loadAll();
   }
   store.emit("doc");
+  updateStatus();
+}
+
+$("songSel").addEventListener("change", (e) => selectSong(parseInt(e.target.value, 10)));
+
+// Project view add/remove-song: rebuild the picker + switch to the target song.
+store.on("songs", (payload) => {
+  rebuildSongList();
+  selectSong(payload?.select ?? store.songIndex);
 });
+store.on("doc", updateStatus); // keep the dirty dot in sync on doc-level edits
 
 // ── views ──
 const jam = new JamKeyboard(store);
@@ -363,6 +401,8 @@ function setRecord(on) {
   patternView.invalidate();
 }
 $("recBtn").addEventListener("click", () => setRecord(!store.record));
+$("undoBtn").addEventListener("click", () => store.undo?.undo());
+$("redoBtn").addEventListener("click", () => store.undo?.redo());
 
 // ── theme toggle ──
 $("themeBtn").addEventListener("click", () => toggleTheme());

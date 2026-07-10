@@ -3,7 +3,8 @@
 // taut.js VIEW_PROJECT. Pitch-table retune is an M8 item.
 
 import { setSongScalarOp, retuneOp } from "../../doc/ops.js";
-import { pitchTablePresets, presetForNotation, retuneNearest } from "../pitchtables.js";
+import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
+import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
 
 export class ProjectView {
@@ -66,15 +67,35 @@ export class ProjectView {
     tuning.className = "dim";
     tuning.textContent =
       `Tuning: base note 0x${song.tuningBaseNote.toString(16).toUpperCase()} @ ${song.tuningFreq} Hz` +
-      ` · pitch table: ${preset.name}` +
       (sm ? ` · beat ${sm.beatPri}/${sm.beatSec}` : "") +
       ` · patterns: ${song.patterns.length} · cues used: ${song.lastUsedCue() + 1}`;
+    this.root.appendChild(tuning);
+
+    // Notation (display-only): changes how notes are drawn WITHOUT moving them.
+    const notationRow = document.createElement("div");
+    notationRow.className = "inst-field";
+    notationRow.style.maxWidth = "440px";
+    notationRow.append(document.createTextNode("Notation (display only)"));
+    const notSel = document.createElement("select");
+    for (const p of Object.values(pitchTablePresets)) {
+      const o = document.createElement("option");
+      o.value = p.index;
+      o.textContent = p.name;
+      notSel.appendChild(o);
+    }
+    notSel.value = preset.index;
+    notSel.addEventListener("change", () => this.changeNotation(parseInt(notSel.value, 10)));
+    notationRow.appendChild(notSel);
+    this.root.appendChild(notationRow);
+
+    const retuneP = document.createElement("p");
+    retuneP.className = "dim";
+    retuneP.append(document.createTextNode("Remap notes onto a different tuning: "));
     const retuneBtn = document.createElement("button");
     retuneBtn.textContent = "Retune…";
-    retuneBtn.style.marginLeft = "0.8rem";
     retuneBtn.addEventListener("click", () => this.openRetune(preset));
-    tuning.appendChild(retuneBtn);
-    this.root.appendChild(tuning);
+    retuneP.appendChild(retuneBtn);
+    this.root.appendChild(retuneP);
 
     const songsTable = document.createElement("table");
     songsTable.className = "files-table";
@@ -91,6 +112,83 @@ export class ProjectView {
     });
     songsTable.appendChild(tbody);
     this.root.appendChild(songsTable);
+
+    const songBar = document.createElement("div");
+    songBar.className = "toolbox";
+    songBar.style.borderBottom = "none";
+    songBar.style.padding = "0.4rem 0";
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "＋ Add song";
+    addBtn.addEventListener("click", () => this.addSong());
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "－ Remove current song";
+    delBtn.disabled = doc.songs.length <= 1;
+    delBtn.addEventListener("click", () => this.removeSong());
+    songBar.append(addBtn, delBtn);
+    this.root.appendChild(songBar);
+  }
+
+  /** Change the song's display notation only — does NOT move any notes. */
+  changeNotation(newIndex) {
+    const store = this.store;
+    const sm = store.doc.meta.songMeta[store.songIndex] ??
+      (store.doc.meta.songMeta[store.songIndex] =
+        { notation: 120, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" });
+    sm.notation = newIndex;
+    store.doc.smetEdited = true;
+    store.doc.dirty = true;
+    store.pitchPreset = presetForNotation(newIndex);
+    store.emit("doc"); // redraw glyphs with the new table
+    this.refresh();
+  }
+
+  /** Append a fresh empty song (one private pattern per channel, cue 0). */
+  addSong() {
+    const store = this.store;
+    const doc = store.doc;
+    const chans = doc.channelCount;
+    const emptyPat = new Uint8Array(512);
+    for (let r = 0; r < 64; r++) { emptyPat[r * 8 + 3] = 0xc0; emptyPat[r * 8 + 4] = 0xc0; }
+    const cue0 = new Uint16Array(64).fill(0x7fff);
+    const patterns = [];
+    for (let ch = 0; ch < chans; ch++) { cue0[ch] = ch; patterns.push(Uint8Array.from(emptyPat)); }
+    const t = store.song;
+    doc.songs.push(new Song({
+      numVoices: chans,
+      bpm: t?.bpm ?? 125, tickRate: t?.tickRate ?? 6,
+      tuningBaseNote: t?.tuningBaseNote ?? 0xa000, tuningFreq: t?.tuningFreq ?? 8363.0,
+      globalFlags: t?.globalFlags ?? 0, globalVolume: t?.globalVolume ?? 0x80,
+      mixingVolume: t?.mixingVolume ?? 0x80, patterns, cues: [cue0],
+    }));
+    const idx = doc.songs.length - 1;
+    doc.meta.songMeta[idx] = {
+      notation: doc.meta.songMeta[store.songIndex]?.notation ?? 120,
+      beatPri: 4, beatSec: 16, name: `song ${idx}`, composer: "", copyright: "",
+    };
+    doc.smetEdited = true;
+    doc.dirty = true;
+    store.emit("songs", { select: idx });
+  }
+
+  /** Remove the current song (guarded against removing the last one). */
+  removeSong() {
+    const store = this.store;
+    const doc = store.doc;
+    if (doc.songs.length <= 1) return;
+    const idx = store.songIndex;
+    const nm = doc.meta.songMeta[idx]?.name;
+    if (!confirm(`Remove song ${idx}${nm ? ` "${nm}"` : ""}? This cannot be undone.`)) return;
+    doc.songs.splice(idx, 1);
+    // songMeta is keyed by song index — shift entries above `idx` down by one.
+    const newMeta = {};
+    for (const k of Object.keys(doc.meta.songMeta).map(Number)) {
+      if (k === idx) continue;
+      newMeta[k > idx ? k - 1 : k] = doc.meta.songMeta[k];
+    }
+    doc.meta.songMeta = newMeta;
+    doc.smetEdited = true;
+    doc.dirty = true;
+    store.emit("songs", { select: Math.min(idx, doc.songs.length - 1) });
   }
 
   /** Retune dialog: snap every note onto a new pitch table (nearest-pitch).
@@ -101,26 +199,42 @@ export class ProjectView {
     const store = this.store;
     const result = await showModal({
       title: "Retune all patterns",
-      body: `Current: ${currentPreset.name}. Notes snap to the nearest pitch of the new table; percussion instruments are skipped. One undo step.`,
-      fields: [{
-        name: "preset", label: "New pitch table", type: "select",
-        value: String(currentPreset.index),
-        options: Object.values(pitchTablePresets)
-          .filter((p) => p.table.length > 0)
-          .map((p) => ({ value: String(p.index), label: p.name })),
-      }],
+      body: `Current: ${currentPreset.name}. Notes remap onto the new table; percussion instruments are skipped. One undo step.`,
+      fields: [
+        {
+          name: "preset", label: "New pitch table", type: "select",
+          value: String(currentPreset.index),
+          options: Object.values(pitchTablePresets)
+            .filter((p) => p.table.length > 0)
+            .map((p) => ({ value: String(p.index), label: p.name })),
+        },
+        {
+          name: "method", label: "Method", type: "select", value: "pitch",
+          options: [
+            { value: "pitch", label: "Nearest pitch (snap each note)" },
+            { value: "delta", label: "Nearest delta (preserve intervals)" },
+            { value: "cadence", label: "Nearest cadence (tonal tension)" },
+            { value: "harmonic", label: "Cadence-aware harmonic" },
+          ],
+        },
+      ],
       okLabel: "Retune",
     });
     if (!result) return;
     const newPreset = pitchTablePresets[parseInt(result.preset, 10)];
-    if (!newPreset || newPreset.index === currentPreset.index) return;
+    if (!newPreset) return;
+    const method = result.method || "pitch";
+    // A same-table retune is a no-op only for the plain 'pitch' method; the
+    // delta/cadence/harmonic methods can still re-voice within the same tuning.
+    if (newPreset.index === currentPreset.index && method === "pitch") return;
 
     // Percussion slots: inst byte14 bit4 / meta byte0 bit1 (isPercussion getter).
     const percSlots = new Uint8Array(1024);
     for (const s of store.doc.usedInstrumentSlots()) {
       if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
     }
-    store.undo.apply(retuneOp(store.songIndex, newPreset, percSlots, retuneNearest));
+    store.undo.apply(retuneOp(store.songIndex, newPreset, percSlots,
+      (song, np, ps) => retuneAllPatterns(song, np, currentPreset, ps, method)));
     // Record the new tuning in the song metadata (drives display + next retune).
     if (!store.doc.meta.songMeta[store.songIndex]) {
       store.doc.meta.songMeta[store.songIndex] =

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>pattern preview smoke</title></head>
+<body>
+  <!-- Drives the real app: switch to Patterns, hit Preview, confirm the device
+       actually advances rows (regression guard for the frame() auto-stop race
+       that killed the preview before the first snapshot confirmed playback). -->
+  <pre id="out">running… (needs a real audio-capable browser; ~3s)</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud&view=pattern" style="width:1200px;height:700px"></iframe>
+  <script>
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); console.log("PREVIEW: " + l); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((res) => {
+          const p = setInterval(() => { const w = frame.contentWindow; if (w && w.__microtone?.store.doc) { clearInterval(p); res(w); } }, 50);
+        });
+        const M = win.__microtone;
+        log("doc loaded, patterns=" + M.store.song.patterns.length);
+        M.patternView.setPattern(0);
+        await M.patternView.togglePreview();
+        let maxRow = -1, everPlaying = false;
+        for (let i = 0; i < 60; i++) {
+          await sleep(50);
+          const a = M.store.audio;
+          if (!a) continue;
+          if (a.isPlaying()) everPlaying = true;
+          maxRow = Math.max(maxRow, a.getTrackerRow());
+        }
+        log(`everPlaying=${everPlaying} maxRow=${maxRow} cue=${M.store.audio?.getCuePosition()}`);
+        log(everPlaying && maxRow > 0 ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (e) { log("ERROR " + e.message); }
+    })();
+  </script>
+</body>
+</html>

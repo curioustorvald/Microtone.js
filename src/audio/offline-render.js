@@ -72,14 +72,34 @@ export function renderSong(eng, seconds) {
   };
 }
 
-/** Offline-render a Document's song to a 16-bit stereo WAV (from the pre-dither
- *  float mix bus). Returns {bytes, seconds, halted}. */
-export function renderToWav(docLike, songIndex, maxSeconds) {
+/** Linear-resample interleaved stereo Float32 from srcRate to dstRate. */
+function resampleStereoF32(f32, srcRate, dstRate) {
+  if (srcRate === dstRate) return f32;
+  const srcFrames = f32.length / 2;
+  const dstFrames = Math.floor((srcFrames * dstRate) / srcRate);
+  const out = new Float32Array(dstFrames * 2);
+  const step = srcRate / dstRate;
+  for (let n = 0; n < dstFrames; n++) {
+    const pos = n * step;
+    const i0 = Math.floor(pos);
+    const frac = pos - i0;
+    const i1 = Math.min(i0 + 1, srcFrames - 1);
+    out[n * 2] = f32[i0 * 2] * (1 - frac) + f32[i1 * 2] * frac;
+    out[n * 2 + 1] = f32[i0 * 2 + 1] * (1 - frac) + f32[i1 * 2 + 1] * frac;
+  }
+  return out;
+}
+
+/** Offline-render a Document's song to a 16-bit stereo WAV, resampled to
+ *  `outRate` (default 48 kHz), taken from the pre-dither float mix bus (no
+ *  dithering). Returns {bytes, seconds, halted}. */
+export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
   const eng = new TaudEngine();
   loadIntoEngine(eng, docLike, songIndex);
   const r = renderSong(eng, maxSeconds);
 
-  const numSamples = r.f32.length; // interleaved stereo samples
+  const pcm = resampleStereoF32(r.f32, SAMPLING_RATE, outRate);
+  const numSamples = pcm.length; // interleaved stereo samples
   const dataBytes = numSamples * 2;
   const buf = new ArrayBuffer(44 + dataBytes);
   const dv = new DataView(buf);
@@ -91,14 +111,14 @@ export function renderToWav(docLike, songIndex, maxSeconds) {
   dv.setUint32(16, 16, true);
   dv.setUint16(20, 1, true);           // PCM
   dv.setUint16(22, 2, true);           // stereo
-  dv.setUint32(24, SAMPLING_RATE, true);
-  dv.setUint32(28, SAMPLING_RATE * 4, true); // byte rate (16-bit stereo)
+  dv.setUint32(24, outRate, true);
+  dv.setUint32(28, outRate * 4, true); // byte rate (16-bit stereo)
   dv.setUint16(32, 4, true);           // block align
   dv.setUint16(34, 16, true);          // bits
   wstr(36, "data");
   dv.setUint32(40, dataBytes, true);
   for (let i = 0; i < numSamples; i++) {
-    const v = Math.max(-1, Math.min(1, r.f32[i]));
+    const v = Math.max(-1, Math.min(1, pcm[i]));
     dv.setInt16(44 + i * 2, Math.round(v * 32767), true);
   }
   return { bytes: new Uint8Array(buf), seconds: r.frames / SAMPLING_RATE, halted: r.halted };

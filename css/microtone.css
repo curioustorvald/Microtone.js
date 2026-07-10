@@ -42,6 +42,8 @@
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
   --cv-wave-loop: #26314a;   /* loop-region shading */
+  --cv-wave-mid: #4a5266;    /* waveform centre baseline */
+  --cv-wave-funk: #f5a623;   /* loop bytes live-inverted by funk repeat (S$Fx) */
   --cv-play-cursor: #f5a623; /* live play-position bars, envelope nodes */
   --cv-env-line: #4aa3ff;    /* envelope polyline, zone strokes */
   --cv-env-node: #f5a623;    /* envelope node dots */
@@ -87,6 +89,8 @@
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;
   --cv-wave-loop: #ccd8ee;
+  --cv-wave-mid: #b3bcc9;
+  --cv-wave-funk: #c07a10;
   --cv-play-cursor: #af6f10;
   --cv-env-line: #1d66b8;
   --cv-env-node: #af6f10;
@@ -210,6 +214,28 @@ select, input[type="range"] {
 
 .transport-controls { display: flex; gap: 0.3rem; align-items: center; }
 .chk { color: var(--dim); font-size: 0.85rem; display: flex; align-items: center; gap: 0.25rem; }
+
+.tb-sep { width: 1px; align-self: stretch; margin: 0.1rem 0.25rem; background: var(--border); }
+.icon-btn { padding: 0.25rem 0.5rem; font-size: 1.05rem; line-height: 1; }
+button.icon-btn:disabled { opacity: 0.35; cursor: default; }
+button.icon-btn:disabled:hover { border-color: var(--border); }
+.undo-stat { font-size: 0.75rem; min-width: 3.5ch; font-variant-numeric: tabular-nums; }
+
+.support-btn {
+  font-size: 0.82rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.support-btn.donate { color: #e0507a; border-color: #e0507a55; }
+.support-btn.sponsor { color: #db61a2; border-color: #db61a255; }
+.support-btn:hover { border-color: var(--accent); }
+.gh-link { color: var(--dim); text-decoration: none; font-size: 0.82rem; white-space: nowrap; }
+.gh-link:hover { color: var(--accent); }
 
 .pos { display: flex; gap: 0.7rem; font-size: 0.9rem; }
 .pos span { color: var(--dim); }
@@ -385,6 +411,16 @@ select, input[type="range"] {
   gap: 0.4rem 1rem;
   margin-bottom: 0.8rem;
 }
+.inst-group-head {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0.2rem 0 0.4rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid var(--border);
+}
 .inst-field {
   display: flex;
   justify-content: space-between;
@@ -401,6 +437,20 @@ select, input[type="range"] {
   padding: 0.15rem 0.35rem;
   width: 7.5rem;
 }
+
+.env-controls { margin-top: 0.7rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.env-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; }
+.env-ctl {
+  display: flex; align-items: center; gap: 0.35rem;
+  color: var(--dim); font-size: 0.85rem;
+}
+.env-ctl input[type="number"] {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 0.12rem 0.3rem; width: 4.5rem;
+}
+.env-ctl.chk { gap: 0.3rem; }
+.env-row button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
 
 .project-view { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; max-width: 900px; }
 

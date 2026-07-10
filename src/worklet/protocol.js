@@ -31,11 +31,13 @@ export const CMD = Object.freeze({
   JAM_STOP: "jamStop",                             // {ph}
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
+  QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
   SNAPSHOT_RETURN: "snapshotReturn",               // {buffer: ArrayBuffer} (recycle)
 });
 
 export const MSG = Object.freeze({
   SNAPSHOT: "snapshot", // {buffer: ArrayBuffer} — Float32Array, layout below
+  FUNK_MASK: "funkMask", // {slot, mask: ArrayBuffer} — S$Fx invert-loop bit mask
   READY: "ready",
 });
 

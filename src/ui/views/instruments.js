@@ -4,7 +4,7 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setEnvDragOp } from "../../doc/ops.js";
+import { setInstFieldOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp } from "../../doc/ops.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
@@ -59,6 +59,7 @@ export class InstrumentsView {
     this.tab = "general";
     this.visible = false;
     this.dragState = null;
+    this.selectedNode = 0; // envelope node targeted by the spinner controls
 
     this.root = document.createElement("div");
     this.root.className = "split-view";
@@ -196,22 +197,53 @@ export class InstrumentsView {
     this.store.undo.apply(setInstFieldOp(this.selected, key, value));
   }
 
-  renderGeneral(inst) {
+  /** A titled group of fields (taut.js drawGroupHeader layout: fields grouped
+   *  by function — Volume / Panning / Filter / Vibrato / Note actions / …). */
+  group(title, ...fields) {
+    const head = document.createElement("div");
+    head.className = "inst-group-head";
+    head.textContent = title;
+    this.panel.appendChild(head);
     const grid = document.createElement("div");
     grid.className = "inst-grid";
+    grid.append(...fields.filter(Boolean));
+    this.panel.appendChild(grid);
+  }
+
+  renderGeneral(inst) {
     const fadeout = inst.volumeFadeoutLow | ((inst.fadeoutHigh & 0x0f) << 8);
-    grid.append(
+
+    this.group("Volume",
       this.field("Global vol", inst.instGlobalVolume, 0, 255, (v) => this.setField("instGlobalVolume", v)),
       this.field("Default note vol", inst.defaultNoteVolume, 0, 255, (v) => this.setField("defaultNoteVolume", v)),
       this.field("Fadeout (12-bit)", fadeout, 0, 4095, (v) => {
         this.setField("volumeFadeoutLow", v & 0xff);
         this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f));
       }),
+    );
+
+    this.group("Panning",
       this.field("Default pan", inst.defaultPan, 0, 255, (v) => this.setField("defaultPan", v)),
+    );
+
+    this.group("Filter",
+      this.select("Mode", (inst.fadeoutHigh >> 4) & 1, [[0, "IT"], [1, "SoundFont"]],
+        (v) => this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x0f) | (v << 4))),
       this.field("Cutoff", inst.defaultCutoff, 0, 255, (v) => this.setField("defaultCutoff", v)),
       this.field("Resonance", inst.defaultResonance, 0, 255, (v) => this.setField("defaultResonance", v)),
-      this.field("Detune (s16)", inst.sampleDetuneSigned, -32768, 32767, (v) =>
-        this.setField("sampleDetune", v & 0xffff)),
+    );
+
+    this.group("Vibrato",
+      this.select("Wave", (inst.instrumentFlag >> 2) & 7,
+        [[0, "sine"], [1, "ramp down"], [2, "square"], [3, "random"], [4, "ramp up"]],
+        (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~0x1c) | (v << 2))),
+      this.field("Speed", inst.vibratoSpeed, 0, 255, (v) => this.setField("vibratoSpeed", v)),
+      this.field("Depth", inst.vibratoDepth, 0, 255, (v) => this.setField("vibratoDepth", v)),
+      this.field("Sweep", inst.vibratoSweep, 0, 255, (v) => this.setField("vibratoSweep", v)),
+      this.field("Rate", inst.vibratoRate, 0, 255, (v) => this.setField("vibratoRate", v)),
+    );
+
+    this.group("Note actions",
       this.select("NNA", inst.instrumentFlag & 3,
         [[0, "Note off"], [1, "Note cut"], [2, "Continue"], [3, "Note fade"]],
         (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~3) | v)),
@@ -223,15 +255,9 @@ export class InstrumentsView {
       this.select("DCA", (inst.dupCheckFlag >> 2) & 3,
         [[0, "cut"], [1, "off"], [2, "fade"]],
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~0x0c) | (v << 2))),
-      this.select("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
-        (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
-      this.field("Vib speed", inst.vibratoSpeed, 0, 255, (v) => this.setField("vibratoSpeed", v)),
-      this.field("Vib sweep", inst.vibratoSweep, 0, 255, (v) => this.setField("vibratoSweep", v)),
-      this.field("Vib depth", inst.vibratoDepth, 0, 255, (v) => this.setField("vibratoDepth", v)),
-      this.field("Vib rate", inst.vibratoRate, 0, 255, (v) => this.setField("vibratoRate", v)),
-      this.select("Vib wave", (inst.instrumentFlag >> 2) & 7,
-        [[0, "sine"], [1, "ramp down"], [2, "square"], [3, "random"], [4, "ramp up"]],
-        (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~0x1c) | (v << 2))),
+    );
+
+    this.group("Sample",
       this.field("Sample ptr", inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v)),
       this.field("Sample len", inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
       this.field("Rate @C4", inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v)),
@@ -240,32 +266,30 @@ export class InstrumentsView {
       this.select("Loop mode", inst.loopMode & 3,
         [[0, "off"], [1, "forward"], [2, "ping-pong"], [3, "one-shot"]],
         (v) => this.setField("loopMode", (inst.loopMode & ~3) | v)),
-      this.select("SF2 filter", (inst.fadeoutHigh >> 4) & 1, [[0, "IT"], [1, "SoundFont"]],
-        (v) => this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x0f) | (v << 4))),
+      this.select("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
+        (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
     );
-    this.panel.appendChild(grid);
+
+    this.group("Tuning",
+      this.field("Detune (s16)", inst.sampleDetuneSigned, -32768, 32767, (v) =>
+        this.setField("sampleDetune", v & 0xffff)),
+    );
   }
 
   renderEnv(inst, tabDef) {
     const env = inst[tabDef.key];
-    const loopWord = inst[tabDef.loopKey];
-    const susWord = inst[tabDef.susKey];
+    const present = envPresent(inst[tabDef.loopKey]);
     const head = document.createElement("div");
     head.className = "detail-info";
-    const present = envPresent(loopWord);
     if (tabDef.role) {
-      // Pitch / Filter tab — the physical slot + its m-bit are hidden; the tab
-      // shows only whether this role is active. Editing an absent role claims
-      // a slot (drawEnvGraph writes the P bit + m-bit on the first drag).
       head.innerHTML = tabDef.roleActive
-        ? `${tabDef.label} — drag nodes to edit`
-        : `${tabDef.label}: <b>none</b> — drag a node to add ${tabDef.role === "filter"
+        ? `${tabDef.label} — drag nodes on the graph, or use the controls below`
+        : `${tabDef.label}: <b>none</b> — drag a node (or press Add node) to add ${tabDef.role === "filter"
             ? "a filter-cutoff modulation envelope" : "a pitch-bend envelope"}`;
     } else {
       head.innerHTML =
-        `${tabDef.label}: ${present ? "present" : "absent"}` +
-        ` · loop 0x${loopWord.toString(16)} sustain 0x${susWord.toString(16)}` +
-        ` — drag nodes to edit values`;
+        `${tabDef.label}: ${present ? "<b>present</b>" : "<b>absent</b>"}` +
+        ` — drag nodes on the graph, or use the controls below`;
     }
     this.panel.appendChild(head);
 
@@ -273,6 +297,9 @@ export class InstrumentsView {
     canvas.className = "wave-canvas";
     this.panel.appendChild(canvas);
     this.envCanvas = { canvas, env, tabDef, inst, head };
+
+    const active = this.envActiveCount(env);
+    this.selectedNode = Math.min(Math.max(this.selectedNode, 0), active - 1);
     this.drawEnvGraph();
 
     canvas.addEventListener("pointerdown", (e) => this.envPointerDown(e));
@@ -280,20 +307,159 @@ export class InstrumentsView {
     canvas.addEventListener("pointerup", () => {
       const dragged = this.dragState !== null;
       this.dragState = null;
-      // Re-render was suppressed during the drag; settle header + tab state now
+      // Re-render was suppressed during the drag; settle header + spinners now
       // (a role claim can change which slot each tab resolves to).
       if (dragged) this.renderPanel();
     });
+
+    this.panel.appendChild(this.buildEnvControls(inst, tabDef, env, active));
+  }
+
+  /** Active node count: nodes 0..N where N is the first zero-duration
+   *  (terminator) node, capped at 25 (the physical slot count). */
+  envActiveCount(env) {
+    for (let i = 0; i < 24; i++) if (env[i].offset === 0) return i + 1;
+    return 25;
+  }
+
+  setEnvWordBit(key, bit, on) {
+    const cur = this.store.doc.instruments[this.selected][key];
+    const nw = on ? (cur | (1 << bit)) : (cur & ~(1 << bit));
+    this.store.undo.apply(setInstFieldOp(this.selected, key, nw & 0xffff));
+  }
+
+  setEnvWordField(key, shift, mask, val) {
+    const cur = this.store.doc.instruments[this.selected][key];
+    const v = Math.min(Math.max(val | 0, 0), mask);
+    const nw = (cur & ~(mask << shift)) | (v << shift);
+    this.store.undo.apply(setInstFieldOp(this.selected, key, nw & 0xffff));
+  }
+
+  /** Insert a node after `sel`: split its segment (interior) or extend the tail. */
+  addEnvNode(tabDef, env, sel, max) {
+    const active = this.envActiveCount(env);
+    if (active >= 25) return;
+    const nodes = env.map((n) => ({ value: n.value, offset: n.offset }));
+    if (sel >= active - 1) {
+      // Extend the envelope: give the last node a span, append a terminator.
+      nodes[active - 1] = { value: env[active - 1].value, offset: minifloatFromDouble(0.1) };
+      nodes[active] = { value: env[active - 1].value, offset: 0 };
+      this.selectedNode = active;
+    } else {
+      const total = minifloatToDouble(env[sel].offset);
+      const half = minifloatFromDouble(total / 2);
+      const midVal = Math.round((env[sel].value + env[sel + 1].value) / 2);
+      for (let i = 24; i > sel + 1; i--) nodes[i] = { value: nodes[i - 1].value, offset: nodes[i - 1].offset };
+      nodes[sel].offset = half;
+      nodes[sel + 1] = { value: Math.min(Math.max(midVal, 0), max),
+        offset: minifloatFromDouble(Math.max(total - minifloatToDouble(half), 0)) };
+      this.selectedNode = sel + 1;
+    }
+    this.store.undo.apply(setEnvArrayOp(this.selected, tabDef.key, nodes));
+  }
+
+  /** Delete node `sel` (node 0 is anchored at t=0 and cannot be removed). */
+  removeEnvNode(tabDef, env, sel) {
+    const active = this.envActiveCount(env);
+    if (sel === 0 || active <= 1) return;
+    const nodes = env.map((n) => ({ value: n.value, offset: n.offset }));
+    // Merge the removed segment into the previous node so later timing is kept.
+    const merged = minifloatToDouble(env[sel - 1].offset) + minifloatToDouble(env[sel].offset);
+    nodes[sel - 1].offset = minifloatFromDouble(merged);
+    for (let i = sel; i < 24; i++) nodes[i] = { value: env[i + 1].value, offset: env[i + 1].offset };
+    this.selectedNode = Math.max(sel - 1, 0);
+    this.store.undo.apply(setEnvArrayOp(this.selected, tabDef.key, nodes));
+  }
+
+  /** Spinner/checkbox control panel below the envelope graph. */
+  buildEnvControls(inst, tabDef, env, active) {
+    const max = tabDef.max;
+    const wrap = document.createElement("div");
+    wrap.className = "env-controls";
+    const sel = this.selectedNode;
+    const node = env[sel];
+
+    const spin = (label, value, min, hi, step, onChange) => {
+      const l = document.createElement("label");
+      l.className = "env-ctl";
+      l.append(document.createTextNode(label));
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.value = value; inp.min = min; inp.max = hi;
+      if (step) inp.step = step;
+      inp.addEventListener("change", () => onChange(inp.value));
+      l.appendChild(inp);
+      return l;
+    };
+    const chk = (label, checked, onChange) => {
+      const l = document.createElement("label");
+      l.className = "env-ctl chk";
+      const c = document.createElement("input");
+      c.type = "checkbox"; c.checked = checked;
+      c.addEventListener("change", () => onChange(c.checked));
+      l.append(c, document.createTextNode(label));
+      return l;
+    };
+    const btn = (label, title, onClick, disabled) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title; b.disabled = !!disabled;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const row = (...kids) => { const d = document.createElement("div"); d.className = "env-row"; d.append(...kids); return d; };
+
+    // node select + value + segment duration + add/remove
+    wrap.appendChild(row(
+      spin("Node", sel, 0, active - 1, 1, (v) => {
+        this.selectedNode = Math.min(Math.max(parseInt(v, 10) || 0, 0), active - 1);
+        this.renderPanel();
+      }),
+      spin("Value", node.value, 0, max, 1, (v) =>
+        this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
+          { value: Math.min(Math.max(parseInt(v, 10) || 0, 0), max) }))),
+      spin("Seg (s)", minifloatToDouble(node.offset).toFixed(3), 0, 10, 0.01, (v) =>
+        this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
+          { offset: minifloatFromDouble(Math.max(parseFloat(v) || 0, 0)) }))),
+      btn("＋ Add node", "Insert a node after the selected one",
+        () => this.addEnvNode(tabDef, env, sel, max), active >= 25),
+      btn("－ Remove node", "Delete the selected node",
+        () => this.removeEnvNode(tabDef, env, sel), active <= 1 || sel === 0),
+    ));
+
+    // sustain point + range
+    const susW = inst[tabDef.susKey];
+    wrap.appendChild(row(
+      chk("Sustain", ((susW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.susKey, 5, on)),
+      spin("start", (susW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 8, 0x1f, parseInt(v, 10) || 0)),
+      spin("end", susW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 0, 0x1f, parseInt(v, 10) || 0)),
+    ));
+
+    // loop point + range
+    const loopW = inst[tabDef.loopKey];
+    wrap.appendChild(row(
+      chk("Loop", ((loopW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.loopKey, 5, on)),
+      spin("start", (loopW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 8, 0x1f, parseInt(v, 10) || 0)),
+      spin("end", loopW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 0, 0x1f, parseInt(v, 10) || 0)),
+    ));
+
+    // present toggle (Vol/Pan tabs; Pitch/Filter presence is the role claim)
+    if (!tabDef.role) {
+      wrap.appendChild(row(
+        chk("Envelope present", envPresent(inst[tabDef.loopKey]),
+          (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
+      ));
+    }
+    return wrap;
   }
 
   envGeometry() {
     const { canvas, env } = this.envCanvas;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-    // cumulative time axis; ensure a minimum span so flat envs remain visible
+    // cumulative time axis; span only the ACTIVE envelope (to its terminator).
     const times = [0];
     for (let i = 0; i < 24; i++) times.push(times[i] + minifloatToDouble(env[i].offset));
-    const total = Math.max(times[24], 0.25);
+    const active = this.envActiveCount(env);
+    const total = Math.max(times[active - 1], 0.25);
     return { w, h, times, total };
   }
 
@@ -315,6 +481,31 @@ export class InstrumentsView {
     const { times, total } = this.envGeometry();
     const X = (i) => 10 + (times[i] / total) * (w - 20);
     const Y = (v) => h - 14 - (v / tabDef.max) * (h - 28);
+    const Xt = (t) => 10 + (t / total) * (w - 20);
+
+    // ── grids ── magnitude (horizontal, value labels) + time (vertical, seconds)
+    ctx.font = "9px monospace";
+    ctx.textAlign = "left";
+    ctx.strokeStyle = C.border;
+    for (let g = 0; g <= 4; g++) {
+      const val = (tabDef.max * g) / 4;
+      const y = Y(val);
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath(); ctx.moveTo(10, y); ctx.lineTo(w - 10, y); ctx.stroke();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = C.dim;
+      ctx.fillText(String(Math.round(val)), 1, y - 1.5);
+    }
+    const stepT = niceTimeStep(total);
+    for (let t = 0; t <= total + 1e-9; t += stepT) {
+      const x = Xt(t);
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h - 12); ctx.stroke();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = C.dim;
+      ctx.fillText(t.toFixed(t < 1 ? 2 : 1) + "s", x + 1, h - 3);
+    }
+    ctx.globalAlpha = 1;
 
     // sustain / loop region shading
     const shade = (word, color) => {
@@ -327,10 +518,11 @@ export class InstrumentsView {
     shade(inst[tabDef.susKey], C.envSus);
     shade(inst[tabDef.loopKey], C.envLoop);
 
-    // polyline + nodes
+    // polyline + nodes (active nodes only — up to the terminator)
+    const activeCount = this.envActiveCount(env);
     ctx.strokeStyle = C.envLine;
     ctx.beginPath();
-    for (let i = 0; i <= 24; i++) {
+    for (let i = 0; i < activeCount; i++) {
       const x = X(i);
       const y = Y(env[i].value);
       if (i === 0) ctx.moveTo(x, y);
@@ -338,10 +530,19 @@ export class InstrumentsView {
     }
     ctx.stroke();
     ctx.fillStyle = C.envNode;
-    for (let i = 0; i <= 24; i++) {
+    for (let i = 0; i < activeCount; i++) {
       ctx.beginPath();
       ctx.arc(X(i), Y(env[i].value), 3.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+    // highlight the spinner-selected node
+    if (this.selectedNode >= 0 && this.selectedNode < activeCount) {
+      ctx.strokeStyle = C.playCursor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(X(this.selectedNode), Y(env[this.selectedNode].value), 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
     }
 
     // live playback cursor for THIS envelope's role — every tab (vol / pan /
@@ -366,8 +567,9 @@ export class InstrumentsView {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const { w, times, total } = this.envGeometry();
+    const active = this.envActiveCount(this.envCanvas.env);
     let best = -1, bestD = 12;
-    for (let i = 0; i <= 24; i++) {
+    for (let i = 0; i < active; i++) {
       const nx = 10 + (times[i] / total) * (w - 20);
       const d = Math.abs(nx - x);
       if (d < bestD) { bestD = d; best = i; }
@@ -378,6 +580,7 @@ export class InstrumentsView {
   envPointerDown(e) {
     const hit = this.envHit(e);
     if (hit.idx < 0) return;
+    this.selectedNode = hit.idx; // sync the spinner target to the grabbed node
     this.envCanvas.canvas.setPointerCapture(e.pointerId);
     const gestureId = `envdrag${Date.now()}`;
     this.dragState = { idx: hit.idx, gestureId };
@@ -512,4 +715,13 @@ export class InstrumentsView {
 
 function escape(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+/** A "nice" time-grid interval (1/2/5 × 10ⁿ) giving ~5-8 gridlines. */
+function niceTimeStep(total) {
+  const raw = total / 6;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const norm = raw / pow;
+  const mult = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+  return Math.max(mult * pow, 0.01);
 }

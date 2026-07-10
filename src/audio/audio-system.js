@@ -30,13 +30,14 @@ export class AudioSystem {
     this.interruptMask = 0; // accumulated between pollTrackerInterrupts calls
     this.onSnapshot = null; // optional callback(snapshot Float32Array)
     this.usedBundleFallback = false;
+    this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
   }
 
   /** Create the context + node. Must be called once; audio starts suspended
    *  until resume() is called from a user gesture.
    *  Test knobs: forceBundle loads the single-file worklet concat; sampleRate
    *  overrides the context rate (exercises the 32 kHz→context resampler). */
-  async init({ snapshotIntervalMs = 16, forceBundle = false, sampleRate = 32000 } = {}) {
+  async init({ snapshotIntervalMs = 16, forceBundle = false, sampleRate = 48000 } = {}) {
     let ctx;
     try {
       ctx = new AudioContext({ sampleRate, latencyHint: "interactive" });
@@ -72,6 +73,8 @@ export class AudioSystem {
         this.interruptMask |= f[SNAP_INTERRUPT_MASK];
         this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
         if (this.onSnapshot) this.onSnapshot(this.snapshot);
+      } else if (m.t === MSG.FUNK_MASK) {
+        this.funkMasks.set(m.slot, new Uint8Array(m.mask));
       }
     };
     this.node.connect(ctx.destination);
@@ -171,6 +174,12 @@ export class AudioSystem {
     this._post({ t: CMD.UPLOAD_INSTRUMENT, slot, bytes: buf }, [buf]);
   }
   set64ChannelMode(on) { this._post({ t: CMD.SET_64CH, on }); }
+
+  /** Ask the worklet for instrument `slot`'s live S$Fx invert-loop bit mask;
+   *  the reply lands in funkMasks (read via getFunkMask, ~1 frame later). */
+  requestFunkMask(slot) { this._post({ t: CMD.QUERY_FUNK_MASK, slot }); }
+  /** Latest queried funk mask for `slot` (Uint8Array; empty when none). */
+  getFunkMask(slot) { return this.funkMasks.get(slot) ?? null; }
 
   // ── snapshot-backed synchronous readbacks (audio.*-shaped) ──
 

@@ -4,7 +4,7 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
-import { noteToStr, hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
+import { hex2, hex4, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell } from "../glyphs.js";
 import {
@@ -17,7 +17,7 @@ import { themeColors } from "../theme.js";
 const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
 const CHAR_W = 7.3;
 const ROW_H = 16;
-const HEADER_H = 44;   // channel header: number + VU + pan
+const HEADER_H = 50;   // channel header: number + pattern + VU + pan + live note
 const GUTTER_W = 76;   // "cue:row | absrow"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 
@@ -30,6 +30,7 @@ export class TimelineView {
     this.scrollCh = 0;    // leftmost visible channel
     this.map = null;      // songMap cache
     this.needsRedraw = true;
+    this.lastPlayRow = -1; // remembered so resize() can repaint synchronously
 
     store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.invalidate(); });
     store.on("edit", () => { this.map = null; this.invalidate(); });
@@ -55,12 +56,21 @@ export class TimelineView {
   resize() {
     const host = this.canvas.parentElement;
     const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = Math.max(100, host.clientWidth * dpr);
-    this.canvas.height = Math.max(100, host.clientHeight * dpr);
+    const w = Math.max(100, Math.round(host.clientWidth * dpr));
+    const h = Math.max(100, Math.round(host.clientHeight * dpr));
+    // Skip no-op resizes (ResizeObserver fires on unrelated reflows too).
+    if (this.canvas.width === w && this.canvas.height === h && this.dpr === dpr) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
     this.canvas.style.width = host.clientWidth + "px";
     this.canvas.style.height = host.clientHeight + "px";
     this.dpr = dpr;
-    this.invalidate();
+    // Setting canvas.width blanks the backing store; repaint synchronously
+    // (ResizeObserver runs before paint) so the empty frame never shows — this
+    // is the "moving the cursor in/out of the note column flickers" fix, since
+    // that resizes the command palette and reflows the view host.
+    this.needsRedraw = false;
+    this.draw(this.lastPlayRow);
   }
 
   invalidate() { this.needsRedraw = true; }
@@ -297,7 +307,24 @@ export class TimelineView {
     }
   }
 
+  /** Pattern number assigned to channel `ch` at the current play/cursor cue. */
+  currentPatternFor(ch) {
+    const song = this.store.song;
+    if (!song) return null;
+    const map = this.getMap();
+    const audio = this.store.audio;
+    let entry = null;
+    if (audio && audio.isPlaying() && map) entry = map.entries[audio.getCuePosition()];
+    else { const loc = this.locate(this.store.cursor.row); entry = loc?.entry ?? null; }
+    if (!entry) return null;
+    const words = song.cues[entry.cue];
+    if (!words) return null;
+    return words[ch] & 0x7fff;
+  }
+
   draw(playRow) {
+    if (playRow === undefined) playRow = -1;
+    this.lastPlayRow = playRow;
     const C = themeColors();
     const { ctx, store } = this;
     const dpr = this.dpr;
@@ -319,37 +346,46 @@ export class TimelineView {
     ctx.font = FONT;
     ctx.textBaseline = "middle";
 
-    // ── channel headers: number, VU bar, pan tick ──
+    // ── channel headers: number + pattern, VU bar, pan tick, live note ──
+    const headPal = { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent };
     for (let i = 0; i < visCh; i++) {
       const ch = this.scrollCh + i;
       const x = GUTTER_W + i * COL_W;
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
       ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
+      // top line: channel number (left) + current pattern number (right)
       ctx.fillStyle = C.dim;
       ctx.textAlign = "left";
-      ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, 10);
+      ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, 9);
+      const patNum = this.currentPatternFor(ch);
+      if (patNum !== null && patNum !== PATTERN_EMPTY) {
+        ctx.fillStyle = C.accent;
+        ctx.textAlign = "right";
+        ctx.fillText(hex4(patNum), x + COL_W - 6, 9);
+        ctx.textAlign = "left";
+      }
       // VU
-      const barX = x + 24;
-      const barW = COL_W - 32;
+      const barX = x + 4;
+      const barW = COL_W - 12;
       ctx.fillStyle = C.meterBg;
-      ctx.fillRect(barX, 6, barW, 8);
+      ctx.fillRect(barX, 16, barW, 7);
       if (audio && audio.getVoiceActive(ch)) {
         const vol = audio.getVoiceEffectiveVolume(ch);
         ctx.fillStyle = C.meter;
-        ctx.fillRect(barX, 6, Math.round(barW * vol), 8);
+        ctx.fillRect(barX, 16, Math.round(barW * vol), 7);
       }
       // pan
       ctx.fillStyle = C.meterBg;
-      ctx.fillRect(barX, 20, barW, 4);
+      ctx.fillRect(barX, 27, barW, 3);
       const pan = audio ? audio.getVoiceEffectivePan(ch) / 255 : 0.5;
       ctx.fillStyle = C.accent2;
-      ctx.fillRect(barX + pan * (barW - 3), 18, 3, 8);
-      // live note (small text under meters)
+      ctx.fillRect(barX + pan * (barW - 3), 25, 3, 7);
+      // live note — same 4-char glyph font as the pattern cells (raw-aware)
       if (audio && audio.getVoiceActive(ch)) {
-        ctx.fillStyle = C.fg;
-        ctx.fillText(noteToStr(audio.getVoiceNote(ch)), x + 4, 34);
+        paintNoteCell(ctx, audio.getVoiceNote(ch), store.pitchPreset, x + 4, 33,
+          CHAR_W, 15, headPal, store.rawNoteView);
         ctx.fillStyle = C.dim;
-        ctx.fillText(hex2(audio.getVoiceInstrument(ch)), x + 34, 34);
+        ctx.fillText(hex2(audio.getVoiceInstrument(ch)), x + 4 + 5 * CHAR_W, 40.5);
       }
     }
 

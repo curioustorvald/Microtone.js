@@ -144,18 +144,67 @@ export function stepNoteInTable(note, preset, dir) {
   return Math.min(Math.max(out, 0x20), 0xffff);
 }
 
+// ── retune tension / harmonic fields (taut.js:340-489) ──
+const FIFTH_PC = 0x95a;   // abstract 3:2 fifth in 0x1000-per-octave units
+const TONIC_TOL = 0x40;   // narrow tonic neighbourhood for the k=0 tension gate
+
+/** Fifth-circle tonal tension of pitch `p` relative to `tonic` ('cadence'). */
+function cadTension(p, tonic, interval) {
+  const half = interval >>> 1;
+  const d = (((p - tonic) % interval) + interval) % interval;
+  const cyclic = d <= half ? d : interval - d;
+  let bestT = cyclic <= TONIC_TOL ? cyclic : Infinity;
+  for (let k = -6; k <= 6; k++) {
+    if (k === 0) continue;
+    const target = (((k * FIFTH_PC) % interval) + interval) % interval;
+    let dist = Math.abs(d - target);
+    if (dist > half) dist = interval - dist;
+    const candT = Math.abs(k) * 0x100 + dist;
+    if (candT < bestT) bestT = candT;
+  }
+  return bestT;
+}
+
+// Just-intonation attractor field A(P) for the 'harmonic' method: [offset, weight].
+const HARM_REFS = [
+  [0x0, 1.0], [0x1d2, 4.0], [0x435, 3.0], [0x527, 3.0], [0x6a4, 2.0],
+  [0x95b, 2.0], [0xab7, 3.0], [0xbcb, 3.0], [0xd3d, 4.0],
+];
+function harmonicCost(p, tonic, interval) {
+  const half = interval >>> 1;
+  const d = (((p - tonic) % interval) + interval) % interval;
+  let best = Infinity;
+  for (const [off, w] of HARM_REFS) {
+    let dist = Math.abs(d - off);
+    if (dist > half) dist = interval - dist;
+    const cost = w * dist;
+    if (cost < best) best = cost;
+  }
+  return best;
+}
+
 /**
- * Nearest-pitch retune of every pattern note in `song` from its current
- * tuning to `newPreset` — the 'pitch' method of taut.js retuneAllPatterns
- * (taut.js:522+), candidate generator ported verbatim. Percussion notes are
- * skipped via percSlots (inst byte14 bit4 / meta byte0 bit1). Mutates cells;
- * returns [{pat, row, prev}] for the inverse. (delta/cadence/harmonic
- * methods: future work.)
+ * Retune every pattern note in `song` from `srcPreset` to `newPreset` — the
+ * four methods of taut.js retuneAllPatterns (taut.js:522+), ported verbatim:
+ *   'pitch'    nearest-note: snap each pitch to the closest new-table entry.
+ *   'delta'    nearest-delta: first note nearest-pitch; each later note keeps
+ *              the interval from the previous mapped note closest to the
+ *              original interval ("preserve the melody's shape").
+ *   'cadence'  nearest-cadence: like delta, but scored by how well the mapped
+ *              step reproduces the tonal-tension change of the source step.
+ *   'harmonic' cadence-aware nearest-harmonic: delta + a duration-weighted
+ *              pull toward JI attractors (long notes pull harder).
+ * Percussion notes are skipped via percSlots (inst byte14 bit4 / meta byte0
+ * bit1). Mutates cells; returns [{pat, row, prev}] for the inverse.
  */
-export function retuneNearest(song, newPreset, percSlots) {
+export function retuneAllPatterns(song, newPreset, srcPreset, percSlots, method = "pitch") {
+  if (method !== "delta" && method !== "cadence" && method !== "harmonic") method = "pitch";
   const newTable = newPreset.table;
   const newInterval = newPreset.interval;
   if (newTable.length === 0) return [];
+  // Tension/harmonic shapes are read from the SOURCE tuning's modular space —
+  // they describe the composition the user wrote, not the snap grid.
+  const srcInterval = srcPreset?.interval || 0x1000;
 
   const forEachCandidate = (absRef, fn) => {
     const baseK = Math.floor((absRef - ANCHOR_NOTE) / newInterval);
@@ -173,26 +222,83 @@ export function retuneNearest(song, newPreset, percSlots) {
   const changes = [];
   for (let p = 0; p < song.patterns.length; p++) {
     const ptn = song.patterns[p];
+    let prevOrigAbs = -1, prevMappedAbs = 0, tonic = 0;
+
+    // Tonic = the first non-percussion, non-sentinel note in the pattern.
+    if (method === "cadence" || method === "harmonic") {
+      let runningInst = 0;
+      for (let row = 0; row < ptn.length; row++) {
+        const cell = ptn[row];
+        if (cell.instrment !== 0) runningInst = cell.instrment;
+        const note = cell.note;
+        if (note >= 0x0000 && note <= 0x001f) continue;
+        const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
+        if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
+        tonic = note;
+        break;
+      }
+    }
+
     let runningInst = 0;
-    for (let row = 0; row < 64; row++) {
+    for (let row = 0; row < ptn.length; row++) {
       const cell = ptn[row];
       if (cell.instrment !== 0) runningInst = cell.instrment;
       const note = cell.note;
       if (note >= 0x0000 && note <= 0x001f) continue; // sentinels/interrupts
       const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
       if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
+      const origAbs = note;
+      let newAbs;
 
-      let bestAbs = 0, bestDist = Infinity;
-      forEachCandidate(note, (cand) => {
-        const d = Math.abs(cand - note);
-        if (d < bestDist) { bestDist = d; bestAbs = cand; }
-      });
-      const newNote = Math.min(Math.max(bestAbs, 0), 0xffff) & 0xffff;
-      if (newNote !== note) {
-        changes.push({ pat: p, row, prev: note });
-        cell.note = newNote;
+      if ((method === "delta" || method === "cadence" || method === "harmonic") && prevOrigAbs >= 0) {
+        const targetAbs = prevMappedAbs + (origAbs - prevOrigAbs);
+        let targetDeltaT = 0, tMappedPrev = 0, lambda = 0;
+        if (method === "cadence") {
+          targetDeltaT = cadTension(origAbs, tonic, srcInterval) - cadTension(prevOrigAbs, tonic, srcInterval);
+          tMappedPrev = cadTension(prevMappedAbs, tonic, srcInterval);
+        } else if (method === "harmonic") {
+          let duration = 1; // held length = trailing key-off (0x0001) run
+          for (let r = row + 1; r < ptn.length; r++) {
+            if (ptn[r].note !== 0x0001) break;
+            duration++;
+          }
+          lambda = 1 - Math.exp(-(duration - 1) / 4);
+        }
+        let bestAbs = 0, bestScore = Infinity;
+        forEachCandidate(targetAbs, (cand) => {
+          const pitchErr = Math.abs(cand - targetAbs);
+          let score = pitchErr;
+          if (method === "cadence") {
+            const candDeltaT = cadTension(cand, tonic, srcInterval) - tMappedPrev;
+            score = Math.abs(candDeltaT - targetDeltaT) * 2 + pitchErr;
+          } else if (method === "harmonic") {
+            score = pitchErr + lambda * harmonicCost(cand, tonic, srcInterval);
+          }
+          if (score < bestScore) { bestScore = score; bestAbs = cand; }
+        });
+        newAbs = bestAbs;
+      } else {
+        let bestAbs = 0, bestDist = Infinity;
+        forEachCandidate(origAbs, (cand) => {
+          const d = Math.abs(cand - origAbs);
+          if (d < bestDist) { bestDist = d; bestAbs = cand; }
+        });
+        newAbs = bestAbs;
       }
+
+      newAbs = Math.min(Math.max(newAbs, 0), 0xffff) & 0xffff;
+      if (newAbs !== note) {
+        changes.push({ pat: p, row, prev: note });
+        cell.note = newAbs;
+      }
+      prevOrigAbs = origAbs;
+      prevMappedAbs = newAbs;
     }
   }
   return changes;
+}
+
+/** Nearest-pitch retune (back-compat wrapper). */
+export function retuneNearest(song, newPreset, percSlots) {
+  return retuneAllPatterns(song, newPreset, null, percSlots, "pitch");
 }

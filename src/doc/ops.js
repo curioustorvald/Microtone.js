@@ -125,6 +125,28 @@ export function setEnvDragOp(slot, envKey, idx, change, gestureId = null) {
   };
 }
 
+/** Replace an entire 25-node envelope array (add/remove node structural edit).
+ *  newNodes is [{value, offset}]×25; inverse restores the previous array. */
+export function setEnvArrayOp(slot, envKey, newNodes, gestureId = null) {
+  return {
+    type: "setEnvArray",
+    slot, envKey, newNodes, gestureId,
+    coalesceKey: `envarray:${slot}:${envKey}`,
+    apply(doc) {
+      const env = doc.instruments[slot & 0x3ff][envKey];
+      const prev = env.map((n) => ({ value: n.value, offset: n.offset }));
+      for (let i = 0; i < env.length; i++) {
+        env[i].value = newNodes[i].value;
+        env[i].offset = newNodes[i].offset;
+      }
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setEnvArrayOp(slot, envKey, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
 /** Bulk note restore (the inverse of a retune): sets each {pat,row} note back. */
 export function restoreNotesOp(song, changes, gestureId = null) {
   return {

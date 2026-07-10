@@ -93,6 +93,12 @@ class TaudProcessor extends AudioWorkletProcessor {
       case CMD.JAM_STOP: eng.jamStop(m.ph); break;
       case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); break;
       case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); break;
+      case CMD.QUERY_FUNK_MASK: {
+        const mask = eng.getInstrumentFunkMask(m.slot); // Uint8Array (bit mask)
+        const buf = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+        this.port.postMessage({ t: MSG.FUNK_MASK, slot: m.slot, mask: buf }, [buf]);
+        break;
+      }
       case CMD.SNAPSHOT_RETURN:
         if (this.snapshotPool.length < 2) this.snapshotPool.push(m.buffer);
         break;
@@ -109,10 +115,16 @@ class TaudProcessor extends AudioWorkletProcessor {
         this.ringR[w] = 0;
       }
     } else {
+      // Feed the pre-dither Float32 mix bus directly — clean output, no 8-bit
+      // dithering. (renderChunk still fills the dithered U8 `out` so the engine
+      // stays bit-exact for the JVM-oracle conformance tests; playback ignores it.)
+      const ts = this.engine.playheads[this.playhead].trackerState;
+      const mL = ts.mixLeft;
+      const mR = ts.mixRight;
       for (let n = 0; n < TRACKER_CHUNK; n++) {
         const w = (this.ringWrite + n) & mask;
-        this.ringL[w] = (out[n * 2] - 128) / 128;
-        this.ringR[w] = (out[n * 2 + 1] - 128) / 128;
+        this.ringL[w] = mL[n];
+        this.ringR[w] = mR[n];
       }
     }
     this.ringWrite += TRACKER_CHUNK;

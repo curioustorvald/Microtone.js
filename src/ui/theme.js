@@ -14,7 +14,8 @@ const VAR_KEYS = {
   playhead: "--cv-playhead", cursor: "--cv-cursor", caret: "--cv-caret",
   caretNav: "--cv-caret-nav", cueLine: "--cv-cue-line", colPan: "--cv-col-pan",
   // canvas: samples / instruments
-  wave: "--cv-wave", waveLoop: "--cv-wave-loop", playCursor: "--cv-play-cursor",
+  wave: "--cv-wave", waveLoop: "--cv-wave-loop", waveMid: "--cv-wave-mid",
+  waveFunk: "--cv-wave-funk", playCursor: "--cv-play-cursor",
   envLine: "--cv-env-line", envNode: "--cv-env-node", envSus: "--cv-env-sus",
   envLoop: "--cv-env-loop", live: "--cv-live",
 };

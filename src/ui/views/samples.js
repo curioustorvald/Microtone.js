@@ -82,7 +82,14 @@ export class SamplesView {
   /** Per-frame: live play cursors + list dots while audio runs. */
   frame() {
     if (!this.visible) return;
-    if (this.store.audio?.isPlaying() || this.store.audio?.snapshot) this.drawWave();
+    const audio = this.store.audio;
+    // Refresh the funk-repeat masks of the shown sample's instruments so the
+    // waveform overlay tracks the live S$Fx inversion (reply lands next frame).
+    if (audio?.isPlaying()) {
+      const s = this.list[this.selected];
+      if (s) for (const inst of s.users) audio.requestFunkMask(inst);
+    }
+    if (audio?.isPlaying() || audio?.snapshot) this.drawWave();
     this.updateLiveDots();
   }
 
@@ -105,33 +112,72 @@ export class SamplesView {
     const bin = doc.sampleBin;
 
     // loop region shading
-    if ((s.loopMode & 3) !== 0 && s.loopEnd > s.loopStart) {
+    const hasLoop = (s.loopMode & 3) !== 0 && s.loopEnd > s.loopStart;
+    if (hasLoop) {
       ctx.fillStyle = C.waveLoop;
       ctx.fillRect((s.loopStart / s.len) * w, 0, ((s.loopEnd - s.loopStart) / s.len) * w, h);
     }
 
-    // min/max column waveform
-    ctx.strokeStyle = C.wave;
-    ctx.beginPath();
-    for (let x = 0; x < w; x++) {
-      const a = s.ptr + Math.floor((x / w) * s.len);
-      const b = s.ptr + Math.max(a - s.ptr + 1, Math.floor(((x + 1) / w) * s.len));
-      let mn = 255, mx = 0;
-      for (let i = a; i < b && i < s.ptr + s.len; i++) {
-        const v = bin[i];
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
+    // Live funk-repeat (S$Fx) invert-loop overlay: the engine's per-instrument
+    // XOR mask flips loop-region bytes by 0xFF and persists like ProTracker's
+    // destructive EFx. Bytes it flips are drawn in the funk colour. (taut.js)
+    const audio = this.store.audio;
+    let funkMask = null;
+    if (hasLoop && audio) {
+      for (const inst of s.users) {
+        const m = audio.getFunkMask(inst);
+        if (m && m.length) { funkMask = m; break; }
       }
-      const y0 = h - (mx / 255) * h;
-      const y1 = h - (mn / 255) * h;
-      ctx.moveTo(x + 0.5, y0);
-      ctx.lineTo(x + 0.5, Math.max(y1, y0 + 1));
     }
-    ctx.stroke();
+    const funkEnd = funkMask ? Math.min(s.loopEnd, s.loopStart + funkMask.length * 8) : 0;
+    const byteAt = (p) => {
+      let v = bin[s.ptr + p];
+      let flipped = false;
+      if (funkMask && p >= s.loopStart && p < funkEnd) {
+        const k = p - s.loopStart;
+        if ((funkMask[k >>> 3] >>> (k & 7)) & 1) { v ^= 0xff; flipped = true; }
+      }
+      return { v, flipped };
+    };
+
+    // Bars anchored to the centre line (taut style): value 128 sits at the
+    // middle, each bar filled from the baseline out to its sample value.
+    const baseY = h / 2;
+    const yOf = (v) => (h * (255 - v)) / 255;
+    ctx.fillStyle = C.waveMid ?? C.dim;
+    ctx.fillRect(0, Math.round(baseY), w, 1);
+
+    if (s.len <= w) {
+      const rectW = Math.max(1, Math.ceil(w / s.len));
+      for (let i = 0; i < s.len; i++) {
+        const { v, flipped } = byteAt(i);
+        const yv = yOf(v);
+        const top = Math.min(baseY, yv);
+        ctx.fillStyle = flipped ? C.waveFunk : C.wave;
+        ctx.fillRect(Math.floor((i * w) / s.len), top, rectW, Math.max(1, Math.abs(baseY - yv)));
+      }
+    } else {
+      for (let col = 0; col < w; col++) {
+        const start = Math.floor((col * s.len) / w);
+        const end = Math.min(s.len, Math.floor(((col + 1) * s.len) / w));
+        if (end <= start) continue;
+        const step = Math.max(1, ((end - start) / 8) | 0);
+        let mn = 255, mx = 0, anyFlip = false;
+        for (let p = start; p < end; p += step) {
+          const { v, flipped } = byteAt(p);
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+          if (flipped) anyFlip = true;
+        }
+        const yTop = Math.min(baseY, yOf(mx));
+        const yBot = Math.max(baseY, yOf(mn));
+        ctx.fillStyle = anyFlip ? C.waveFunk : C.wave;
+        ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
+      }
+    }
 
     // live play-position cursors — vertical bars, matching the envelope
     // graph's playback cursor style
-    const audio = this.store.audio;
     if (audio) {
       ctx.fillStyle = C.playCursor;
       for (let vi = 0; vi < 64; vi++) {

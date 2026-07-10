@@ -15,6 +15,11 @@
       <button id="stopBtn" title="Stop (Space)">■</button>
       <label class="chk"><input type="checkbox" id="follow" checked />follow</label>
       <button id="recBtn" class="rec on" title="Record mode (Insert)">⏺ rec</button>
+      <span class="tb-sep"></span>
+      <button id="undoBtn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↶</button>
+      <button id="redoBtn" class="icon-btn" title="Redo (Ctrl+Y)" disabled>↷</button>
+      <span id="undoStat" class="dim undo-stat"></span>
+      <span class="tb-sep"></span>
       <span id="octCtl" class="dim wheelable" title="wheel: octave ([ ])">Oct <b id="octDisp">4</b></span>
       <span id="instCtl" class="dim wheelable" title="wheel: step used instruments">Inst <b id="instDisp">01</b></span>
     </div>
@@ -26,6 +31,8 @@
     </div>
     <div class="grow"></div>
     <label>Song <select id="songSel"></select></label>
+    <a class="support-btn donate" href="https://paypal.me/curioustorvald" target="_blank" rel="noopener" title="Support development via PayPal">♥ Donate</a>
+    <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" title="Become a GitHub Sponsor">Sponsor</a>
     <button id="themeBtn" title="Toggle dark/light theme">◐</button>
     <button id="newBtn">New…</button>
     <button id="openBtn">Open…</button>
@@ -69,6 +76,7 @@
     <span id="stDirty" class="dirty" hidden>●</span>
     <div class="grow"></div>
     <span id="stHint" class="dim">Space play/stop · arrows navigate · wheel scroll</span>
+    <a class="gh-link" href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener" title="View source / fork on GitHub">Fork me on GitHub ↗</a>
   </footer>
 
   <script type="module" src="src/ui/app.js"></script>

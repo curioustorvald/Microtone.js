@@ -33,6 +33,7 @@ export class PatternView {
     this.cursor = { row: 0, sub: 0, nib: 0 };
     this.scrollRow = 0;
     this.previewing = false;
+    this.previewStarted = false; // set once the worklet confirms playback
     this.needsRedraw = true;
 
     this.root = document.createElement("div");
@@ -126,23 +127,34 @@ export class PatternView {
     if (this.previewing) { this.stopPreview(); return; }
     await window.__microtoneEnsureAudio?.();
     if (!store.audio) return;
+    const song = store.song;
+    // Faithful to taut startPlayPattern: clean slate + restore song tempo.
     store.sync?.flushPatterns();
-    const bytes = new Uint8Array(64);
-    for (let ch = 0; ch < 32; ch++) { bytes[ch * 2] = 0xff; bytes[ch * 2 + 1] = 0x7f; }
+    store.audio.stop(0);
+    store.audio.setBPM(0, song.bpm);
+    store.audio.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
+    // Preview cue: voice 0 = this pattern, all other voices CUE_EMPTY (0x7FFF),
+    // plus a HALT so it ends after one pass (channel 8 sign bit → word0 = HALT).
+    const chans = store.doc.channelCount;
+    const bytes = new Uint8Array(chans * 2);
+    for (let i = 0; i < bytes.length; i += 2) { bytes[i] = 0xff; bytes[i + 1] = 0x7f; }
     bytes[0] = this.patIdx & 0xff;          // channel 0 ← this pattern
     bytes[1] = (this.patIdx >>> 8) & 0x7f;
     bytes[17] |= 0x80;                      // ch8 sign bit → word0 bit 8 = HALT
     store.audio.uploadCue(PREVIEW_CUE, bytes);
+    store.audio.resetFunkState(0);
     store.audio.setCuePosition(0, PREVIEW_CUE);
     store.audio.setTrackerRow(0, 0);
     store.audio.play(0);
     this.previewing = true;
+    this.previewStarted = false; // do NOT auto-stop until the worklet confirms play
     this.previewBtn.textContent = "■ Stop";
   }
 
   stopPreview() {
     this.store.audio?.stop(0);
     this.previewing = false;
+    this.previewStarted = false;
     this.previewBtn.textContent = "▶ Preview";
   }
 
@@ -244,19 +256,31 @@ export class PatternView {
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(200, this.root.clientWidth);
     const h = Math.max(120, this.root.clientHeight - this.bar.offsetHeight - 6);
-    this.canvas.width = w * dpr;
-    this.canvas.height = h * dpr;
+    const cw = Math.round(w * dpr);
+    const ch = Math.round(h * dpr);
+    if (this.canvas.width === cw && this.canvas.height === ch && this.dpr === dpr) return;
+    this.canvas.width = cw;
+    this.canvas.height = ch;
     this.canvas.style.width = w + "px";
     this.canvas.style.height = h + "px";
     this.dpr = dpr;
-    this.invalidate();
+    // Repaint synchronously — setting canvas.width blanks the backing store,
+    // and a deferred redraw flashes when the command palette reflows the view.
+    this.needsRedraw = false;
+    this.draw();
   }
 
   frame() {
     if (!this.visible) return;
     const audio = this.store.audio;
     if (audio?.isPlaying()) this.needsRedraw = true; // playhead row while previewing
-    if (this.previewing && audio && !audio.isPlaying()) this.stopPreview();
+    // Auto-reset the button when the preview ends — but only AFTER we've actually
+    // seen it playing. Snapshots lag the play() command by ~16 ms, so checking
+    // !isPlaying() too early would kill the preview before it ever started.
+    if (this.previewing && audio) {
+      if (audio.isPlaying()) this.previewStarted = true;
+      else if (this.previewStarted) this.stopPreview();
+    }
     if (this.needsRedraw) { this.needsRedraw = false; this.draw(); }
   }
 
