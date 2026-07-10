@@ -19,13 +19,13 @@ export function showHelp() {
         <dt>Ctrl+G</dt><dd>go to cue:row</dd>
       </dl>
       <dl>
-        <dt>A S D F G H J K</dt><dd>piano white keys (C D E F G A B C)</dd>
         <dt>W E · T Y U</dt><dd>piano black keys</dd>
+        <dt>A S D F G H J K</dt><dd>piano white keys (C D E F G A B C)</dd>
         <dt>\` 1 2 3</dt><dd>note column: key-off ===, cut ^^^, fade ~~~, fast-fade ~^~</dd>
         <dt>0-9 A-F</dt><dd>hex entry (inst / vol / pan / fx arg)</dd>
         <dt>0-Z</dt><dd>effect opcode (base-36)</dd>
         <dt>+ / -</dt><dd>vol/pan column: slide selectors</dd>
-        <dt>Delete or .</dt><dd>clear field</dd>
+        <dt>Delete / .</dt><dd>clear field</dd>
         <dt>← → / Tab</dt><dd>sub-column / next channel</dd>
         <dt>wheel · Shift+wheel</dt><dd>scroll rows · channels</dd>
         <dt>wheel on cursor cell</dt><dd>record mode: step the hovered column (notes step by one degree of the song's pitch table)</dd>

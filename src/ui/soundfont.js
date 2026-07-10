@@ -1,31 +1,44 @@
-// Session soundfont sources — the bundled GeneralUser-GS.sf2 next to
+// Session soundfont sources — the bundled GeneralUser bank next to
 // index.html and/or a user-picked .sf2, each fetched/picked once per session.
 // MIDI import (topbar button, drag-drop, ?load=) and the Instruments Add…
 // shortcut share these caches.
+//
+// The primary bundle is GeneralUser-GS.taud.sf2.gz — the sf2taudify.py build
+// (Taud-conformant samples, gzipped under the Cloudflare Pages 25 MiB
+// per-file limit; committed as a plain git object, no LFS). The plain
+// GeneralUser-GS.sf2 stays as a fallback for trees without the build.
 
 import { pickFile } from "../storage/import-export.js";
+import { gunzipSync } from "../../vendor/fflate.esm.js";
 
 let bundled;        // undefined = not tried, null = unavailable, else {name, bytes}
 let userSf2 = null; // last user-picked {name, bytes}
 
-/** The bundled GeneralUser-GS.sf2, or null when not deployed alongside the
- *  app. Guards the RIFF magic: a host that checked out Git LFS without
- *  pulling objects serves the ~130-byte POINTER FILE with a 200. */
+const BUNDLE_CANDIDATES = ["GeneralUser-GS.taud.sf2.gz", "GeneralUser-GS.sf2"];
+
+/** The bundled soundfont, or null when not deployed alongside the app.
+ *  Gunzips a .gz candidate (sniffed, so a host that transparently decodes it
+ *  also works) and guards the RIFF magic: a host that checked out Git LFS
+ *  without pulling objects serves the ~130-byte POINTER FILE with a 200. */
 export async function getBundledSoundfont() {
   if (bundled !== undefined) return bundled;
   bundled = null;
-  try {
-    const res = await fetch(new URL("GeneralUser-GS.sf2", document.baseURI));
-    if (res.ok) {
-      const bytes = new Uint8Array(await res.arrayBuffer());
+  for (const candidate of BUNDLE_CANDIDATES) {
+    try {
+      const res = await fetch(new URL(candidate, document.baseURI));
+      if (!res.ok) continue;
+      let bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+        try { bytes = gunzipSync(bytes); } catch { continue; }
+      }
       if (bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 &&
           bytes[2] === 0x46 && bytes[3] === 0x46) { // "RIFF"
-        bundled = { name: "GeneralUser-GS.sf2", bytes };
-      } else {
-        console.warn("bundled GeneralUser-GS.sf2 is not a RIFF file (Git LFS pointer?) — ignoring");
+        bundled = { name: candidate.replace(/\.gz$/, ""), bytes };
+        break;
       }
-    }
-  } catch { /* not bundled */ }
+      console.warn(`bundled ${candidate} is not a RIFF file (Git LFS pointer?) — ignoring`);
+    } catch { /* try the next candidate */ }
+  }
   return bundled;
 }
 

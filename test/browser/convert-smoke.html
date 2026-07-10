@@ -73,7 +73,11 @@
         const docm = await win.eval('import("/src/doc/document.js")');
         const bm = await win.eval('import("/src/doc/bankmerge.js")');
         const ops = await win.eval('import("/src/doc/ops.js")');
-        const sf2Bytes = new Uint8Array(await (await fetch("/GeneralUser-GS.sf2")).arrayBuffer());
+        // the bundled bank via the app's own resolution (the .taud.sf2.gz
+        // build first) — already fetched and cached by the MIDI leg above,
+        // and present on trees without Git LFS objects
+        const sfm = await win.eval('import("/src/ui/soundfont.js")');
+        const sf2Bytes = (await sfm.getBundledSoundfont()).bytes;
         const presets = await conv.listSf2Presets(sf2Bytes);
         log(`sf2 presets listed: ${presets.length} (${presets[0]?.name})`);
         const tsii = await conv.buildSf2Bank(sf2Bytes, [[0, 0]], { bpm: store.doc.songs[0].bpm });

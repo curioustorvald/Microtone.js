@@ -335,7 +335,7 @@ export class InstrumentsView {
     this.group("Volume",
       this.sliderRow("Global vol", inst.instGlobalVolume, 0, 255, fSet("instGlobalVolume"), { ann: annHex2 }),
       this.sliderRow("Default note vol", inst.defaultNoteVolume, 0, 255, fSet("defaultNoteVolume"), { ann: annHex2 }),
-      this.sliderRow("Fadeout", fadeout, 0, 4095, (v, gid) =>
+      this.sliderRow("Fadeout", fadeout, 0, 1024, (v, gid) =>
         this.applyQuiet(setInstBytesOp(this.selected,
           [[172, v & 0xff], [173, (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f)]], gid)),
         { ann: annFadeout }),

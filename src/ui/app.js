@@ -368,7 +368,7 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       name: "sf", label: "Soundfont", type: "select",
       value: bundledAvail ? "bundled" : "own",
       options: [
-        ...(bundledAvail ? [{ value: "bundled", label: "Bundled GeneralUser-GS.sf2" }] : []),
+        ...(bundledAvail ? [{ value: "bundled", label: "Bundled GeneralUser-GS" }] : []),
         { value: "own", label: "Choose an .sf2 file…" },
       ],
     }],

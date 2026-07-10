@@ -5,3 +5,4 @@ test/reference/
 .DS_Store
 CLAUDE.md
 vendor/converters/__pycache__
+*.taud.sf2
