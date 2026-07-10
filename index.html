@@ -8,66 +8,66 @@
 </head>
 <body class="app-page">
   <header class="topbar">
-    <div class="brand-container">
+    <div class="brand-container" id="brandBtn" data-i18n-title="topbar.aboutTitle">
       <span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span>
     </div>
     <div class="transport-controls">
-      <button id="playSong" title="Play from start (Shift+Space)">▶ Song</button>
-      <button id="playCue" title="Play from current cue">▶ Cue</button>
-      <button id="stopBtn" title="Stop (Space)">■</button>
-      <label class="chk"><input type="checkbox" id="follow" checked />follow</label>
-      <button id="recBtn" class="rec on" title="Record mode (Insert)">⏺ rec</button>
+      <button id="playSong" data-i18n="topbar.playSong" data-i18n-title="topbar.playSongTitle">▶ Song</button>
+      <button id="playCue" data-i18n="topbar.playCue" data-i18n-title="topbar.playCueTitle">▶ Cue</button>
+      <button id="stopBtn" data-i18n-title="topbar.stopTitle">■</button>
+      <label class="chk"><input type="checkbox" id="follow" checked /><span data-i18n="topbar.follow">follow</span></label>
+      <button id="recBtn" class="rec on" data-i18n="topbar.rec" data-i18n-title="topbar.recTitle">⏺ rec</button>
       <span class="tb-sep"></span>
-      <button id="undoBtn" class="icon-btn" title="Undo (Ctrl+Z)" disabled>↶</button>
-      <button id="redoBtn" class="icon-btn" title="Redo (Ctrl+Y)" disabled>↷</button>
+      <button id="undoBtn" class="icon-btn" data-i18n-title="topbar.undoTitle" disabled>↶</button>
+      <button id="redoBtn" class="icon-btn" data-i18n-title="topbar.redoTitle" disabled>↷</button>
       <span id="undoStat" class="dim undo-stat"></span>
       <span class="tb-sep"></span>
-      <span id="octCtl" class="dim wheelable" title="wheel: octave ([ ])">Oct <b id="octDisp">4</b></span>
-      <span id="instCtl" class="dim wheelable" title="wheel: step used instruments">Inst <b id="instDisp">01</b></span>
+      <span id="octCtl" class="dim wheelable" data-i18n-title="topbar.octTitle">Oct <b id="octDisp">4</b></span>
+      <span id="instCtl" class="dim wheelable" data-i18n-title="topbar.instTitle">Inst <b id="instDisp">01</b></span>
     </div>
     <div class="pos">
       <span class="wheelable-dummy">Cue <b id="posCue">–</b></span>
       <span class="wheelable-dummy">Row <b id="posRow">–</b></span>
       <span class="wheelable-dummy">BPM <b id="posBpm">–</b></span>
-      <span id="spdCtl" class="wheelable" title="wheel: live playback speed">Spd <b id="posSpd">–</b></span>
+      <span id="spdCtl" class="wheelable" data-i18n-title="topbar.spdTitle">Spd <b id="posSpd">–</b></span>
     </div>
     <div>
-      <label>Song <select id="songSel"></select></label>
-      <button id="songRenameBtn" title="Rename this song">Rename</button>
+      <label><span data-i18n="topbar.song">Song </span><select id="songSel"></select></label>
     </div>
     <div>
-      <button id="newBtn">New…</button>
-      <button id="openBtn">Open…</button>
-      <button id="importMidiBtn" title="Convert a MIDI file with a chosen soundfont">Import MIDI…</button>
+      <button id="newBtn" data-i18n="topbar.new">New…</button>
+      <button id="openBtn" data-i18n="topbar.open">Open…</button>
+      <button id="importMidiBtn" data-i18n="topbar.importMidi" data-i18n-title="topbar.importMidiTitle">Import MIDI…</button>
       <input id="fileInput" type="file" accept=".taud,.tsii,.tpif" hidden />
     </div>
     <div class="grow"></div>
     <div>
-      <span id="audioBadge" class="badge">audio off</span>
-      <a class="support-btn donate" href="https://paypal.me/curioustorvald" target="_blank" rel="noopener" title="Support development via PayPal">♥ Donate</a>
-      <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" title="Become a GitHub Sponsor">Sponsor</a>
-      <button id="themeBtn" title="Toggle dark/light theme">◐</button>
+      <span id="audioBadge" class="badge" data-i18n="topbar.audioOff">audio off</span>
+      <a class="support-btn donate" href="https://paypal.me/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.donate" data-i18n-title="topbar.donateTitle">♥ Donate</a>
+      <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.sponsor" data-i18n-title="topbar.sponsorTitle">Sponsor</a>
+      <button id="langBtn" data-i18n-title="topbar.langTitle">EN</button>
+      <button id="themeBtn" data-i18n-title="topbar.themeTitle">◐</button>
     </div>
   </header>
 
   <nav class="tabs" id="tabs">
-    <button data-view="timeline" class="active">Timeline</button>
-    <button data-view="cues">Cues</button>
-    <button data-view="pattern">Patterns</button>
-    <button data-view="samples">Samples</button>
-    <button data-view="instruments">Instruments</button>
-    <button data-view="project">Project</button>
-    <button data-view="files">File</button>
+    <button data-view="timeline" class="active" data-i18n="tab.timeline">Timeline</button>
+    <button data-view="cues" data-i18n="tab.cues">Cues</button>
+    <button data-view="pattern" data-i18n="tab.pattern">Patterns</button>
+    <button data-view="samples" data-i18n="tab.samples">Samples</button>
+    <button data-view="instruments" data-i18n="tab.instruments">Instruments</button>
+    <button data-view="project" data-i18n="tab.project">Project</button>
+    <button data-view="files" data-i18n="tab.files">File</button>
   </nav>
 
   <div id="toolbox" class="toolbox" hidden>
-    <button id="tbRetune">Retune…</button>
-    <button id="tbRaw" title="Show note words as raw hex">Raw: off</button>
+    <button id="tbRetune" data-i18n="toolbox.retune">Retune…</button>
+    <button id="tbRaw" data-i18n-title="toolbox.rawTitle">Raw: off</button>
   </div>
 
   <main id="viewHost" class="view-host">
     <div id="emptyState" class="empty-state">
-      <p><strong>Drop a .taud file anywhere</strong> or use Open…</p>
+      <p><strong data-i18n="empty.drop">Drop a .taud file anywhere</strong><span data-i18n="empty.orOpen"> or use Open…</span></p>
     </div>
     <canvas id="timeline" class="view-canvas" hidden></canvas>
     <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
@@ -82,11 +82,11 @@
   <div id="cmdPalette" class="cmd-palette" hidden></div>
 
   <footer class="statusbar">
-    <span id="stFile" class="dim">no file</span>
+    <span id="stFile" class="dim" data-i18n="status.noFile">no file</span>
     <span id="stDirty" class="dirty" hidden>●</span>
     <div class="grow"></div>
-    <span id="stHint" class="dim">Space play/stop · arrows navigate · wheel scroll</span>
-    <a class="gh-link" href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener" title="View source / fork on GitHub">Fork me on GitHub ↗</a>
+    <span id="stHint" class="dim" data-i18n="status.hint">Space play/stop · arrows navigate · wheel scroll</span>
+    <a class="gh-link" href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener" title="View source / fork on GitHub" data-i18n="status.fork">Fork me on GitHub ↗</a>
   </footer>
 
   <script type="module" src="src/ui/app.js"></script>

@@ -1,16 +1,21 @@
 // File view (F7) — OPFS project browser + import/export. DOM-based (lists and
 // buttons, no canvas). The Files tab replaces taut's filenav-driven File tab.
+// Reachable WITHOUT a loaded document (browse OPFS / import something); the
+// doc-scoped buttons and the song list only appear once a project is loaded.
 
 import * as opfs from "../../storage/opfs.js";
 import { pickFile, download } from "../../storage/import-export.js";
 import { converterFor, CONVERT_ACCEPT } from "../../convert/convert.js";
 import { showModal } from "../widgets/modal.js";
 import { renderToWav } from "../../audio/offline-render.js";
+import { unescapeName } from "../names.js";
+import { t } from "../i18n.js";
 
 export class FilesView {
   /**
    * @param host container element
-   * @param callbacks { openBytes(name, bytes), currentDoc() → {doc, fileName} }
+   * @param callbacks { openBytes(name, bytes), currentDoc() → {doc, fileName},
+   *                    songIndex(), importMidi(), renameSong(index) }
    */
   constructor(store, host, callbacks) {
     this.store = store;
@@ -23,58 +28,103 @@ export class FilesView {
 
   async refresh() {
     const ok = await opfs.available();
+    const { doc } = this.cb.currentDoc();
     this.root.innerHTML = "";
 
     const bar = document.createElement("div");
     bar.className = "files-bar";
-    const saveBtn = mkBtn("Save", () => this.save());
-    const saveAsBtn = mkBtn("Save As…", () => this.saveAs());
-    const importBtn = mkBtn("Import Taud/Module…", () => this.import());
-    const exportBtn = mkBtn("Export ⬇", () => this.export());
-    const wavBtn = mkBtn("Export WAV…", () => this.exportWav());
-    bar.append(saveBtn, saveAsBtn, importBtn, exportBtn, wavBtn);
+    const saveBtn = mkBtn(t("files.save"), () => this.save());
+    const saveAsBtn = mkBtn(t("files.saveAs"), () => this.saveAs());
+    const importBtn = mkBtn(t("files.import"), () => this.import());
+    const importMidiBtn = mkBtn(t("files.importMidi"), async () => {
+      await this.cb.importMidi();
+      this.refresh();
+    });
+    const exportBtn = mkBtn(t("files.export"), () => this.export());
+    const wavBtn = mkBtn(t("files.exportWav"), () => this.exportWav());
+    // doc-scoped actions grey out until something is loaded
+    for (const b of [saveBtn, saveAsBtn, exportBtn, wavBtn]) b.disabled = !doc;
+    bar.append(saveBtn, saveAsBtn, importBtn, importMidiBtn, exportBtn, wavBtn);
     this.root.appendChild(bar);
 
     if (!ok) {
       const warn = document.createElement("p");
       warn.className = "files-warn";
-      warn.textContent = "OPFS unavailable (private mode?) — nothing persists in-browser; use Export to keep your work.";
+      warn.textContent = t("files.opfsWarn");
       this.root.appendChild(warn);
-      return;
+    } else {
+      const entries = await opfs.list();
+      const table = document.createElement("table");
+      table.className = "files-table";
+      table.innerHTML =
+        `<thead><tr><th>${t("files.colProject")}</th><th>${t("files.colSize")}</th>` +
+        `<th>${t("files.colModified")}</th><th></th></tr></thead>`;
+      const tbody = document.createElement("tbody");
+      if (entries.length === 0) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4" class="dim">${escapeHtml(t("files.none"))}</td>`;
+        tbody.appendChild(tr);
+      }
+      for (const e of entries) {
+        const tr = document.createElement("tr");
+        const current = e.name === this.store.fileName;
+        tr.innerHTML =
+          `<td class="${current ? "files-current" : ""}">${escapeHtml(e.name)}</td>` +
+          `<td>${(e.size / 1024).toFixed(1)} K</td>` +
+          `<td>${new Date(e.mtime).toLocaleString()}</td>`;
+        const td = document.createElement("td");
+        td.append(
+          mkBtn(t("files.open"), async () => {
+            await this.cb.openBytes(e.name, await opfs.read(e.name));
+            this.refresh();
+          }),
+          mkBtn("⬇", async () => download(await opfs.read(e.name), e.name)),
+          mkBtn("✕", async () => {
+            const yes = await showModal({ title: t("files.deleteAsk", { name: e.name }), okLabel: t("common.delete") });
+            if (yes) { await opfs.remove(e.name); this.refresh(); }
+          }),
+        );
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      this.root.appendChild(table);
     }
 
-    const entries = await opfs.list();
+    if (doc) this.renderSongList(doc);
+  }
+
+  /** Current project's songs, each with its Rename button (the rename UI
+   *  lives here rather than loose on the topbar). */
+  renderSongList(doc) {
+    const head = document.createElement("h3");
+    head.className = "files-songs-head";
+    head.textContent = t("files.songsHead");
+    this.root.appendChild(head);
+
     const table = document.createElement("table");
     table.className = "files-table";
-    table.innerHTML = "<thead><tr><th>project</th><th>size</th><th>modified</th><th></th></tr></thead>";
+    table.innerHTML =
+      `<thead><tr><th>${t("files.colSong")}</th><th>${t("files.colName")}</th>` +
+      `<th>${t("files.colVoices")}</th><th>${t("files.colPatterns")}</th><th></th></tr></thead>`;
     const tbody = document.createElement("tbody");
-    if (entries.length === 0) {
+    doc.songs.forEach((s, i) => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4" class="dim">no projects yet — Save As… or Import…</td>`;
-      tbody.appendChild(tr);
-    }
-    for (const e of entries) {
-      const tr = document.createElement("tr");
-      const current = e.name === this.store.fileName;
+      const nm = unescapeName(doc.meta.songMeta[i]?.name ?? "");
       tr.innerHTML =
-        `<td class="${current ? "files-current" : ""}">${escapeHtml(e.name)}</td>` +
-        `<td>${(e.size / 1024).toFixed(1)} K</td>` +
-        `<td>${new Date(e.mtime).toLocaleString()}</td>`;
+        `<td class="${i === this.cb.songIndex() ? "files-current" : ""}">${i}</td>` +
+        `<td>${escapeHtml(nm || "(unnamed)")}</td>` +
+        `<td>${s.numVoices}</td><td>${s.patterns.length}</td>`;
       const td = document.createElement("td");
-      td.append(
-        mkBtn("Open", async () => {
-          await this.cb.openBytes(e.name, await opfs.read(e.name));
-          this.refresh();
-        }),
-        mkBtn("⬇", async () => download(await opfs.read(e.name), e.name)),
-        mkBtn("✕", async () => {
-          const yes = await showModal({ title: `Delete ${e.name}?`, okLabel: "Delete" });
-          if (yes) { await opfs.remove(e.name); this.refresh(); }
-        }),
-      );
+      const rn = mkBtn(t("common.rename"), async () => {
+        await this.cb.renameSong(i);
+        this.refresh();
+      });
+      rn.title = t("song.renameBtnTitle");
+      td.appendChild(rn);
       tr.appendChild(td);
       tbody.appendChild(tr);
-    }
+    });
     table.appendChild(tbody);
     this.root.appendChild(table);
   }
@@ -93,9 +143,9 @@ export class FilesView {
     const { doc, fileName } = this.cb.currentDoc();
     if (!doc) return;
     const result = await showModal({
-      title: "Save project as",
-      fields: [{ name: "name", label: "Name", value: fileName ?? "untitled.taud" }],
-      okLabel: "Save",
+      title: t("files.saveAsTitle"),
+      fields: [{ name: "name", label: t("files.name"), value: fileName ?? "untitled.taud" }],
+      okLabel: t("common.save"),
     });
     if (!result || !result.name) return;
     const name = result.name.endsWith(".taud") ? result.name : result.name + ".taud";
@@ -107,7 +157,7 @@ export class FilesView {
   }
 
   async import() {
-    // no .mid here — MIDI import (with its soundfont choice) is the topbar button
+    // no .mid here — MIDI import (with its soundfont choice) is its own button
     const file = await pickFile(".taud,.tsii,.tpif," +
       CONVERT_ACCEPT.split(",").filter((e) => !e.startsWith(".mid")).join(","));
     if (!file) return;
@@ -130,10 +180,10 @@ export class FilesView {
     const { doc, fileName } = this.cb.currentDoc();
     if (!doc) return;
     const result = await showModal({
-      title: "Export WAV (offline render)",
-      body: "Renders through the same engine at 32 kHz. Songs that never HALT stop at the cap.",
-      fields: [{ name: "cap", label: "Max seconds", type: "number", value: 300, min: 1, max: 3600 }],
-      okLabel: "Render",
+      title: t("files.wavTitle"),
+      body: t("files.wavBody"),
+      fields: [{ name: "cap", label: t("files.wavCap"), type: "number", value: 300, min: 1, max: 3600 }],
+      okLabel: t("files.render"),
     });
     if (!result) return;
     const cap = Math.min(Math.max(parseInt(result.cap || "300", 10), 1), 3600);

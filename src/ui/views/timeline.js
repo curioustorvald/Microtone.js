@@ -13,9 +13,10 @@ import {
 } from "../edit.js";
 import { setCellOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
+import { canvasFont } from "../fonts.js";
 
-const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
-const CHAR_W = 7.3;
+const FONT_PX = 13; // family comes from --cv-font via fonts.js
+const CHAR_W = 7.9;
 const ROW_H = 16;
 const HEADER_H = 50;   // channel header: number + pattern + VU + pan + live note
 const GUTTER_W = 76;   // "cue:row | absrow"
@@ -42,10 +43,15 @@ export class TimelineView {
       // Shift+wheel reports its delta in deltaX on most platforms.
       const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
       // Record mode: wheel over the CURSOR cell increments/decrements the
-      // hovered column (wheel up = +1); elsewhere the wheel scrolls.
-      if (this.store.record && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
-      if (e.shiftKey) this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
-      else this.scrollBy(d / ROW_H);
+      // hovered column (wheel up = +1); elsewhere the wheel scrolls. Shift
+      // always means "scroll channels" — never a cell edit.
+      if (!e.shiftKey && this.store.record && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
+      if (e.shiftKey) {
+        this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
+        this.invalidate();
+      } else {
+        this.scrollBy(d / ROW_H);
+      }
     }, { passive: false });
 
     canvas.addEventListener("pointerdown", (e) => this.onPointer(e));
@@ -353,7 +359,7 @@ export class TimelineView {
     const top = Math.floor(this.scrollRow);
     const audio = store.audio;
 
-    ctx.font = FONT;
+    ctx.font = canvasFont(FONT_PX);
     ctx.textBaseline = "middle";
 
     // ── channel headers: number + pattern, VU bar, pan tick, live note ──
@@ -463,10 +469,6 @@ export class TimelineView {
         }
         const patNum = entry.info ? (this.store.song.cues[entry.cue][ch] & 0x7fff) : PATTERN_EMPTY;
         if (patNum === PATTERN_EMPTY) {
-          ctx.fillStyle = C.dim;
-          ctx.globalAlpha = 0.35;
-          ctx.fillText("···", x + 2, y + ROW_H / 2);
-          ctx.globalAlpha = 1;
           continue;
         }
         const pattern = song.patterns[patNum];

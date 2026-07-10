@@ -1,6 +1,6 @@
 # Microtone.js
 
-![Microtone screenshot](Screenshot_20260710_013203.png)
+![Microtone screenshot](Screenshot1.png)
 
 A web build of the **Microtone** tracker and the **Taud** audio engine from
 [TSVM](https://github.com/curioustorvald/tsvm). Two halves:

@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>ui smoke: mute/solo + renames + toolbar</title>
+  <title>ui smoke: mute/solo + renames + files tab + editors + pattern ops</title>
 </head>
 <body>
   <pre id="out">running…</pre>
   <!-- worker-less page: the virtual-time --dump-dom recipe applies -->
   <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <!-- second instance WITHOUT a document: the File tab must still open -->
+  <iframe id="app2" src="../../index.html" style="width:1200px;height:400px"></iframe>
   <script type="module">
     const out = [];
     const log = (line) => {
@@ -25,10 +27,24 @@
             if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
           }, 100);
         });
-        const { store, timeline, instrumentsView: iv, projectView: pv } = win.__microtone;
+        const { store, timeline, patternView, projectView: pv } = win.__microtone;
         const key = (code, opts = {}) =>
           win.dispatchEvent(new win.KeyboardEvent("keydown", { code, bubbles: true, ...opts }));
         log("app loaded");
+
+        // ── i18n boot: static chrome translated via data-i18n ──
+        const langBtn = win.document.getElementById("langBtn");
+        const i18nOk = !!langBtn && langBtn.textContent === "EN" &&
+          win.document.getElementById("playSong").textContent === "▶ Song";
+        log(`i18n applied (langBtn "${langBtn?.textContent}"): ${i18nOk ? "ok" : "FAIL"}`);
+
+        // ── About popup on brand click ──
+        win.document.getElementById("brandBtn").click();
+        const aboutDlg = win.document.querySelector("dialog.about-modal");
+        const aboutOk = !!aboutDlg && aboutDlg.textContent.includes("Special thanks");
+        aboutDlg?.querySelector(".modal-buttons button")?.click();
+        const aboutClosed = !win.document.querySelector("dialog.about-modal");
+        log(`About popup opens + closes: ${aboutOk && aboutClosed ? "ok" : "FAIL"}`);
 
         // ── mute/solo keys (navigate mode; taut M/N semantics) ──
         store.record = false;
@@ -46,7 +62,6 @@
         let unmutedAll = true;
         for (let i = 0; i < n; i++) if (store.voiceMutes[i]) unmutedAll = false;
         log(`N solos then clears: ${soloOk && unmutedAll ? "ok" : "FAIL"}`);
-        // record mode leaves M/N alone (piano keys)
         store.record = true;
         key("KeyM");
         log(`record mode keeps M as piano: ${store.voiceMutes[2] === false ? "ok" : "FAIL"}`);
@@ -71,74 +86,188 @@
         store.clearMutes();
         log(`header click mute / ctrl+click solo: ${clickMute && clickSolo ? "ok" : "FAIL"}`);
 
-        // ── project rename (PNam) ──
+        // ── project rename (PNam) escapes + display decode ──
         pv.changeProjectName("Neue Œuvre");
         const pn = store.doc.meta.projectName;
         const pnam = store.doc.projSections.find((s) => s.fourcc === "PNam");
         const { parseTaud } = await import("../../src/format/taud-parse.js");
         const re = parseTaud(store.doc.toBytes());
-        const projOk = pn === "Neue \\u0152uvre" && !!pnam && re.meta.projectName === pn;
-        log(`project rename escapes + round-trips: "${re.meta.projectName}" ${projOk ? "ok" : "FAIL"}`);
+        const stFile = win.document.getElementById("stFile").textContent;
+        const projOk = pn === "Neue \\u0152uvre" && !!pnam && re.meta.projectName === pn &&
+          stFile.includes("Neue Œuvre") && !stFile.includes("\\u0152");
+        log(`project rename escapes + status shows decoded name: ${projOk ? "ok" : "FAIL"}`);
 
-        // ── song rename plumbing (topbar ✎ uses the same path) ──
-        const btn = win.document.getElementById("songRenameBtn");
-        pv.changeName("Renamed Song");
-        const songOk = !!btn && store.doc.meta.songMeta[0].name === "Renamed Song" && store.doc.smetEdited;
-        log(`✎ present + changeName routes to sMet: ${songOk ? "ok" : "FAIL"}`);
+        // ── song rename now lives on the File tab's song list ──
+        const gone = !win.document.getElementById("songRenameBtn");
+        pv.changeName("Renamed Song", 0);
+        const smOk = store.doc.meta.songMeta[0].name === "Renamed Song" && store.doc.smetEdited;
+        win.document.querySelector('#tabs button[data-view="files"]').click();
+        await new Promise((r) => setTimeout(r, 300)); // refresh() is async
+        const filesHost = win.document.getElementById("filesHost");
+        const songHead = filesHost.querySelector(".files-songs-head");
+        const renameBtns = [...filesHost.querySelectorAll("table")].at(-1)
+          ?.querySelectorAll("tbody button") ?? [];
+        const midiBtnFiles = [...filesHost.querySelectorAll(".files-bar button")]
+          .some((b) => b.textContent === "Import MIDI…");
+        const songListOk = gone && smOk && !!songHead && renameBtns.length === store.doc.songs.length &&
+          filesHost.textContent.includes("Renamed Song");
+        log(`File-tab song list + rename buttons (topbar ✎ gone): ${songListOk ? "ok" : "FAIL"}`);
+        log(`File-tab Import MIDI… button: ${midiBtnFiles ? "ok" : "FAIL"}`);
 
-        // ── instruments toolbar: Add… + Import… ──
-        iv.visible = true;
-        iv.refresh();
-        const btns = [...iv.listEl.querySelectorAll(".side-toolbar button")].map((b) => b.textContent);
-        const tbOk = btns.includes("Add…") && btns.includes("Import…");
-        log(`instruments toolbar [${btns.join(", ")}]: ${tbOk ? "ok" : "FAIL"}`);
-
-        // ── sample editor: markers/fields write user insts, DSP + undo ──
+        // ── sample DSP editor (Samples tab): Apply keeps, Cancel rolls back ──
         {
           const doc = store.doc;
-          const { openSampleEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
+          const { openSampleDspEditor, openInstSampleEditor } =
+            await win.eval('import("/src/ui/popups/sampleeditor.js")');
           const census = doc.sampleList();
           const s = census.find((e) => e.users.some((u) =>
             !doc.instruments[u].isMeta && doc.instruments[u].samplePtr === e.ptr &&
             doc.instruments[u].sampleLength === e.len));
-          const closed = openSampleEditor(store, s); // resolves on close
-          const dlg = win.document.querySelector("dialog.sample-editor");
-          const spin = dlg.querySelectorAll(".smp-fields input[type=number]");
-          const okOpen = !!dlg && spin.length === 3 && !!dlg.querySelector(".smp-canvas");
-          log(`sample editor opens (canvas + 3 marker fields): ${okOpen ? "ok" : "NO"}`);
+          const span = () => Array.from(doc.sampleBin.subarray(s.ptr, Math.min(s.ptr + 64, s.ptr + s.len)));
+          const before = span();
+          const depth0 = store.undo.undoStack.length;
 
-          // loopStart spinner → every base-inst user updated
+          // Cancel path
+          let closed = openSampleDspEditor(store, s);
+          let dlg = win.document.querySelector("dialog.sample-editor");
+          const dspButtons = [...dlg.querySelectorAll(".smp-ops button")].map((b) => b.textContent);
+          const hasDsp = ["Normalise", "Fade in", "Fade out", "Reverse"].every((x) => dspButtons.includes(x));
+          const noMarkers = dlg.querySelectorAll(".smp-fields input").length === 0;
+          const btns = [...dlg.querySelectorAll(".modal-buttons button")].map((b) => b.textContent);
+          const btnOk = btns[0] === "Apply" && btns[1] === "Cancel";
+          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Normalise").click();
+          const changed = span().some((v, i) => v !== before[i]);
+          [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
+          await closed;
+          const rolledBack = span().every((v, i) => v === before[i]) &&
+            store.undo.undoStack.length === depth0;
+          log(`DSP editor (DSP-only, Apply/Cancel, cancel rolls back): ${hasDsp && noMarkers && btnOk && changed && rolledBack ? "ok" : "FAIL"}`);
+
+          // Apply path
+          closed = openSampleDspEditor(store, s);
+          dlg = win.document.querySelector("dialog.sample-editor");
+          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Reverse").click();
+          [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // Apply
+          await closed;
+          const kept = span().some((v, i) => v !== before[i]) &&
+            store.undo.undoStack.length === depth0 + 1;
+          store.undo.undo();
+          log(`DSP editor Apply keeps the edit (1 undo step): ${kept ? "ok" : "FAIL"}`);
+
+          // ── instrument sample editor (Instruments tab): markers, one slot ──
           const slot = s.users.find((u) => !doc.instruments[u].isMeta &&
             doc.instruments[u].samplePtr === s.ptr && doc.instruments[u].sampleLength === s.len);
-          spin[1].value = "7";
+          const other = s.users.find((u) => u !== slot &&
+            !doc.instruments[u].isMeta && doc.instruments[u].samplePtr === s.ptr);
+          const loopBefore = doc.instruments[slot].sampleLoopStart;
+          closed = openInstSampleEditor(store, slot);
+          dlg = win.document.querySelector("dialog.sample-editor");
+          const spin = dlg.querySelectorAll(".smp-fields input[type=number]");
+          const openOk = !!dlg && spin.length === 3 && !!dlg.querySelector(".smp-canvas");
+          spin[1].value = "9";
           spin[1].dispatchEvent(new win.Event("change", { bubbles: true }));
-          const loopOk = doc.instruments[slot].sampleLoopStart === 7;
-          log(`loopStart spinner writes the user instrument: ${loopOk ? "ok" : "NO"}`);
-
-          // Normalise → pool bytes change; undo → byte-exact restore
-          const spanBefore = Array.from(doc.sampleBin.subarray(s.ptr, Math.min(s.ptr + 64, s.ptr + s.len)));
-          const normBtn = [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Normalise");
-          normBtn.click();
-          const spanAfter = Array.from(doc.sampleBin.subarray(s.ptr, Math.min(s.ptr + 64, s.ptr + s.len)));
-          const changed = spanAfter.some((v, i) => v !== spanBefore[i]);
-          store.undo.undo();
-          const spanUndone = Array.from(doc.sampleBin.subarray(s.ptr, Math.min(s.ptr + 64, s.ptr + s.len)));
-          const dspOk = changed && spanUndone.every((v, i) => v === spanBefore[i]);
-          log(`Normalise changes pool + undo restores: ${dspOk ? "ok" : "NO"}`);
-
-          dlg.querySelector(".modal-buttons button").click();
+          const wrote = doc.instruments[slot].sampleLoopStart === 9;
+          const scoped = other === undefined || doc.instruments[other].sampleLoopStart !== 9 ||
+            loopBefore === 9;
+          [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
           await closed;
-          const closedOk = !win.document.querySelector("dialog.sample-editor");
-          log(`sample editor closes: ${closedOk ? "ok" : "NO"}`);
-          const edOk = okOpen && loopOk && dspOk && closedOk;
-          log(`sample editor: ${edOk ? "ok" : "FAIL"}`);
+          const instRolled = doc.instruments[slot].sampleLoopStart === loopBefore;
+          log(`inst sample editor (3 markers, single slot, cancel restores): ${openOk && wrote && scoped && instRolled ? "ok" : "FAIL"}`);
+        }
+
+        // ── pattern ops: duplicate / lengthen / shorten ──
+        {
+          const song = store.song;
+          const n0 = song.patterns.length;
+          patternView.setPattern(2);
+          patternView.duplicate();
+          const dupOk = song.patterns.length === n0 + 1 && patternView.patIdx === n0 &&
+            JSON.stringify([...store.doc.patternBytes(0, n0)]) ===
+            JSON.stringify([...store.doc.patternBytes(0, 2)]);
+          store.undo.undo();
+          const undone = song.patterns.length === n0;
+          log(`pattern Duplicate + undo: ${dupOk && undone ? "ok" : "FAIL"}`);
+
+          patternView.setPattern(2);
+          const { expandPatternBytes } = await win.eval('import("/src/doc/patterntools.js")');
+          const want = expandPatternBytes(store.doc.patternBytes(0, 2));
+          patternView.applyPatternBytes(expandPatternBytes);
+          const exOk = JSON.stringify([...store.doc.patternBytes(0, 2)]) === JSON.stringify([...want]);
+          store.undo.undo();
+          const barLabels = [...patternView.bar.querySelectorAll("button")].map((b) => b.textContent);
+          const barOk = ["Duplicate", "Transpose…", "Lengthen ×2", "Shorten ÷2"]
+            .every((x) => barLabels.includes(x));
+          log(`pattern Lengthen ×2 via bar (+ all four buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
+        }
+
+        // ── shift+wheel scrolls timeline channels (repaint + no cell edit) ──
+        {
+          const wheel = (opts) => timeline.canvas.dispatchEvent(
+            new win.WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true, ...opts }));
+          // navigate mode, anywhere on the canvas
+          store.record = false;
+          timeline.scrollCh = 0;
+          timeline.needsRedraw = false;
+          wheel({ shiftKey: true });
+          const scrolled = timeline.scrollCh === 1 && timeline.needsRedraw === true;
+          // Firefox delivers shift+wheel as deltaX with deltaY 0
+          wheel({ shiftKey: true, deltaY: 0, deltaX: 120 });
+          const scrolledDx = timeline.scrollCh === 2;
+          log(`shift+wheel scrolls channels + repaints (deltaY & deltaX): ${scrolled && scrolledDx ? "ok" : "FAIL"}`);
+
+          // record mode, pointer over the CURSOR cell: must scroll, not edit
+          store.record = true;
+          timeline.scrollCh = 0;
+          store.cursor = { row: 0, ch: 0, sub: 1, nib: 0 }; // inst column (wheel-editable even when empty)
+          timeline.scrollRow = 0;
+          const r = timeline.canvas.getBoundingClientRect();
+          const depth = store.undo.undoStack.length;
+          const overCursor = { clientX: r.left + 76 + 8, clientY: r.top + 50 + 8 }; // GUTTER_W/HEADER_H
+          wheel({ shiftKey: true, ...overCursor });
+          const chScrolled = timeline.scrollCh === 1;
+          const noEdit = store.undo.undoStack.length === depth;
+          store.record = false;
+          store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+          log(`record mode: shift+wheel over cursor cell scrolls, no edit: ${chScrolled && noEdit ? "ok" : "FAIL"}`);
         }
 
         // ── topbar Import MIDI… + Open accept without .mid ──
         const midBtn = win.document.getElementById("importMidiBtn");
         const accept = win.document.getElementById("fileInput").accept;
-        const openOk = !!midBtn && !accept.includes(".mid") && accept.includes(".xm");
-        log(`Import MIDI button + Open accept "${accept}": ${openOk ? "ok" : "FAIL"}`);
+        const openOk2 = !!midBtn && !accept.includes(".mid") && accept.includes(".xm");
+        log(`Import MIDI button + Open accept "${accept}": ${openOk2 ? "ok" : "FAIL"}`);
+
+        // ── second instance, NO document: File tab must open ──
+        const frame2 = document.getElementById("app2");
+        const win2 = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame2.contentWindow;
+            if (w && w.__microtone) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        win2.document.querySelector('#tabs button[data-view="files"]').click();
+        await new Promise((r) => setTimeout(r, 300));
+        const host2 = win2.document.getElementById("filesHost");
+        const saveDisabled = host2.querySelector(".files-bar button")?.disabled === true;
+        const noDocOk = !host2.hidden && win2.__microtone.store.view === "files" &&
+          win2.document.getElementById("emptyState").hidden && saveDisabled;
+        log(`File tab reachable without a document (Save greyed): ${noDocOk ? "ok" : "FAIL"}`);
+
+        // ── Korean boot: saved language applies to the static chrome ──
+        localStorage.setItem("microtone-lang", "ko");
+        frame2.src = "../../index.html";
+        const win3 = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame2.contentWindow;
+            if (w && w.__microtone) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const koPlay = win3.document.getElementById("playSong").textContent;
+        const koTab = win3.document.querySelector('#tabs button[data-view="files"]').textContent;
+        const koBtn = win3.document.getElementById("langBtn").textContent;
+        localStorage.removeItem("microtone-lang");
+        const koOk = koPlay === "▶ 곡" && koTab === "파일" && koBtn === "KO";
+        log(`ko boot ("${koPlay}" / "${koTab}" / ${koBtn}): ${koOk ? "ok" : "FAIL"}`);
 
         log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
       } catch (err) {

@@ -7,9 +7,28 @@
     body { background: #16181d; color: #d8dce4; font-family: monospace; padding: 16px; }
     canvas { display: block; background: #1f232b; border: 1px solid #343a46; margin-bottom: 12px; }
     h3 { color: #f5a623; margin: 10px 0 4px; font-size: 13px; }
+    .ctl {
+      position: sticky; top: 0; background: #16181d; z-index: 1;
+      display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+      padding: 8px 0; border-bottom: 1px solid #343a46; margin-bottom: 8px;
+    }
+    .ctl input, .ctl button { background: #262b35; color: #d8dce4; border: 1px solid #404655; }
+    .ctl input[type="range"] { width: 220px; }
+    #blVal { color: #f5a623; min-width: 6ch; display: inline-block; }
+    #fontStat { color: #7a8290; }
   </style>
 </head>
 <body>
+  <div class="ctl">
+    <label>font <input id="fontName" value="Roboto Mono" size="18"
+      title="Any Google Fonts family (fetched live) — or a locally installed one"></label>
+    <button id="loadFont">load webfont</button>
+    <span id="fontStat"></span>
+    <label>baseline offset <input id="bl" type="range" min="-0.25" max="0.25" step="0.005" value="0"></label>
+    <span id="blVal">0.000</span>
+    <span>← copy into GLYPH.baselineOffset (src/ui/glyphs.js); fraction of row height, + = vectors down</span>
+  </div>
+
   <h3>sentinels: key-off · cut · fade · fast-fade | empty · reserved · interrupt</h3>
   <canvas id="sent" width="900" height="40"></canvas>
   <h3>12-TET: C-4 C#4 D-4 … B-4 | off-grid ("out of tune") = yellow nearest degree</h3>
@@ -23,19 +42,14 @@
   <h3>Shi'er lü (十二律): 黃4 大4 太4 夾4 姑4 仲4 蕤4 林4 夷4 南4 無4 應4</h3>
   <canvas id="t10123" width="900" height="40"></canvas>
   <script type="module">
-    import { paintNoteCell } from "../../src/ui/glyphs.js";
+    import { paintNoteCell, GLYPH } from "../../src/ui/glyphs.js";
     import { pitchTablePresets, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 
     const CH = 13, RH = 26; // big cells for inspection
     const PAL = { note: "#d8dce4", sentinel: "#f5a623", dim: "#7a8290", offGrid: "#f5a623" };
 
-    function row(id, notes, preset) {
-      const ctx = document.getElementById(id).getContext("2d");
-      ctx.font = "20px ui-monospace, monospace";
-      ctx.textBaseline = "middle";
-      notes.forEach((n, i) => paintNoteCell(ctx, n, preset, 8 + i * (CH * 4 + 12), 6, CH, RH, PAL));
-      console.log("GALLERY: drew " + id);
-    }
+    let family = null; // null → local fallback stack only
+    const fontStr = () => `20px ${family ? `"${family}", ` : ""}ui-monospace, monospace`;
 
     const p12 = pitchTablePresets[120];
     const degreeNotes = (preset, count, from = 0) => {
@@ -43,14 +57,75 @@
       for (let i = 0; i < count; i++) out.push(ANCHOR_NOTE + preset.table[(from + i) % preset.table.length]);
       return out;
     };
+    const ROWS = [
+      ["sent", [0x0001, 0x0002, 0x0003, 0x0004, 0x0000, 0x0007, 0x0015], p12],
+      ["t12", [...degreeNotes(p12, 12), 0x5042 /* off-grid → hex */], p12],
+      ["t24", degreeNotes(pitchTablePresets[240], 14), pitchTablePresets[240]],
+      ["t531", degreeNotes(pitchTablePresets[531], 17), pitchTablePresets[531]],
+      ["t410", degreeNotes(pitchTablePresets[410], 17), pitchTablePresets[410]],
+      ["t10123", degreeNotes(pitchTablePresets[10123], 12), pitchTablePresets[10123]],
+    ];
 
-    row("sent", [0x0001, 0x0002, 0x0003, 0x0004, 0x0000, 0x0007, 0x0015], p12);
-    row("t12", [...degreeNotes(p12, 12), 0x5042 /* off-grid → hex */], p12);
-    row("t24", degreeNotes(pitchTablePresets[240], 14), pitchTablePresets[240]);
-    row("t531", degreeNotes(pitchTablePresets[531], 17), pitchTablePresets[531]);
-    row("t410", degreeNotes(pitchTablePresets[410], 17), pitchTablePresets[410]);
-    row("t10123", degreeNotes(pitchTablePresets[10123], 12), pitchTablePresets[10123]);
-    console.log("GALLERY: done");
+    function repaint() {
+      for (const [id, notes, preset] of ROWS) {
+        const cv = document.getElementById(id);
+        const ctx = cv.getContext("2d");
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.font = fontStr();
+        ctx.textBaseline = "middle";
+        notes.forEach((n, i) => paintNoteCell(ctx, n, preset, 8 + i * (CH * 4 + 12), 6, CH, RH, PAL));
+        console.log("GALLERY: drew " + id);
+      }
+      console.log("GALLERY: done");
+    }
+
+    // ── baseline-offset slider: mutates the GLYPH tunable live ──
+    const bl = document.getElementById("bl");
+    const blVal = document.getElementById("blVal");
+    bl.addEventListener("input", () => {
+      GLYPH.baselineOffset = parseFloat(bl.value);
+      blVal.textContent = GLYPH.baselineOffset.toFixed(3);
+      repaint();
+    });
+    bl.value = GLYPH.baselineOffset;
+    blVal.textContent = GLYPH.baselineOffset.toFixed(3);
+
+    // ── webfont loader: inject a Google Fonts stylesheet for the typed
+    //    family, force-load it (canvas never triggers the download), repaint ──
+    const stat = document.getElementById("fontStat");
+    async function loadWebfont() {
+      const name = document.getElementById("fontName").value.trim();
+      if (!name) { family = null; repaint(); return; }
+      stat.textContent = "loading…";
+      const id = "gf-" + name.replace(/\W+/g, "-");
+      if (!document.getElementById(id)) {
+        const link = document.createElement("link");
+        link.id = id;
+        link.rel = "stylesheet";
+        link.href = "https://fonts.googleapis.com/css2?family=" +
+          name.trim().replace(/\s+/g, "+") + ":wght@400;700&display=swap";
+        const loaded = new Promise((res) => { link.onload = res; link.onerror = res; });
+        document.head.appendChild(link);
+        await loaded;
+      }
+      try {
+        const faces = await document.fonts.load(`20px "${name}"`);
+        stat.textContent = faces.length > 0
+          ? `"${name}" loaded (${faces.length} face${faces.length === 1 ? "" : "s"})`
+          : `"${name}" not found — falling back (locally installed fonts still apply)`;
+      } catch {
+        stat.textContent = `"${name}" — Font Loading API unavailable, using fallback`;
+      }
+      family = name;
+      repaint();
+    }
+    document.getElementById("loadFont").addEventListener("click", loadWebfont);
+    document.getElementById("fontName").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") loadWebfont();
+    });
+
+    repaint();       // immediate (fallback stack)
+    loadWebfont();   // then swap in the default webfont when it arrives
   </script>
 </body>
 </html>

@@ -302,3 +302,55 @@ export function retuneAllPatterns(song, newPreset, srcPreset, percSlots, method 
 export function retuneNearest(song, newPreset, percSlots) {
   return retuneAllPatterns(song, newPreset, null, percSlots, "pitch");
 }
+
+/**
+ * Transpose every note of ONE pattern, notation-aware:
+ *   - table presets: snap to the nearest degree, move `fine` table steps
+ *     (wrapping across periods) plus `coarse` whole periods;
+ *   - Raw (empty table): `fine` raw 4096-TET note units plus `coarse` periods.
+ * Sentinels/interrupts (< 0x20) and percussion instruments are skipped, with
+ * the same running-instrument inheritance as retuneAllPatterns. Mutates the
+ * cells; returns [{pat, row, prev}] for restoreNotesOp (via bulkNotesOp).
+ */
+export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse) {
+  const ptn = song.patterns[patIdx];
+  const useTable = preset && preset.table.length > 0;
+  const interval = preset?.interval || 0x1000;
+  const changes = [];
+  let runningInst = 0;
+  for (let row = 0; row < ptn.length; row++) {
+    const cell = ptn[row];
+    if (cell.instrment !== 0) runningInst = cell.instrment;
+    const note = cell.note;
+    if (note >= 0x0000 && note <= 0x001f) continue; // sentinels/interrupts
+    const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
+    if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
+
+    let out;
+    if (!useTable) {
+      out = note + fine + coarse * interval;
+    } else {
+      const table = preset.table;
+      const rel = note - ANCHOR_NOTE;
+      let k = Math.floor(rel / interval);
+      const inPeriod = rel - k * interval;
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < table.length; i++) {
+        const d = Math.abs(table[i] - inPeriod);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      // the next period's root may be nearer than the top table entry
+      if (interval - inPeriod < bestD) { k += 1; best = 0; }
+      let idx = best + fine;
+      k += Math.floor(idx / table.length) + coarse;
+      idx = ((idx % table.length) + table.length) % table.length;
+      out = ANCHOR_NOTE + k * interval + table[idx];
+    }
+    out = Math.min(Math.max(Math.round(out), 0x20), 0xffff);
+    if (out !== note) {
+      changes.push({ pat: patIdx, row, prev: note });
+      cell.note = out;
+    }
+  }
+  return changes;
+}

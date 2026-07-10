@@ -7,7 +7,8 @@
  *  attribute on <html>.
  * ══════════════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,400..700;1,400..700&family=Roboto:ital,wdth,wght@0,75..100,100..900;1,75..100,100..900&family=Geist:wght@900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@450&family=Open+Sans:ital,wdth,wght@0,75..100,300..800;1,75..100,300..800&family=Geist:wght@400..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Asta+Sans:wght@300..800&display=swap');
 
 /* ── THEME: DARK (default) — taut.js-inspired slate + amber ───────────── */
 :root,
@@ -104,17 +105,29 @@
   --brand2: #404758;
 }
 
+/* ── CANVAS GRID FONT ──────────────────────────────────────────────────
+ * The tracker-grid typeface (Timeline / Cues / Patterns canvases). Canvas
+ * views read this through src/ui/fonts.js, which also force-loads the
+ * webfont faces (canvas fillText never triggers a download on its own) and
+ * repaints once they arrive. To test another font: add it to the @import
+ * line above (or any @font-face) and put its family first here. If the
+ * glyph baseline sits off against the new font, tune GLYPH.baselineOffset
+ * in src/ui/glyphs.js (live slider: test/browser/glyph-gallery.html). */
+:root {
+  --cv-font: "Roboto Mono", ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+}
+
 * { box-sizing: border-box; }
 
 /* display rules on classes must not defeat the hidden attribute */
 [hidden] { display: none !important; }
 
 :root, body, button {
-  font-family: "Roboto", sans-serif;
+  font-family: "Open Sans", sans-serif;
   font-optical-sizing: auto;
   font-style: normal;
   font-variation-settings:
-    "wdth" 87.5;
+    "wdth" 86.6667;
 }
 
 button {
@@ -126,11 +139,6 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-}
-
-canvas {
-  font-family: "Roboto Mono", monospace;
-  font-optical-sizing: auto;
 }
 
 .player {
@@ -228,6 +236,8 @@ select, input[type="range"] {
   border-bottom: none;
   border-top: 1px solid var(--border);
   font-size: 0.85rem;
+  font-variation-settings:
+    "wdth" 92.5;
 }
 
 .brand-container {
@@ -237,6 +247,7 @@ select, input[type="range"] {
   font-style: oblique;
   font-size: 1.333rem;
   margin: 0 0.333rem;
+  cursor: pointer; /* opens the About popup */
 }
 
 .brand {
@@ -246,6 +257,7 @@ select, input[type="range"] {
 }
 .brand-red { color: var(--brand); }
 .brand-white { color: var(--brand2); }
+.brand-dim { margin-left: 0.14rem; color: var(--dim); font-weight: 400; font-style: normal; font-size: 1.222rem; }
 
 .transport-controls { display: flex; gap: 0.3rem; align-items: center; }
 .chk { color: var(--dim); font-size: 0.85rem; display: flex; align-items: center; gap: 0.25rem; }
@@ -639,6 +651,22 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   border-radius: 4px;
 }
 .smp-toolbar { padding: 0.3rem 0.6rem 0; }
+
+/* ── About popup (brand click) ── */
+.about-modal { max-width: 460px; }
+.about-modal h3 { font-size: 1.3rem; }
+.about-modal h4 {
+  margin: 0.9rem 0 0.3rem;
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.about-modal a { color: var(--accent); }
+.about-thanks { margin: 0.2rem 0 0; padding-left: 1.2rem; }
+
+/* File tab: current project's song list */
+.files-songs-head { margin: 1.4rem 0 0.5rem; font-size: 1rem; color: var(--fg2); }
 
 .side-toolbar {
   display: flex;

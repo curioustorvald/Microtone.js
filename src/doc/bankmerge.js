@@ -13,7 +13,7 @@
 //     order always matches the post-merge sampleList() census.
 
 import { SAMPLEBIN_SIZE, ixmpPatchLen } from "../format/taud-const.js";
-import { parsePatchesBlob } from "../engine/inst.js";
+import { parsePatchesBlob, TaudInst } from "../engine/inst.js";
 
 const sampleKey = (ptr, len) => `${ptr}:${len}`;
 
@@ -334,6 +334,99 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
     slotMap,
     newSampleBytes,
     dedupedSamples,
+  };
+}
+
+/** Fresh single-sample instrument record: TaudInst constructor defaults
+ *  (vol-env terminator at 0x3F — a zeroed record's value-0 terminator would
+ *  hit the Schism cut rule and ramp the voice out instantly) with the sample
+ *  binding filled in. */
+export function buildFreshInstRecord({ samplePtr, sampleLength, samplingRate }) {
+  const inst = new TaudInst(0);
+  inst.samplePtr = samplePtr;
+  inst.sampleLength = sampleLength;
+  inst.samplingRate = samplingRate;
+  const rec = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) rec[i] = inst.getByteNormal(i);
+  return rec;
+}
+
+/**
+ * Plan importing ONE raw sample (mono U8 PCM, ≤ 65535 bytes) as a brand-new
+ * instrument: pool content is deduped, the PCM first-fits a free extent, the
+ * instrument takes the lowest free note-addressable slot, and INam/SNam get
+ * `nameBytes`. Returns {error} on failure, else a plan shaped exactly like
+ * planImport's — apply it with importBankOp for full undo.
+ */
+export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, rate }) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image to import into." };
+  }
+  if (!pcm || pcm.length === 0) return { error: "The decoded sample is empty." };
+  if (pcm.length > 0xffff) {
+    return { error: `Sample too long: ${pcm.length} bytes (65535 max) — resample it first.` };
+  }
+
+  const taken = new Set(destDoc.usedInstrumentSlots());
+  let slot = 1;
+  while (slot <= 255 && taken.has(slot)) slot++;
+  if (slot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+
+  const destCensus = destDoc.sampleList();
+  const destPool = destDoc.sampleBin;
+  let ptr = null;
+  const samples = [];
+  for (const e of destCensus) {
+    if (e.len === pcm.length && bytesEqual(destPool.subarray(e.ptr, e.ptr + e.len), pcm)) {
+      ptr = e.ptr; // identical content already pooled — reuse it
+      break;
+    }
+  }
+  if (ptr === null) {
+    const ext = freeExtents(destCensus).find((x) => x.len >= pcm.length);
+    if (!ext) {
+      return { error: `Sample pool full: needs ${pcm.length} more bytes and no free extent is large enough.` };
+    }
+    ptr = ext.ptr;
+    samples.push({ ptr, bytes: Uint8Array.from(pcm), srcKeys: [] });
+  }
+
+  const record = buildFreshInstRecord({
+    samplePtr: ptr,
+    sampleLength: pcm.length,
+    samplingRate: Math.max(1, Math.min(0xffff, Math.round(rate) || 0)),
+  });
+
+  // INam: splice the instrument name in by slot.
+  const destInamPayload = sectionPayload(destDoc, "INam");
+  let inamPayload = null;
+  if (nameBytes.length > 0 || destInamPayload !== null) {
+    const parts = splitNameTable(destInamPayload);
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = nameBytes;
+    inamPayload = joinNameTable(parts);
+  }
+
+  // SNam identity map (payload rebuilt from the real census after apply).
+  // A deduped sample keeps its existing name.
+  const snamNames = new Map();
+  const destSnam = splitNameTable(sectionPayload(destDoc, "SNam"));
+  destCensus.forEach((e, i) => snamNames.set(sampleKey(e.ptr, e.len), destSnam[i] ?? new Uint8Array(0)));
+  const key = sampleKey(ptr, pcm.length);
+  if (!snamNames.has(key)) snamNames.set(key, nameBytes);
+  const writeSnam = nameBytes.length > 0 || sectionPayload(destDoc, "SNam") !== null;
+
+  return {
+    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob: null, ixmpCount: 0 }],
+    samples,
+    inamPayload,
+    snamNames,
+    writeSnam,
+    slotMap: new Map([[-1, slot]]),
+    newSampleBytes: samples.length > 0 ? pcm.length : 0,
+    dedupedSamples: samples.length > 0 ? 0 : 1,
   };
 }
 

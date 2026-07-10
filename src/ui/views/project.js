@@ -6,6 +6,7 @@ import { setSongScalarOp, retuneOp } from "../../doc/ops.js";
 import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
+import { escapeNonAscii, unescapeName } from "../names.js";
 
 export class ProjectView {
   constructor(store, host) {
@@ -34,7 +35,7 @@ export class ProjectView {
     const sm = doc.meta.songMeta[this.store.songIndex];
 
     const head = document.createElement("h3");
-    head.textContent = doc.meta.projectName ?? "(untitled project)";
+    head.textContent = unescapeName(doc.meta.projectName ?? "") || "(untitled project)";
     this.root.appendChild(head);
 
     const info = document.createElement("p");
@@ -42,19 +43,20 @@ export class ProjectView {
     info.textContent =
       `${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount} channels · format v${doc.fmtVer ?? 2}` +
       ` · signature "${doc.signature.trim()}"` +
-      (sm ? ` · song: "${sm.name}"${sm.composer ? ` by ${sm.composer}` : ""}` : "");
+      (sm ? ` · song: "${unescapeName(sm.name)}"${sm.composer ? ` by ${unescapeName(sm.composer)}` : ""}` : "");
     this.root.appendChild(info);
 
-    // Editable PROJECT name (PNam). Song renaming lives on the topbar ✎
-    // button next to the song selector. TSVM's string reader is ASCII-only,
-    // so any non-ASCII character is stored as a \uHHHH escape.
+    // Editable PROJECT name (PNam). Song renaming lives on the File tab's
+    // song list. TSVM's string reader is ASCII-only, so any non-ASCII
+    // character is STORED as a \uHHHH escape; the input shows the decoded
+    // text and re-escapes on save.
     const nameRow = document.createElement("div");
     nameRow.className = "inst-field";
     nameRow.style.maxWidth = "440px";
     nameRow.append(document.createTextNode("Project name"));
     const nameInput = document.createElement("input");
     nameInput.type = "text";
-    nameInput.value = doc.meta.projectName ?? "";
+    nameInput.value = unescapeName(doc.meta.projectName ?? "");
     nameInput.placeholder = "(untitled project)";
     nameInput.spellcheck = false;
     nameInput.addEventListener("change", () => this.changeProjectName(nameInput.value));
@@ -128,7 +130,7 @@ export class ProjectView {
       const tr = document.createElement("tr");
       if (i === this.store.songIndex) tr.className = "files-current";
       tr.innerHTML =
-        `<td>${i}</td><td>${esc(m?.name || "(unnamed)")}</td><td>${s.numVoices}</td>` +
+        `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || "(unnamed)")}</td><td>${s.numVoices}</td>` +
         `<td>${s.patterns.length}</td><td>${s.bpm}</td><td>${s.tickRate}</td>`;
       tbody.appendChild(tr);
     });
@@ -166,14 +168,14 @@ export class ProjectView {
     this.refresh();
   }
 
-  /** Rename the current song. Non-ASCII characters are encoded as \uHHHH
-   *  ASCII escapes so the sMet stays TSVM-readable (its string parser is not
-   *  Unicode; the escape is kept verbatim). */
-  changeName(raw) {
+  /** Rename song `index` (default: current). Non-ASCII characters are encoded
+   *  as \uHHHH ASCII escapes so the sMet stays TSVM-readable (its string
+   *  parser is not Unicode; the escape is kept verbatim). */
+  changeName(raw, index = this.store.songIndex) {
     const store = this.store;
     const escaped = escapeNonAscii(raw);
-    const sm = store.doc.meta.songMeta[store.songIndex] ??
-      (store.doc.meta.songMeta[store.songIndex] =
+    const sm = store.doc.meta.songMeta[index] ??
+      (store.doc.meta.songMeta[index] =
         { notation: 120, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" });
     if (sm.name === escaped) return;
     sm.name = escaped;
@@ -230,7 +232,7 @@ export class ProjectView {
     const doc = store.doc;
     if (doc.songs.length <= 1) return;
     const idx = store.songIndex;
-    const nm = doc.meta.songMeta[idx]?.name;
+    const nm = unescapeName(doc.meta.songMeta[idx]?.name ?? "");
     if (!confirm(`Remove song ${idx}${nm ? ` "${nm}"` : ""}? This cannot be undone.`)) return;
     doc.songs.splice(idx, 1);
     // songMeta is keyed by song index — shift entries above `idx` down by one.
@@ -342,15 +344,4 @@ function sel(label, value, options, onChange) {
 
 function esc(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
-
-/** ASCII-escape every non-ASCII UTF-16 code unit as \uHHHH (uppercase hex).
- *  Idempotent: already-escaped input passes through unchanged. */
-function escapeNonAscii(s) {
-  let out = "";
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    out += c < 0x80 ? s[i] : "\\u" + c.toString(16).toUpperCase().padStart(4, "0");
-  }
-  return out;
 }

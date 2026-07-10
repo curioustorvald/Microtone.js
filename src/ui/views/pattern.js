@@ -7,17 +7,21 @@
 import { PATTERN_EMPTY } from "../../engine/constants.js";
 import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { paintNoteCell } from "../glyphs.js";
-import { stepNoteInTable } from "../pitchtables.js";
+import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
 import {
   interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
 } from "../edit.js";
-import { setCellOp } from "../../doc/ops.js";
+import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp } from "../../doc/ops.js";
+import { expandPatternBytes, shrinkPatternBytes } from "../../doc/patterntools.js";
 import { CUE_EMPTY } from "../../format/taud-const.js";
 import { themeColors } from "../theme.js";
+import { canvasFont } from "../fonts.js";
+import { showModal } from "../widgets/modal.js";
+import { t } from "../i18n.js";
 
-const FONT = "13px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
-const CHAR_W = 7.9;
+const FONT_PX = 14; // family comes from --cv-font via fonts.js
+const CHAR_W = 8.5;
 const ROW_H = 17;
 const GUTTER_W = 34;
 const PREVIEW_CUE = 8191; // device-only scratch cue (taut PREVIEW_CUE_IDX idiom)
@@ -49,10 +53,20 @@ export class PatternView {
     });
     const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
     const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
-    this.previewBtn = mkBtn("▶ Preview", () => this.togglePreview());
+    this.previewBtn = mkBtn(t("pat.preview"), () => this.togglePreview());
+    // pattern-scoped edit operations (all single undo steps)
+    const dupBtn = mkBtn(t("pat.duplicate"), () => this.duplicate());
+    dupBtn.title = t("pat.duplicateTitle");
+    const trBtn = mkBtn(t("pat.transpose"), () => this.transpose());
+    trBtn.title = t("pat.transposeTitle");
+    const lenBtn = mkBtn(t("pat.lengthen"), () => this.applyPatternBytes(expandPatternBytes));
+    lenBtn.title = t("pat.lengthenTitle");
+    const shortBtn = mkBtn(t("pat.shorten"), () => this.applyPatternBytes(shrinkPatternBytes));
+    shortBtn.title = t("pat.shortenTitle");
     this.info = document.createElement("span");
     this.info.className = "dim";
-    this.bar.append(prev, this.patInput, next, this.previewBtn, this.info);
+    this.bar.append(prev, this.patInput, next, this.previewBtn,
+      dupBtn, trBtn, lenBtn, shortBtn, this.info);
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "pattern-canvas";
@@ -148,14 +162,74 @@ export class PatternView {
     store.audio.play(0);
     this.previewing = true;
     this.previewStarted = false; // do NOT auto-stop until the worklet confirms play
-    this.previewBtn.textContent = "■ Stop";
+    this.previewBtn.textContent = t("pat.previewStop");
   }
 
   stopPreview() {
     this.store.audio?.stop(0);
     this.previewing = false;
     this.previewStarted = false;
-    this.previewBtn.textContent = "▶ Preview";
+    this.previewBtn.textContent = t("pat.preview");
+  }
+
+  // ── pattern-scoped edit operations ──
+
+  /** Duplicate: append a copy of this pattern and jump to it. */
+  duplicate() {
+    const store = this.store;
+    if (!store.doc || !this.pattern()) return;
+    if (store.song.patterns.length >= 0x7fff) return; // cue words are 15-bit
+    store.undo.apply(appendPatternOp(store.songIndex,
+      store.doc.patternBytes(store.songIndex, this.patIdx)));
+    this.setPattern(store.song.patterns.length - 1);
+  }
+
+  /** Run a bytes→bytes transform (lengthen/shorten) as one undo step. */
+  applyPatternBytes(fn) {
+    const store = this.store;
+    if (!store.doc || !this.pattern()) return;
+    store.undo.apply(setPatternBytesOp(store.songIndex, this.patIdx,
+      fn(store.doc.patternBytes(store.songIndex, this.patIdx))));
+    this.refreshBar();
+    this.invalidate();
+  }
+
+  /** Notation-aware transpose of this pattern. The fine unit follows the
+   *  song's tuning — semitones in 12-TET, steps in other TETs, raw note
+   *  units in Raw — and the coarse unit is octaves (or periods when the
+   *  tuning isn't octave-based, e.g. Bohlen-Pierce tritaves). */
+  async transpose() {
+    const store = this.store;
+    if (!store.doc || !this.pattern()) return;
+    const preset = store.pitchPreset;
+    const raw = !preset || preset.table.length === 0;
+    const fineLabel = raw ? t("pat.unitNoteUnits")
+      : preset.index === 120 ? t("pat.unitSemitones") : t("pat.unitSteps");
+    const coarseLabel = (preset?.interval ?? 0x1000) === 0x1000
+      ? t("pat.unitOctaves") : t("pat.unitPeriods");
+    const result = await showModal({
+      title: t("pat.transposeModalTitle", { pat: this.patIdx.toString(16).toUpperCase().padStart(4, "0") }),
+      body: t("pat.transposeBody"),
+      fields: [
+        { name: "fine", label: fineLabel, type: "number", value: 0, min: -4096, max: 4096 },
+        { name: "coarse", label: coarseLabel, type: "number", value: 0, min: -10, max: 10 },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const fine = parseInt(result.fine || "0", 10) | 0;
+    const coarse = parseInt(result.coarse || "0", 10) | 0;
+    if (fine === 0 && coarse === 0) return;
+    // Percussion slots skip the shift (retune semantics — a kit piece's pitch
+    // selects the drum, it isn't melodic).
+    const percSlots = new Uint8Array(1024);
+    for (const s of store.doc.usedInstrumentSlots()) {
+      if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
+    }
+    const patIdx = this.patIdx;
+    store.undo.apply(bulkNotesOp(store.songIndex,
+      (song) => transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse)));
+    this.invalidate();
   }
 
   hitTest(e) {
@@ -296,11 +370,11 @@ export class PatternView {
     const pattern = this.pattern();
     if (!pattern) {
       ctx.fillStyle = C.dim;
-      ctx.font = FONT;
+      ctx.font = canvasFont(FONT_PX);
       ctx.fillText("no such pattern", 20, 30);
       return;
     }
-    ctx.font = FONT;
+    ctx.font = canvasFont(FONT_PX);
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
 

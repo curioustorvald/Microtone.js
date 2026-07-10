@@ -21,6 +21,7 @@ import { CommandPalette } from "./palette.js";
 import { setCellOp } from "../doc/ops.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
+import { showAbout } from "./popups/about.js";
 import { showModal } from "./widgets/modal.js";
 import * as opfs from "../storage/opfs.js";
 import { pickFile } from "../storage/import-export.js";
@@ -29,8 +30,13 @@ import { showImportProgress } from "./popups/importlog.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange } from "./theme.js";
+import { initI18n, applyDom, t, LANGS, setLang, currentLang } from "./i18n.js";
+import { unescapeName } from "./names.js";
+import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
 
 initTheme(); // before any canvas paints (saved choice ?? OS preference)
+await initI18n(); // strings before any UI is built
+applyDom(); // translate the static index.html chrome
 {
   // ?theme=dark|light overrides for this load (and persists like the toggle)
   const t = new URLSearchParams(location.search).get("theme");
@@ -97,7 +103,7 @@ async function convertImport(name, bytes, sf2Override = null) {
 }
 
 // ── document loading ──
-async function loadBytes(name, bytes, { sf2 = null } = {}) {
+async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
   let converted = false;
   if (converterFor(name)) {
     bytes = await convertImport(name, bytes, sf2);
@@ -191,19 +197,17 @@ async function loadBytes(name, bytes, { sf2 = null } = {}) {
     store.sync.loadAll();
   }
 
-  const sel = $("songSel");
-  sel.innerHTML = "";
-  store.doc.songs.forEach((song, i) => {
-    const opt = document.createElement("option");
-    const sm = store.doc.meta.songMeta[i];
-    opt.value = i;
-    opt.textContent = sm?.name ? `${i}: ${sm.name}` : `song ${i}`;
-    sel.appendChild(opt);
-  });
+  rebuildSongList();
 
   $("emptyState").hidden = true;
   showView("timeline");
   if (converted) store.doc.dirty = true; // imported, not yet saved anywhere
+  if (converted && saveToOpfs && (await opfs.available())) {
+    // Files-tab MIDI import: the CONVERSION RESULT lands in OPFS right away.
+    await opfs.write(name, store.doc.toBytes());
+    store.doc.dirty = false;
+    store.emit("saved", name);
+  }
   updateStatus();
   store.emit("doc");
 }
@@ -211,8 +215,8 @@ async function loadBytes(name, bytes, { sf2 = null } = {}) {
 function updateStatus() {
   const doc = store.doc;
   $("stFile").textContent = doc
-    ? `${store.fileName ?? "untitled"} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount}ch`
-    : "no file";
+    ? `${store.fileName ?? "untitled"} — ${unescapeName(doc.meta.projectName ?? "untitled")} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount}ch`
+    : t("status.noFile");
   $("stDirty").hidden = !doc?.dirty;
   $("octDisp").textContent = jam.octave;
   $("instDisp").textContent = hex2(jam.currentInst);
@@ -351,7 +355,9 @@ const OPEN_ACCEPT = ".taud,.tsii,.tpif," +
 $("fileInput").accept = OPEN_ACCEPT;
 $("openBtn").addEventListener("click", () => $("fileInput").click());
 
-$("importMidiBtn").addEventListener("click", async () => {
+/** Pick a .mid + soundfont, convert, load. `toOpfs` (Files-tab button) also
+ *  persists the conversion result into OPFS. */
+async function importMidiInteractive({ toOpfs = false } = {}) {
   const file = await pickFile(".mid,.midi");
   if (!file) return;
   const bundledAvail = (await getBundledSoundfont()) !== null;
@@ -366,13 +372,14 @@ $("importMidiBtn").addEventListener("click", async () => {
         { value: "own", label: "Choose an .sf2 file…" },
       ],
     }],
-    okLabel: "Import",
+    okLabel: t("common.import"),
   });
   if (!choice) return;
   const sf2 = choice.sf === "bundled" ? await getBundledSoundfont() : await pickUserSoundfont();
   if (!sf2) { $("stFile").textContent = "MIDI import cancelled (no soundfont)"; return; }
-  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()), { sf2 });
-});
+  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()), { sf2, saveToOpfs: toOpfs });
+}
+$("importMidiBtn").addEventListener("click", () => importMidiInteractive());
 $("fileInput").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   if (f) await loadBytes(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -394,7 +401,7 @@ function rebuildSongList() {
     const opt = document.createElement("option");
     const sm = store.doc.meta.songMeta[i];
     opt.value = i;
-    opt.textContent = sm?.name ? `${i}: ${sm.name}` : `song ${i}`;
+    opt.textContent = sm?.name ? `${i}: ${unescapeName(sm.name)}` : `song ${i}`;
     sel.appendChild(opt);
   });
   sel.value = store.songIndex;
@@ -417,22 +424,22 @@ function selectSong(index) {
 
 $("songSel").addEventListener("change", (e) => selectSong(parseInt(e.target.value, 10)));
 
-// ✎ — rename the current song (same escape rules as the Project view; the
-// actual write goes through ProjectView.changeName so there is one code path).
-$("songRenameBtn").addEventListener("click", async () => {
+// Rename song `index` — offered per-row on the File tab's song list (the
+// write goes through ProjectView.changeName so there is one code path). The
+// input shows the DECODED name; changeName re-escapes on save.
+async function renameSongInteractive(index) {
   if (!store.doc) return;
-  const sm = store.doc.meta.songMeta[store.songIndex];
+  const sm = store.doc.meta.songMeta[index];
   const result = await showModal({
-    title: `Rename song ${store.songIndex}`,
-    body: "",
-    fields: [{ name: "name", label: "Name", value: sm?.name ?? "" }],
-    okLabel: "Rename",
+    title: t("song.renameTitle", { n: index }),
+    fields: [{ name: "name", label: t("files.name"), value: unescapeName(sm?.name ?? "") }],
+    okLabel: t("common.rename"),
   });
   if (result === null) return;
-  projectView.changeName(result.name);
+  projectView.changeName(result.name, index);
   rebuildSongList();
   updateStatus();
-});
+}
 
 // Project view add/remove-song: rebuild the picker + switch to the target song.
 store.on("songs", (payload) => {
@@ -454,6 +461,8 @@ const filesView = new FilesView(store, $("filesHost"), {
   openBytes: (name, bytes) => loadBytes(name, bytes),
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
   songIndex: () => store.songIndex,
+  importMidi: () => importMidiInteractive({ toOpfs: true }),
+  renameSong: (i) => renameSongInteractive(i),
 });
 
 function showView(name) {
@@ -461,6 +470,7 @@ function showView(name) {
   for (const btn of $("tabs").children) {
     btn.classList.toggle("active", btn.dataset.view === name);
   }
+  $("emptyState").hidden = !!store.doc || name === "files";
   $("toolbox").hidden = !(name === "timeline" || name === "pattern") || !store.doc;
   $("timeline").hidden = name !== "timeline";
   $("cuesCanvas").hidden = name !== "cues";
@@ -481,7 +491,9 @@ function showView(name) {
 }
 $("tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
-  if (btn && store.doc) showView(btn.dataset.view);
+  // The File tab works without a document (browse OPFS, import something);
+  // every other view needs one.
+  if (btn && (store.doc || btn.dataset.view === "files")) showView(btn.dataset.view);
 });
 
 // ── transport ──
@@ -514,10 +526,32 @@ $("recBtn").addEventListener("click", () => setRecord(!store.record));
 $("undoBtn").addEventListener("click", () => store.undo?.undo());
 $("redoBtn").addEventListener("click", () => store.undo?.redo());
 
+// ── About (brand click) ──
+$("brandBtn").addEventListener("click", () => showAbout());
+
+// ── language picker (reload applies the choice everywhere) ──
+$("langBtn").textContent = currentLang().toUpperCase();
+$("langBtn").addEventListener("click", async () => {
+  const result = await showModal({
+    title: t("lang.title"),
+    body: t("lang.body"),
+    fields: [{
+      name: "lang", label: t("lang.field"), type: "select", value: currentLang(),
+      options: Object.entries(LANGS).map(([value, label]) => ({ value, label })),
+    }],
+    okLabel: t("common.ok"),
+  });
+  if (!result || result.lang === currentLang()) return;
+  if (store.doc?.dirty && !confirm(`Discard unsaved changes to ${store.fileName ?? "the current project"}?`)) return;
+  setLang(result.lang);
+  location.reload();
+});
+
 // ── theme toggle ──
 $("themeBtn").addEventListener("click", () => toggleTheme());
 onThemeChange(() => {
   // repaint every canvas + refresh DOM views that cache colours implicitly
+  refreshCanvasFont(); // --cv-font could be themed too
   timeline.invalidate();
   cuesView.invalidate();
   patternView.invalidate();
@@ -525,12 +559,23 @@ onThemeChange(() => {
   if (store.view === "instruments") instrumentsView.renderPanel();
 });
 
+// ── canvas grid webfont (--cv-font) ──
+// Canvas text never triggers a webfont download on its own; force-load the
+// faces at the sizes the grids draw (12px timeline/cues, 13px patterns) and
+// repaint once the real font is in (early paints show the fallback stack).
+loadCanvasFonts([13, 14], () => {
+  timeline.invalidate();
+  cuesView.invalidate();
+  patternView.invalidate();
+});
+
 // ── toolbox (Timeline / Patterns) ──
 $("tbRetune").addEventListener("click", () => projectView.openRetune());
 store.rawNoteView = false;
+$("tbRaw").textContent = t("toolbox.rawOff");
 $("tbRaw").addEventListener("click", () => {
   store.rawNoteView = !store.rawNoteView;
-  $("tbRaw").textContent = `Raw: ${store.rawNoteView ? "on" : "off"}`;
+  $("tbRaw").textContent = t(store.rawNoteView ? "toolbox.rawOn" : "toolbox.rawOff");
   $("tbRaw").classList.toggle("active", store.rawNoteView);
   timeline.invalidate();
   patternView.invalidate();
@@ -597,7 +642,15 @@ for (const topic of ["cursor", "edit", "view", "doc"]) {
 
 // ── keyboard dispatch ──
 window.addEventListener("keydown", (e) => {
-  if (!store.doc) return;
+  if (!store.doc) {
+    // The File tab stays reachable before anything is loaded.
+    if (e.code === "F7" && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        e.target.tagName !== "INPUT" && !e.target.closest?.("dialog")) {
+      e.preventDefault();
+      showView("files");
+    }
+    return;
+  }
   if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" ||
       e.target.closest?.("dialog")) return;
 

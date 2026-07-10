@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>sample import smoke: WAV → decode → new instrument</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- decodeAudioData runs on a REAL decoder thread, which starves under
+       --virtual-time-budget (like the Pyodide worker). Run this page in REAL
+       time: the /hang image below keeps the load event pending so the dump
+       happens at --timeout.
+         python3 tools/test-server.py &   # repo file server + /hang on :8932
+         chromium --headless=new --dump-dom --timeout=30000 \
+           http://localhost:8932/test/browser/sampleimport-smoke.html -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store } = win.__microtone;
+        log("app loaded");
+
+        const { decodeAudioToU8 } = await win.eval('import("/src/ui/audiodecode.js")');
+        const { planSampleImport } = await win.eval('import("/src/doc/bankmerge.js")');
+        const { importBankOp } = await win.eval('import("/src/doc/ops.js")');
+
+        // synthesise a 16-bit mono WAV @22050 (2000 samples of a sine)
+        const sr = 22050, nSamp = 2000;
+        const wav = new DataView(new ArrayBuffer(44 + nSamp * 2));
+        const w32 = (o, v) => wav.setUint32(o, v, true);
+        const wstr = (o, s) => { for (let i = 0; i < s.length; i++) wav.setUint8(o + i, s.charCodeAt(i)); };
+        wstr(0, "RIFF"); w32(4, 36 + nSamp * 2); wstr(8, "WAVE");
+        wstr(12, "fmt "); w32(16, 16); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+        w32(24, sr); w32(28, sr * 2); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+        wstr(36, "data"); w32(40, nSamp * 2);
+        for (let i = 0; i < nSamp; i++) wav.setInt16(44 + i * 2, Math.round(30000 * Math.sin(i / 10)), true);
+
+        const decoded = await decodeAudioToU8(new Uint8Array(wav.buffer));
+        // 22050 → 32 kHz context resample: expect ~2902 samples @32000
+        const decodeOk = decoded.rate === 32000 &&
+          Math.abs(decoded.pcm.length - Math.round(nSamp * 32000 / sr)) <= 2 &&
+          Math.max(...decoded.pcm) > 200 && Math.min(...decoded.pcm) < 56;
+        log(`decode: ${decoded.pcm.length}B @ ${decoded.rate}Hz (${decoded.seconds.toFixed(3)}s): ${decodeOk ? "ok" : "FAIL"}`);
+
+        const before = win.eval("__microtone.store.doc.toBytes()");
+        const usedBefore = new Set(store.doc.usedInstrumentSlots());
+        const plan = planSampleImport(store.doc, {
+          nameBytes: new TextEncoder().encode("smoke-wav"),
+          pcm: decoded.pcm, rate: decoded.rate,
+        });
+        if (plan.error) {
+          log(`plan FAIL: ${plan.error}`);
+        } else {
+          store.undo.apply(importBankOp(plan));
+          const slot = plan.insts[0].destSlot;
+          const inst = store.doc.instruments[slot];
+          const census = store.doc.sampleList();
+          const entry = census.find((e) => e.ptr === inst.samplePtr && e.len === inst.sampleLength);
+          const impOk = !usedBefore.has(slot) &&
+            inst.sampleLength === decoded.pcm.length &&
+            inst.samplingRate === decoded.rate &&
+            store.doc.instrumentName(slot) === "smoke-wav" &&
+            !!entry && entry.users.includes(slot) &&
+            store.doc.sampleName(entry.index) === "smoke-wav";
+          log(`instrument $${slot.toString(16).toUpperCase()} created + named: ${impOk ? "ok" : "FAIL"}`);
+          store.undo.undo();
+          const after = win.eval("__microtone.store.doc.toBytes()");
+          const undoOk = after.length === before.length && after.every((v, i) => v === before[i]);
+          log(`undo byte-exact: ${undoOk ? "ok" : "FAIL"}`);
+        }
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

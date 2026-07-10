@@ -10,9 +10,10 @@ import { INST_NOP, INST_GOBACK, INST_SKIP, INST_JUMP, INST_PATLEN, INST_HALTAT, 
 import { setCueWordOp, setCueOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
+import { canvasFont } from "../fonts.js";
 
-const FONT = "12px ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace";
-const CHAR_W = 7.3;
+const FONT_PX = 13; // family comes from --cv-font via fonts.js
+const CHAR_W = 7.9;
 const ROW_H = 16;
 const HEADER_H = 22;
 const GUTTER_W = 52;             // cue index (4-digit hex)
@@ -211,7 +212,7 @@ export class CuesView {
     const song = store.song;
     if (!song) return;
     const chans = store.doc.channelCount;
-    ctx.font = FONT;
+    ctx.font = canvasFont(FONT_PX);
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
 

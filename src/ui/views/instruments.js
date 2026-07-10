@@ -11,6 +11,8 @@ import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.j
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
+import { unescapeName } from "../names.js";
+import { t } from "../i18n.js";
 
 const ENV_TABS = [
   { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env",
@@ -108,17 +110,24 @@ export class InstrumentsView {
       this.refresh();
     };
     const addBtn = document.createElement("button");
-    addBtn.textContent = "Add…";
-    addBtn.title = "Add instruments from the bundled GeneralUser-GS soundfont (or a picked .sf2)";
+    addBtn.textContent = t("inst.add");
+    addBtn.title = t("inst.addTitle");
     addBtn.addEventListener("click", async () => {
       const sf2 = await getSoundfont();
       if (sf2) adopt(await importFromSf2(this.store, sf2.name, sf2.bytes));
     });
     const importBtn = document.createElement("button");
-    importBtn.textContent = "Import…";
-    importBtn.title = "Import instruments (with samples and patches) from a .taud, .tsii or .sf2 file";
+    importBtn.textContent = t("inst.import");
+    importBtn.title = t("inst.importTitle");
     importBtn.addEventListener("click", async () => adopt(await showImportInstruments(this.store)));
-    bar.append(addBtn, importBtn);
+    const smpBtn = document.createElement("button");
+    smpBtn.textContent = t("inst.newFromSample");
+    smpBtn.title = t("inst.newFromSampleTitle");
+    smpBtn.addEventListener("click", async () => {
+      const { importSampleAsInstrument } = await import("../popups/importsample.js");
+      adopt(await importSampleAsInstrument(this.store));
+    });
+    bar.append(addBtn, importBtn, smpBtn);
     this.listEl.appendChild(bar);
     for (const slot of doc.usedInstrumentSlots()) {
       const inst = doc.instruments[slot];
@@ -128,7 +137,7 @@ export class InstrumentsView {
       row.innerHTML =
         `<span class="dot"></span>` +
         `<span class="idx">$${slot.toString(16).toUpperCase().padStart(3, "0")}</span>` +
-        `<span class="name">${escape(doc.instrumentName(slot) || "(unnamed)")}</span>` +
+        `<span class="name">${escape(unescapeName(doc.instrumentName(slot)) || "(unnamed)")}</span>` +
         `<span class="badge-sm">${kind}</span>`;
       row.addEventListener("click", () => {
         this.selected = slot;
@@ -387,6 +396,24 @@ export class InstrumentsView {
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~0x0c) | (v << 2))),
     );
 
+    // Sample section — the visual play/loop/sustain editor lives in a modal
+    // (same style as the Samples-tab editor, but scoped to THIS instrument).
+    const editRow = document.createElement("div");
+    editRow.className = "slider-row";
+    const editLab = document.createElement("span");
+    editLab.className = "sl-label";
+    editLab.textContent = "Play/loop/sustain";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = t("smp.edit");
+    editBtn.title = "Waveform editor for this instrument's play start / loop points / sustain";
+    editBtn.disabled = inst.sampleLength <= 0;
+    editBtn.addEventListener("click", async () => {
+      const { openInstSampleEditor } = await import("../popups/sampleeditor.js");
+      await openInstSampleEditor(this.store, this.selected);
+      this.renderPanel();
+    });
+    editRow.append(editLab, editBtn);
+
     this.group("Sample",
       this.numRow("Sample ptr", inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v), { ann: annHex6 }),
       this.numRow("Sample len", inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
@@ -398,6 +425,7 @@ export class InstrumentsView {
         (v) => this.setField("loopMode", (inst.loopMode & ~3) | v)),
       this.selectRow("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
         (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
+      editRow,
     );
 
     this.group("Tuning", this.detuneRow(inst));
@@ -844,7 +872,7 @@ export class InstrumentsView {
       const tr = document.createElement("tr");
       tr.innerHTML =
         `<td>${i}</td>` +
-        `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ${escape(doc.instrumentName(l.instIdx) || "")}</td>` +
+        `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>` +
         `<td>${l.mixOctet}</td><td>${l.detune}</td>` +
         `<td>${noteToStr(l.pitchStart)}‥${noteToStr(l.pitchEnd)}</td>` +
         `<td>${l.volStart}‥${l.volEnd}</td>`;

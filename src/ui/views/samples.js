@@ -5,6 +5,8 @@
 
 import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
+import { unescapeName } from "../names.js";
+import { t } from "../i18n.js";
 
 export class SamplesView {
   constructor(store, host) {
@@ -23,13 +25,13 @@ export class SamplesView {
     this.toolbar = document.createElement("div");
     this.toolbar.className = "smp-toolbar";
     this.editBtn = document.createElement("button");
-    this.editBtn.textContent = "Edit…";
-    this.editBtn.title = "Open the sample editor (loop points, normalise/fade/reverse, audition)";
+    this.editBtn.textContent = t("smp.edit");
+    this.editBtn.title = "Open the sample DSP editor (normalise/fade/reverse — affects every instrument using the sample)";
     this.editBtn.addEventListener("click", async () => {
       const s = this.list?.[this.selected];
       if (!s) return;
-      const { openSampleEditor } = await import("../popups/sampleeditor.js");
-      await openSampleEditor(this.store, s);
+      const { openSampleDspEditor } = await import("../popups/sampleeditor.js");
+      await openSampleDspEditor(this.store, s);
       this.refresh();
     });
     this.toolbar.appendChild(this.editBtn);
@@ -63,7 +65,7 @@ export class SamplesView {
       row.innerHTML =
         `<span class="dot"></span>` +
         `<span class="idx">${String(i).padStart(3, "0")}</span>` +
-        `<span class="name">${escape(s.name || "(unnamed)")}</span>` +
+        `<span class="name">${escape(unescapeName(s.name) || "(unnamed)")}</span>` +
         `<span class="dim">${(s.len / 1024).toFixed(1)}K</span>`;
       row.addEventListener("click", () => { this.selected = i; this.refresh(); });
       this.listEl.appendChild(row);
@@ -89,7 +91,7 @@ export class SamplesView {
     if (!s) { this.info.textContent = "no samples"; return; }
     const loopModes = ["no loop", "forward", "ping-pong", "one-shot"];
     this.info.innerHTML =
-      `<b>${escape(s.name || "(unnamed)")}</b> · ptr 0x${s.ptr.toString(16).toUpperCase()} · ` +
+      `<b>${escape(unescapeName(s.name) || "(unnamed)")}</b> · ptr 0x${s.ptr.toString(16).toUpperCase()} · ` +
       `${s.len} bytes · ${s.rate} Hz@C4 · ${loopModes[s.loopMode & 3]}` +
       `${(s.loopMode & 3) !== 0 ? ` [${s.loopStart}..${s.loopEnd}]` : ""}` +
       `${(s.loopMode & 4) !== 0 ? " · sustain" : ""}` +

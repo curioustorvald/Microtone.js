@@ -7,6 +7,7 @@
 //           | {kind:"scalar", song, key} | {kind:"inst", slot} | {kind:"bank"}
 
 import { applyPlan, captureBankState, restoreBankState } from "./bankmerge.js";
+import { TaudPlayData } from "../engine/state.js";
 
 export function setCellOp(song, pat, row, fields, gestureId = null) {
   return {
@@ -168,6 +169,93 @@ export function setEnvArrayOp(slot, envKey, newNodes, gestureId = null) {
       return setEnvArrayOp(slot, envKey, prev, gestureId);
     },
     dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
+/** Replace a whole pattern's 512-byte image (lengthen/shorten-style edits). */
+export function setPatternBytesOp(song, pat, bytes, gestureId = null) {
+  return {
+    type: "setPatternBytes",
+    song, pat, bytes, gestureId,
+    coalesceKey: `patbytes:${song}:${pat}`,
+    apply(doc) {
+      const rows = doc.songs[song].patterns[pat];
+      const prev = new Uint8Array(512);
+      for (let r = 0; r < 64; r++) {
+        for (let b = 0; b < 8; b++) {
+          prev[r * 8 + b] = rows[r].getByte(b);
+          rows[r].setByte(b, bytes[r * 8 + b]);
+        }
+      }
+      doc.dirty = true;
+      return setPatternBytesOp(song, pat, prev, gestureId);
+    },
+    dirty: () => [{ kind: "pattern", song, pat }],
+  };
+}
+
+/** Append a new pattern (512-byte image) at the end of the song's list —
+ *  the Pattern view's Duplicate. Inverse pops it again; that is safe in the
+ *  LIFO undo order because any later op that references the new index (a cue
+ *  edit, say) is necessarily undone first. */
+export function appendPatternOp(song, bytes, gestureId = null) {
+  return {
+    type: "appendPattern",
+    song, bytes, gestureId,
+    coalesceKey: `addpat:${song}`,
+    apply(doc) {
+      const rows = new Array(64);
+      for (let r = 0; r < 64; r++) {
+        const cell = new TaudPlayData();
+        for (let b = 0; b < 8; b++) cell.setByte(b, bytes[r * 8 + b]);
+        rows[r] = cell;
+      }
+      doc.songs[song].patterns.push(rows);
+      doc.dirty = true;
+      return removeLastPatternOp(song, gestureId);
+    },
+    // called post-apply: length-1 IS the new pattern's index
+    dirty: (doc) => [{ kind: "pattern", song, pat: doc.songs[song].patterns.length - 1 }],
+  };
+}
+
+function removeLastPatternOp(song, gestureId = null) {
+  return {
+    type: "removeLastPattern",
+    song, gestureId,
+    coalesceKey: `addpat:${song}`,
+    apply(doc) {
+      const removed = doc.songs[song].patterns.pop();
+      const bytes = new Uint8Array(512);
+      for (let r = 0; r < 64; r++) {
+        for (let b = 0; b < 8; b++) bytes[r * 8 + b] = removed[r].getByte(b);
+      }
+      doc.dirty = true;
+      return appendPatternOp(song, bytes, gestureId);
+    },
+    // post-apply: the removed index (patternBytes serves an empty image for
+    // it, so the sync flush blanks the worklet's copy)
+    dirty: (doc) => [{ kind: "pattern", song, pat: doc.songs[song].patterns.length }],
+  };
+}
+
+/** Bulk note edit driven by a mutator: `fn(songObj)` changes cell notes and
+ *  returns [{pat, row, prev}] (the retuneAllPatterns contract). Transpose
+ *  uses this; the inverse is a plain note restore. */
+export function bulkNotesOp(song, fn, gestureId = null) {
+  return {
+    type: "bulkNotes",
+    song, gestureId,
+    coalesceKey: `bulknotes:${song}`,
+    apply(doc) {
+      this._changes = fn(doc.songs[song]);
+      doc.dirty = true;
+      return restoreNotesOp(song, this._changes, gestureId);
+    },
+    dirty(doc) {
+      const pats = new Set((this._changes ?? []).map((c) => c.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
   };
 }
 

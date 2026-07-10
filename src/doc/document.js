@@ -7,6 +7,7 @@ import { TaudPlayData } from "../engine/state.js";
 import { decodeInstWord, INST_PATLEN, INST_HALTAT, INST_HALT, INST_GOBACK, INST_SKIP, INST_JUMP } from "../engine/state.js";
 import { TaudInst, parsePatchesBlob } from "../engine/inst.js";
 import { CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
+import { emptyPatternBytes } from "./patterntools.js";
 import { cueInstructionWords } from "../format/taud-parse.js";
 import { writeTaud } from "../format/taud-write.js";
 
@@ -344,9 +345,12 @@ export class Document {
     });
   }
 
-  /** Encode one pattern back to its 512-byte image (worklet sync). */
+  /** Encode one pattern back to its 512-byte image (worklet sync). An index
+   *  past the end (a just-undone append) serves the empty-cell image so the
+   *  sync flush blanks the worklet's stale copy. */
   patternBytes(songIdx, patIdx) {
-    return encodePattern(this.songs[songIdx].patterns[patIdx]);
+    const rows = this.songs[songIdx].patterns[patIdx];
+    return rows ? encodePattern(rows) : emptyPatternBytes();
   }
 
   /** Parsed-shape view for offline rendering (offline-render.js) — includes

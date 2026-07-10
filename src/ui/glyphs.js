@@ -25,6 +25,13 @@ export const NOTE_CELL_CHARS = 4;
 export const GLYPH = {
   lineWidth: 1.3,
 
+  // Vertical shift of EVERY vector-drawn component (sentinels, accidentals,
+  // ticks, naturals) as a fraction of row height, positive = down. The text
+  // parts of a cell (letter, octave digit) sit on the FONT's own baseline,
+  // which moves when the grid font changes (--cv-font) — tune this until the
+  // vectors line up with the new font. Live slider in glyph-gallery.html.
+  baselineOffset: -0.03,
+
   // sentinels (fractions of the full 4-char cell)
   keyoffW: 0.76,      // box width
   keyoffH: 0.28,      // box height
@@ -262,7 +269,11 @@ function drawTickCode(ctx, code, x, y, w, h) {
  */
 export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, rawMode = false) {
   const cellW = charW * NOTE_CELL_CHARS;
+  const x1 = x + 0;
   const midY = y + rowH / 2;
+  // Vector components shift by the baseline axis; fillText stays on the
+  // font's own baseline (it IS the reference being matched).
+  const dy = rowH * GLYPH.baselineOffset;
 
   if (note === 0x0000) {
     ctx.fillStyle = palette.dim;
@@ -279,10 +290,10 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
     ctx.lineWidth = GLYPH.lineWidth;
     ctx.lineJoin = "miter";
     switch (note) {
-      case 0x0001: drawKeyOff(ctx, x, y, cellW, rowH); break;
-      case 0x0002: drawCut(ctx, x, y, cellW, rowH, false); break;
-      case 0x0003: drawFade(ctx, x, y, cellW, rowH); break;
-      case 0x0004: drawCut(ctx, x, y, cellW, rowH, true); break; // cut, mirrored
+      case 0x0001: drawKeyOff(ctx, x, y + dy, cellW, rowH); break;
+      case 0x0002: drawCut(ctx, x, y + dy, cellW, rowH, false); break;
+      case 0x0003: drawFade(ctx, x, y + dy, cellW, rowH); break;
+      case 0x0004: drawCut(ctx, x, y + dy, cellW, rowH, true); break; // cut, mirrored
     }
     return;
   }
@@ -324,14 +335,14 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
 
   if (symb.tick !== " ") {
     // Kite: [tick][letter][compact accidental][octave]
-    drawTickCode(ctx, symb.tick, x, y + 1, charW, rowH - 2);
+    drawTickCode(ctx, symb.tick, x1, y + 1 + dy, charW, rowH - 2);
     ctx.fillText(symb.letter, x + charW * 1.1, midY);
-    drawAccidental(ctx, symb.acc, x + charW * 1.8, y + 2, charW * 1.5, rowH - 4);
+    drawAccidental(ctx, symb.acc, x + charW * 1.8, y + 2 + dy, charW * 1.5, rowH - 4);
     ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
   } else {
     // Normal presets: [letter][ accidental spanning TWO cells ][octave]
     ctx.fillText(symb.letter, x + charW * 0.1, midY);
-    drawAccidental(ctx, symb.acc, x + charW * 1.05, y + 2, charW * 1.9, rowH - 4);
+    drawAccidental(ctx, symb.acc, x1 + charW * 1.05, y + 2 + dy, charW * 1.9, rowH - 4);
     ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
   }
 }
