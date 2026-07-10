@@ -3,6 +3,7 @@
 
 import * as opfs from "../../storage/opfs.js";
 import { pickFile, download } from "../../storage/import-export.js";
+import { converterFor, CONVERT_ACCEPT } from "../../convert/convert.js";
 import { showModal } from "../widgets/modal.js";
 import { renderToWav } from "../../audio/offline-render.js";
 
@@ -28,7 +29,7 @@ export class FilesView {
     bar.className = "files-bar";
     const saveBtn = mkBtn("Save", () => this.save());
     const saveAsBtn = mkBtn("Save As…", () => this.saveAs());
-    const importBtn = mkBtn("Import…", () => this.import());
+    const importBtn = mkBtn("Import Taud/Module…", () => this.import());
     const exportBtn = mkBtn("Export ⬇", () => this.export());
     const wavBtn = mkBtn("Export WAV…", () => this.exportWav());
     bar.append(saveBtn, saveAsBtn, importBtn, exportBtn, wavBtn);
@@ -106,10 +107,14 @@ export class FilesView {
   }
 
   async import() {
-    const file = await pickFile();
+    // no .mid here — MIDI import (with its soundfont choice) is the topbar button
+    const file = await pickFile(".taud,.tsii,.tpif," +
+      CONVERT_ACCEPT.split(",").filter((e) => !e.startsWith(".mid")).join(","));
     if (!file) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
-    if (await opfs.available()) await opfs.write(file.name, bytes);
+    // Foreign formats are converted by openBytes → the user saves the RESULT;
+    // only native containers land in OPFS verbatim.
+    if (!converterFor(file.name) && await opfs.available()) await opfs.write(file.name, bytes);
     await this.cb.openBytes(file.name, bytes);
     this.refresh();
   }

@@ -35,6 +35,7 @@ export class TimelineView {
     store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.invalidate(); });
     store.on("edit", () => { this.map = null; this.invalidate(); });
     store.on("cursor", () => this.invalidate());
+    store.on("mutes", () => this.invalidate());
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -123,7 +124,16 @@ export class TimelineView {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    if (y < HEADER_H) return; // header clicks (mute) come with M6
+    if (y < HEADER_H) {
+      // channel header: click = mute toggle, Ctrl/⌘+click = solo toggle
+      const ch = this.scrollCh + Math.floor((x - GUTTER_W) / COL_W);
+      if (x >= GUTTER_W && ch >= this.scrollCh &&
+          ch < (this.store.doc?.channelCount ?? 0)) {
+        if (e.ctrlKey || e.metaKey) this.store.toggleSolo(ch);
+        else this.store.toggleMute(ch);
+      }
+      return;
+    }
     const hit = this.hitTest(x, y);
     if (!hit) return;
     this.store.cursor = hit;
@@ -259,7 +269,7 @@ export class TimelineView {
     const c = store.cursor;
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, target.cell,
-      { octave: jam.octave, currentInst: jam.currentInst });
+      { octave: jam.octave, currentInst: jam.currentInst, preset: store.pitchPreset });
     if (!action) return false;
 
     if (action.fields) {
@@ -386,6 +396,17 @@ export class TimelineView {
           CHAR_W, 15, headPal, store.rawNoteView);
         ctx.fillStyle = C.dim;
         ctx.fillText(hex2(audio.getVoiceInstrument(ch)), x + 4 + 5 * CHAR_W, 40.5);
+      }
+      // muted channel: dim the header, MUTE tag over the meters
+      if (store.voiceMutes[ch]) {
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = C.bg;
+        ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = C.fg2;
+        ctx.textAlign = "center";
+        ctx.fillText("MUTE", x + (COL_W - 2) / 2, 20);
+        ctx.textAlign = "left";
       }
     }
 

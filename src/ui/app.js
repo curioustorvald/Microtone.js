@@ -3,7 +3,7 @@
 // + Cues + Files views. Samples/Instruments/Project views come with M7.
 
 import { parseTaud } from "../format/taud-parse.js";
-import { Document } from "../doc/document.js";
+import { Document, combineTpif } from "../doc/document.js";
 import { DocSync } from "../doc/sync.js";
 import { UndoStack } from "../doc/undo.js";
 import { AudioSystem } from "../audio/audio-system.js";
@@ -23,6 +23,10 @@ import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showModal } from "./widgets/modal.js";
 import * as opfs from "../storage/opfs.js";
+import { pickFile } from "../storage/import-export.js";
+import { convertToTaud, converterFor, CONVERT_ACCEPT } from "../convert/convert.js";
+import { showImportProgress } from "./popups/importlog.js";
+import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange } from "./theme.js";
 
@@ -56,6 +60,8 @@ async function ensureAudio() {
   if (store.doc && !store.sync) {
     store.sync = new DocSync(store.audio, store.doc, store.songIndex);
     store.sync.loadAll();
+    // mutes toggled before the first audio gesture only exist in the store
+    store.voiceMutes.forEach((m, ch) => { if (m) store.audio.setVoiceMute(0, ch, true); });
   }
   const badge = $("audioBadge");
   if (store.audio.running) {
@@ -67,8 +73,39 @@ for (const ev of ["pointerdown", "keydown"]) {
   window.addEventListener(ev, () => { if (audioInitPromise) ensureAudio(); }, { capture: true });
 }
 
+// ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
+
+async function convertImport(name, bytes, sf2Override = null) {
+  let sf2 = sf2Override;
+  if (!sf2 && converterFor(name).isMidi) {
+    $("stFile").textContent = "MIDI import needs a soundfont — bundled GeneralUser or pick an .sf2";
+    sf2 = await getSoundfont();
+    if (!sf2) { $("stFile").textContent = "MIDI import cancelled (no soundfont)"; return null; }
+  }
+  const progress = showImportProgress(`Importing ${name}`);
+  try {
+    const out = await convertToTaud(name, bytes, { sf2, onStatus: progress.log });
+    progress.done();
+    return out;
+  } catch (err) {
+    const last = err.message.trim().split("\n").pop();
+    progress.fail(last);
+    $("stFile").textContent = `import ${name} failed: ${last}`;
+    console.error("import failed:", err);
+    return null;
+  }
+}
+
 // ── document loading ──
-async function loadBytes(name, bytes) {
+async function loadBytes(name, bytes, { sf2 = null } = {}) {
+  let converted = false;
+  if (converterFor(name)) {
+    bytes = await convertImport(name, bytes, sf2);
+    if (bytes === null) return;
+    name = name.replace(/\.[^.]+$/, "") + ".taud";
+    converted = true;
+  }
+
   let parsed;
   try {
     parsed = parseTaud(bytes);
@@ -105,9 +142,32 @@ async function loadBytes(name, bytes) {
     }
     return;
   }
-  if (parsed.kind !== "taud") {
-    $("stFile").textContent = `.${parsed.kind} needs its companion .tsii loaded first (open the .tsii, then the .tpif — full support is future work)`;
-    return;
+  // .tpif = one song's patterns over a resident bank (taud.mjs:173). Combine
+  // it with the current project's bank when one is loaded, else prompt for
+  // the companion .tsii; the result is a full (unsaved) .taud document.
+  if (parsed.kind === "tpif") {
+    let bank;
+    if (store.doc?.sampleInstImage) {
+      store.doc._rebuildInstRegion(); // decoded inst edits are canonical
+      bank = store.doc;
+    } else {
+      $("stFile").textContent = `${name} carries patterns only — pick its companion .tsii bank`;
+      const bankFile = await pickFile(".tsii,.taud");
+      if (!bankFile) return;
+      try {
+        bank = parseTaud(new Uint8Array(await bankFile.arrayBuffer()));
+      } catch (err) {
+        $("stFile").textContent = `parse error in ${bankFile.name}: ${err.message}`;
+        return;
+      }
+      if (!bank.sampleInstImage) {
+        $("stFile").textContent = `${bankFile.name} carries no sample+instrument bank`;
+        return;
+      }
+    }
+    parsed = combineTpif(bank, parsed);
+    name = name.replace(/\.[^.]+$/, "") + ".taud";
+    converted = true; // synthesised container — load it unsaved
   }
 
   if (store.doc?.dirty) {
@@ -115,6 +175,7 @@ async function loadBytes(name, bytes) {
   }
   store.audio?.stop(0);
   store.doc = new Document(parsed);
+  store.clearMutes(); // per-song UI state (taut finishLoadCommon)
   store.fileName = name;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
@@ -142,6 +203,7 @@ async function loadBytes(name, bytes) {
 
   $("emptyState").hidden = true;
   showView("timeline");
+  if (converted) store.doc.dirty = true; // imported, not yet saved anywhere
   updateStatus();
   store.emit("doc");
 }
@@ -149,7 +211,7 @@ async function loadBytes(name, bytes) {
 function updateStatus() {
   const doc = store.doc;
   $("stFile").textContent = doc
-    ? `${store.fileName ?? "untitled"} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} song(s) · ${doc.channelCount}ch`
+    ? `${store.fileName ?? "untitled"} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount}ch`
     : "no file";
   $("stDirty").hidden = !doc?.dirty;
   $("octDisp").textContent = jam.octave;
@@ -170,6 +232,7 @@ function updateUndoUI() {
 }
 store.on("saved", updateStatus);
 store.on("edit", updateUndoUI);
+store.on("status", updateStatus); // e.g. project rename
 
 /** New Project wizard — optionally seeded from a .tsii instrument bank. */
 async function newProject({ fromBank = null, bankName = null } = {}) {
@@ -280,7 +343,36 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
 }
 
 $("newBtn").addEventListener("click", () => newProject());
+// Open takes native containers + tracker files; MIDI goes through the
+// dedicated Import MIDI… button (explicit soundfont choice). Drag-drop and
+// ?load= still accept .mid via the automatic bundled-else-picker path.
+const OPEN_ACCEPT = ".taud,.tsii,.tpif," +
+  CONVERT_ACCEPT.split(",").filter((e) => !e.startsWith(".mid")).join(",");
+$("fileInput").accept = OPEN_ACCEPT;
 $("openBtn").addEventListener("click", () => $("fileInput").click());
+
+$("importMidiBtn").addEventListener("click", async () => {
+  const file = await pickFile(".mid,.midi");
+  if (!file) return;
+  const bundledAvail = (await getBundledSoundfont()) !== null;
+  const choice = await showModal({
+    title: `Import ${file.name}`,
+    body: "The MIDI is converted through a SoundFont's instruments.",
+    fields: [{
+      name: "sf", label: "Soundfont", type: "select",
+      value: bundledAvail ? "bundled" : "own",
+      options: [
+        ...(bundledAvail ? [{ value: "bundled", label: "Bundled GeneralUser-GS.sf2" }] : []),
+        { value: "own", label: "Choose an .sf2 file…" },
+      ],
+    }],
+    okLabel: "Import",
+  });
+  if (!choice) return;
+  const sf2 = choice.sf === "bundled" ? await getBundledSoundfont() : await pickUserSoundfont();
+  if (!sf2) { $("stFile").textContent = "MIDI import cancelled (no soundfont)"; return; }
+  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()), { sf2 });
+});
 $("fileInput").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   if (f) await loadBytes(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -311,6 +403,7 @@ function rebuildSongList() {
 function selectSong(index) {
   store.songIndex = Math.min(Math.max(index, 0), store.doc.songs.length - 1);
   $("songSel").value = store.songIndex;
+  store.clearMutes(); // per-song state (taut finishLoadCommon)
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
   store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120);
   if (store.audio) {
@@ -323,6 +416,23 @@ function selectSong(index) {
 }
 
 $("songSel").addEventListener("change", (e) => selectSong(parseInt(e.target.value, 10)));
+
+// ✎ — rename the current song (same escape rules as the Project view; the
+// actual write goes through ProjectView.changeName so there is one code path).
+$("songRenameBtn").addEventListener("click", async () => {
+  if (!store.doc) return;
+  const sm = store.doc.meta.songMeta[store.songIndex];
+  const result = await showModal({
+    title: `Rename song ${store.songIndex}`,
+    body: "",
+    fields: [{ name: "name", label: "Name", value: sm?.name ?? "" }],
+    okLabel: "Rename",
+  });
+  if (result === null) return;
+  projectView.changeName(result.name);
+  rebuildSongList();
+  updateStatus();
+});
 
 // Project view add/remove-song: rebuild the picker + switch to the target song.
 store.on("songs", (payload) => {
@@ -587,6 +697,14 @@ window.addEventListener("keydown", (e) => {
         }
         return;
       }
+      // Mute/solo on the cursor channel — navigate mode only, like taut
+      // (in record mode M and N stay piano keys).
+      case "KeyM":
+        if (!store.record) { e.preventDefault(); store.toggleMute(store.cursor.ch); return; }
+        break;
+      case "KeyN":
+        if (!store.record) { e.preventDefault(); store.toggleSolo(store.cursor.ch); return; }
+        break;
     }
     if (store.record && timeline.processEditKey(e, jam)) {
       e.preventDefault();
@@ -684,7 +802,7 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, jam, loadBytes };
+window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, projectView, jam, loadBytes };
 
 // ── frame loop ──
 function frame() {

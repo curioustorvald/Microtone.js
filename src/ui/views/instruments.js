@@ -4,7 +4,9 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp } from "../../doc/ops.js";
+import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp } from "../../doc/ops.js";
+import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
+import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
@@ -60,6 +62,7 @@ export class InstrumentsView {
     this.visible = false;
     this.dragState = null;
     this.selectedNode = 0; // envelope node targeted by the spinner controls
+    this.envLogTime = false; // logarithmic time axis for the envelope graph
 
     this.root = document.createElement("div");
     this.root.className = "split-view";
@@ -77,11 +80,14 @@ export class InstrumentsView {
 
     store.on("doc", () => { this.selected = 1; if (this.visible) this.refresh(); });
     store.on("edit", (tags) => {
-      // Suppress the rebuild WHILE an envelope node is being dragged — each
-      // drag step fires an inst edit, and re-rendering would detach the canvas
-      // (killing pointer capture). The graph repaints in-place via drawEnvGraph.
-      if (this.dragState) return;
-      if (this.visible && tags?.some?.((t) => t.kind === "inst")) this.renderPanel();
+      // Suppress the rebuild WHILE an envelope node or a General-tab slider is
+      // being dragged — each drag step fires an inst edit, and re-rendering
+      // would detach the canvas/control (killing pointer capture). The graph
+      // repaints in-place via drawEnvGraph; sliders update themselves.
+      if (this.dragState || this._quiet) return;
+      if (!this.visible) return;
+      if (tags?.some?.((t) => t.kind === "bank")) this.refresh(); // import/undo — slots changed
+      else if (tags?.some?.((t) => t.kind === "inst")) this.renderPanel();
     });
   }
 
@@ -93,6 +99,27 @@ export class InstrumentsView {
     this.listEl.innerHTML = "";
     this.rowEls = [];
     if (!doc) return;
+    const bar = document.createElement("div");
+    bar.className = "side-toolbar";
+    const adopt = (res) => {
+      if (!res) return;
+      this.selected = res.firstSlot;
+      this.jam.currentInst = res.firstSlot;
+      this.refresh();
+    };
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Add…";
+    addBtn.title = "Add instruments from the bundled GeneralUser-GS soundfont (or a picked .sf2)";
+    addBtn.addEventListener("click", async () => {
+      const sf2 = await getSoundfont();
+      if (sf2) adopt(await importFromSf2(this.store, sf2.name, sf2.bytes));
+    });
+    const importBtn = document.createElement("button");
+    importBtn.textContent = "Import…";
+    importBtn.title = "Import instruments (with samples and patches) from a .taud, .tsii or .sf2 file";
+    importBtn.addEventListener("click", async () => adopt(await showImportInstruments(this.store)));
+    bar.append(addBtn, importBtn);
+    this.listEl.appendChild(bar);
     for (const slot of doc.usedInstrumentSlots()) {
       const inst = doc.instruments[slot];
       const row = document.createElement("div");
@@ -158,122 +185,222 @@ export class InstrumentsView {
     else if (this.tab === "meta") this.renderMeta(inst);
   }
 
-  field(label, value, min, max, onChange) {
-    const wrap = document.createElement("label");
-    wrap.className = "inst-field";
-    wrap.textContent = label;
-    const input = document.createElement("input");
-    input.type = "number";
-    input.value = value;
-    input.min = min;
-    input.max = max;
-    input.addEventListener("change", () => {
-      const v = Math.min(Math.max(parseInt(input.value || "0", 10), min), max);
-      input.value = v;
-      onChange(v);
-    });
-    wrap.appendChild(input);
-    return wrap;
-  }
-
-  select(label, value, options, onChange) {
-    const wrap = document.createElement("label");
-    wrap.className = "inst-field";
-    wrap.textContent = label;
-    const sel = document.createElement("select");
-    options.forEach(([v, text]) => {
-      const o = document.createElement("option");
-      o.value = v;
-      o.textContent = text;
-      sel.appendChild(o);
-    });
-    sel.value = value;
-    sel.addEventListener("change", () => onChange(parseInt(sel.value, 10)));
-    wrap.appendChild(sel);
-    return wrap;
-  }
-
   setField(key, value) {
     this.store.undo.apply(setInstFieldOp(this.selected, key, value));
   }
 
-  /** A titled group of fields (taut.js drawGroupHeader layout: fields grouped
-   *  by function — Volume / Panning / Filter / Vibrato / Note actions / …). */
-  group(title, ...fields) {
+  /** Apply an inst op WITHOUT rebuilding the panel — for slider drags whose
+   *  widgets update themselves in place (a rebuild would detach the control
+   *  mid-drag). The engine still re-syncs via the dirty tag. */
+  applyQuiet(op) {
+    this._quiet = true;
+    try { this.store.undo.apply(op); }
+    finally { this._quiet = false; }
+  }
+
+  /** A titled group of stacked field rows (taut.js drawGroupHeader layout —
+   *  Volume / Panning / Filter / Vibrato / Note actions / …). */
+  group(title, ...rows) {
     const head = document.createElement("div");
     head.className = "inst-group-head";
     head.textContent = title;
     this.panel.appendChild(head);
-    const grid = document.createElement("div");
-    grid.className = "inst-grid";
-    grid.append(...fields.filter(Boolean));
-    this.panel.appendChild(grid);
+    const box = document.createElement("div");
+    box.className = "inst-rows";
+    box.append(...rows.filter(Boolean));
+    this.panel.appendChild(box);
+  }
+
+  /** label · editable number spinner · annotation · range slider. `onChange`
+   *  receives (value, gestureId); a range drag reuses one gestureId so it
+   *  collapses to a single undo step. `opts`: {ann, wide}. */
+  sliderRow(label, value, min, max, onChange, opts = {}) {
+    const row = document.createElement("div");
+    row.className = "slider-row" + (opts.wide ? " wide" : "");
+    const lab = document.createElement("span");
+    lab.className = "sl-label"; lab.textContent = label;
+    const num = document.createElement("input");
+    num.type = "number"; num.className = "sl-num";
+    num.min = min; num.max = max; num.value = value;
+    const ann = document.createElement("span");
+    ann.className = "sl-ann";
+    const range = document.createElement("input");
+    range.type = "range"; range.className = "sl-range";
+    range.min = min; range.max = max; range.step = 1;
+    range.value = clampN(value, min, max);
+
+    const paint = (v) => { if (opts.ann) ann.textContent = opts.ann(v); };
+    paint(value);
+
+    let gid = null;
+    const commit = (v, g) => {
+      v = clampN(Math.round(v), min, max);
+      num.value = v; range.value = v; paint(v);
+      onChange(v, g);
+    };
+    range.addEventListener("pointerdown", () => { gid = "sl" + Date.now() + Math.random(); });
+    range.addEventListener("keydown", () => { if (!gid) gid = "sl" + Date.now(); });
+    range.addEventListener("input", () => commit(parseFloat(range.value), gid ?? ("sl" + Date.now())));
+    range.addEventListener("change", () => { gid = null; });
+    num.addEventListener("change", () => commit(parseInt(num.value || "0", 10), null));
+
+    row.append(lab, num, ann, range);
+    return row;
+  }
+
+  /** Spinner-only row (values whose range is too wide for a useful slider). */
+  numRow(label, value, min, max, onChange, opts = {}) {
+    const row = document.createElement("div");
+    row.className = "slider-row noslider";
+    const lab = document.createElement("span");
+    lab.className = "sl-label"; lab.textContent = label;
+    const num = document.createElement("input");
+    num.type = "number"; num.className = "sl-num wide"; num.min = min; num.max = max; num.value = value;
+    const ann = document.createElement("span");
+    ann.className = "sl-ann";
+    if (opts.ann) ann.textContent = opts.ann(value);
+    num.addEventListener("change", () => {
+      const v = clampN(parseInt(num.value || "0", 10), min, max);
+      num.value = v; if (opts.ann) ann.textContent = opts.ann(v);
+      onChange(v);
+    });
+    row.append(lab, num, ann);
+    return row;
+  }
+
+  /** label · checkbox (with on/off text) row. */
+  checkRow(label, checked, onChange) {
+    const row = document.createElement("div");
+    row.className = "slider-row check";
+    const lab = document.createElement("span");
+    lab.className = "sl-label"; lab.textContent = label;
+    const wrap = document.createElement("label");
+    wrap.className = "sl-check";
+    const c = document.createElement("input");
+    c.type = "checkbox"; c.checked = checked;
+    c.addEventListener("change", () => onChange(c.checked));
+    wrap.append(c, document.createTextNode(checked ? "on" : "off"));
+    row.append(lab, wrap);
+    return row;
+  }
+
+  selectRow(label, value, options, onChange) {
+    const row = document.createElement("div");
+    row.className = "slider-row select";
+    const lab = document.createElement("span");
+    lab.className = "sl-label"; lab.textContent = label;
+    const sel = document.createElement("select");
+    sel.className = "sl-select";
+    options.forEach(([v, text]) => {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = text; sel.appendChild(o);
+    });
+    sel.value = value;
+    sel.addEventListener("change", () => onChange(parseInt(sel.value, 10)));
+    row.append(lab, sel);
+    return row;
+  }
+
+  /** WIDE detune slider (±1 octave interactive range) with an editable signed
+   *  spinner plus hex-word and cents readout (taut.js detuneRow). */
+  detuneRow(inst) {
+    const min = -4096, max = 4096;
+    const value = inst.sampleDetuneSigned;
+    const ann = (v) =>
+      `$${(v & 0xffff).toString(16).toUpperCase().padStart(4, "0")} · ` +
+      `${((v * 1200) / 4096).toFixed(1)} cents, 4096-TET`;
+    return this.sliderRow("Detune", value, min, max,
+      (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, "sampleDetune", v & 0xffff, gid)),
+      { ann, wide: true });
   }
 
   renderGeneral(inst) {
+    const fSet = (key) => (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, key, v, gid));
+    const flagSet = (mask, shift) => (v) =>
+      this.setField("instrumentFlag", (inst.instrumentFlag & ~(mask << shift)) | ((v & mask) << shift));
     const fadeout = inst.volumeFadeoutLow | ((inst.fadeoutHigh & 0x0f) << 8);
+    const sfMode = inst.filterSfMode;
+    // NNA UI value: 4 = Key Lift (flag bit 5), else 0..3 (flag bits 0-1).
+    const nna = ((inst.instrumentFlag >> 5) & 1) ? 4 : (inst.instrumentFlag & 3);
 
     this.group("Volume",
-      this.field("Global vol", inst.instGlobalVolume, 0, 255, (v) => this.setField("instGlobalVolume", v)),
-      this.field("Default note vol", inst.defaultNoteVolume, 0, 255, (v) => this.setField("defaultNoteVolume", v)),
-      this.field("Fadeout (12-bit)", fadeout, 0, 4095, (v) => {
-        this.setField("volumeFadeoutLow", v & 0xff);
-        this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f));
-      }),
+      this.sliderRow("Global vol", inst.instGlobalVolume, 0, 255, fSet("instGlobalVolume"), { ann: annHex2 }),
+      this.sliderRow("Default note vol", inst.defaultNoteVolume, 0, 255, fSet("defaultNoteVolume"), { ann: annHex2 }),
+      this.sliderRow("Fadeout", fadeout, 0, 4095, (v, gid) =>
+        this.applyQuiet(setInstBytesOp(this.selected,
+          [[172, v & 0xff], [173, (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f)]], gid)),
+        { ann: annFadeout }),
+      this.sliderRow("Swing", inst.volumeSwing, 0, 255, fSet("volumeSwing"), { ann: annHex2 }),
     );
 
     this.group("Panning",
-      this.field("Default pan", inst.defaultPan, 0, 255, (v) => this.setField("defaultPan", v)),
+      this.sliderRow("Default pan", inst.defaultPan, 0, 255, fSet("defaultPan"), { ann: annHex2 }),
+      this.sliderRow("Pitch-pan sep", inst.pitchPanSeparation, -128, 127, fSet("pitchPanSeparation")),
+      this.sliderRow("Pan swing", inst.panSwing, 0, 255, fSet("panSwing"), { ann: annHex2 }),
+      this.sliderRow("Pitch-pan centre", inst.pitchPanCentre, 0, 0xffff, fSet("pitchPanCentre"), { ann: annHex4 }),
+      // Pan LOOP word bit 7 = "use default pan" (engine trigger.js:280).
+      this.checkRow("Use default pan", ((inst.panEnvLoop >> 7) & 1) !== 0,
+        (on) => this.setEnvWordBit("panEnvLoop", 7, on)),
     );
 
     this.group("Filter",
-      this.select("Mode", (inst.fadeoutHigh >> 4) & 1, [[0, "IT"], [1, "SoundFont"]],
+      this.selectRow("Mode", sfMode ? 1 : 0, [[0, "ImpulseTracker"], [1, "SoundFont2"]],
         (v) => this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x0f) | (v << 4))),
-      this.field("Cutoff", inst.defaultCutoff, 0, 255, (v) => this.setField("defaultCutoff", v)),
-      this.field("Resonance", inst.defaultResonance, 0, 255, (v) => this.setField("defaultResonance", v)),
+      sfMode
+        // SoundFont: 16-bit cutoff (absolute cents, bytes 182/252) → Hz,
+        // resonance (centibels above DC gain, bytes 183/253) → dB.
+        ? this.sliderRow("Cutoff", inst.defaultCutoff16, 1500, 13500, (v, gid) =>
+            this.applyQuiet(setInstBytesOp(this.selected, [[182, (v >> 8) & 0xff], [252, v & 0xff]], gid)),
+            { ann: annSfCutoff })
+        : this.sliderRow("Cutoff", inst.defaultCutoff, 0, 255, fSet("defaultCutoff"), { ann: annFilter }),
+      sfMode
+        ? this.sliderRow("Resonance", inst.defaultResonance16, 0, 960, (v, gid) =>
+            this.applyQuiet(setInstBytesOp(this.selected, [[183, (v >> 8) & 0xff], [253, v & 0xff]], gid)),
+            { ann: annSfReso })
+        : this.sliderRow("Resonance", inst.defaultResonance, 0, 255, fSet("defaultResonance"), { ann: annFilter }),
     );
 
     this.group("Vibrato",
-      this.select("Wave", (inst.instrumentFlag >> 2) & 7,
+      this.selectRow("Wave", (inst.instrumentFlag >> 2) & 7,
         [[0, "sine"], [1, "ramp down"], [2, "square"], [3, "random"], [4, "ramp up"]],
-        (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~0x1c) | (v << 2))),
-      this.field("Speed", inst.vibratoSpeed, 0, 255, (v) => this.setField("vibratoSpeed", v)),
-      this.field("Depth", inst.vibratoDepth, 0, 255, (v) => this.setField("vibratoDepth", v)),
-      this.field("Sweep", inst.vibratoSweep, 0, 255, (v) => this.setField("vibratoSweep", v)),
-      this.field("Rate", inst.vibratoRate, 0, 255, (v) => this.setField("vibratoRate", v)),
+        flagSet(7, 2)),
+      this.sliderRow("Speed", inst.vibratoSpeed, 0, 255, fSet("vibratoSpeed"), { ann: annHex2 }),
+      this.sliderRow("Depth", inst.vibratoDepth, 0, 255, fSet("vibratoDepth"), { ann: annHex2 }),
+      this.sliderRow("Sweep", inst.vibratoSweep, 0, 255, fSet("vibratoSweep"), { ann: annHex2 }),
+      this.sliderRow("Rate", inst.vibratoRate, 0, 255, fSet("vibratoRate"), { ann: annHex2 }),
     );
 
     this.group("Note actions",
-      this.select("NNA", inst.instrumentFlag & 3,
-        [[0, "Note off"], [1, "Note cut"], [2, "Continue"], [3, "Note fade"]],
-        (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~3) | v)),
-      this.select("Key lift", (inst.instrumentFlag >> 5) & 1, [[0, "off"], [1, "on"]],
-        (v) => this.setField("instrumentFlag", (inst.instrumentFlag & ~0x20) | (v << 5))),
-      this.select("DCT", inst.dupCheckFlag & 3,
-        [[0, "off"], [1, "note"], [2, "sample"], [3, "instrument"]],
+      this.selectRow("New Note Action", nna,
+        [[0, "Note off"], [1, "Note cut"], [2, "Continue"], [3, "Note fade"], [4, "Key lift"]],
+        (v) => {
+          // Key Lift = bit 5 set, NNA bits 0-1 = 00 (the 0b100 "Nnn" pattern);
+          // 0..3 = traditional NNA with bit 5 clear. Preserve vib-waveform bits.
+          const base = inst.instrumentFlag & ~0x23;
+          this.setField("instrumentFlag", v === 4 ? (base | 0x20) : (base | (v & 3)));
+        }),
+      this.selectRow("Duplicate Check Type", inst.dupCheckFlag & 3,
+        [[0, "Never"], [1, "Note"], [2, "Sample"], [3, "Instrument"]],
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~3) | v)),
-      this.select("DCA", (inst.dupCheckFlag >> 2) & 3,
-        [[0, "cut"], [1, "off"], [2, "fade"]],
+      this.selectRow("Duplicate Check Action", (inst.dupCheckFlag >> 2) & 3,
+        [[0, "Cut"], [1, "Off"], [2, "Fade"]],
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~0x0c) | (v << 2))),
     );
 
     this.group("Sample",
-      this.field("Sample ptr", inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v)),
-      this.field("Sample len", inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
-      this.field("Rate @C4", inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v)),
-      this.field("Loop start", inst.sampleLoopStart, 0, 65535, (v) => this.setField("sampleLoopStart", v)),
-      this.field("Loop end", inst.sampleLoopEnd, 0, 65535, (v) => this.setField("sampleLoopEnd", v)),
-      this.select("Loop mode", inst.loopMode & 3,
+      this.numRow("Sample ptr", inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v), { ann: annHex6 }),
+      this.numRow("Sample len", inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
+      this.numRow("Rate @C4", inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v), { ann: (v) => v + " Hz" }),
+      this.numRow("Loop start", inst.sampleLoopStart, 0, 65535, (v) => this.setField("sampleLoopStart", v)),
+      this.numRow("Loop end", inst.sampleLoopEnd, 0, 65535, (v) => this.setField("sampleLoopEnd", v)),
+      this.selectRow("Loop mode", inst.loopMode & 3,
         [[0, "off"], [1, "forward"], [2, "ping-pong"], [3, "one-shot"]],
         (v) => this.setField("loopMode", (inst.loopMode & ~3) | v)),
-      this.select("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
+      this.selectRow("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
         (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
     );
 
-    this.group("Tuning",
-      this.field("Detune (s16)", inst.sampleDetuneSigned, -32768, 32767, (v) =>
-        this.setField("sampleDetune", v & 0xffff)),
-    );
+    this.group("Tuning", this.detuneRow(inst));
   }
 
   renderEnv(inst, tabDef) {
@@ -441,14 +568,35 @@ export class InstrumentsView {
       spin("end", loopW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 0, 0x1f, parseInt(v, 10) || 0)),
     ));
 
-    // present toggle (Vol/Pan tabs; Pitch/Filter presence is the role claim)
-    if (!tabDef.role) {
+    // Final row: logarithmic time-axis toggle for the graph above, plus (on
+    // Vol/Pan tabs) the envelope-present toggle. Pitch/Filter presence is the
+    // role claim, so those tabs show only the log toggle.
+    const logChk = chk("Log timescale", this.envLogTime,
+      (on) => { this.envLogTime = on; this.drawEnvGraph(); });
+    if (tabDef.role) {
+      wrap.appendChild(row(logChk));
+    } else {
       wrap.appendChild(row(
         chk("Envelope present", envPresent(inst[tabDef.loopKey]),
           (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
+        logChk,
       ));
     }
     return wrap;
+  }
+
+  /** Fraction 0..1 of the time axis for time `t` (linear or log). */
+  envTimeFrac(t, total) {
+    if (!this.envLogTime) return total > 0 ? t / total : 0;
+    const t0 = Math.max(total / 400, 1e-4);
+    return Math.log((t + t0) / t0) / Math.log((total + t0) / t0);
+  }
+
+  /** Inverse of envTimeFrac: seconds for axis fraction `f`. */
+  envFracTime(f, total) {
+    if (!this.envLogTime) return f * total;
+    const t0 = Math.max(total / 400, 1e-4);
+    return t0 * (Math.pow((total + t0) / t0, f) - 1);
   }
 
   envGeometry() {
@@ -479,9 +627,9 @@ export class InstrumentsView {
     ctx.fillRect(0, 0, w, h);
 
     const { times, total } = this.envGeometry();
-    const X = (i) => 10 + (times[i] / total) * (w - 20);
+    const Xt = (t) => 10 + this.envTimeFrac(t, total) * (w - 20);
+    const X = (i) => Xt(times[i]);
     const Y = (v) => h - 14 - (v / tabDef.max) * (h - 28);
-    const Xt = (t) => 10 + (t / total) * (w - 20);
 
     // ── grids ── magnitude (horizontal, value labels) + time (vertical, seconds)
     ctx.font = "9px monospace";
@@ -496,14 +644,15 @@ export class InstrumentsView {
       ctx.fillStyle = C.dim;
       ctx.fillText(String(Math.round(val)), 1, y - 1.5);
     }
-    const stepT = niceTimeStep(total);
-    for (let t = 0; t <= total + 1e-9; t += stepT) {
+    // Time gridlines: log mode uses a 1/2/5-decade ladder (spreads in log
+    // space); linear mode uses evenly-spaced "nice" steps.
+    for (const t of envTimeTicks(total, this.envLogTime)) {
       const x = Xt(t);
       ctx.globalAlpha = 0.35;
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h - 12); ctx.stroke();
       ctx.globalAlpha = 0.7;
       ctx.fillStyle = C.dim;
-      ctx.fillText(t.toFixed(t < 1 ? 2 : 1) + "s", x + 1, h - 3);
+      ctx.fillText((t < 1 ? t.toFixed(2) : t.toFixed(1)) + "s", x + 1, h - 3);
     }
     ctx.globalAlpha = 1;
 
@@ -556,7 +705,7 @@ export class InstrumentsView {
         const t = audio[tabDef.liveTime](vi);
         if (idx < 0 || idx > 24) continue;
         const base = times[Math.min(idx, 24)];
-        const x = 10 + (Math.min(base + t, total) / total) * (w - 20);
+        const x = Xt(Math.min(base + t, total));
         ctx.fillRect(x - 1, 0, 2, h);
       }
     }
@@ -570,7 +719,7 @@ export class InstrumentsView {
     const active = this.envActiveCount(this.envCanvas.env);
     let best = -1, bestD = 12;
     for (let i = 0; i < active; i++) {
-      const nx = 10 + (times[i] / total) * (w - 20);
+      const nx = 10 + this.envTimeFrac(times[i], total) * (w - 20);
       const d = Math.abs(nx - x);
       if (d < bestD) { bestD = d; best = i; }
     }
@@ -610,7 +759,8 @@ export class InstrumentsView {
     if (idx > 0) {
       const { w, times, total } = this.envGeometry();
       const x = e.clientX - rect.left;
-      const wantTime = ((x - 10) / (w - 20)) * total;
+      const frac = Math.min(Math.max((x - 10) / (w - 20), 0), 1);
+      const wantTime = this.envFracTime(frac, total);
       const seg = Math.max(wantTime - times[idx - 1], 0);
       change.prevOffset = minifloatFromDouble(seg);
     }
@@ -623,7 +773,8 @@ export class InstrumentsView {
     const head = document.createElement("div");
     head.className = "detail-info";
     const patches = inst.extraPatches ?? [];
-    head.textContent = `${patches.length} Ixmp patch(es) — pitch × velocity zones (live triggers highlighted)`;
+    head.textContent = `${patches.length} Ixmp ${patches.length === 1 ? "patch" : "patches"} — ` +
+      `pitch × velocity zones (live triggers highlighted)`;
     this.panel.appendChild(head);
     const canvas = document.createElement("canvas");
     canvas.className = "wave-canvas";
@@ -717,6 +868,33 @@ function escape(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+function clampN(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+const annHex2 = (v) => "$" + (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
+const annHex4 = (v) => "$" + (v & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+const annHex6 = (v) => "$" + (v & 0xffffff).toString(16).toUpperCase().padStart(6, "0");
+const annFilter = (v) => (v === 0xff ? "off" : annHex2(v));
+function annFadeout(v) {
+  if (v <= 0) return "none";
+  if (v >= 1024) return "cut";
+  return "~" + Math.round(1024 / v) + " ticks";
+}
+// SoundFont filter units (AudioAdapter.refreshVoiceFilter): cutoff = absolute
+// cents → Hz (8.176·2^(cents/1200)); resonance = centibels above DC → dB. The
+// cents/cB are clamped to the SF2-spec range for display — a value carried over
+// from a toggled ImpulseTracker instrument can sit far outside it (the engine
+// clamps too), and the raw Hz/dB would otherwise read as an absurd number.
+function annSfCutoff(v) {
+  if (v >= 0xffff) return "off";
+  const hz = 8.176 * Math.pow(2, Math.min(Math.max(v, 1500), 13500) / 1200);
+  if (hz >= 10000) return Math.round(hz / 1000) + " kHz";
+  if (hz >= 1000) return (hz / 1000).toFixed(2) + " kHz";
+  return Math.round(hz) + " Hz";
+}
+function annSfReso(v) {
+  if (v >= 0xffff) return "flat";
+  return (Math.min(v, 960) / 10).toFixed(1) + " dB";
+}
+
 /** A "nice" time-grid interval (1/2/5 × 10ⁿ) giving ~5-8 gridlines. */
 function niceTimeStep(total) {
   const raw = total / 6;
@@ -724,4 +902,19 @@ function niceTimeStep(total) {
   const norm = raw / pow;
   const mult = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
   return Math.max(mult * pow, 0.01);
+}
+
+/** Time gridline positions (seconds). Linear mode: evenly-spaced nice steps.
+ *  Log mode: a 1/2/5-per-decade ladder (spreads legibly in log space). */
+function envTimeTicks(total, log) {
+  const ticks = [];
+  if (log) {
+    const ladder = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15];
+    ticks.push(0);
+    for (const t of ladder) if (t <= total + 1e-9) ticks.push(t);
+  } else {
+    const step = niceTimeStep(total);
+    for (let t = 0; t <= total + 1e-9; t += step) ticks.push(t);
+  }
+  return ticks;
 }

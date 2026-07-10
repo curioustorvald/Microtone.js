@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<script type="module">
+const out = [];
+const log = (l) => {
+  out.push(String(l));
+  document.getElementById("out").textContent = out.join("\n");
+  fetch("/BEACON/" + encodeURIComponent(String(l).slice(0, 120))).catch(() => {});
+};
+window.addEventListener("error", (e) => log("window error: " + e.message + " @ " + e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => log("unhandled rejection: " + e.reason));
+
+// main-thread boot (control group)
+try {
+  const { loadPyodide } = await import("/vendor/pyodide/pyodide.mjs");
+  log("main: pyodide.mjs imported");
+  const py = await loadPyodide({ indexURL: new URL("/vendor/pyodide/", location.href).href });
+  log("main: booted " + py.runPython("import sys; sys.version.split()[0]"));
+} catch (err) { log("main boot error: " + err.message); }
+
+// worker path
+const w = new Worker(new URL("/src/convert/convert.worker.js", location.href), { type: "module" });
+w.onerror = (e) => log("worker onerror: " + e.message + " @ " + e.filename + ":" + e.lineno);
+w.onmessage = (e) => log("worker msg: " + JSON.stringify({t: e.data.t, line: e.data.line, message: e.data.message, len: e.data.bytes?.byteLength}));
+const bytes = new Uint8Array(await (await fetch("/test/corpus/import/milky.xm")).arrayBuffer());
+w.postMessage({ t: "convert", id: 1, fileName: "milky.xm", bytes: bytes.buffer }, [bytes.buffer]);
+log("posted convert message");
+</script>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>instrument import smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Exercises the M8+ instrument-import path end-to-end in the real app:
+    // Import… button present, planImport + importBankOp merge a meta (and its
+    // layer deps) + an Ixmp instrument from M_E1M1 into the loaded WHEN
+    // project, views refresh via the bank dirty tag, undo/redo restore
+    // byte-exact document bytes.
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, instrumentsView: iv } = win.__microtone;
+        const { parseTaud } = await import("../../src/format/taud-parse.js");
+        const { Document } = await import("../../src/doc/document.js");
+        const { planImport, bankInventory } = await import("../../src/doc/bankmerge.js");
+        const { importBankOp } = await import("../../src/doc/ops.js");
+        log("app loaded, doc ready");
+
+        iv.visible = true;
+        iv.refresh();
+        const importBtn = [...iv.listEl.querySelectorAll(".side-toolbar button")]
+          .find((b) => b.textContent.startsWith("Import"));
+        log(`import button present: ${importBtn ? "yes" : "NO"}`);
+
+        const bytes = new Uint8Array(await (await fetch("../corpus/M_E1M1.taud")).arrayBuffer());
+        const src = new Document(parseTaud(bytes));
+        const inv = bankInventory(src);
+        const metaSlot = inv.find((e) => e.isMeta).slot;
+        const ixmpSlot = (inv.find((e) => !e.isMeta && e.patchCount > 0 && e.layerOf.length === 0)
+          ?? inv.find((e) => !e.isMeta && e.patchCount > 0)).slot;
+        log(`source: ${inv.length} instruments; picking meta $${metaSlot.toString(16)} + ixmp $${ixmpSlot.toString(16)}`);
+
+        const before = store.doc.toBytes();
+        const usedBefore = store.doc.usedInstrumentSlots().length;
+        const samplesBefore = store.doc.sampleList().length;
+
+        const plan = planImport(store.doc, src, [metaSlot, ixmpSlot]);
+        if (plan.error) throw new Error("plan: " + plan.error);
+        store.undo.apply(importBankOp(plan));
+        const usedAfter = store.doc.usedInstrumentSlots().length;
+        log(`imported ${plan.insts.length} insts (${plan.newSampleBytes} sample bytes): used ${usedBefore} → ${usedAfter}`);
+        log(`slots grew correctly: ${usedAfter === usedBefore + plan.insts.length ? "yes" : "NO"}`);
+        log(`sample census grew: ${store.doc.sampleList().length > samplesBefore ? "yes" : "NO"}`);
+
+        // list view refreshed by the bank dirty tag → new slot rows visible
+        const rowIdx = [...iv.listEl.querySelectorAll(".side-row .idx")].map((e) => e.textContent);
+        const metaDest = plan.slotMap.get(metaSlot);
+        const seen = rowIdx.includes("$" + metaDest.toString(16).toUpperCase().padStart(3, "0"));
+        log(`instrument list shows imported meta: ${seen ? "yes" : "NO"}`);
+        const nameOk = store.doc.instrumentName(metaDest) === src.instrumentName(metaSlot);
+        log(`INam carried: ${nameOk ? "yes" : "NO"}`);
+
+        const after = store.doc.toBytes();
+        store.undo.undo();
+        const undone = store.doc.toBytes();
+        const undoOk = undone.length === before.length && undone.every((b, i) => b === before[i]);
+        log(`undo byte-exact: ${undoOk ? "yes" : "NO"}`);
+        store.undo.redo();
+        const redone = store.doc.toBytes();
+        const redoOk = redone.length === after.length && redone.every((b, i) => b === after[i]);
+        log(`redo byte-exact: ${redoOk ? "yes" : "NO"}`);
+
+        const bad = out.filter((l) => l.includes("NO"));
+        log(bad.length === 0 ? "ALL PASS" : `FAILURES: ${bad.length}`);
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

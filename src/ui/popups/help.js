@@ -13,6 +13,7 @@ export function showHelp() {
         <dt>Insert</dt><dd>record mode on/off</dd>
         <dt>[ ]</dt><dd>octave down / up</dd>
         <dt>Enter</dt><dd>Timeline: pick up cell's instrument · Cues: command popup</dd>
+        <dt>M / N</dt><dd>Timeline, navigate mode: mute / solo the cursor channel (or click / Ctrl+click a channel header)</dd>
         <dt>Ctrl+Z / Ctrl+Y</dt><dd>undo / redo</dd>
         <dt>Ctrl+S</dt><dd>save to browser disk (OPFS)</dd>
         <dt>Ctrl+G</dt><dd>go to cue:row</dd>

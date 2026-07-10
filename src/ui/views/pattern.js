@@ -117,7 +117,7 @@ export class PatternView {
     });
     this.info.textContent =
       ` of ${song.patterns.length.toString(16).toUpperCase().padStart(4, "0")} · used by ` +
-      (users.length ? `${users.length} cue(s): ${users.slice(0, 8).join(" ")}${users.length > 8 ? "…" : ""}` : "no cue");
+      (users.length ? `${users.length} ${users.length === 1 ? "cue" : "cues"}: ${users.slice(0, 8).join(" ")}${users.length > 8 ? "…" : ""}` : "no cue");
   }
 
   /** Preview: play just this pattern via the device-only scratch cue (HALT). */
@@ -206,7 +206,7 @@ export class PatternView {
     const cell = pattern[c.row];
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, cell,
-      { octave: this.jam.octave, currentInst: this.jam.currentInst });
+      { octave: this.jam.octave, currentInst: this.jam.currentInst, preset: this.store.pitchPreset });
     if (!action) return false;
     if (action.fields) {
       this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, c.row, action.fields));

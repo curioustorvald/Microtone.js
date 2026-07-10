@@ -90,6 +90,34 @@ export class Song {
   }
 }
 
+/**
+ * Combine a .tpif (patterns/cues/sMet only — the song domain) with an
+ * instrument bank into a full parsed shape for `new Document()`. Mirrors the
+ * device flow where a .tpif loads over the RESIDENT sample+inst state
+ * (taud.mjs:173): the bank contributes the image, Ixmp and INam/SNam names;
+ * everything else (songs, sMet, xHDR channel mode, …) comes from the .tpif.
+ * `bank` is either a parsed .tsii/.taud or a live Document (whose image must
+ * be up to date — call _rebuildInstRegion() first). The image is copied so
+ * the combined document never aliases the bank's.
+ */
+export function combineTpif(bank, tpif) {
+  const isBankSec = (s) => ["INam", "SNam", "Ixmp"].includes(s.fourcc);
+  return {
+    kind: "taud",
+    fmtVer: tpif.fmtVer,
+    is64Channel: tpif.is64Channel,
+    signature: tpif.signature,
+    sampleInstImage: bank.sampleInstImage ? bank.sampleInstImage.slice() : null,
+    songs: tpif.songs,
+    projSections: [
+      ...tpif.projSections.filter((s) => !isBankSec(s)),
+      ...(bank.projSections ?? []).filter(isBankSec),
+    ],
+    ixmp: bank.ixmp ?? [],
+    meta: tpif.meta,
+  };
+}
+
 export class Document {
   /** Build from the structure parseTaud returns. */
   constructor(parsed) {
@@ -116,6 +144,9 @@ export class Document {
 
     this._instruments = null;     // lazily-decoded TaudInst[1024]
     this._instrumentsEdited = false; // when true, toBytes rebuilds the inst region
+    this._editedSlots = new Set();   // ONLY these slots rebuild — the decode
+                                     // masks quirk bits (e.g. byte 173 & 0x1f),
+                                     // so untouched records must stay verbatim
     this.smetEdited = false;      // when true, toBytes regenerates the sMet section
   }
 
@@ -169,7 +200,20 @@ export class Document {
   markInstUsed(slot) {
     this.instruments;
     this._usedSlots.add(slot & 0x3ff);
+    this._editedSlots.add(slot & 0x3ff);
     this._instrumentsEdited = true;
+  }
+
+  /** Set/replace a Project-Data section payload; null removes the section. */
+  setSection(fourcc, payload) {
+    const i = this.projSections.findIndex((s) => s.fourcc === fourcc);
+    if (payload === null) {
+      if (i >= 0) this.projSections.splice(i, 1);
+    } else if (i >= 0) {
+      this.projSections[i] = { fourcc, payload };
+    } else {
+      this.projSections.push({ fourcc, payload });
+    }
   }
 
   /** 0x1E-separated name-table lookup (INam / SNam / pNam). */
@@ -234,13 +278,15 @@ export class Document {
     return rec;
   }
 
-  /** Fold decoded-instrument edits back into the image's inst region. */
+  /** Fold decoded-instrument edits back into the image's inst region —
+   *  edited slots only, so unedited records round-trip byte-exact. */
   _rebuildInstRegion() {
     if (!this._instrumentsEdited || this.sampleInstImage === null) return;
     const instRegion = this.sampleInstImage.subarray(SAMPLEBIN_SIZE);
-    for (let s = 0; s < 1024; s++) {
+    for (const s of this._editedSlots) {
       instRegion.set(this.instRecordBytes(s), s * 256);
     }
+    this._editedSlots.clear();
     this._instrumentsEdited = false;
   }
 

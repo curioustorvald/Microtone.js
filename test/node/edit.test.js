@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { interpretEditKey, semiToNote, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
+import { interpretEditKey, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
+import { pitchTablePresets } from "../../src/ui/pitchtables.js";
 
 const ctx = { octave: 4, currentInst: 0x12 };
 
@@ -12,6 +13,34 @@ test("semiToNote: C4 = MIDDLE_C, octave steps are 4096", () => {
   assert.equal(semiToNote(5, 0), MIDDLE_C + 4096);
   assert.equal(semiToNote(4, 12), MIDDLE_C + 4096);
   assert.equal(semiToNote(4, 7), MIDDLE_C + Math.round((7 * 4096) / 12));
+});
+
+test("semiToNoteInTable: 12-TET/Raw/absent fall back to plain 12-EDO", () => {
+  for (const preset of [undefined, pitchTablePresets[0], pitchTablePresets[120]]) {
+    for (const semi of [0, 1, 5, 7, 11, 12]) {
+      assert.equal(semiToNoteInTable(4, semi, preset), semiToNote(4, semi));
+    }
+  }
+});
+
+test("semiToNoteInTable: non-12 tuning snaps keys onto the scale degrees", () => {
+  const p24 = pitchTablePresets[240]; // 24-TET, table entries per quarter-tone
+  // Root key still lands on the anchor C4.
+  assert.equal(semiToNoteInTable(4, 0, p24), MIDDLE_C);
+  // A white key snaps to the nearest 24-TET degree (an exact table entry).
+  const e = semiToNoteInTable(4, 4, p24); // ~major third
+  const off = (e - MIDDLE_C) % p24.interval;
+  assert.ok(p24.table.includes(off), `offset ${off.toString(16)} is a 24-TET degree`);
+  // Top C wraps up one period.
+  assert.equal(semiToNoteInTable(4, 12, p24), MIDDLE_C + p24.interval);
+});
+
+test("note column: entry follows the active notation preset", () => {
+  const cell = new TaudPlayData();
+  const p24 = pitchTablePresets[240];
+  const a = interpretEditKey({ code: "KeyE", key: "e" }, SUB_NOTE, 0, cell,
+    { octave: 4, currentInst: 0, preset: p24 });
+  assert.equal(a.fields.note, semiToNoteInTable(4, 3, p24)); // KeyE = semitone 3
 });
 
 test("note column: piano key writes note + adopts current inst + jams", () => {

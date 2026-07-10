@@ -4,3 +4,4 @@ node_modules/
 test/reference/
 .DS_Store
 CLAUDE.md
+vendor/converters/__pycache__

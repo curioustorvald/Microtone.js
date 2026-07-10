@@ -6,6 +6,10 @@
 </head>
 <body>
   <pre id="out">running…</pre>
+  <!-- keeps the load event pending on tools/test-server.py so
+       --dump-dom --timeout runs the audio in REAL time (404s harmlessly on
+       a plain http.server) -->
+  <img src="/hang" hidden>
   <script type="module">
     // Headless smoke test: worklet module load, document upload, playback
     // advance, snapshot flow. Results go to console (SMOKE: lines) and #out.
@@ -30,6 +34,7 @@
         sampleRate: params.has("rate") ? parseInt(params.get("rate"), 10) : 32000,
       });
       log(`init ok — sampleRate=${audio.context.sampleRate} bundleFallback=${audio.usedBundleFallback}`);
+      log(`snapshot path: ${audio.usingSab ? "SharedArrayBuffer" : "postMessage"} (crossOriginIsolated=${globalThis.crossOriginIsolated})`);
       await audio.resume();
       log(`context state=${audio.context.state}`);
 

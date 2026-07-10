@@ -64,6 +64,35 @@ export function semiToNote(octave, semi) {
   return Math.min(Math.max(val, 0x20), 0xffff);
 }
 
+/**
+ * Notation-aware jam note: map a 12-EDO semitone (0..12 white/black keys) to a
+ * note word in the active pitch table by snapping the semitone's fractional
+ * period position to the NEAREST table degree — the port of taut.js
+ * semitoneToNote. So a non-12-TET song's keyboard plays that tuning's degrees
+ * (CDEFGAB… mapped into its grid) instead of fixed 12-EDO. The Raw preset
+ * (empty table) and 12-TET fall back to the exact 12-EDO note.
+ */
+export function semiToNoteInTable(octave, semi, preset) {
+  if (!preset || preset.table.length === 0 || preset.index === 120) {
+    return semiToNote(octave, semi);
+  }
+  const interval = preset.interval;
+  const table = preset.table;
+  let pos = Math.round((semi / 12) * interval);
+  let carry = 0;
+  while (pos >= interval) { pos -= interval; carry++; } // semitone 12 wraps to next period root
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < table.length; i++) {
+    const d = Math.abs(table[i] - pos);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  // The next period's root (one interval up) can be the true nearest degree.
+  let off = table[bestIdx], periodAdj = carry;
+  if (interval - pos < bestDist) { off = table[0]; periodAdj = carry + 1; }
+  const val = MIDDLE_C + (octave - 4) * interval + periodAdj * interval + off;
+  return Math.min(Math.max(val, 0x20), 0xffff);
+}
+
 function hexDigit(key) {
   if (key.length !== 1) return -1;
   const c = key.toLowerCase().charCodeAt(0);
@@ -85,7 +114,7 @@ function base36Digit(key) {
  * @param ev   {code, key} from the KeyboardEvent
  * @param sub  cursor sub-column, nib nibble index within it
  * @param cell current TaudPlayData (read-only here)
- * @param ctx  {octave, currentInst}
+ * @param ctx  {octave, currentInst, preset} — preset = active pitch table
  * @returns null (unhandled) or an action:
  *   {fields, jamNote?, advanceRow?, advanceNib?} — fields go through setCellOp;
  *   advanceRow steps the cursor down (note entry / field completion),
@@ -96,7 +125,7 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
 
   if (sub === SUB_NOTE) {
     if (code in JAM_SEMIS) {
-      const note = semiToNote(ctx.octave, JAM_SEMIS[code]);
+      const note = semiToNoteInTable(ctx.octave, JAM_SEMIS[code], ctx.preset);
       const fields = { note };
       // Current-instrument auto-adopt (taut behaviour): note entry stamps the
       // active instrument unless the cell already carries one.

@@ -2,7 +2,7 @@
 // channel; releasing the last held key stops the audition. Single-voice,
 // last-key-wins (taut's cursor-channel jam model).
 
-import { JAM_SEMIS, semiToNote } from "./edit.js";
+import { JAM_SEMIS, semiToNoteInTable } from "./edit.js";
 
 export class JamKeyboard {
   constructor(store) {
@@ -19,7 +19,7 @@ export class JamKeyboard {
     this.held.add(code);
     const audio = this.store.audio;
     if (audio) {
-      const note = semiToNote(this.octave, JAM_SEMIS[code]);
+      const note = semiToNoteInTable(this.octave, JAM_SEMIS[code], this.store.pitchPreset);
       audio.jamNote(0, this.store.cursor.ch, note, this.currentInst);
     }
     return true;

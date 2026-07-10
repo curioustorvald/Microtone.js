@@ -33,6 +33,7 @@ export const CMD = Object.freeze({
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
   QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
   SNAPSHOT_RETURN: "snapshotReturn",               // {buffer: ArrayBuffer} (recycle)
+  USE_SAB: "useSab",                               // {sab: SharedArrayBuffer} — switch to shared-memory snapshots
 });
 
 export const MSG = Object.freeze({
@@ -73,3 +74,10 @@ export const SNAP_VOICE_STRIDE = 16;
 
 export const SNAP_MAX_VOICES = 64;
 export const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1032
+
+// SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
+// float snapshot region plus a trailing Int32 interrupt-latch cell that the
+// worklet ORs into (Atomics.or) and the main thread drains
+// (Atomics.exchange 0). The float SNAP_INTERRUPT_MASK slot is only used by
+// the postMessage fallback.
+export const SNAP_SAB_BYTES = SNAP_FLOATS * 4 + 4;

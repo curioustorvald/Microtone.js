@@ -14,7 +14,7 @@ import {
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
-  SNAP_VOICE_STRIDE, SNAP_FLOATS,
+  SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES,
 } from "../worklet/protocol.js";
 import { MAX_VOICES, NUM_VOICES } from "../engine/constants.js";
 
@@ -28,8 +28,10 @@ export class AudioSystem {
     this.snapshot = new Float32Array(SNAP_FLOATS);
     this.snapshot[SNAP_CHANNEL_COUNT] = NUM_VOICES;
     this.interruptMask = 0; // accumulated between pollTrackerInterrupts calls
-    this.onSnapshot = null; // optional callback(snapshot Float32Array)
+    this.onSnapshot = null; // optional callback(snapshot Float32Array; postMessage path only)
     this.usedBundleFallback = false;
+    this.usingSab = false;  // shared-memory snapshots (crossOriginIsolated deploys)
+    this.sabI32 = null;     // Int32Array view over the SAB interrupt latch
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
   }
 
@@ -69,15 +71,34 @@ export class AudioSystem {
       const m = e.data;
       if (m.t === MSG.SNAPSHOT) {
         const f = new Float32Array(m.buffer);
-        this.snapshot.set(f);
+        // A snapshot posted before the USE_SAB switch landed must not clobber
+        // the live shared view — but its latched interrupts still count.
         this.interruptMask |= f[SNAP_INTERRUPT_MASK];
+        if (!this.usingSab) {
+          this.snapshot.set(f);
+          if (this.onSnapshot) this.onSnapshot(this.snapshot);
+        }
         this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
-        if (this.onSnapshot) this.onSnapshot(this.snapshot);
       } else if (m.t === MSG.FUNK_MASK) {
         this.funkMasks.set(m.slot, new Uint8Array(m.mask));
       }
     };
     this.node.connect(ctx.destination);
+
+    // SAB fast path: on cross-origin-isolated pages (the Cloudflare Pages
+    // deploy sends COOP/COEP via _headers) snapshots live in shared memory —
+    // the worklet writes in place and the getters below read it directly,
+    // with zero message traffic. Local dev servers usually lack the headers
+    // and keep the recycled-postMessage path.
+    if (globalThis.crossOriginIsolated && typeof SharedArrayBuffer !== "undefined") {
+      const sab = new SharedArrayBuffer(SNAP_SAB_BYTES);
+      const view = new Float32Array(sab, 0, SNAP_FLOATS);
+      view.set(this.snapshot); // carry the pre-init defaults (channel count)
+      this.snapshot = view;
+      this.sabI32 = new Int32Array(sab, SNAP_FLOATS * 4, 1);
+      this.node.port.postMessage({ t: CMD.USE_SAB, sab });
+      this.usingSab = true;
+    }
     return this;
   }
 
@@ -173,6 +194,16 @@ export class AudioSystem {
     const buf = bytes.slice().buffer;
     this._post({ t: CMD.UPLOAD_INSTRUMENT, slot, bytes: buf }, [buf]);
   }
+  /** Replace the whole 8650752-byte sample+inst image (bank import/undo).
+   *  Clears all uploaded Ixmp patch state — re-send the blobs afterwards. */
+  uploadSampleInstImage(image) {
+    const buf = image.slice().buffer;
+    this._post({ t: CMD.UPLOAD_SAMPLE_INST_BLOB, image: buf }, [buf]);
+  }
+  uploadInstrumentPatches(slot, blob) {
+    const buf = blob.slice().buffer;
+    this._post({ t: CMD.UPLOAD_INSTRUMENT_PATCHES, slot, bytes: buf }, [buf]);
+  }
   set64ChannelMode(on) { this._post({ t: CMD.SET_64CH, on }); }
 
   /** Ask the worklet for instrument `slot`'s live S$Fx invert-loop bit mask;
@@ -190,10 +221,14 @@ export class AudioSystem {
   getTickRate() { return this.snapshot[SNAP_TICK_RATE]; }
   channelCount() { return this.snapshot[SNAP_CHANNEL_COUNT] || NUM_VOICES; }
 
-  /** Edge-triggered latch, accumulated across snapshots; reading clears. */
+  /** Edge-triggered latch, accumulated across snapshots; reading clears.
+   *  SAB path: the worklet ORs into the shared Int32 cell; draining is one
+   *  atomic exchange. (Both sources merge — snapshots posted before the
+   *  USE_SAB switch landed still count.) */
   pollTrackerInterrupts() {
-    const m = this.interruptMask;
+    let m = this.interruptMask;
     this.interruptMask = 0;
+    if (this.sabI32 !== null) m |= Atomics.exchange(this.sabI32, 0, 0);
     return m;
   }
 

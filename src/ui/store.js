@@ -12,7 +12,38 @@ export class Store {
     this.fileName = null;
     this.follow = true;
     this.cursor = { row: 0, ch: 0 }; // absolute song row + channel
+    this.voiceMutes = new Array(64).fill(false); // per-channel mute (UI + engine)
     this._subs = new Map();
+  }
+
+  setVoiceMute(ch, muted) {
+    this.voiceMutes[ch] = muted;
+    this.audio?.setVoiceMute(0, ch, muted);
+  }
+
+  toggleMute(ch) {
+    this.setVoiceMute(ch, !this.voiceMutes[ch]);
+    this.emit("mutes");
+  }
+
+  /** taut toggleSolo: mute everything but ch; when ch is ALREADY the solo
+   *  (all others muted), unmute all instead. */
+  toggleSolo(ch) {
+    const n = this.doc?.channelCount ?? 64;
+    let inSolo = true;
+    for (let i = 0; i < n; i++) {
+      if (i !== ch && !this.voiceMutes[i]) { inSolo = false; break; }
+    }
+    for (let i = 0; i < n; i++) this.setVoiceMute(i, inSolo ? false : i !== ch);
+    this.emit("mutes");
+  }
+
+  /** Song/project switch: clear all mutes (taut finishLoadCommon). */
+  clearMutes() {
+    for (let i = 0; i < 64; i++) {
+      if (this.voiceMutes[i]) this.setVoiceMute(i, false);
+    }
+    this.emit("mutes");
   }
 
   on(topic, fn) {

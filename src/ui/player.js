@@ -59,7 +59,7 @@ async function loadFile(file) {
   });
 
   $("fileinfo").textContent =
-    `${file.name} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} song(s) · ` +
+    `${file.name} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ` +
     `format v${doc.fmtVer} · ${doc.is64Channel ? 64 : 32}ch` +
     (doc.ixmp.length ? ` · Ixmp on ${doc.ixmp.length} inst` : "");
   $("transport").hidden = false;

@@ -20,14 +20,31 @@ export class SamplesView {
     this.right.className = "side-detail";
     this.info = document.createElement("div");
     this.info.className = "detail-info";
+    this.toolbar = document.createElement("div");
+    this.toolbar.className = "smp-toolbar";
+    this.editBtn = document.createElement("button");
+    this.editBtn.textContent = "Edit…";
+    this.editBtn.title = "Open the sample editor (loop points, normalise/fade/reverse, audition)";
+    this.editBtn.addEventListener("click", async () => {
+      const s = this.list?.[this.selected];
+      if (!s) return;
+      const { openSampleEditor } = await import("../popups/sampleeditor.js");
+      await openSampleEditor(this.store, s);
+      this.refresh();
+    });
+    this.toolbar.appendChild(this.editBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
-    this.right.append(this.info, this.canvas);
+    this.right.append(this.info, this.toolbar, this.canvas);
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
     this.visible = false;
 
     store.on("doc", () => { this.selected = 0; if (this.visible) this.refresh(); });
+    store.on("edit", (tags) => {
+      // bank import/undo changes the census; inst edits move loop points
+      if (this.visible && tags?.some?.((t) => t.kind === "bank" || t.kind === "inst")) this.refresh();
+    });
     new ResizeObserver(() => { if (this.visible) this.drawWave(); }).observe(this.right);
   }
 

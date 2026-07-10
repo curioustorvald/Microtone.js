@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>instruments smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Exercises the reworked Instruments General tab (sliders, SF filter units,
+    // NNA key-lift, panning/volume swing, wide detune), the envelope log-time
+    // toggle, notation-aware note entry, and the song-name \uHHHH escape.
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const M = win.__microtone;
+        const { store, instrumentsView: iv, timeline, jam } = M;
+        const { presetForNotation } = await import("../../src/ui/pitchtables.js");
+        const { semiToNote, semiToNoteInTable } = await import("../../src/ui/edit.js");
+        log("app loaded, doc ready");
+
+        // Pick the first used non-meta instrument slot.
+        let slot = -1;
+        for (const s of store.doc.usedInstrumentSlots()) {
+          if (!store.doc.instruments[s].isMeta) { slot = s; break; }
+        }
+        if (slot < 0) throw new Error("no non-meta instrument in corpus");
+        const inst = store.doc.instruments[slot];
+        log(`using inst slot $${slot.toString(16)}`);
+
+        // Render the General tab.
+        iv.visible = true;
+        iv.selected = slot;
+        iv.tab = "general";
+        iv.refresh();
+        const labels = [...iv.panel.querySelectorAll(".sl-label")].map((e) => e.textContent);
+        const need = ["Global vol", "Swing", "Default pan", "Pitch-pan sep", "Pan swing",
+          "Pitch-pan centre", "Mode", "New Note Action", "Duplicate Check Type",
+          "Duplicate Check Action", "Detune"];
+        const missing = need.filter((l) => !labels.includes(l));
+        const labelsOk = missing.length === 0;
+        log(`general labels present: ${labelsOk ? "yes" : "MISSING " + missing.join(",")}`);
+
+        // Volume swing slider → applies to inst.volumeSwing.
+        const findRow = (label) =>
+          [...iv.panel.querySelectorAll(".slider-row")].find(
+            (r) => r.querySelector(".sl-label")?.textContent === label);
+        const swingRange = findRow("Swing").querySelector(".sl-range");
+        swingRange.value = 42; fire(swingRange, "input");
+        const swingOk = inst.volumeSwing === 42;
+        log(`volume swing slider: volumeSwing=${inst.volumeSwing} (${swingOk ? "ok" : "FAIL"})`);
+
+        // Panning fields.
+        const sepRange = findRow("Pitch-pan sep").querySelector(".sl-range");
+        sepRange.value = -20; fire(sepRange, "input");
+        const sepOk = inst.pitchPanSeparation === -20;
+        const panSwRange = findRow("Pan swing").querySelector(".sl-range");
+        panSwRange.value = 77; fire(panSwRange, "input");
+        const panSwOk = inst.panSwing === 77;
+        const ppcRange = findRow("Pitch-pan centre").querySelector(".sl-range");
+        ppcRange.value = 0x6000; fire(ppcRange, "input");
+        const ppcOk = inst.pitchPanCentre === 0x6000;
+        log(`panning: sep=${inst.pitchPanSeparation} swing=${inst.panSwing} centre=0x${inst.pitchPanCentre.toString(16)} (${sepOk && panSwOk && ppcOk ? "ok" : "FAIL"})`);
+
+        // "Use default pan" toggles pan LOOP word bit 7.
+        const useDefBefore = (inst.panEnvLoop >> 7) & 1;
+        const useDefChk = findRow("Use default pan").querySelector("input[type=checkbox]");
+        useDefChk.checked = !useDefBefore; fire(useDefChk, "change");
+        const useDefOk = !!useDefChk && ((inst.panEnvLoop >> 7) & 1) === (useDefBefore ? 0 : 1);
+        log(`use default pan: bit7 ${useDefBefore}→${(inst.panEnvLoop >> 7) & 1} (${useDefOk ? "ok" : "FAIL"})`);
+
+        // Filter: switch to SoundFont2, verify 16-bit + Hz/dB annotations, edit cutoff.
+        const modeSel = findRow("Mode").querySelector(".sl-select");
+        modeSel.value = "1"; fire(modeSel, "change"); // re-renders the panel
+        const sfMode = inst.filterSfMode;
+        const cutRow = findRow("Cutoff");
+        const cutAnn = cutRow.querySelector(".sl-ann").textContent;
+        const cutRange = cutRow.querySelector(".sl-range");
+        cutRange.value = 7000; fire(cutRange, "input");
+        const cut16 = inst.defaultCutoff16;
+        const cutBytesOk = inst.getByteNormal(182) === ((7000 >> 8) & 0xff) &&
+                           inst.getByteNormal(252) === (7000 & 0xff);
+        const cutOk = sfMode && cut16 === 7000 && cutBytesOk && /Hz|kHz/.test(cutAnn);
+        log(`SF filter: mode=${sfMode} cutoff16=${cut16} ann="${cutAnn}" bytesOk=${cutBytesOk} (${cutOk ? "ok" : "FAIL"})`);
+
+        const resRow = findRow("Resonance");
+        const resAnn = resRow.querySelector(".sl-ann").textContent;
+        const resRange = resRow.querySelector(".sl-range");
+        resRange.value = 240; fire(resRange, "input");
+        const resOk = inst.defaultResonance16 === 240 && /dB/.test(resRow.querySelector(".sl-ann").textContent);
+        log(`SF reso: reso16=${inst.defaultResonance16} ann0="${resAnn}" (${resOk ? "ok" : "FAIL"})`);
+
+        // NNA key-lift as the 5th option → flag bit 5 set, bits 0-1 clear.
+        const nnaSel = findRow("New Note Action").querySelector(".sl-select");
+        const nnaOptCount = nnaSel.options.length;
+        nnaSel.value = "4"; fire(nnaSel, "change");
+        const kl = ((inst.instrumentFlag >> 5) & 1) === 1 && (inst.instrumentFlag & 3) === 0;
+        const nnaOk = nnaOptCount === 5 && kl;
+        log(`NNA key-lift: options=${nnaOptCount} flag=0x${inst.instrumentFlag.toString(16)} (${nnaOk ? "ok" : "FAIL"})`);
+
+        // Wide detune slider.
+        iv.refresh();
+        const detRow = findRow("Detune");
+        const detWide = detRow.classList.contains("wide");
+        const detRange = detRow.querySelector(".sl-range");
+        detRange.value = 2048; fire(detRange, "input");
+        const detOk = detWide && inst.sampleDetuneSigned === 2048 &&
+          /cents/.test(detRow.querySelector(".sl-ann").textContent);
+        log(`detune: wide=${detWide} signed=${inst.sampleDetuneSigned} (${detOk ? "ok" : "FAIL"})`);
+
+        // Envelope log-time toggle exists and flips the flag.
+        iv.tab = "env0";
+        iv.renderPanel();
+        const logChk = [...iv.panel.querySelectorAll("label")]
+          .find((l) => /Log timescale/.test(l.textContent))?.querySelector("input");
+        logChk.checked = true; fire(logChk, "change");
+        const logOk = !!logChk && iv.envLogTime === true;
+        log(`env log-time toggle: present=${!!logChk} flag=${iv.envLogTime} (${logOk ? "ok" : "FAIL"})`);
+
+        // Notation-aware entry: a 5-TET project (NOT a 12-TET superset) → a jam
+        // key snaps to a 5-TET degree, and the note differs from plain 12-EDO.
+        const p5 = presetForNotation(50);
+        store.pitchPreset = p5;
+        store.view = "timeline";
+        store.record = true;
+        store.cursor = { row: 5, ch: 0, sub: 0, nib: 0 };
+        const tgt = timeline.cursorCell();
+        timeline.processEditKey({ code: "KeyS", key: "s" }, jam); // semitone 2
+        const entered = store.song.patterns[tgt.pat][tgt.rowInCue].note;
+        const off = (entered - 0x5000) % p5.interval;
+        const notOk = entered === semiToNoteInTable(4, 2, p5) &&
+          entered !== semiToNote(4, 2) && p5.table.includes(off);
+        log(`notation entry (5-TET): note=0x${entered.toString(16)} off=0x${off.toString(16)} 12tet=0x${semiToNote(4, 2).toString(16)} (${notOk ? "ok" : "FAIL"})`);
+
+        // Song-name \uHHHH escape.
+        const pv = M.projectView ?? win.__microtone.projectView;
+        let nameOk = true;
+        if (pv && pv.changeName) {
+          pv.changeName("café 🎵");
+          const nm = store.doc.meta.songMeta[store.songIndex].name;
+          nameOk = nm === "caf\\u00E9 \\uD83C\\uDFB5";
+          log(`song name escape: "${nm}" (${nameOk ? "ok" : "FAIL"})`);
+        } else {
+          log("projectView not exposed; skipping name test");
+        }
+
+        const pass = labelsOk && swingOk && sepOk && panSwOk && ppcOk && useDefOk && cutOk && resOk &&
+          nnaOk && detOk && logOk && notOk && nameOk;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

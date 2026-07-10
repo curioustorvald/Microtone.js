@@ -40,10 +40,32 @@ export class ProjectView {
     const info = document.createElement("p");
     info.className = "dim";
     info.textContent =
-      `${doc.songs.length} song(s) · ${doc.channelCount} channels · format v${doc.fmtVer ?? 2}` +
+      `${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount} channels · format v${doc.fmtVer ?? 2}` +
       ` · signature "${doc.signature.trim()}"` +
       (sm ? ` · song: "${sm.name}"${sm.composer ? ` by ${sm.composer}` : ""}` : "");
     this.root.appendChild(info);
+
+    // Editable PROJECT name (PNam). Song renaming lives on the topbar ✎
+    // button next to the song selector. TSVM's string reader is ASCII-only,
+    // so any non-ASCII character is stored as a \uHHHH escape.
+    const nameRow = document.createElement("div");
+    nameRow.className = "inst-field";
+    nameRow.style.maxWidth = "440px";
+    nameRow.append(document.createTextNode("Project name"));
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = doc.meta.projectName ?? "";
+    nameInput.placeholder = "(untitled project)";
+    nameInput.spellcheck = false;
+    nameInput.addEventListener("change", () => this.changeProjectName(nameInput.value));
+    nameRow.appendChild(nameInput);
+    this.root.appendChild(nameRow);
+    const nameHint = document.createElement("p");
+    nameHint.className = "dim";
+    nameHint.style.margin = "0.1rem 0 0.4rem";
+    nameHint.style.fontSize = "0.8rem";
+    // nameHint.textContent = "Non-ASCII characters are stored as \\uHHHH escapes (TSVM compatibility).";
+    this.root.appendChild(nameHint);
 
     const grid = document.createElement("div");
     grid.className = "inst-grid";
@@ -126,6 +148,38 @@ export class ProjectView {
     delBtn.addEventListener("click", () => this.removeSong());
     songBar.append(addBtn, delBtn);
     this.root.appendChild(songBar);
+  }
+
+  /** Rename the project (PNam section). Same \uHHHH escape convention as
+   *  song names; the payload is byte-per-char + NUL (taud.mjs strNul). */
+  changeProjectName(raw) {
+    const store = this.store;
+    const escaped = escapeNonAscii(raw);
+    if ((store.doc.meta.projectName ?? "") === escaped) return;
+    store.doc.meta.projectName = escaped;
+    const bytes = [];
+    for (let i = 0; i < escaped.length; i++) bytes.push(escaped.charCodeAt(i) & 0xff);
+    bytes.push(0);
+    store.doc.setSection("PNam", Uint8Array.from(bytes));
+    store.doc.dirty = true;
+    store.emit("status"); // topbar file line shows the project name
+    this.refresh();
+  }
+
+  /** Rename the current song. Non-ASCII characters are encoded as \uHHHH
+   *  ASCII escapes so the sMet stays TSVM-readable (its string parser is not
+   *  Unicode; the escape is kept verbatim). */
+  changeName(raw) {
+    const store = this.store;
+    const escaped = escapeNonAscii(raw);
+    const sm = store.doc.meta.songMeta[store.songIndex] ??
+      (store.doc.meta.songMeta[store.songIndex] =
+        { notation: 120, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" });
+    if (sm.name === escaped) return;
+    sm.name = escaped;
+    store.doc.smetEdited = true;
+    store.doc.dirty = true;
+    this.refresh();
   }
 
   /** Change the song's display notation only — does NOT move any notes. */
@@ -288,4 +342,15 @@ function sel(label, value, options, onChange) {
 
 function esc(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+/** ASCII-escape every non-ASCII UTF-16 code unit as \uHHHH (uppercase hex).
+ *  Idempotent: already-escaped input passes through unchanged. */
+function escapeNonAscii(s) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    out += c < 0x80 ? s[i] : "\\u" + c.toString(16).toUpperCase().padStart(4, "0");
+  }
+  return out;
 }

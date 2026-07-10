@@ -1,0 +1,6 @@
+# Cloudflare Pages headers — cross-origin isolation enables SharedArrayBuffer
+# for the planned SAB snapshot fast path (worklet ↔ main thread). The app is
+# fully self-contained (vendored assets only), so COEP breaks nothing.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

@@ -4,7 +4,9 @@
 // op.coalesceKey (same key + same gestureId collapse in the undo stack).
 //
 // Dirty tags: {kind:"pattern", song, pat} | {kind:"cue", song, cue}
-//           | {kind:"scalar", song, key}
+//           | {kind:"scalar", song, key} | {kind:"inst", slot} | {kind:"bank"}
+
+import { applyPlan, captureBankState, restoreBankState } from "./bankmerge.js";
 
 export function setCellOp(song, pat, row, fields, gestureId = null) {
   return {
@@ -72,6 +74,28 @@ export function setInstFieldOp(slot, key, value, gestureId = null) {
       doc.markInstUsed(slot);
       doc.dirty = true;
       return setInstFieldOp(slot, key, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
+/** Write one or more raw record bytes atomically (for fields split across
+ *  bytes that are not single decoded properties — e.g. the SoundFont filter
+ *  cutoff/resonance whose low byte lives in the reserved region). `pairs` is
+ *  [[offset, byte], …]; the inverse restores all touched bytes in one step, so
+ *  a slider drag coalesces cleanly. */
+export function setInstBytesOp(slot, pairs, gestureId = null) {
+  return {
+    type: "setInstBytes",
+    slot, pairs, gestureId,
+    coalesceKey: `instbytes:${slot}:${pairs.map((p) => p[0]).join(",")}`,
+    apply(doc) {
+      const inst = doc.instruments[slot & 0x3ff];
+      const prev = pairs.map(([o]) => [o, inst.getByteNormal(o)]);
+      for (const [o, b] of pairs) inst.setByte(o, b & 0xff);
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setInstBytesOp(slot, prev, gestureId);
     },
     dirty: () => [{ kind: "inst", slot }],
   };
@@ -187,6 +211,80 @@ export function retuneOp(song, newPreset, percSlots, retuneFn, gestureId = null)
       const pats = new Set((this._changes ?? []).map((c) => c.pat));
       return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
     },
+  };
+}
+
+/** Import instruments from another bank (bankmerge.planImport plan). The
+ *  inverse is a full snapshot swap of everything the plan touches (pool
+ *  spans, inst records, ixmp list, INam/SNam/Ixmp sections) — capture is
+ *  cheap because only the touched spans/slots are stored. Dirty {kind:"bank"}
+ *  → DocSync re-uploads the whole image + patch blobs. */
+export function importBankOp(plan, gestureId = null) {
+  return {
+    type: "importBank",
+    plan, gestureId,
+    coalesceKey: "importBank",
+    apply(doc) {
+      const prev = captureBankState(doc, plan);
+      applyPlan(doc, plan);
+      return restoreBankSnapshotOp(plan, prev, gestureId);
+    },
+    dirty: () => [{ kind: "bank" }],
+  };
+}
+
+function restoreBankSnapshotOp(plan, state, gestureId) {
+  return {
+    type: "restoreBankSnapshot",
+    plan, state, gestureId,
+    coalesceKey: "importBank",
+    apply(doc) {
+      const prev = captureBankState(doc, plan);
+      restoreBankState(doc, state);
+      return restoreBankSnapshotOp(plan, prev, gestureId);
+    },
+    dirty: () => [{ kind: "bank" }],
+  };
+}
+
+/** Overwrite a sample-pool span (sample editor DSP ops). The inverse restores
+ *  the previous bytes; dirty {kind:"bank"} re-uploads the image, so playback
+ *  hears the edit immediately. */
+export function setSampleBytesOp(ptr, bytes, gestureId = null) {
+  return {
+    type: "setSampleBytes",
+    ptr, bytes, gestureId,
+    coalesceKey: `smpbytes:${ptr}:${bytes.length}`,
+    apply(doc) {
+      const prev = Uint8Array.from(doc.sampleBin.subarray(ptr, ptr + bytes.length));
+      doc.sampleBin.set(bytes, ptr);
+      doc.dirty = true;
+      return setSampleBytesOp(ptr, prev, gestureId);
+    },
+    dirty: () => [{ kind: "bank" }],
+  };
+}
+
+/** Raw record bytes across SEVERAL instruments in one undo step — the sample
+ *  editor writes shared loop/play fields to every base-instrument user of a
+ *  sample at once. edits = [{slot, pairs: [[offset, byte], …]}]. */
+export function multiInstBytesOp(edits, gestureId = null) {
+  return {
+    type: "multiInstBytes",
+    edits, gestureId,
+    coalesceKey: `minst:${edits.map((e) => e.slot).join(",")}:${edits[0]?.pairs.map((p) => p[0]).join(",") ?? ""}`,
+    apply(doc) {
+      const inverse = edits.map(({ slot, pairs }) => {
+        const inst = doc.instruments[slot & 0x3ff];
+        const prev = pairs.map(([o]) => [o, inst.getByteNormal(o)]);
+        for (const [o, b] of pairs) inst.setByte(o, b & 0xff);
+        doc.markInstUsed(slot);
+        return { slot, pairs: prev };
+      });
+      doc.dirty = true;
+      return multiInstBytesOp(inverse, gestureId);
+    },
+    dirty: () => edits.map(({ slot }) => ({ kind: "inst", slot })),
   };
 }
 

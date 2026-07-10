@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>tracker/MIDI import smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- Pyodide-in-a-worker DEADLOCKS under --virtual-time-budget (worker timers
+       starve while the main frame's virtual clock races). This smoke must run
+       in REAL time: the /hang image below keeps the load event pending so
+       --dump-dom waits for --timeout instead of dumping at load. Recipe:
+         python3 tools/test-server.py &   # repo file server + /hang on :8932
+         chromium --headless=new --disable-gpu --no-sandbox --timeout=60000 \
+           --dump-dom http://localhost:8932/test/browser/convert-smoke.html
+       (On a plain http.server the img 404s instantly and this page will dump
+       at load — use tools/test-server.py.) -->
+  <img src="/hang" hidden>
+  <!-- ?load with a RAW .xm exercises the whole import pipeline on boot:
+       loadBytes → convert.worker (Pyodide) → xm2taud.py → parse → views -->
+  <iframe id="app" src="../../index.html?load=test/corpus/import/milky.xm" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        // No wall-clock guard: under --virtual-time-budget the clock races far
+        // ahead of real wasm work. Run with a huge virtual budget capped by a
+        // REAL --timeout, e.g.:
+        //   chromium --headless=new --virtual-time-budget=100000000 \
+        //     --timeout=60000 --dump-dom .../convert-smoke.html
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 200);
+        });
+        const { store, loadBytes } = win.__microtone;
+        log("xm import via ?load:");
+        log(`  fileName: ${store.fileName} (${store.fileName === "milky.taud" ? "ok" : "WRONG"})`);
+        log(`  patterns: ${store.doc.songs[0].patterns.length}, insts: ${store.doc.usedInstrumentSlots().length}, dirty: ${store.doc.dirty}`);
+        const xmOk = store.fileName === "milky.taud" &&
+          store.doc.songs[0].patterns.length > 0 && store.doc.usedInstrumentSlots().length > 0 &&
+          store.doc.dirty === true;
+        log(`  → ${xmOk ? "ok" : "FAIL"}`);
+
+        // second conversion through the SAME worker/runtime (.it)
+        store.doc.dirty = false; // skip the unsaved-changes confirm (headless auto-dismisses)
+        const itBytes = new Uint8Array(await (await fetch("../corpus/import/TUTE.IT")).arrayBuffer());
+        await loadBytes("TUTE.IT", itBytes);
+        const itOk = store.fileName === "TUTE.taud" && store.doc.usedInstrumentSlots().length > 0;
+        log(`it import (runtime reuse): ${store.fileName}, insts: ${store.doc.usedInstrumentSlots().length} → ${itOk ? "ok" : "FAIL"}`);
+
+        // MIDI with the bundled GeneralUser-GS.sf2 (fetched from the app root)
+        store.doc.dirty = false;
+        const midBytes = new Uint8Array(await (await fetch("../corpus/import/M_E1M1.mid")).arrayBuffer());
+        await loadBytes("M_E1M1.mid", midBytes);
+        const used = store.doc.usedInstrumentSlots();
+        const hasMeta = used.some((s) => store.doc.instruments[s].isMeta);
+        const midOk = store.fileName === "M_E1M1.taud" && used.length > 0 && hasMeta;
+        log(`mid import (bundled sf2): ${store.fileName}, insts: ${used.length}, meta: ${hasMeta} → ${midOk ? "ok" : "FAIL"}`);
+
+        // SF2 instrument import (1.1): drive the IFRAME's own modules so the
+        // already-booted conversion worker is reused, exactly like the picker.
+        const conv = await win.eval('import("/src/convert/convert.js")');
+        const fmt = await win.eval('import("/src/format/taud-parse.js")');
+        const docm = await win.eval('import("/src/doc/document.js")');
+        const bm = await win.eval('import("/src/doc/bankmerge.js")');
+        const ops = await win.eval('import("/src/doc/ops.js")');
+        const sf2Bytes = new Uint8Array(await (await fetch("/GeneralUser-GS.sf2")).arrayBuffer());
+        const presets = await conv.listSf2Presets(sf2Bytes);
+        log(`sf2 presets listed: ${presets.length} (${presets[0]?.name})`);
+        const tsii = await conv.buildSf2Bank(sf2Bytes, [[0, 0]], { bpm: store.doc.songs[0].bpm });
+        const src = new docm.Document(fmt.parseTaud(tsii));
+        const top = src.usedInstrumentSlots().filter((s) => s <= 255);
+        const plan = bm.planImport(store.doc, src, top);
+        if (plan.error) throw new Error("sf2 plan: " + plan.error);
+        store.undo.apply(ops.importBankOp(plan));
+        const gpSlot = plan.slotMap.get(top[0]);
+        const sf2Ok = store.doc.instrumentName(gpSlot) === "Grand Piano";
+        log(`sf2 import: "${store.doc.instrumentName(gpSlot)}" at $${gpSlot.toString(16)} → ${sf2Ok ? "ok" : "FAIL"}`);
+
+        // .tpif leg: serialise the loaded doc's song domain as a .tpif (kind
+        // flip through toBytes), then reload it via loadBytes — exercises the
+        // combine-with-resident-bank branch. Grand Piano (imported above)
+        // must survive because the bank is carried over.
+        const patsBefore = store.doc.songs[0].patterns.length;
+        store.doc.kind = "tpif";
+        const tpifBytes = store.doc.toBytes();
+        store.doc.kind = "taud";
+        store.doc.dirty = false;
+        await loadBytes("roundtrip.tpif", tpifBytes);
+        const tpOk = store.fileName === "roundtrip.taud" &&
+          store.doc.songs[0].patterns.length === patsBefore &&
+          store.doc.instrumentName(gpSlot) === "Grand Piano" &&
+          store.doc.dirty === true;
+        log(`tpif reload over resident bank: ${store.fileName}, pats ${store.doc.songs[0].patterns.length}/${patsBefore}, ` +
+            `gp: "${store.doc.instrumentName(gpSlot)}" → ${tpOk ? "ok" : "FAIL"}`);
+
+        log(xmOk && itOk && midOk && sf2Ok && tpOk ? "ALL PASS" : "FAILURES");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -24,7 +24,9 @@ export function decomp(bytes, expectedSize) {
   );
 }
 
-/** Compress a section for writing (always gzip; TSVM sniffs the magic on load). */
+/** Compress a section for writing (always gzip; TSVM sniffs the magic on load).
+ *  mtime 0 like the *2taud converters — without it fflate stamps the current
+ *  time into the gzip header and toBytes() stops being deterministic. */
 export function comp(bytes) {
-  return gzipSync(bytes);
+  return gzipSync(bytes, { mtime: 0 });
 }

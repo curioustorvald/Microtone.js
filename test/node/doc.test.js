@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
-import { setCellOp, setCueWordOp, setSongScalarOp } from "../../src/doc/ops.js";
+import { setCellOp, setCueWordOp, setSongScalarOp, setInstBytesOp } from "../../src/doc/ops.js";
 import { UndoStack } from "../../src/doc/undo.js";
 import { DocSync } from "../../src/doc/sync.js";
 
@@ -46,6 +46,28 @@ test("songMap covers sequential cues with row limits", () => {
     acc += e.rowLimit;
   }
   assert.equal(map.totalRows, acc);
+});
+
+test("setInstBytesOp: atomic multi-byte write, invertible, SF16 composition", () => {
+  const doc = new Document(parseTaud(whenBytes));
+  const slot = [...doc.usedInstrumentSlots()].find((s) => !doc.instruments[s].isMeta);
+  const inst = doc.instruments[slot];
+  const before = [inst.getByteNormal(182), inst.getByteNormal(252),
+    inst.getByteNormal(173)];
+  // Enter SoundFont mode (byte 173 bit 4) and write a 16-bit cutoff = 7000
+  // across the high byte (182) and reserved low byte (252).
+  inst.setByte(173, (inst.fadeoutHigh & 0x0f) | 0x10);
+  const op = setInstBytesOp(slot, [[182, (7000 >> 8) & 0xff], [252, 7000 & 0xff]]);
+  const inverse = op.apply(doc);
+  assert.equal(inst.getByteNormal(182), (7000 >> 8) & 0xff);
+  assert.equal(inst.getByteNormal(252), 7000 & 0xff);
+  assert.ok(inst.filterSfMode);
+  assert.equal(inst.defaultCutoff16, 7000); // getter composes 182<<8 | reserved[1]
+  // toBytes must carry the reserved low byte through (sync/serialisation path).
+  assert.equal(doc.instRecordBytes(slot)[252], 7000 & 0xff);
+  inverse.apply(doc);
+  assert.equal(inst.getByteNormal(182), before[0]);
+  assert.equal(inst.getByteNormal(252), before[1]);
 });
 
 test("setCellOp apply → invert restores the cell", () => {

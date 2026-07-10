@@ -4372,6 +4372,7 @@ const CMD = Object.freeze({
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
   QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
   SNAPSHOT_RETURN: "snapshotReturn",               // {buffer: ArrayBuffer} (recycle)
+  USE_SAB: "useSab",                               // {sab: SharedArrayBuffer} — switch to shared-memory snapshots
 });
 
 const MSG = Object.freeze({
@@ -4412,6 +4413,13 @@ const SNAP_VOICE_STRIDE = 16;
 
 const SNAP_MAX_VOICES = 64;
 const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1032
+
+// SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
+// float snapshot region plus a trailing Int32 interrupt-latch cell that the
+// worklet ORs into (Atomics.or) and the main thread drains
+// (Atomics.exchange 0). The float SNAP_INTERRUPT_MASK slot is only used by
+// the postMessage fallback.
+const SNAP_SAB_BYTES = SNAP_FLOATS * 4 + 4;
 
 // ══ src/worklet/taud-processor.js ══
 // TaudProcessor — AudioWorkletProcessor hosting the Taud engine.
@@ -4454,6 +4462,10 @@ class TaudProcessor extends AudioWorkletProcessor {
       new ArrayBuffer(SNAP_FLOATS * 4),
       new ArrayBuffer(SNAP_FLOATS * 4),
     ];
+    // SAB fast path (CMD.USE_SAB): write snapshots straight into shared
+    // memory — no messaging, no buffer recycling.
+    this.sabF32 = null;
+    this.sabI32 = null;
 
     this.port.onmessage = (e) => this.onCommand(e.data);
     this.port.postMessage({ t: MSG.READY });
@@ -4508,6 +4520,10 @@ class TaudProcessor extends AudioWorkletProcessor {
       case CMD.SNAPSHOT_RETURN:
         if (this.snapshotPool.length < 2) this.snapshotPool.push(m.buffer);
         break;
+      case CMD.USE_SAB:
+        this.sabF32 = new Float32Array(m.sab, 0, SNAP_FLOATS);
+        this.sabI32 = new Int32Array(m.sab, SNAP_FLOATS * 4, 1);
+        break;
     }
   }
 
@@ -4537,9 +4553,25 @@ class TaudProcessor extends AudioWorkletProcessor {
   }
 
   assembleSnapshot() {
+    if (this.sabF32 !== null) {
+      // Shared-memory path: fill in place; interrupts accumulate in the
+      // trailing Int32 cell until the main thread drains it atomically.
+      this.fillSnapshot(this.sabF32);
+      this.sabF32[SNAP_INTERRUPT_MASK] = 0;
+      const drained = this.engine.playheads[this.playhead].trackerState.drainInterrupts();
+      if (drained !== 0) Atomics.or(this.sabI32, 0, drained);
+      return;
+    }
     const buffer = this.snapshotPool.pop();
     if (!buffer) return; // main thread slow returning — skip, never allocate
     const f = new Float32Array(buffer);
+    this.fillSnapshot(f);
+    f[SNAP_INTERRUPT_MASK] = this.engine.playheads[this.playhead].trackerState.drainInterrupts();
+    this.port.postMessage({ t: MSG.SNAPSHOT, buffer }, [buffer]);
+  }
+
+  /** Write every snapshot field except the interrupt latch into `f`. */
+  fillSnapshot(f) {
     const eng = this.engine;
     const ph = eng.playheads[this.playhead];
     const ts = ph.trackerState;
@@ -4549,7 +4581,6 @@ class TaudProcessor extends AudioWorkletProcessor {
     f[SNAP_BPM] = ph.bpm;
     f[SNAP_TICK_RATE] = ph.tickRate;
     f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
-    f[SNAP_INTERRUPT_MASK] = ts.drainInterrupts();
     f[SNAP_CHANNEL_COUNT] = eng.channelCount();
     for (let vi = 0; vi < MAX_VOICES; vi++) {
       const v = ts.voices[vi];
@@ -4594,7 +4625,6 @@ class TaudProcessor extends AudioWorkletProcessor {
         f[o + SNAP_V_ENV_FILTER_IDX] = -1;
       }
     }
-    this.port.postMessage({ t: MSG.SNAPSHOT, buffer }, [buffer]);
   }
 
   process(_inputs, outputs) {
