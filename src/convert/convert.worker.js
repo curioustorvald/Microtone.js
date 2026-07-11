@@ -17,7 +17,7 @@ let queue = Promise.resolve(); // one conversion at a time
 function ensureRuntime(onStatus) {
   if (!runtimePromise) {
     runtimePromise = (async () => {
-      const { loadPyodide } = await import(new URL("pyodide/pyodide.mjs", VENDOR));
+      const { loadPyodide } = await import(new URL("pyodide/pyodide.js", VENDOR));
       const sources = {};
       const fetchSource = async (name, url) => {
         const res = await fetch(url);

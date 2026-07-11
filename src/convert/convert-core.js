@@ -36,7 +36,7 @@ export function converterFor(name) {
 
 /**
  * Load Pyodide and install the converter sources on its MEMFS.
- * @param loadPyodide  the function from vendor/pyodide/pyodide.mjs
+ * @param loadPyodide  the function from vendor/pyodide/pyodide.js
  * @param indexURL     URL/path of vendor/pyodide/
  * @param sources      {fileName: Uint8Array} for CONVERTER_SOURCES
  * @param onStatus     optional (line) => void progress callback

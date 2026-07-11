@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { loadPyodide } from "../../vendor/pyodide/pyodide.mjs";
+import { loadPyodide } from "../../vendor/pyodide/pyodide.js";
 import {
   CONVERTER_SOURCES, SF2BANK_SOURCE, converterFor, loadConverterRuntime,
   runConverter, buildArgv,

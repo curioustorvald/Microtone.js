@@ -20,10 +20,15 @@ never on the normal app path.
 
 | File | Version | Source |
 |---|---|---|
-| `pyodide/pyodide.mjs`, `pyodide.asm.mjs`, `pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json` | 314.0.2 (CPython 3.14.2) | https://github.com/pyodide/pyodide/releases/download/314.0.2/pyodide-core-314.0.2.tar.bz2 |
+| `pyodide/pyodide.js`, `pyodide.asm.js`, `pyodide.asm.wasm`, `python_stdlib.zip`, `pyodide-lock.json` | 314.0.2 (CPython 3.14.2) | https://github.com/pyodide/pyodide/releases/download/314.0.2/pyodide-core-314.0.2.tar.bz2 |
 
-To update: extract those five files from the release tarball, run the
-conversion tests.
+To update: extract those five files from the release tarball, then RENAME the
+two module files `pyodide.mjs → pyodide.js` and `pyodide.asm.mjs →
+pyodide.asm.js` and fix the `pyodide.asm.mjs` reference inside `pyodide.js`
+(sed `s/pyodide\.asm\.mjs/pyodide.asm.js/`). Reason: static hosts that don't
+map the `.mjs` extension serve it with no/`text/x-asm` MIME type, and browsers
+refuse to load an ES module without a JS MIME type — the `.js` extension is
+universally recognised. Then run the conversion tests.
 
 ## converters/ — canonical Taud converters (verbatim copies from tsvm)
 

@@ -14,8 +14,8 @@ window.addEventListener("unhandledrejection", (e) => log("unhandled rejection: "
 
 // main-thread boot (control group)
 try {
-  const { loadPyodide } = await import("/vendor/pyodide/pyodide.mjs");
-  log("main: pyodide.mjs imported");
+  const { loadPyodide } = await import("/vendor/pyodide/pyodide.js");
+  log("main: pyodide.js imported");
   const py = await loadPyodide({ indexURL: new URL("/vendor/pyodide/", location.href).href });
   log("main: booted " + py.runPython("import sys; sys.version.split()[0]"));
 } catch (err) { log("main boot error: " + err.message); }
