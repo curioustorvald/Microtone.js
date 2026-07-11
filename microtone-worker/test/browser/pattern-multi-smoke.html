@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>multi-column pattern view smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 31: Patterns tab = multiple "view windows" (PatternPanes), each with
+    // its own pattern + scroll; edit tools/preview/keyboard act on the active
+    // column; column count follows the viewport width (minimum 2). Drives the
+    // real app to prove the container ↔ pane delegation + responsive layout.
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const key = (win, code, k, opts = {}) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key: k, bubbles: true, ...opts }));
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key: k, bubbles: true, ...opts }));
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, patternView } = win.__microtone;
+        log("app loaded, doc ready");
+        const checks = [];
+        const check = (name, ok) => { checks.push(ok); log(`${ok ? "ok  " : "FAIL"} ${name}`); };
+
+        // Switch to Patterns via the real F3 path (runs showView → layout()).
+        key(win, "F3", "F3");
+        await sleep(100);
+
+        // 1. At least two columns on a wide (1200px) viewport.
+        const n = patternView.panes.length;
+        check(`>= 2 panes on wide viewport (got ${n})`, n >= 2);
+
+        // 2. Columns hold independent patterns + independent scroll.
+        patternView.panes[0].setPattern(1);
+        patternView.panes[1].setPattern(4);
+        patternView.panes[0].scrollRow = 0;
+        patternView.panes[1].scrollRow = 12;
+        check("panes carry independent pattern indices",
+          patternView.panes[0].patIdx === 1 && patternView.panes[1].patIdx === 4);
+        check("panes carry independent scroll",
+          patternView.panes[0].scrollRow === 0 && patternView.panes[1].scrollRow === 12);
+
+        // 3. Active tracking: default active = column 0, .active class applied.
+        check("column 0 active by default",
+          patternView.activeIdx === 0 &&
+          patternView.panes[0].el.classList.contains("active") &&
+          !patternView.panes[1].el.classList.contains("active"));
+
+        // 4. Delegating surface follows the active pane.
+        check("patternView.patIdx delegates to active pane",
+          patternView.patIdx === patternView.panes[0].patIdx);
+        check("patternView.cursor is the active pane's cursor",
+          patternView.cursor === patternView.panes[0].cursor);
+
+        // 5. Tab cycles the active column; delegation moves with it.
+        key(win, "Tab", "Tab");
+        await sleep(20);
+        check("Tab activates column 1",
+          patternView.activeIdx === 1 &&
+          patternView.panes[1].el.classList.contains("active") &&
+          !patternView.panes[0].el.classList.contains("active"));
+        check("delegation follows to column 1",
+          patternView.patIdx === 4 && patternView.cursor === patternView.panes[1].cursor);
+
+        // 6. Clicking (setActivePane) re-focuses column 0.
+        patternView.setActivePane(patternView.panes[0]);
+        check("setActivePane re-focuses column 0", patternView.activeIdx === 0);
+
+        // 7. Selection + Ctrl+C read the ACTIVE pane (column 0 → pattern 1).
+        patternView.sel = { aRow: 0, row: 2 };            // setter → active.sel
+        check("sel setter targets active pane",
+          patternView.panes[0].sel !== null && patternView.panes[1].sel === null);
+        key(win, "KeyC", "c", { ctrlKey: true });         // app selView → copy
+        const block = store.clipboard;
+        check("Ctrl+C copies 3 rows from the active column",
+          !!block && block.rows === 3);
+
+        // Switching columns clears the stray selection we left behind.
+        key(win, "Tab", "Tab");
+        await sleep(20);
+        check("focus change clears the left column's selection",
+          patternView.panes[0].sel === null);
+        patternView.setActivePane(patternView.panes[0]);
+
+        // 8. Shared preview button label reflects the active pane's state.
+        const previewLabel = patternView.previewBtn.textContent;
+        check("preview button shows the idle label",
+          previewLabel && !/stop/i.test(previewLabel));
+
+        // 9. Responsive: a narrow viewport collapses to the 2-column minimum.
+        // (ResizeObserver callbacks don't flush under headless virtual time, so
+        // drive layout() directly — it reads the live, reflowed panesEl width.)
+        // First make the LAST column active to prove the shrink clamps active.
+        patternView.setActivePane(patternView.panes[patternView.panes.length - 1]);
+        frame.style.width = "540px";
+        await sleep(50);
+        patternView.layout();
+        const narrowW = patternView.panesEl.clientWidth;
+        check(`narrow viewport collapses to 2 (${narrowW}px → ${patternView.panes.length})`,
+          patternView.panes.length === 2);
+        check("active index clamps into range after shrink",
+          patternView.activeIdx >= 0 && patternView.activeIdx < patternView.panes.length &&
+          patternView.panes[patternView.activeIdx].el.classList.contains("active"));
+        // Column numbers renumber contiguously.
+        check("columns renumbered #1..#N after shrink",
+          patternView.panes.every((p, i) => p.numEl.textContent === "#" + (i + 1)));
+
+        frame.style.width = "1200px";
+        await sleep(50);
+        patternView.layout();
+        check(`wide viewport grows past 2 again (${patternView.panesEl.clientWidth}px → ${patternView.panes.length})`,
+          patternView.panes.length > 2);
+
+        const pass = checks.every(Boolean);
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

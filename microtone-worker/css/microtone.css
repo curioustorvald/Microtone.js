@@ -598,7 +598,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   flex-direction: column;
   padding: 0.5rem 0.8rem;
 }
-.pattern-view .files-bar { align-items: center; margin-bottom: 0.4rem; }
+.pattern-view .files-bar { align-items: center; margin-bottom: 0.4rem; flex-wrap: wrap; }
 .pat-input {
   width: 4.5rem;
   text-align: center;
@@ -609,7 +609,30 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   border-radius: 4px;
   padding: 0.25rem;
 }
-.pattern-canvas { flex: 1; border: 1px solid var(--border); border-radius: 6px; }
+/* Responsive row of pattern "view windows"; each column scrolls on its own. */
+.pattern-panes { flex: 1; display: flex; gap: 0.7rem; min-height: 0; }
+.pattern-pane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.pattern-pane-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.1rem 0.3rem;
+  font-size: 0.8rem;
+}
+.pattern-pane-hd .pane-num { color: var(--dim); font-family: "Roboto Mono", monospace; }
+.pattern-pane-hd .pat-input { width: 3.8rem; padding: 0.15rem; }
+.pattern-pane-hd button { padding: 0.05rem 0.4rem; font-size: 0.85rem; }
+.pattern-pane-hd .pane-info {
+  flex: 1;
+  min-width: 0;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pattern-canvas { display: block; border: 1px solid var(--border); border-radius: 6px; }
+.pattern-pane.active .pattern-canvas { border-color: var(--accent); }
+.pattern-pane.active .pane-num { color: var(--accent); }
 
 .help-modal { max-width: 720px; }
 

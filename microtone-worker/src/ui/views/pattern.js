@@ -1,10 +1,12 @@
-// Pattern view (F3) — single-pattern editor. A Taud pattern is a per-channel
-// entity (64 rows × 8-byte cells); cues place patterns onto channels. This
-// view edits one pattern directly (regardless of cue assignments), shows
-// which cues use it, and previews it via a device-only scratch cue.
+// Pattern view (F3) — multi-column pattern editor. A Taud pattern is a
+// per-channel entity (64 rows × 8-byte cells); cues place patterns onto
+// channels. This view shows SEVERAL patterns side by side ("view windows",
+// each an independent PatternPane with its own pattern selector + scroll), so
+// a musician can edit one pattern while referencing/copy-pasting others in
+// real time. The shared toolbar's edit tools + preview act on the currently
+// ACTIVE column. Column count follows the viewport width (minimum 2).
 // Reference: taut.js VIEW_PATTERN_DETAILS + PREVIEW_CUE_IDX.
 
-import { PATTERN_EMPTY } from "../../engine/constants.js";
 import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { paintNoteCell } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
@@ -31,48 +33,67 @@ const ROW_H = 17;
 const GUTTER_W = 34;
 const PREVIEW_CUE = 8191; // device-only scratch cue (taut PREVIEW_CUE_IDX idiom)
 
+const MIN_PANES = 2;         // spec: at least two columns
+const MAX_PANES = 6;         // sanity cap for very wide viewports
+const MIN_PANE_W = 300;      // px budget per column before we add another
+
 function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-export class PatternView {
-  constructor(store, host, jam) {
-    this.store = store;
-    this.jam = jam;
-    this.visible = false;
+// ───────────────────────── one column ─────────────────────────
+// A PatternPane owns a pattern index, cursor, scroll, selection and its own
+// canvas. All the per-pattern editing lives here; the container routes the
+// shared toolbar/keyboard to whichever pane is active.
+class PatternPane {
+  constructor(container, index) {
+    this.container = container;
+    this.store = container.store;
+    this.jam = container.jam;
+    this.index = index;
     this.patIdx = 0;
     this.cursor = { row: 0, sub: 0, nib: 0 };
     this.scrollRow = 0;
-    this.sel = null;    // row-range selection {aRow, row}
-    this._drag = null;  // active pointer-drag anchor row
+    this.sel = null;    // row-range selection {aRow, row, aSub, sub}
+    this._drag = null;  // active pointer-drag anchor {row, sub}
     this.previewing = false;
     this.previewStarted = false; // set once the worklet confirms playback
     this.needsRedraw = true;
 
-    this.root = document.createElement("div");
-    this.root.className = "pattern-view";
-    this.bar = document.createElement("div");
-    this.bar.className = "files-bar";
-    this.buildBar();
+    this.el = document.createElement("div");
+    this.el.className = "pattern-pane";
+    this.header = document.createElement("div");
+    this.header.className = "pattern-pane-hd";
+    this.numEl = document.createElement("span");
+    this.numEl.className = "pane-num";
+    this.numEl.textContent = "#" + (index + 1);
+    this.patInput = document.createElement("input");
+    this.patInput.type = "text";
+    this.patInput.className = "pat-input";
+    this.patInput.addEventListener("change", () => this.setPattern(parseInt(this.patInput.value, 16) || 0));
+    const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
+    const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
+    this.info = document.createElement("span");
+    this.info.className = "pane-info";
+    this.header.append(this.numEl, prev, this.patInput, next, this.info);
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "pattern-canvas";
-    this.root.append(this.bar, this.canvas);
-    host.appendChild(this.root);
+    this.el.append(this.header, this.canvas);
     this.ctx = this.canvas.getContext("2d");
 
-    store.on("doc", () => {
-      this.patIdx = 0;
-      this.cursor = { row: 0, sub: 0, nib: 0 };
-      this.scrollRow = 0;
-      this.sel = null;
-      if (this.visible) this.refreshBar();
-      this.invalidate();
-    });
-    store.on("edit", () => this.invalidate());
+    this.attachEvents();
+  }
 
+  isActive() { return this.container.active === this; }
+  invalidate() { this.needsRedraw = true; }
+  setIndex(i) { this.index = i; this.numEl.textContent = "#" + (i + 1); }
+  applyActiveClass(on) { this.el.classList.toggle("active", on); }
+
+  attachEvents() {
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      if (this.store.record && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
+      // Wheel-edit only on the active column (record mode); reference panes scroll.
+      if (this.store.record && this.isActive() && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
       this.scrollRow = clampInt(this.scrollRow + Math.round(d / ROW_H), 0, 48);
       this.invalidate();
     }, { passive: false });
@@ -80,6 +101,7 @@ export class PatternView {
     this.canvas.addEventListener("pointerdown", (e) => {
       const hit = this.hitTest(e);
       if (!hit) return;
+      this.container.setActivePane(this); // clicking a column focuses it
       if (e.shiftKey) {
         // Shift+click = full-column selection.
         if (!this.sel) this.sel = { aRow: this.cursor.row, row: hit.row, aSub: 0, sub: SUB_FX_ARG };
@@ -111,47 +133,6 @@ export class PatternView {
         this._drag = null;
       }
     });
-
-    new ResizeObserver(() => { if (this.visible) this.resize(); }).observe(this.root);
-  }
-
-  show() { this.visible = true; this.refreshBar(); this.resize(); }
-  hide() { this.visible = false; if (this.previewing) this.stopPreview(); }
-  invalidate() { this.needsRedraw = true; }
-
-  /** (Re)build the toolbar — labels come from i18n, so this also re-runs on a
-   *  runtime language change. */
-  buildBar() {
-    this.bar.innerHTML = "";
-    this.patInput = document.createElement("input");
-    this.patInput.type = "text";
-    this.patInput.className = "pat-input";
-    this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
-    this.patInput.addEventListener("change", () => {
-      this.setPattern(parseInt(this.patInput.value, 16) || 0);
-    });
-    const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
-    const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
-    this.previewBtn = mkBtn(this.previewing ? t("pat.previewStop") : t("pat.preview"), () => this.togglePreview());
-    const dupBtn = mkBtn(t("pat.duplicate"), () => this.duplicate());
-    dupBtn.title = t("pat.duplicateTitle");
-    const trBtn = mkBtn(t("pat.transpose"), () => this.transpose());
-    trBtn.title = t("pat.transposeTitle");
-    const lenBtn = mkBtn(t("pat.lengthen"), () => this.applyPatternBytes(expandPatternBytes));
-    lenBtn.title = t("pat.lengthenTitle");
-    const shortBtn = mkBtn(t("pat.shorten"), () => this.applyPatternBytes(shrinkPatternBytes));
-    shortBtn.title = t("pat.shortenTitle");
-    const volBtn = mkBtn(t("pat.volume"), () => this.volumeOp());
-    volBtn.title = t("pat.volumeTitle");
-    const panBtn = mkBtn(t("pat.pan"), () => this.panOp());
-    panBtn.title = t("pat.panTitle");
-    const instBtn = mkBtn(t("pat.instrument"), () => this.instrumentOp());
-    instBtn.title = t("pat.instrumentTitle");
-    this.info = document.createElement("span");
-    this.info.className = "dim";
-    this.bar.append(prev, this.patInput, next, this.previewBtn,
-      dupBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn, this.info);
-    if (this.visible) this.refreshBar();
   }
 
   pattern() { return this.store.song?.patterns[this.patIdx] ?? null; }
@@ -160,7 +141,7 @@ export class PatternView {
     const numPats = this.store.song?.patterns.length ?? 0;
     this.patIdx = clampInt(idx, 0, Math.max(numPats - 1, 0));
     this.sel = null;
-    this.refreshBar();
+    this.refreshHeader();
     this.invalidate();
   }
 
@@ -250,11 +231,11 @@ export class PatternView {
     return true;
   }
 
-  refreshBar() {
-    const song = this.store.song;
-    if (!song) return;
-    // Pattern numbers are 4-digit hex, range 0000..7FFE.
+  /** Update this column's header — pattern number + which cues use it. */
+  refreshHeader() {
     this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
+    const song = this.store.song;
+    if (!song) { this.info.textContent = ""; return; }
     const users = [];
     song.cues.forEach((words, c) => {
       for (let ch = 0; ch < this.store.doc.channelCount; ch++) {
@@ -264,9 +245,9 @@ export class PatternView {
         }
       }
     });
-    this.info.textContent =
-      ` of ${song.patterns.length.toString(16).toUpperCase().padStart(4, "0")} · used by ` +
-      (users.length ? `${users.length} ${users.length === 1 ? "cue" : "cues"}: ${users.slice(0, 8).join(" ")}${users.length > 8 ? "…" : ""}` : "no cue");
+    this.info.textContent = users.length
+      ? `${users.length} ${users.length === 1 ? "cue" : "cues"}: ${users.slice(0, 4).join(" ")}${users.length > 4 ? "…" : ""}`
+      : "unused";
   }
 
   /** Preview: play just this pattern via the device-only scratch cue (HALT). */
@@ -297,14 +278,12 @@ export class PatternView {
     store.audio.play(0);
     this.previewing = true;
     this.previewStarted = false; // do NOT auto-stop until the worklet confirms play
-    this.previewBtn.textContent = t("pat.previewStop");
   }
 
   stopPreview() {
     this.store.audio?.stop(0);
     this.previewing = false;
     this.previewStarted = false;
-    this.previewBtn.textContent = t("pat.preview");
   }
 
   // ── pattern-scoped edit operations ──
@@ -325,7 +304,7 @@ export class PatternView {
     if (!store.doc || !this.pattern()) return;
     store.undo.apply(setPatternBytesOp(store.songIndex, this.patIdx,
       fn(store.doc.patternBytes(store.songIndex, this.patIdx))));
-    this.refreshBar();
+    this.refreshHeader();
     this.invalidate();
   }
 
@@ -343,7 +322,7 @@ export class PatternView {
     const coarseLabel = (preset?.interval ?? 0x1000) === 0x1000
       ? t("pat.unitOctaves") : t("pat.unitPeriods");
     const result = await showModal({
-      title: t("pat.transposeModalTitle", { pat: this.patIdx.toString(16).toUpperCase().padStart(4, "0") }),
+      title: t("pat.transposeModalTitle", { pat: this._titlePat() }),
       body: t("pat.transposeBody"),
       fields: [
         { name: "fine", label: fineLabel, type: "number", value: 0, min: -4096, max: 4096 },
@@ -477,7 +456,8 @@ export class PatternView {
     this.store.emit("cursor");
   }
 
-  /** View-specific keys; true when consumed. Called from the app dispatcher. */
+  /** View-specific keys; true when consumed. Called from the container (which
+   *  has already routed here as the active pane). */
   processKey(e) {
     switch (e.code) {
       case "ArrowUp": e.shiftKey ? this.extendSelection(-1) : this.moveCursor(-1); return true;
@@ -544,8 +524,8 @@ export class PatternView {
 
   resize() {
     const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(200, this.root.clientWidth);
-    const h = Math.max(120, this.root.clientHeight - this.bar.offsetHeight - 6);
+    const w = Math.max(160, this.el.clientWidth);
+    const h = Math.max(80, this.el.clientHeight - this.header.offsetHeight - 4);
     const cw = Math.round(w * dpr);
     const ch = Math.round(h * dpr);
     if (this.canvas.width === cw && this.canvas.height === ch && this.dpr === dpr) return;
@@ -560,18 +540,22 @@ export class PatternView {
     this.draw();
   }
 
+  /** Per-frame housekeeping: playhead repaint + preview auto-stop.
+   *  Returns true when the preview state changed (so the container refreshes
+   *  the shared button). */
   frame() {
-    if (!this.visible) return;
     const audio = this.store.audio;
-    if (audio?.isPlaying()) this.needsRedraw = true; // playhead row while previewing
-    // Auto-reset the button when the preview ends — but only AFTER we've actually
-    // seen it playing. Snapshots lag the play() command by ~16 ms, so checking
+    if (this.previewing && audio?.isPlaying()) this.needsRedraw = true; // playhead row
+    let changed = false;
+    // Auto-reset when the preview ends — but only AFTER we've actually seen it
+    // playing. Snapshots lag the play() command by ~16 ms, so checking
     // !isPlaying() too early would kill the preview before it ever started.
     if (this.previewing && audio) {
       if (audio.isPlaying()) this.previewStarted = true;
-      else if (this.previewStarted) this.stopPreview();
+      else if (this.previewStarted) { this.stopPreview(); changed = true; }
     }
     if (this.needsRedraw) { this.needsRedraw = false; this.draw(); }
+    return changed;
   }
 
   draw() {
@@ -597,6 +581,7 @@ export class PatternView {
     const audio = store.audio;
     const playRow = this.previewing && audio?.isPlaying() &&
       audio.getCuePosition() === PREVIEW_CUE ? audio.getTrackerRow() : -1;
+    const active = this.isActive();
 
     const vis = Math.floor(H / ROW_H) + 1;
     const x0 = GUTTER_W + 4;
@@ -629,7 +614,9 @@ export class PatternView {
         ctx.fillStyle = C.cursor;
         ctx.fillRect(GUTTER_W, y, CELL_CHARS * CHAR_W + 8, ROW_H);
         const [cpos, cw] = subCharPos(this.cursor.sub, this.cursor.nib);
-        ctx.fillStyle = store.record ? C.caret : C.cursor;
+        // Amber record caret only on the active column; reference panes show
+        // a plain cursor so it's clear which one edits will land in.
+        ctx.fillStyle = (store.record && active) ? C.caret : C.cursor;
         ctx.fillRect(x0 + cpos * CHAR_W - 1, y, cw * CHAR_W + 2, ROW_H);
       }
       ctx.fillStyle = row % beats.sec === 0 ? C.accent
@@ -659,6 +646,202 @@ export class PatternView {
     ctx.moveTo(GUTTER_W - 2.5, 0);
     ctx.lineTo(GUTTER_W - 2.5, H);
     ctx.stroke();
+  }
+}
+
+// ───────────────────── multi-column container ─────────────────────
+// Owns the shared toolbar and a responsive row of PatternPanes. The active
+// pane receives the toolbar's edit tools, the preview button, the keyboard,
+// and the clipboard. The public surface (cursor/patIdx/sel/setPattern/… and
+// the clipboard methods) delegates to the active pane so app.js + the smoke
+// tests keep talking to `patternView` unchanged.
+export class PatternView {
+  constructor(store, host, jam) {
+    this.store = store;
+    this.jam = jam;
+    this.visible = false;
+    this.panes = [];
+    this.activeIdx = 0;
+
+    this.root = document.createElement("div");
+    this.root.className = "pattern-view";
+    this.bar = document.createElement("div");
+    this.bar.className = "files-bar";
+    this.panesEl = document.createElement("div");
+    this.panesEl.className = "pattern-panes";
+    this.root.append(this.bar, this.panesEl);
+    host.appendChild(this.root);
+
+    this.buildBar();
+
+    store.on("doc", () => {
+      this.resetPanes();
+      if (this.visible) { this.refreshAllHeaders(); this.syncPreviewBtn(); }
+      this.invalidate();
+    });
+    store.on("edit", () => this.invalidate());
+
+    this._ro = new ResizeObserver(() => { if (this.visible) this.layout(); });
+    this._ro.observe(this.root);
+
+    for (let i = 0; i < MIN_PANES; i++) this.addPane();
+    this.reassertActive();
+  }
+
+  get active() { return this.panes[this.activeIdx]; }
+
+  // ── delegating surface (app.js palette/clipboard + smoke tests) ──
+  get cursor() { return this.active.cursor; }
+  get patIdx() { return this.active.patIdx; }
+  get scrollRow() { return this.active.scrollRow; }
+  get sel() { return this.active.sel; }
+  set sel(v) { this.active.sel = v; this.active.invalidate(); }
+  pattern() { return this.active.pattern(); }
+  setPattern(i) { return this.active.setPattern(i); }
+  duplicate() { return this.active.duplicate(); }
+  applyPatternBytes(fn) { return this.active.applyPatternBytes(fn); }
+  hasSelection() { return this.active.hasSelection(); }
+  clearSelection() { return this.active.clearSelection(); }
+  copySelection() { return this.active.copySelection(); }
+  cutSelection() { return this.active.cutSelection(); }
+  deleteSelection() { return this.active.deleteSelection(); }
+  paste() { return this.active.paste(); }
+
+  show() {
+    this.visible = true;
+    this.layout();          // fit column count to width + resize panes
+    this.refreshAllHeaders();
+    this.syncPreviewBtn();
+    this.invalidate();
+  }
+  hide() {
+    this.visible = false;
+    for (const p of this.panes) if (p.previewing) p.stopPreview();
+  }
+  invalidate() { for (const p of this.panes) p.invalidate(); }
+
+  /** (Re)build the shared toolbar — labels come from i18n, so this also
+   *  re-runs on a runtime language change. Tools act on the active pane. */
+  buildBar() {
+    this.bar.innerHTML = "";
+    this.previewBtn = mkBtn(t("pat.preview"), () => this.togglePreview());
+    const dupBtn = mkBtn(t("pat.duplicate"), () => this.active.duplicate());
+    dupBtn.title = t("pat.duplicateTitle");
+    const trBtn = mkBtn(t("pat.transpose"), () => this.active.transpose());
+    trBtn.title = t("pat.transposeTitle");
+    const lenBtn = mkBtn(t("pat.lengthen"), () => this.active.applyPatternBytes(expandPatternBytes));
+    lenBtn.title = t("pat.lengthenTitle");
+    const shortBtn = mkBtn(t("pat.shorten"), () => this.active.applyPatternBytes(shrinkPatternBytes));
+    shortBtn.title = t("pat.shortenTitle");
+    const volBtn = mkBtn(t("pat.volume"), () => this.active.volumeOp());
+    volBtn.title = t("pat.volumeTitle");
+    const panBtn = mkBtn(t("pat.pan"), () => this.active.panOp());
+    panBtn.title = t("pat.panTitle");
+    const instBtn = mkBtn(t("pat.instrument"), () => this.active.instrumentOp());
+    instBtn.title = t("pat.instrumentTitle");
+    this.bar.append(this.previewBtn, dupBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn);
+    this.syncPreviewBtn();
+  }
+
+  togglePreview() {
+    const p = this.active.togglePreview();
+    return Promise.resolve(p).finally(() => this.syncPreviewBtn());
+  }
+
+  syncPreviewBtn() {
+    if (!this.previewBtn) return;
+    const label = this.active?.previewing ? t("pat.previewStop") : t("pat.preview");
+    if (this.previewBtn.textContent !== label) this.previewBtn.textContent = label;
+  }
+
+  // ── pane lifecycle + active tracking ──
+  defaultPatFor(i) {
+    const n = this.store.song?.patterns.length ?? 0;
+    return n ? Math.min(i, n - 1) : 0;
+  }
+
+  addPane() {
+    const pane = new PatternPane(this, this.panes.length);
+    pane.patIdx = this.defaultPatFor(this.panes.length);
+    this.panesEl.appendChild(pane.el);
+    this.panes.push(pane);
+    if (this.visible) { pane.refreshHeader(); pane.resize(); }
+  }
+
+  removePane() {
+    const pane = this.panes.pop();
+    if (!pane) return;
+    if (pane.previewing) pane.stopPreview();
+    pane.el.remove();
+  }
+
+  reassertActive() {
+    if (this.activeIdx >= this.panes.length) this.activeIdx = this.panes.length - 1;
+    if (this.activeIdx < 0) this.activeIdx = 0;
+    this.panes.forEach((p, i) => { p.setIndex(i); p.applyActiveClass(i === this.activeIdx); });
+    this.syncPreviewBtn();
+  }
+
+  setActivePane(pane) {
+    const i = this.panes.indexOf(pane);
+    if (i >= 0) this.setActiveIdx(i);
+  }
+
+  setActiveIdx(i) {
+    if (i < 0 || i >= this.panes.length || i === this.activeIdx) return;
+    // Preview follows the active column, and stray selections in the column we
+    // leave would only confuse — drop both when focus moves.
+    for (const p of this.panes) if (p.previewing) p.stopPreview();
+    this.panes.forEach((p, idx) => { if (idx !== i) p.clearSelection(); });
+    this.activeIdx = i;
+    this.panes.forEach((p, idx) => p.applyActiveClass(idx === i));
+    this.syncPreviewBtn();
+    this.invalidate();
+    this.store.emit("cursor"); // palette/status follow the active pane
+  }
+
+  /** Column count follows the viewport width (spec: minimum 2). */
+  layout() {
+    const width = this.panesEl.clientWidth || this.root.clientWidth || 0;
+    let want = Math.max(MIN_PANES, Math.floor(width / MIN_PANE_W));
+    want = Math.min(want, MAX_PANES);
+    while (this.panes.length < want) this.addPane();
+    while (this.panes.length > want) this.removePane();
+    this.reassertActive();
+    for (const p of this.panes) p.resize();
+  }
+
+  resetPanes() {
+    this.activeIdx = 0;
+    this.panes.forEach((p, i) => {
+      p.patIdx = this.defaultPatFor(i);
+      p.cursor = { row: 0, sub: 0, nib: 0 };
+      p.scrollRow = 0;
+      p.sel = null;
+      p.previewing = false;
+      p.previewStarted = false;
+    });
+    this.reassertActive();
+  }
+
+  refreshAllHeaders() { for (const p of this.panes) p.refreshHeader(); }
+
+  /** Tab / Shift+Tab cycles the active column; everything else routes to the
+   *  active pane. */
+  processKey(e) {
+    if (e.code === "Tab") {
+      const dir = e.shiftKey ? -1 : 1;
+      this.setActiveIdx((this.activeIdx + dir + this.panes.length) % this.panes.length);
+      return true;
+    }
+    return this.active.processKey(e);
+  }
+
+  frame() {
+    if (!this.visible) return;
+    let changed = false;
+    for (const p of this.panes) changed = p.frame() || changed;
+    if (changed) this.syncPreviewBtn();
   }
 }
 
