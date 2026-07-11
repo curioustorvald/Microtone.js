@@ -23,6 +23,7 @@ import { setCellOp } from "../doc/ops.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showAbout } from "./popups/about.js";
+import { showNewProject } from "./popups/newproject.js";
 import { showModal } from "./widgets/modal.js";
 import * as opfs from "../storage/opfs.js";
 import { pickFile } from "../storage/import-export.js";
@@ -249,23 +250,12 @@ store.on("status", updateStatus); // e.g. project rename
 
 /** New Project wizard — optionally seeded from a .tsii instrument bank. */
 async function newProject({ fromBank = null, bankName = null } = {}) {
-  const result = await showModal({
-    title: fromBank ? t("np.titleFromBank", { bank: bankName }) : t("np.title"),
-    body: fromBank ? t("np.bodyFromBank") : t("np.body"),
-    fields: [
-      { name: "name", label: t("np.name"), value: t("np.untitled") },
-      { name: "channels", label: t("np.channels"), type: "select", value: "32",
-        options: [{ value: "32", label: "32" }, { value: "64", label: "64" }] },
-      { name: "bpm", label: t("np.bpm"), type: "number", value: 125, min: 25, max: 535 },
-      { name: "speed", label: t("np.speed"), type: "number", value: 6, min: 1, max: 127 },
-    ],
-    okLabel: t("common.create"),
-  });
+  const result = await showNewProject({ fromBank, bankName });
   if (!result) return;
   if (store.doc?.dirty) {
     if (!confirm(t("confirm.discard"))) return;
   }
-  const is64 = result.channels === "64";
+  const is64 = result.channels === 64;
   const chans = is64 ? 64 : 32;
   const projName = result.name || "untitled";
 
@@ -305,10 +295,10 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
     songs: [{
       numVoices: chans,
       numPats: patterns.length,
-      bpm: parseInt(result.bpm, 10) || 125,
-      tickRate: parseInt(result.speed, 10) || 6,
-      tuningBaseNote: 0xa000,
-      tuningFreq: 8363.0,
+      bpm: result.bpm,
+      tickRate: result.tickRate,
+      tuningBaseNote: result.baseNote,
+      tuningFreq: result.baseFreq,
       globalFlags: 0,
       globalVolume: 0x80,
       mixingVolume: 0x80,
@@ -320,7 +310,10 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
     ixmp: fromBank ? fromBank.ixmp : [],
     meta: {
       projectName: projName,
-      songMeta: { 0: { notation: 120, beatPri: 4, beatSec: 16, name: projName, composer: "", copyright: "" } },
+      songMeta: { 0: {
+        notation: result.notation, beatPri: result.beatPri, beatSec: result.beatSec,
+        name: projName, composer: result.composer || "", copyright: result.copyright || "",
+      } },
     },
   };
   store.audio?.stop(0);
@@ -330,7 +323,7 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   store.fileName = null;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
-  store.pitchPreset = presetForNotation(120);
+  store.pitchPreset = presetForNotation(result.notation);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     store.emit("edit", dirty);

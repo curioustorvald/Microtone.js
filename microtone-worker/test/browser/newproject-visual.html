@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>new-project modal — visual</title>
+  <link rel="stylesheet" href="../../css/microtone.css" />
+  <style>
+    html, body { height: 100%; margin: 0; background: var(--bg); }
+  </style>
+</head>
+<body>
+  <script type="module">
+    import { showNewProject } from "../../src/ui/popups/newproject.js";
+    const params = new URLSearchParams(location.search);
+    if (params.get("theme")) document.documentElement.dataset.theme = params.get("theme");
+    showNewProject({});
+  </script>
+</body>
+</html>

@@ -48,7 +48,15 @@ and the editor snaps entry, display and stepping to that table's degrees. See
 
 - **Drop a file anywhere** on the window, or use **Open…** in the top bar. Native formats: `.taud` (full project), `.tsii` (sample+instrument bank), `.tpif` (pattern file that loads over a bank). Tracker modules (`.mod`, `.s3m`, `.xm`, `.it`, `.mon`) are converted on the fly.
 - **Import MIDI…** converts a `.mid` file through a SoundFont — see [Importing music](#importing-music).
-- **New…** opens the New Project wizard: name, 32 or 64 channels, BPM (25–535) and speed (ticks per row, 1–127). A new project has no samples — seed it by opening a `.tsii` bank first, or add instruments later from the Instruments view.
+- **New…** opens the New Project wizard, which collects every song setting before the blank project is built:
+  - **Tempo** — BPM (25–535) and speed (ticks per row, 1–127), with a live *blinkenlights* strip previewing the feel of that tempo.
+  - **Meter** — a time signature and rows-per-beat. These set the two beat divisors (rows/beat and the derived rows/bar) that colour the row highlighting; the **Row highlight** preview shows exactly how the Timeline gutter will band.
+  - **Tuning** — the reference base note (C4 or A4) and its frequency.
+  - **Metadata** — song name, composer and copyright.
+  - **Layout** — 32 or 64 channels.
+  - **Notation** — the display pitch table (12-TET, 24-TET, 31-TET, Bohlen-Pierce…), defaulting to **24-TET**. You can change it later in the Project view.
+
+  A new project has no samples — seed it by opening a `.tsii` bank first, or add instruments later from the Instruments view.
 
 The app warns before discarding unsaved changes, and autosaves your work — see
 [Saving and autosave](#saving-and-autosave).

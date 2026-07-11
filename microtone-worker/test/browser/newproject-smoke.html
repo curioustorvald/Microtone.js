@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>new-project modal smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- load a clean corpus doc so the New flow has no dirty-discard confirm -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:760px"></iframe>
+  <script type="module">
+    import { parseTaud } from "../../src/format/taud-parse.js";
+    // Todo #32: the elaborate New Project modal — notation selector (default
+    // 24-TET), primary/secondary beat divisors + live row-highlight preview,
+    // blinkenlights, tuning + metadata. Verify the modal renders and a created
+    // project carries every chosen setting.
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    let ok = true;
+    const check = (name, cond) => { if (!cond) ok = false; log(`${cond ? "ok  " : "FAIL"} ${name}`); };
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store } = win.__microtone;
+        const doc = win.document;
+
+        // ── open the modal ──
+        doc.getElementById("newBtn").click();
+        await sleep(60);
+        const dlg = doc.querySelector("dialog.np-modal");
+        check("modal opens", !!dlg && dlg.open);
+        if (!dlg) throw new Error("no modal");
+
+        // ── default notation is 24-TET ──
+        const selNote = dlg.querySelector(".np-note.sel .np-note-name");
+        check("default notation = 24-TET", selNote && selNote.textContent === "24-TET");
+
+        // ── preview grid + blinkenlights rendered ──
+        const prevRows = dlg.querySelectorAll(".np-prev-row");
+        check("preview grid rendered (32 rows)", prevRows.length === 32);
+        check("blinkenlights canvas present", !!dlg.querySelector("canvas.np-blink"));
+
+        const inp = (f) => dlg.querySelector(`[data-f="${f}"]`);
+
+        // ── derived rows/bar updates live from time-sig × rows/beat ──
+        inp("rpb").value = "3"; inp("rpb").dispatchEvent(new Event("input", { bubbles: true }));
+        inp("tnum").value = "5"; inp("tnum").dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(20);
+        check("rows/bar derived = 15", /15/.test(inp("rpbar").textContent));
+        // re-query: drawPreview() rebuilt the grid for the new 3/15 divisions
+        const pr = dlg.querySelectorAll(".np-prev-row");
+        // preview row 15 (= beatSec) is a bar row, row 3 (= beatPri) is a beat row
+        check("preview row 15 is a bar row", pr[15].classList.contains("bar"));
+        check("preview row 3 is a beat row", pr[3].classList.contains("beat"));
+
+        // ── tempo fields ──
+        inp("bpm").value = "140";
+        inp("spd").value = "8";
+
+        // ── 64-channel layout ──
+        dlg.querySelector('[data-chan="64"]').click();
+        check("64-channel chip selected", dlg.querySelector('[data-chan="64"]').classList.contains("sel"));
+
+        // ── base note C4 → freq auto-updates ──
+        dlg.querySelector('[data-base="0"]').click();
+        check("base-note C4 auto-sets freq 261.6256", inp("freq").value === "261.6256");
+
+        // ── metadata ──
+        inp("name").value = "SmokeSong";
+        inp("comp").value = "Tester";
+
+        // ── pick 31-TET notation ──
+        const note31 = [...dlg.querySelectorAll("[data-note]")]
+          .find((el) => el.querySelector(".np-note-name").textContent === "31-TET");
+        note31.click();
+        check("31-TET selectable", note31.classList.contains("sel"));
+
+        // ── create ──
+        dlg.querySelector(".np-ok").click();
+        await sleep(80);
+
+        const sm = store.doc.meta.songMeta[0];
+        const song = store.doc.songs[0];
+        check("channels → 64 voices", song.numVoices === 64);
+        check("is64Channel flag", store.doc.is64Channel === true);
+        check("bpm = 140", song.bpm === 140);
+        check("tickRate = 8", song.tickRate === 8);
+        check("notation = 31-TET (310)", sm.notation === 310);
+        check("beatPri = 3", sm.beatPri === 3);
+        check("beatSec = 15", sm.beatSec === 15);
+        check("name stored", sm.name === "SmokeSong" && store.doc.meta.projectName === "SmokeSong");
+        check("composer stored", sm.composer === "Tester");
+        check("tuning base note C4 (0x5000)", song.tuningBaseNote === 0x5000);
+        check("tuning freq 261.6256", Math.abs(song.tuningFreq - 261.6256) < 1e-6);
+        check("active pitch preset follows notation", store.pitchPreset.index === 310);
+        // store.beats() should reflect the new divisions (drives Timeline banding)
+        const beats = store.beats();
+        check("store.beats() = 3/15", beats.pri === 3 && beats.sec === 15);
+
+        // round-trip: sMet regenerates with the chosen notation/beats on save
+        const bytes = store.doc.toBytes();
+        const re = parseTaud(bytes);
+        const smet = re.projSections.find((s) => s.fourcc === "sMet");
+        // sMet sub-record: notation(u16 LE), beatPri, beatSec, then names
+        const p = smet.payload; // first entry: [idx, len(4), notation.lo, notation.hi, pri, sec, ...]
+        const rtNotation = p[5] | (p[6] << 8);
+        check("saved sMet notation = 310", rtNotation === 310);
+        check("saved sMet beatPri = 3", p[7] === 3);
+        check("saved sMet beatSec = 15", p[8] === 15);
+        check("saved 64-channel (xHDR)", re.is64Channel === true);
+        check("saved bpm/speed", re.songs[0].bpm === 140 && re.songs[0].tickRate === 8);
+
+        log(ok ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (e) {
+        log("ERROR: " + e.message + "\n" + e.stack);
+        log("RESULT: FAIL");
+      }
+    })();
+  </script>
+</body>
+</html>
