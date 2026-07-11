@@ -6,3 +6,4 @@ microtone-worker/test/reference/
 CLAUDE.md
 microtone-worker/vendor/converters/__pycache__
 *.taud.sf2
+microtone-worker/favicon/

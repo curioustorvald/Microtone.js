@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Microtone.js — Documentation</title>
+  <link rel="icon" type="image/png" href="favicon.png"><!-- Website favicon -->
+  <link rel="apple-touch-icon" type="image/png" href="favicon.png"> <!-- Apple favicon -->
+  <title>Microtone Documentation</title>
   <link rel="stylesheet" href="css/microtone.css" />
   <style>
     html, body { height: 100%; margin: 0; }
@@ -18,14 +20,14 @@
       display: flex;
       align-items: center;
       gap: 0.8rem;
-      padding: 0.5rem 1rem;
+      padding: 0.4rem 0.8rem;
       background: var(--panel);
       border-bottom: 1px solid var(--border);
       flex: 0 0 auto;
     }
     .docs-topbar .docs-brand { font-weight: 700; color: var(--fg); text-decoration: none; }
     .docs-topbar .docs-brand:hover { color: var(--accent); }
-    .docs-topbar .docs-sub { color: var(--dim); }
+    .docs-topbar .docs-sub { color: var(--fg); }
     .docs-topbar .grow { flex: 1; }
     .docs-topbar a.back { color: var(--accent-2); text-decoration: none; font-size: 0.9rem; }
     .docs-topbar button {
@@ -101,7 +103,9 @@
 </head>
 <body class="docs-body">
   <header class="docs-topbar">
-    <a class="docs-brand" href="index.html">Microtone.js</a>
+    <div class="brand-container">
+      <span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span>
+    </div>
     <span class="docs-sub">Documentation</span>
     <div class="grow"></div>
     <a class="back" href="index.html">← Back to the app</a>

@@ -15,7 +15,8 @@
 // test/browser/glyph-gallery.html (it renders every glyph large), iterate.
 // Sentinel shapes per spec: key-off = wide low-height rectangle; cut =
 // connected vertically-centred ^^^; fade = connected greater-amplitude ~~~;
-// fast-fade = the CUT mirrored vertically (∨∨∨).
+// fast-fade = a sinc function with a TRIANGULAR main lobe (the "~^~" sigil —
+// the cut-like spike at x=0 sits inside a decaying sinc envelope).
 
 import { resolveNoteSymbol } from "./pitchtables.js";
 import { hex4 } from "./notenames.js";
@@ -41,6 +42,11 @@ export const GLYPH = {
   fadeAmp: 0.13,      // ~~~ amplitude
   fadePeriods: 3,
   fadeSpanX: [0.12, 0.88],
+  // fast-fade (~^~): sinc envelope with a triangular main lobe
+  ffAmp: 0.30,        // main-lobe (triangle) peak height (of cell height)
+  ffSpanX: [0.06, 0.94],
+  ffReach: 4.5,         // sinc t-range each side of centre (integer ends on a zero)
+  ffLobeGain: 1.8,    // amplify the small sinc side lobes for legibility
 
   // sharp family (fractions of one accidental box)
   sharpRise: 0.08,    // crossbar upward slant
@@ -79,9 +85,9 @@ function drawKeyOff(ctx, x, y, w, h) {
   ctx.strokeRect(x + (w - bw) / 2 + 0.5, y + (h - bh) / 2 + 0.5, bw, bh);
 }
 
-function drawCut(ctx, x, y, w, h, mirrored) {
-  // connected ^^^ (mirrored = fast-fade's ∨∨∨), vertically centred
-  const amp = h * GLYPH.cutAmp * (mirrored ? -1 : 1);
+function drawCut(ctx, x, y, w, h) {
+  // connected ^^^, vertically centred
+  const amp = h * GLYPH.cutAmp;
   const cy = y + h / 2;
   const x0 = x + w * GLYPH.cutSpanX[0];
   const x1 = x + w * GLYPH.cutSpanX[1];
@@ -106,6 +112,35 @@ function drawFade(ctx, x, y, w, h) {
   for (let i = 0; i <= n; i++) {
     const px = x0 + ((x1 - x0) * i) / n;
     const py = cy - Math.sin((i / n) * Math.PI * 2 * GLYPH.fadePeriods) * amp;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+}
+
+function drawFastFade(ctx, x, y, w, h) {
+  // "~^~" — a sinc(t) = sin(πt)/(πt) with its main lobe replaced by a
+  // TRIANGLE: the sharp central peak evokes the cut's instant behaviour while
+  // the decaying side lobes read as a fade tail. The main lobe (|t| < 1) is a
+  // straight-edged spike; |t| ≥ 1 is the genuine sinc, joined continuously
+  // (both are zero at |t| = 1). ffReach is integer so the curve returns to the
+  // baseline at each end.
+  const amp = h * GLYPH.ffAmp;
+  const cy = y + h / 2;
+  const x0 = x + w * GLYPH.ffSpanX[0];
+  const x1 = x + w * GLYPH.ffSpanX[1];
+  const reach = GLYPH.ffReach;
+  const gain = GLYPH.ffLobeGain;
+  const n = 64;
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const t = -reach + (2 * reach * i) / n;
+    const at = Math.abs(t);
+    const v = at < 1
+      ? 1 - at                                          // triangular main lobe
+      : (Math.sin(Math.PI * t) / (Math.PI * t)) * gain; // sinc side lobes
+    const px = x0 + ((x1 - x0) * i) / n;
+    const py = cy - v * amp;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
   }
@@ -291,9 +326,9 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
     ctx.lineJoin = "miter";
     switch (note) {
       case 0x0001: drawKeyOff(ctx, x, y + dy, cellW, rowH); break;
-      case 0x0002: drawCut(ctx, x, y + dy, cellW, rowH, false); break;
+      case 0x0002: drawCut(ctx, x, y + dy, cellW, rowH); break;
       case 0x0003: drawFade(ctx, x, y + dy, cellW, rowH); break;
-      case 0x0004: drawCut(ctx, x, y + dy, cellW, rowH, true); break; // cut, mirrored
+      case 0x0004: drawFastFade(ctx, x, y + dy, cellW, rowH); break; // ~^~
     }
     return;
   }

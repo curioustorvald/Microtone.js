@@ -85,10 +85,10 @@ export class CommandPalette {
     switch (ctx.sub) {
       case SUB_NOTE:
         label("note");
-        btn("key-off ▭", "note word 0001 (`)", () => ctx.apply({ note: 0x0001 }));
-        btn("cut ⋀⋀", "note word 0002 (1)", () => ctx.apply({ note: 0x0002 }));
-        btn("fade ∿∿", "note word 0003 (2)", () => ctx.apply({ note: 0x0003 }));
-        btn("fast-fade ⋁⋁", "note word 0004 (3)", () => ctx.apply({ note: 0x0004 }));
+        btn("key-off ===", "note word 0001 (z)", () => ctx.apply({ note: 0x0001 }));
+        btn("cut ^^^", "note word 0002 (x)", () => ctx.apply({ note: 0x0002 }));
+        btn("fade ~~~", "note word 0003 (c)", () => ctx.apply({ note: 0x0003 }));
+        btn("fast-fade ~^~", "note word 0004 (v)", () => ctx.apply({ note: 0x0004 }));
         btn("clear", "Delete", () => ctx.apply({ note: 0, instrment: 0 }));
         hint("A S D F G H J K piano · W E T Y U black · [ ] octave · wheel = ±1 degree");
         break;

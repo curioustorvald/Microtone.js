@@ -31,7 +31,7 @@ export default {
   "topbar.themeTitle": "Toggle dark/light theme",
   "topbar.langTitle": "Language",
   "topbar.helpTitle": "Keyboard shortcuts (?)",
-  "topbar.aboutTitle": "About Microtone.js",
+  "topbar.aboutTitle": "About Microtone",
 
   // ── tabs / toolbox / statusbar ──
   "tab.timeline": "Timeline",
@@ -201,7 +201,7 @@ export default {
   "pat.instBody": "Leave From blank to change every instrument to To; else only cells matching From. Applies to {scope}.",
 
   // ── help popup ──
-  "help.title": "Microtone.js — keys",
+  "help.title": "Microtone — keys",
   "help.play": "play from cursor / stop",
   "help.playStart": "play from start",
   "help.views": "views (Timeline, Cues, Patterns, Samples, Instruments, Project, File)",
@@ -220,7 +220,7 @@ export default {
   "help.whiteKeys": "piano white keys (C D E F G A B C)",
   "help.sentinels": "note column: key-off ===, cut ^^^, fade ~~~, fast-fade ~^~",
   "help.hexEntry": "hex entry (inst / vol / pan / fx arg)",
-  "help.fxOpcode": "effect opcode (base-36)",
+  "help.fxOpcode": "effect opcode",
   "help.slideSel": "vol/pan column: slide selectors",
   "help.clearField": "clear field",
   "help.subCol": "sub-column / next channel",

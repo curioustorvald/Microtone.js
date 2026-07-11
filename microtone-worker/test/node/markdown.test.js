@@ -35,6 +35,12 @@ test("inline: bold / italic / code / link, HTML-escaped", () => {
   assert.match(html, /<a href="https:\/\/e\.com" target="_blank" rel="noopener">ref<\/a>/);
 });
 
+test("links: in-page anchors same-tab, external new-tab", () => {
+  const html = renderMarkdown("See [effects](#effects) and [repo](https://e.com).");
+  assert.match(html, /<a href="#effects">effects<\/a>/);
+  assert.match(html, /<a href="https:\/\/e\.com" target="_blank" rel="noopener">repo<\/a>/);
+});
+
 test("GFM table renders thead/tbody with cells", () => {
   const md = "| Cmd | Meaning |\n| --- | --- |\n| A | Speed |\n| T | Tempo |";
   const html = renderMarkdown(md);
@@ -65,7 +71,7 @@ test("horizontal rule + paragraph", () => {
 });
 
 test("renders the real TAUD_NOTE_EFFECTS.md without throwing + builds a TOC", () => {
-  const md = readFileSync(fileURLToPath(new URL("../../TAUD_NOTE_EFFECTS.md", import.meta.url)), "utf8");
+  const md = readFileSync(fileURLToPath(new URL("../../assets/TAUD_NOTE_EFFECTS.md", import.meta.url)), "utf8");
   const html = renderMarkdown(md);
   assert.ok(html.length > 10000);
   assert.match(html, /<h1 id="taud-tracker-effect-command-reference">/);
@@ -74,4 +80,16 @@ test("renders the real TAUD_NOTE_EFFECTS.md without throwing + builds a TOC", ()
   assert.ok(toc.every((e) => e.slug && e.text && (e.level === 2 || e.level === 3)));
   // slugs are unique enough to anchor (allow a few dupes but not mostly)
   assert.ok(new Set(toc.map((e) => e.slug)).size > toc.length * 0.8);
+});
+
+test("renders the real USER_MANUAL.md without throwing + builds a TOC", () => {
+  const md = readFileSync(fileURLToPath(new URL("../../assets/USER_MANUAL.md", import.meta.url)), "utf8");
+  const html = renderMarkdown(md);
+  assert.match(html, /<h1 id="[^"]+">Microtone\.js User Manual<\/h1>/);
+  assert.match(html, /<table>/);
+  assert.match(html, /<pre><code>/);
+  const toc = extractToc(md);
+  assert.ok(toc.length > 20, "TOC has many entries");
+  assert.ok(toc.every((e) => e.slug && e.text && (e.level === 2 || e.level === 3)));
+  assert.equal(new Set(toc.map((e) => e.slug)).size, toc.length, "manual slugs unique");
 });

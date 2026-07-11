@@ -3,8 +3,8 @@
 // document's headings) and centred content (max-width 960px). Light/dark theme
 // matches the main app (shared `microtone-theme` localStorage + data-theme).
 //
-// Two documents: a placeholder User Manual (real content deferred) and the Note
-// Effects reference, rendered live from the repo's TAUD_NOTE_EFFECTS.md.
+// Two documents, both fetched from assets/ and rendered live: the User Manual
+// (USER_MANUAL.md) and the Note Effects reference (TAUD_NOTE_EFFECTS.md).
 
 import { renderMarkdown, extractToc } from "./markdown.js";
 
@@ -20,50 +20,15 @@ function initTheme() {
     (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"));
 }
 
-const MANUAL = `# User Manual
-
-> This manual is still being written. Until it lands, press **?** in the app for
-> the keyboard reference, and see the **Note Effects** reference in the sidebar
-> for the full effect-command specification.
-
-## Overview
-
-Microtone.js is a complete web build of the Microtone tracker — a ScreamTracker
-3-lineage engine extended to 16-bit effect arguments and a 4096-tone
-equal-temperament pitch grid. Everything runs in the browser; there is no
-server and nothing is uploaded.
-
-## Views
-
-- **Timeline** — the whole song across every channel.
-- **Cues** — the per-channel order list and its flow commands.
-- **Patterns** — a single pattern editor with bulk transforms.
-- **Samples / Instruments** — the sample pool and instrument bank.
-- **Project / File** — song metadata, import/export and browser storage.
-
-## Editing
-
-Toggle record mode with **Insert**, enter notes with the piano row
-(**A S D F G H J K**, black keys **W E T Y U**), and step values with the mouse
-wheel over the cursor cell. Full details live under **?** in the app.
-
-## Saving
-
-**Ctrl+S** saves into the browser's private storage (OPFS); use the File tab to
-export a \`.taud\` you can keep. Work autosaves periodically and offers recovery
-on the next boot.
-`;
+const fetchDoc = (path) => async () => {
+  const resp = await fetch(path);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.text();
+};
 
 const DOCS = [
-  { id: "manual", title: "User Manual", load: async () => MANUAL },
-  {
-    id: "effects", title: "Note Effects",
-    load: async () => {
-      const resp = await fetch("assets/TAUD_NOTE_EFFECTS.md");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return resp.text();
-    },
-  },
+  { id: "manual", title: "User Manual", load: fetchDoc("assets/USER_MANUAL.md") },
+  { id: "effects", title: "Note Effects", load: fetchDoc("assets/TAUD_NOTE_EFFECTS.md") },
 ];
 
 const tocEl = document.getElementById("toc");
@@ -105,7 +70,7 @@ async function selectDoc(id, anchor) {
       history.replaceState(null, "", `#${doc.id}/${a.dataset.slug}`);
     });
   }
-  document.title = `Microtone.js — ${doc.title}`;
+  document.title = `Microtone — ${doc.title}`;
   if (anchor) scrollToSlug(anchor);
 }
 
@@ -133,7 +98,11 @@ function fromHash() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   if (!h) return { id: "manual", anchor: null };
   const [id, anchor] = h.split("/");
-  return DOCS.some((d) => d.id === id) ? { id, anchor } : { id: "manual", anchor: h };
+  // A bare heading slug (an in-content anchor link) stays within the current
+  // document; at boot (no current doc yet) it deep-links into the manual.
+  return DOCS.some((d) => d.id === id)
+    ? { id, anchor }
+    : { id: currentId ?? "manual", anchor: h };
 }
 
 // ── boot ──

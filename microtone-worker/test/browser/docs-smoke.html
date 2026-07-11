@@ -26,6 +26,28 @@
         const twoDocs = tocDocs.includes("User Manual") && tocDocs.includes("Note Effects");
         log(`manual default + doc switcher: ${manualOk && twoDocs}`);
 
+        // in-content links: hash anchors navigate same-tab (no target), the
+        // rest carry target=_blank; an in-doc anchor stays on the manual and
+        // the #effects link switches documents in place
+        const contentLinks = [...doc.querySelectorAll("#content a[href]")];
+        const hashSameTab = contentLinks
+          .filter((a) => a.getAttribute("href").startsWith("#"))
+          .every((a) => !a.target);
+        const extNewTab = contentLinks
+          .filter((a) => !a.getAttribute("href").startsWith("#"))
+          .every((a) => a.target === "_blank");
+        contentLinks.find((a) => a.getAttribute("href") === "#saving-and-autosave").click();
+        await sleep(150);
+        const inDocOk = win.location.hash === "#saving-and-autosave" &&
+          /User Manual/i.test(doc.querySelector("#content h1")?.textContent || "");
+        contentLinks.find((a) => a.getAttribute("href") === "#effects").click();
+        for (let i = 0; i < 80; i++) {
+          if (/Effect Command Reference/i.test(doc.querySelector("#content h1")?.textContent || "")) break;
+          await sleep(100);
+        }
+        const linkSwitchOk = /Effect Command Reference/i.test(doc.querySelector("#content h1")?.textContent || "");
+        log(`in-content links: sameTab=${hashSameTab} newTab=${extNewTab} inDoc=${inDocOk} docSwitch=${linkSwitchOk}`);
+
         // switch to Note Effects (fetches + renders the real .md)
         [...doc.querySelectorAll(".toc-doc")].find((b) => b.textContent === "Note Effects").click();
         for (let i = 0; i < 80; i++) {
@@ -49,7 +71,8 @@
         const themeOk = doc.documentElement.dataset.theme !== before;
         log(`anchor target + theme toggle: anchor=${anchorOk} theme=${themeOk}`);
 
-        const pass = manualOk && twoDocs && effectsOk && headingLinks > 10 && hasTable && hasCode && anchorOk && themeOk;
+        const pass = manualOk && twoDocs && hashSameTab && extNewTab && inDocOk && linkSwitchOk &&
+          effectsOk && headingLinks > 10 && hasTable && hasCode && anchorOk && themeOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

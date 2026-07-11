@@ -31,7 +31,7 @@ export default {
   "topbar.themeTitle": "어두운/밝은 테마 전환",
   "topbar.langTitle": "언어",
   "topbar.helpTitle": "키보드 단축키 (?)",
-  "topbar.aboutTitle": "Microtone.js 정보",
+  "topbar.aboutTitle": "Microtone 정보",
 
   // ── tabs / toolbox / statusbar ──
   "tab.timeline": "타임라인",
@@ -139,7 +139,7 @@ export default {
   "smp.loopOneshot": "원샷",
   "smp.audition": "▶ C4",
   "smp.auditionStop": "■ 정지",
-  "smp.auditionTitle": "엔진으로 시청하기",
+  "smp.auditionTitle": "미리듣기",
   "smp.normalise": "노멀라이즈",
   "smp.fadeIn": "페이드 인",
   "smp.fadeOut": "페이드 아웃",
@@ -201,7 +201,7 @@ export default {
   "pat.instBody": "원본을 비우면 모든 악기를 대상으로 바꿉니다. 그렇지 않으면 원본과 일치하는 셀만. 적용 대상: {scope}.",
 
   // ── help popup ──
-  "help.title": "Microtone.js — 단축키",
+  "help.title": "Microtone — 단축키",
   "help.play": "커서 위치부터 재생 / 정지",
   "help.playStart": "처음부터 재생",
   "help.views": "화면 (타임라인, 큐, 패턴, 샘플, 악기, 프로젝트, 파일)",
@@ -218,9 +218,9 @@ export default {
   "help.selClear": "선택 해제 · 선택 블록 비우기",
   "help.blackKeys": "피아노 검은건반",
   "help.whiteKeys": "피아노 흰건반 (C D E F G A B C)",
-  "help.sentinels": "노트 열: key-off ===, cut ^^^, fade ~~~, fast-fade ~^~",
+  "help.sentinels": "노트 열: 건반떼기 ===, 음자르기 ^^^, 페이드 ~~~, 빠른페이드 ~^~",
   "help.hexEntry": "16진 입력 (악기 / 음량 / 팬 / 이펙트 인자)",
-  "help.fxOpcode": "이펙트 명령 코드 (36진)",
+  "help.fxOpcode": "이펙트 명령 코드",
   "help.slideSel": "음량/팬 열: 슬라이드 선택자",
   "help.clearField": "필드 지우기",
   "help.subCol": "하위 열 / 다음 채널",
@@ -248,7 +248,7 @@ export default {
 
   // ── go to ──
   "goto.title": "이동",
-  "goto.cue": "큐 (16진)",
+  "goto.cue": "큐 (16진수)",
   "goto.row": "행",
 
   // ── import MIDI ──
