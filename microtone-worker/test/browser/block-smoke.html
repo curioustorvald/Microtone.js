@@ -33,6 +33,7 @@
         });
         const { store, timeline, patternView } = win.__microtone;
         const { cellToBytes } = await import("../../src/doc/clipboard.js");
+        const { SUB_VOL, COL_VOL, COL_PAN } = await import("../../src/ui/edit.js");
         const cap = (t) => (t ? [...cellToBytes(t.cell)] : null);
         log("app loaded, doc ready");
 
@@ -76,6 +77,24 @@
         })();
         log(`timeline cut cleared the block: ${cutCleared}`);
         key(win, "KeyZ", "z", { ctrlKey: true }); // undo the cut
+
+        // ── Timeline keyboard sub-column selection: Shift+arrows carry the
+        // cursor's column (like a mouse drag), not the old whole-cell band ──
+        timeline.clearSelection();
+        store.cursor = { row: 0, ch: 2, sub: SUB_VOL, nib: 0 };
+        key(win, "ArrowDown", "ArrowDown", { shiftKey: true });
+        key(win, "ArrowDown", "ArrowDown", { shiftKey: true }); // rows 0..2, vol column
+        const tb = timeline.selBounds();
+        const tRowsOk = tb && tb.r0 === 0 && tb.r1 === 2 && tb.c0 === 2 && tb.c1 === 2;
+        const tVolOnly = eq(timeline.selCols(), [COL_VOL]);
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true }); // widen band to pan
+        const tWidened = eq(timeline.selCols(), [COL_VOL, COL_PAN]);
+        key(win, "KeyC", "c", { ctrlKey: true }); // copy → clipboard carries the band
+        const tCopyCols = eq(store.clipboard.cols, [COL_VOL, COL_PAN]);
+        const tKbOk = tRowsOk && tVolOnly && tWidened && tCopyCols;
+        log(`timeline keyboard sub-column select: rows=${tRowsOk} volOnly=${tVolOnly} widened=${tWidened} copyCols=${tCopyCols}`);
+        timeline.clearSelection();
 
         // ── Pattern view: row-range copy → paste ──
         store.view = "pattern";
@@ -130,14 +149,32 @@
         }
         log(`sub-column paste (inst+vol only): cols=${colsOk} merged=${subOk}`);
 
+        // ── keyboard sub-column selection: Shift+arrows carry the cursor's
+        // column, like a mouse drag (not the old whole-cell band) ──
+        patternView.clearSelection();
+        patternView.cursor.row = 0;
+        patternView.cursor.sub = SUB_VOL; patternView.cursor.nib = 0;
+        key(win, "ArrowDown", "ArrowDown", { shiftKey: true });
+        key(win, "ArrowDown", "ArrowDown", { shiftKey: true }); // rows 0..2, vol column
+        const kb = patternView.sel;
+        const kbRowsOk = kb && Math.min(kb.aRow, kb.row) === 0 && Math.max(kb.aRow, kb.row) === 2;
+        const kbVolOnly = eq(patternView.active.selCols(), [COL_VOL]);
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true }); // widen band to pan
+        const kbWidened = eq(patternView.active.selCols(), [COL_VOL, COL_PAN]);
+        key(win, "KeyC", "c", { ctrlKey: true }); // copy → clipboard carries the band
+        const kbCopyCols = eq(store.clipboard.cols, [COL_VOL, COL_PAN]);
+        const kbOk = kbRowsOk && kbVolOnly && kbWidened && kbCopyCols;
+        log(`keyboard sub-column select: rows=${kbRowsOk} volOnly=${kbVolOnly} widened=${kbWidened} copyCols=${kbCopyCols}`);
+
         // Escape clears the selection.
         patternView.sel = { aRow: 0, row: 3 };
         key(win, "Escape", "Escape");
         const escOk = !patternView.hasSelection();
         log(`escape cleared pattern selection: ${escOk}`);
 
-        const pass = blockOk && pasteOk && cutCleared && patPasteOk && colsOk && subOk && escOk;
-        log(pass ? "RESULT: PASS" : `RESULT: FAIL block=${blockOk} paste=${pasteOk} cut=${cutCleared} patPaste=${patPasteOk} cols=${colsOk} sub=${subOk} esc=${escOk}`);
+        const pass = blockOk && pasteOk && cutCleared && tKbOk && patPasteOk && colsOk && subOk && kbOk && escOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL block=${blockOk} paste=${pasteOk} cut=${cutCleared} tKb=${tKbOk} patPaste=${patPasteOk} cols=${colsOk} sub=${subOk} kb=${kbOk} esc=${escOk}`);
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
       }

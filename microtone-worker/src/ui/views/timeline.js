@@ -214,17 +214,49 @@ export class TimelineView {
     return s ? colsForSubs(s.aSub ?? 0, s.sub ?? SUB_FX_ARG) : ALL_COLS;
   }
 
-  /** Keyboard block-extend (Shift+arrows): grow a FULL-column selection. */
+  /** Anchor a keyboard selection at the current cursor cell/column if none is
+   *  active. Keyboard selection carries the SAME sub-column granularity as a
+   *  mouse drag: it anchors on the cursor's sub and tracks it as the cursor
+   *  moves, so Shift+↑/↓ grow the row span and Shift+←/→ the column band. */
+  _ensureSel() {
+    const c = this.store.cursor;
+    if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: c.sub, row: c.row, ch: c.ch, sub: c.sub };
+  }
+
+  /** Keyboard block-extend (Shift+↑/↓, Page, Home/End): grow the row span,
+   *  tracking the cursor's sub-column band. */
   extendSelection(dRow, dCh) {
     const map = this.getMap();
     if (!map) return;
+    this._ensureSel();
     const c = this.store.cursor;
     const chans = this.store.doc.channelCount;
-    if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: 0, row: c.row, ch: c.ch, sub: SUB_FX_ARG };
     c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
     c.ch = clampInt(c.ch + dCh, 0, chans - 1);
-    this.sel.row = c.row; this.sel.ch = c.ch;
-    this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; // keyboard selection = whole cells
+    this.sel.row = c.row; this.sel.ch = c.ch; this.sel.sub = c.sub;
+    this.keepCursorVisible();
+    this.store.emit("cursor");
+  }
+
+  /** Shift+←/→: extend the selection by walking the sub-cursor (crossing
+   *  channels at the edges, like moveSubCursor), so the block carries
+   *  sub-column granularity just like a mouse drag. */
+  extendSelectionSub(dir) {
+    const map = this.getMap();
+    if (!map) return;
+    this._ensureSel();
+    const c = this.store.cursor;
+    const chans = this.store.doc.channelCount;
+    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
+    if (idx < 0) idx = 0;
+    idx += dir;
+    if (idx < 0) {
+      if (c.ch > 0) { c.ch--; idx = SUB_POSITIONS.length - 1; } else idx = 0;
+    } else if (idx >= SUB_POSITIONS.length) {
+      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = SUB_POSITIONS.length - 1;
+    }
+    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    this.sel.ch = c.ch; this.sel.sub = c.sub; this.sel.row = c.row;
     this.keepCursorVisible();
     this.store.emit("cursor");
   }

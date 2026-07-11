@@ -164,14 +164,38 @@ class PatternPane {
     return s ? colsForSubs(s.aSub ?? 0, s.sub ?? SUB_FX_ARG) : ALL_COLS;
   }
 
+  /** Anchor a keyboard selection at the current cursor cell/column if none is
+   *  active. Keyboard selection carries the SAME sub-column granularity as a
+   *  mouse drag: it anchors on the cursor's sub and tracks it as the cursor
+   *  moves, so Shift+↑/↓ grow the row span and Shift+←/→ the column band. */
+  _ensureSel() {
+    if (!this.sel) {
+      this.sel = { aRow: this.cursor.row, row: this.cursor.row, aSub: this.cursor.sub, sub: this.cursor.sub };
+    }
+  }
+
   extendSelection(dRow) {
-    if (!this.sel) this.sel = { aRow: this.cursor.row, row: this.cursor.row, aSub: 0, sub: SUB_FX_ARG };
+    this._ensureSel();
     this.cursor.row = clampInt(this.cursor.row + dRow, 0, 63);
     this.sel.row = this.cursor.row;
-    this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; // keyboard selection = whole cells
+    this.sel.sub = this.cursor.sub; // track the cursor's column band
     const vis = Math.floor(this.canvas.clientHeight / ROW_H);
     if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
     else if (this.cursor.row >= this.scrollRow + vis) this.scrollRow = this.cursor.row - vis + 1;
+    this.invalidate();
+    this.store.emit("cursor");
+  }
+
+  /** Shift+←/→: widen or narrow the selection's column band by walking the
+   *  cursor's sub-position (nibble steps, matching moveSubCursor). */
+  extendSelectionSub(dir) {
+    this._ensureSel();
+    const c = this.cursor;
+    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
+    idx = clampInt(idx + dir, 0, SUB_POSITIONS.length - 1);
+    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    this.sel.row = c.row;
+    this.sel.sub = c.sub;
     this.invalidate();
     this.store.emit("cursor");
   }
@@ -462,8 +486,8 @@ class PatternPane {
     switch (e.code) {
       case "ArrowUp": e.shiftKey ? this.extendSelection(-1) : this.moveCursor(-1); return true;
       case "ArrowDown": e.shiftKey ? this.extendSelection(1) : this.moveCursor(1); return true;
-      case "ArrowLeft": this.moveSubCursor(-1); return true;
-      case "ArrowRight": this.moveSubCursor(1); return true;
+      case "ArrowLeft": e.shiftKey ? this.extendSelectionSub(-1) : this.moveSubCursor(-1); return true;
+      case "ArrowRight": e.shiftKey ? this.extendSelectionSub(1) : this.moveSubCursor(1); return true;
       case "PageUp": e.shiftKey ? this.extendSelection(-16) : this.moveCursor(-16); return true;
       case "PageDown": e.shiftKey ? this.extendSelection(16) : this.moveCursor(16); return true;
       case "Home": e.shiftKey ? this.extendSelection(-64) : this.moveCursor(-64); return true;

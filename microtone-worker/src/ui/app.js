@@ -792,9 +792,9 @@ window.addEventListener("keydown", (e) => {
       case "ArrowDown": e.preventDefault();
         e.shiftKey ? timeline.extendSelection(1, 0) : timeline.moveCursor(store.editStep || 1, 0); return;
       case "ArrowLeft": e.preventDefault();
-        e.shiftKey ? timeline.extendSelection(0, -1) : timeline.moveSubCursor(-1); return;
+        e.shiftKey ? timeline.extendSelectionSub(-1) : timeline.moveSubCursor(-1); return;
       case "ArrowRight": e.preventDefault();
-        e.shiftKey ? timeline.extendSelection(0, 1) : timeline.moveSubCursor(1); return;
+        e.shiftKey ? timeline.extendSelectionSub(1) : timeline.moveSubCursor(1); return;
       case "Tab":
         e.preventDefault();
         store.cursor.sub = SUB_NOTE;
