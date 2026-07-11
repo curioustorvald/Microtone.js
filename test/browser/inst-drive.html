@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>inst drive</title></head>
+<body>
+<iframe id="app" src="../../index.html?load=test/corpus/M_E1M1.taud&view=instruments" style="width:1500px;height:880px;border:0"></iframe>
+<script>
+(async () => {
+  const frame = document.getElementById('app');
+  const win = await new Promise((r) => {
+    const p = setInterval(() => {
+      const w = frame.contentWindow;
+      if (w && w.__microtone?.store.doc && w.__microtone.instrumentsView) { clearInterval(p); r(w); }
+    }, 100);
+  });
+  const iv = win.__microtone.instrumentsView;
+  iv.selected = 0x3;                 // inst $3: base has a Pitch env (slot2)
+  iv.jam.currentInst = 0x3;
+  iv.tab = new URLSearchParams(location.search).get('t') || 'filter';
+  iv.refresh();
+  console.log('DRIVE: showing inst $3 tab=' + iv.tab);
+})();
+</script>
+</body></html>

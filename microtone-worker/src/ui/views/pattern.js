@@ -34,8 +34,8 @@ const GUTTER_W = 34;
 const PREVIEW_CUE = 8191; // device-only scratch cue (taut PREVIEW_CUE_IDX idiom)
 
 const MIN_PANES = 2;         // spec: at least two columns
-const MAX_PANES = 6;         // sanity cap for very wide viewports
-const MIN_PANE_W = 300;      // px budget per column before we add another
+const MAX_PANES = 16;         // sanity cap for very wide viewports
+const MIN_PANE_W = 250;      // px budget per column before we add another
 
 function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
