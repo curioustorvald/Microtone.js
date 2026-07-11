@@ -236,6 +236,27 @@ export class Document {
   instrumentName(slot) { return this._nameTable("INam")[slot] ?? ""; }
   sampleName(index) { return this._nameTable("SNam")[index] ?? ""; }
 
+  /** Build a new SNam payload with `escaped` (ASCII, \uHHHH-escaped) at census
+   *  `index`. Untouched entries keep their exact bytes — the section is split
+   *  on 0x1E at the byte level (not re-encoded) so an imported bank's names
+   *  round-trip verbatim. Missing leading entries are padded empty. */
+  buildSampleNames(index, escaped) {
+    const sec = this.projSections.find((s) => s.fourcc === "SNam");
+    const src = sec ? sec.payload : new Uint8Array(0);
+    const segs = [];
+    let start = 0;
+    for (let i = 0; i <= src.length; i++) {
+      if (i === src.length || src[i] === 0x1e) { segs.push(src.slice(start, i)); start = i + 1; }
+    }
+    while (segs.length <= index) segs.push(new Uint8Array(0));
+    segs[index] = new TextEncoder().encode(escaped);
+    const total = segs.reduce((n, s) => n + s.length, 0) + (segs.length - 1);
+    const out = new Uint8Array(Math.max(0, total));
+    let off = 0;
+    segs.forEach((s, i) => { if (i > 0) out[off++] = 0x1e; out.set(s, off); off += s.length; });
+    return out;
+  }
+
   /**
    * Deduped sample census across base instruments + Ixmp patches, sorted by
    * pool pointer: [{ptr, len, rate, loopStart, loopEnd, loopMode, users}].

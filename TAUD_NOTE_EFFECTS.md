@@ -1009,7 +1009,7 @@ When both effects 8 and 9 are active on the same voice the chain is **filter →
 
 S is a multiplexing opcode; the **high nibble of the high byte** selects the sub-effect, and the remainder is the sub-argument.
 
-# S $0x00 — Amiga LPF/LED Switch
+## S $0x00 — Amiga LPF/LED Switch
 
 **Plain.** `$0100` turns filter off; `$0000` turns it on. The parameter of the filter is dependent on the current interpolation mode: follows Amiga 1200 LPF on 1200 mode, Amiga 500 LPF on 500 mode. For other interpolation modes, this command is no-op. (see § Effects that modifies global behaviour)
 

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>docs viewer smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- docs.html fetches TAUD_NOTE_EFFECTS.md; keep the load real-time via /hang
+       is unnecessary here (fetch of a static file resolves under virtual time),
+       but we DO need the repo server so the .md is reachable at the app root. -->
+  <iframe id="docs" src="../../docs.html" style="width:1100px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const frame = document.getElementById("docs");
+        // wait for the manual (default) to render
+        let win, doc;
+        for (let i = 0; i < 60; i++) {
+          win = frame.contentWindow; doc = win?.document;
+          if (doc?.querySelector("#content h1")) break;
+          await sleep(100);
+        }
+        const manualOk = /User Manual/i.test(doc.querySelector("#content h1")?.textContent || "");
+        const tocDocs = [...doc.querySelectorAll(".toc-doc")].map((b) => b.textContent);
+        const twoDocs = tocDocs.includes("User Manual") && tocDocs.includes("Note Effects");
+        log(`manual default + doc switcher: ${manualOk && twoDocs}`);
+
+        // switch to Note Effects (fetches + renders the real .md)
+        [...doc.querySelectorAll(".toc-doc")].find((b) => b.textContent === "Note Effects").click();
+        for (let i = 0; i < 80; i++) {
+          if (/Effect Command Reference/i.test(doc.querySelector("#content h1")?.textContent || "")) break;
+          await sleep(100);
+        }
+        const effectsOk = /Effect Command Reference/i.test(doc.querySelector("#content h1")?.textContent || "");
+        const headingLinks = doc.querySelectorAll(".toc-headings a").length;
+        const hasTable = !!doc.querySelector("#content table");
+        const hasCode = !!doc.querySelector("#content pre code");
+        log(`note effects render: h1=${effectsOk} tocHeadings=${headingLinks} table=${hasTable} code=${hasCode}`);
+
+        // TOC heading link scrolls (id target exists)
+        const firstLink = doc.querySelector(".toc-headings a[data-slug]");
+        const target = doc.getElementById(firstLink.dataset.slug);
+        const anchorOk = !!target;
+
+        // theme toggle flips data-theme
+        const before = doc.documentElement.dataset.theme;
+        doc.getElementById("themeBtn").click();
+        const themeOk = doc.documentElement.dataset.theme !== before;
+        log(`anchor target + theme toggle: anchor=${anchorOk} theme=${themeOk}`);
+
+        const pass = manualOk && twoDocs && effectsOk && headingLinks > 10 && hasTable && hasCode && anchorOk && themeOk;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -217,7 +217,14 @@ export class TaudEngine {
   getCuePosition(ph) { return this.playheads[ph].position; }
   getTrackerRow(ph) { return this.playheads[ph].trackerState.rowIndex; }
 
-  /** Set the starting row for the next play, resetting timing + silencing voices. */
+  /** Set the starting row for the next play, resetting timing + silencing every
+   *  voice. This is the common pre-play reset point (playFrom / pattern
+   *  preview), so it clears the transient per-play state that would otherwise
+   *  bleed a prior playback into a fresh start — notably the NNA background
+   *  ghosts, which stop() leaves active and a replay would resume (the
+   *  "mysteriously lingering notes" bug). Tempo/volume are deliberately NOT
+   *  touched (a replay must keep the song's tempo — that's why this is not a
+   *  full resetParams). */
   setTrackerRow(ph, row) {
     const ts = this.playheads[ph].trackerState;
     ts.rowIndex = Math.min(Math.max(row, 0), 63);
@@ -226,7 +233,14 @@ export class TaudEngine {
     ts.firstRow = true;
     ts.pendingOrderJump = -1;
     ts.pendingRowJump = -1;
+    ts.pendingRowJumpLocal = false;
+    ts.patternDelayRemaining = 0;
+    ts.patternDelayActive = false;
+    ts.sexWinningChannel = -1;
+    ts.finePatternDelayExtra = 0;
+    ts.pendingInterrupts = 0;
     for (const v of ts.voices) v.active = false;
+    ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
   }
 
   setTrackerMixerFlags(ph, flags) {

@@ -11,9 +11,14 @@ import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
 import {
   interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
+  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
-import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp } from "../../doc/ops.js";
-import { expandPatternBytes, shrinkPatternBytes } from "../../doc/patterntools.js";
+import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp } from "../../doc/ops.js";
+import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
+import {
+  expandPatternBytes, shrinkPatternBytes,
+  scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
+} from "../../doc/patterntools.js";
 import { CUE_EMPTY } from "../../format/taud-const.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
@@ -36,6 +41,8 @@ export class PatternView {
     this.patIdx = 0;
     this.cursor = { row: 0, sub: 0, nib: 0 };
     this.scrollRow = 0;
+    this.sel = null;    // row-range selection {aRow, row}
+    this._drag = null;  // active pointer-drag anchor row
     this.previewing = false;
     this.previewStarted = false; // set once the worklet confirms playback
     this.needsRedraw = true;
@@ -44,29 +51,7 @@ export class PatternView {
     this.root.className = "pattern-view";
     this.bar = document.createElement("div");
     this.bar.className = "files-bar";
-    this.patInput = document.createElement("input");
-    this.patInput.type = "text";
-    this.patInput.className = "pat-input";
-    this.patInput.value = "000";
-    this.patInput.addEventListener("change", () => {
-      this.setPattern(parseInt(this.patInput.value, 16) || 0);
-    });
-    const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
-    const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
-    this.previewBtn = mkBtn(t("pat.preview"), () => this.togglePreview());
-    // pattern-scoped edit operations (all single undo steps)
-    const dupBtn = mkBtn(t("pat.duplicate"), () => this.duplicate());
-    dupBtn.title = t("pat.duplicateTitle");
-    const trBtn = mkBtn(t("pat.transpose"), () => this.transpose());
-    trBtn.title = t("pat.transposeTitle");
-    const lenBtn = mkBtn(t("pat.lengthen"), () => this.applyPatternBytes(expandPatternBytes));
-    lenBtn.title = t("pat.lengthenTitle");
-    const shortBtn = mkBtn(t("pat.shorten"), () => this.applyPatternBytes(shrinkPatternBytes));
-    shortBtn.title = t("pat.shortenTitle");
-    this.info = document.createElement("span");
-    this.info.className = "dim";
-    this.bar.append(prev, this.patInput, next, this.previewBtn,
-      dupBtn, trBtn, lenBtn, shortBtn, this.info);
+    this.buildBar();
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "pattern-canvas";
@@ -78,6 +63,7 @@ export class PatternView {
       this.patIdx = 0;
       this.cursor = { row: 0, sub: 0, nib: 0 };
       this.scrollRow = 0;
+      this.sel = null;
       if (this.visible) this.refreshBar();
       this.invalidate();
     });
@@ -94,9 +80,36 @@ export class PatternView {
     this.canvas.addEventListener("pointerdown", (e) => {
       const hit = this.hitTest(e);
       if (!hit) return;
+      if (e.shiftKey) {
+        // Shift+click = full-column selection.
+        if (!this.sel) this.sel = { aRow: this.cursor.row, row: hit.row, aSub: 0, sub: SUB_FX_ARG };
+        else { this.sel.row = hit.row; this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; }
+      } else {
+        // Mouse-drag carries sub-column granularity.
+        this.sel = null;
+        this._drag = { row: hit.row, sub: hit.sub };
+        this.canvas.setPointerCapture?.(e.pointerId);
+      }
       this.cursor = hit;
       this.invalidate();
       this.store.emit("cursor");
+    });
+    this.canvas.addEventListener("pointermove", (e) => {
+      if (this._drag === null) return;
+      const hit = this.hitTest(e);
+      if (!hit) return;
+      this.sel = (hit.row !== this._drag.row || hit.sub !== this._drag.sub)
+        ? { aRow: this._drag.row, row: hit.row, aSub: this._drag.sub, sub: hit.sub }
+        : null;
+      this.cursor.row = hit.row; this.cursor.sub = hit.sub; this.cursor.nib = hit.nib;
+      this.invalidate();
+      this.store.emit("cursor");
+    });
+    this.canvas.addEventListener("pointerup", (e) => {
+      if (this._drag !== null) {
+        this.canvas.releasePointerCapture?.(e.pointerId);
+        this._drag = null;
+      }
     });
 
     new ResizeObserver(() => { if (this.visible) this.resize(); }).observe(this.root);
@@ -106,13 +119,135 @@ export class PatternView {
   hide() { this.visible = false; if (this.previewing) this.stopPreview(); }
   invalidate() { this.needsRedraw = true; }
 
+  /** (Re)build the toolbar — labels come from i18n, so this also re-runs on a
+   *  runtime language change. */
+  buildBar() {
+    this.bar.innerHTML = "";
+    this.patInput = document.createElement("input");
+    this.patInput.type = "text";
+    this.patInput.className = "pat-input";
+    this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
+    this.patInput.addEventListener("change", () => {
+      this.setPattern(parseInt(this.patInput.value, 16) || 0);
+    });
+    const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
+    const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
+    this.previewBtn = mkBtn(this.previewing ? t("pat.previewStop") : t("pat.preview"), () => this.togglePreview());
+    const dupBtn = mkBtn(t("pat.duplicate"), () => this.duplicate());
+    dupBtn.title = t("pat.duplicateTitle");
+    const trBtn = mkBtn(t("pat.transpose"), () => this.transpose());
+    trBtn.title = t("pat.transposeTitle");
+    const lenBtn = mkBtn(t("pat.lengthen"), () => this.applyPatternBytes(expandPatternBytes));
+    lenBtn.title = t("pat.lengthenTitle");
+    const shortBtn = mkBtn(t("pat.shorten"), () => this.applyPatternBytes(shrinkPatternBytes));
+    shortBtn.title = t("pat.shortenTitle");
+    const volBtn = mkBtn(t("pat.volume"), () => this.volumeOp());
+    volBtn.title = t("pat.volumeTitle");
+    const panBtn = mkBtn(t("pat.pan"), () => this.panOp());
+    panBtn.title = t("pat.panTitle");
+    const instBtn = mkBtn(t("pat.instrument"), () => this.instrumentOp());
+    instBtn.title = t("pat.instrumentTitle");
+    this.info = document.createElement("span");
+    this.info.className = "dim";
+    this.bar.append(prev, this.patInput, next, this.previewBtn,
+      dupBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn, this.info);
+    if (this.visible) this.refreshBar();
+  }
+
   pattern() { return this.store.song?.patterns[this.patIdx] ?? null; }
 
   setPattern(idx) {
     const numPats = this.store.song?.patterns.length ?? 0;
     this.patIdx = clampInt(idx, 0, Math.max(numPats - 1, 0));
+    this.sel = null;
     this.refreshBar();
     this.invalidate();
+  }
+
+  // ── row-range selection + clipboard ──
+  hasSelection() { return this.sel !== null; }
+  clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
+
+  selRowBounds() {
+    const s = this.sel;
+    if (!s) return null;
+    const aSub = s.aSub ?? 0, sub = s.sub ?? SUB_FX_ARG;
+    return {
+      r0: Math.min(s.aRow, s.row), r1: Math.max(s.aRow, s.row),
+      colLo: subToCol(Math.min(aSub, sub)), colHi: subToCol(Math.max(aSub, sub)),
+    };
+  }
+
+  selCols() {
+    const s = this.sel;
+    return s ? colsForSubs(s.aSub ?? 0, s.sub ?? SUB_FX_ARG) : ALL_COLS;
+  }
+
+  extendSelection(dRow) {
+    if (!this.sel) this.sel = { aRow: this.cursor.row, row: this.cursor.row, aSub: 0, sub: SUB_FX_ARG };
+    this.cursor.row = clampInt(this.cursor.row + dRow, 0, 63);
+    this.sel.row = this.cursor.row;
+    this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; // keyboard selection = whole cells
+    const vis = Math.floor(this.canvas.clientHeight / ROW_H);
+    if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
+    else if (this.cursor.row >= this.scrollRow + vis) this.scrollRow = this.cursor.row - vis + 1;
+    this.invalidate();
+    this.store.emit("cursor");
+  }
+
+  copySelection() {
+    const b = this.selRowBounds();
+    const pattern = this.pattern();
+    if (!b || !pattern) return false;
+    const rows = b.r1 - b.r0 + 1;
+    const block = makeBlock(rows, 1);
+    for (let r = 0; r < rows; r++) blockCell(block, r, 0).set(cellToBytes(pattern[b.r0 + r]));
+    block.cols = this.selCols();
+    this.store.clipboard = block;
+    return true;
+  }
+
+  cutSelection() {
+    if (!this.copySelection()) return false;
+    this.clearRegion(this.selRowBounds(), this.selCols());
+    return true;
+  }
+
+  deleteSelection() {
+    const b = this.selRowBounds();
+    if (!b) return false;
+    this.clearRegion(b, this.selCols());
+    return true;
+  }
+
+  clearRegion(b, cols = ALL_COLS) {
+    const empty = emptyCellBytes();
+    const pattern = this.pattern();
+    const writes = [];
+    for (let r = b.r0; r <= b.r1; r++) {
+      writes.push({ pat: this.patIdx, row: r, bytes: overlayCols(cellToBytes(pattern[r]), empty, cols) });
+    }
+    this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
+    this.invalidate();
+  }
+
+  paste() {
+    const block = this.store.clipboard;
+    const pattern = this.pattern();
+    if (!block || !pattern) return false;
+    const cols = block.cols ?? ALL_COLS;
+    const start = this.cursor.row;
+    const writes = [];
+    for (let r = 0; r < block.rows; r++) {
+      const row = start + r;
+      if (row > 63) break;
+      writes.push({ pat: this.patIdx, row, bytes: overlayCols(cellToBytes(pattern[row]), blockCell(block, r, 0), cols) });
+    }
+    if (!writes.length) return false;
+    this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
+    this.sel = { aRow: start, row: Math.min(start + block.rows - 1, 63), aSub: 0, sub: SUB_FX_ARG };
+    this.invalidate();
+    return true;
   }
 
   refreshBar() {
@@ -232,6 +367,85 @@ export class PatternView {
     this.invalidate();
   }
 
+  /** Row span the bulk ops act on: the row-range selection if one is active,
+   *  else the whole pattern. Returns [r0,r1] plus a human scope label. */
+  _opScope() {
+    const b = this.selRowBounds();
+    return b
+      ? { rows: [b.r0, b.r1], scope: t("pat.scopeSel", { r0: b.r0, r1: b.r1 }) }
+      : { rows: null, scope: t("pat.scopeAll") };
+  }
+
+  _titlePat() { return this.patIdx.toString(16).toUpperCase().padStart(4, "0"); }
+
+  /** Volume amplify: new = old × mult + add (existing volumes only). */
+  async volumeOp() {
+    if (!this.pattern()) return;
+    const { rows, scope } = this._opScope();
+    const result = await showModal({
+      title: t("pat.volModalTitle", { pat: this._titlePat() }),
+      body: t("pat.volBody", { scope }),
+      fields: [
+        { name: "mult", label: t("pat.multiply"), type: "number", value: 1, min: -8, max: 8 },
+        { name: "add", label: t("pat.add"), type: "number", value: 0, min: -63, max: 63 },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const mult = parseFloat(result.mult ?? "1");
+    const add = parseInt(result.add || "0", 10) | 0;
+    if (mult === 1 && add === 0) return;
+    this._applyBytes((src) => scaleVolumeBytes(src, mult, add, rows));
+  }
+
+  /** Pan widen/narrow (signed mult about centre) + shift (add). */
+  async panOp() {
+    if (!this.pattern()) return;
+    const { rows, scope } = this._opScope();
+    const result = await showModal({
+      title: t("pat.panModalTitle", { pat: this._titlePat() }),
+      body: t("pat.panBody", { scope }),
+      fields: [
+        { name: "mult", label: t("pat.widen"), type: "number", value: 1, min: -4, max: 4 },
+        { name: "shift", label: t("pat.shift"), type: "number", value: 0, min: -63, max: 63 },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const mult = parseFloat(result.mult ?? "1");
+    const shift = parseInt(result.shift || "0", 10) | 0;
+    if (mult === 1 && shift === 0) return;
+    this._applyBytes((src) => transformPanBytes(src, mult, shift, rows));
+  }
+
+  /** Change instrument: From blank → every non-empty inst becomes To. */
+  async instrumentOp() {
+    if (!this.pattern()) return;
+    const { rows, scope } = this._opScope();
+    const result = await showModal({
+      title: t("pat.instModalTitle", { pat: this._titlePat() }),
+      body: t("pat.instBody", { scope }),
+      fields: [
+        { name: "from", label: t("pat.instFrom"), type: "text", value: "", placeholder: t("pat.instAll") },
+        { name: "to", label: t("pat.instTo"), type: "text", value: "" },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const fromStr = (result.from ?? "").trim();
+    const from = fromStr === "" ? null : (parseInt(fromStr, 16) & 0xff);
+    const to = parseInt((result.to ?? "").trim() || "0", 16) & 0xff;
+    this._applyBytes((src) => changeInstrumentBytes(src, from, to, rows));
+  }
+
+  /** Apply a bytes→bytes pattern transform as one undo step + repaint. */
+  _applyBytes(fn) {
+    const store = this.store;
+    store.undo.apply(setPatternBytesOp(store.songIndex, this.patIdx,
+      fn(store.doc.patternBytes(store.songIndex, this.patIdx))));
+    this.invalidate();
+  }
+
   hitTest(e) {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -244,6 +458,7 @@ export class PatternView {
   }
 
   moveCursor(dRow) {
+    this.sel = null;
     this.cursor.row = clampInt(this.cursor.row + dRow, 0, 63);
     const vis = Math.floor(this.canvas.clientHeight / ROW_H);
     if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
@@ -253,6 +468,7 @@ export class PatternView {
   }
 
   moveSubCursor(dir) {
+    this.sel = null;
     const c = this.cursor;
     let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
     idx = clampInt(idx + dir, 0, SUB_POSITIONS.length - 1);
@@ -264,14 +480,14 @@ export class PatternView {
   /** View-specific keys; true when consumed. Called from the app dispatcher. */
   processKey(e) {
     switch (e.code) {
-      case "ArrowUp": this.moveCursor(-1); return true;
-      case "ArrowDown": this.moveCursor(1); return true;
+      case "ArrowUp": e.shiftKey ? this.extendSelection(-1) : this.moveCursor(-1); return true;
+      case "ArrowDown": e.shiftKey ? this.extendSelection(1) : this.moveCursor(1); return true;
       case "ArrowLeft": this.moveSubCursor(-1); return true;
       case "ArrowRight": this.moveSubCursor(1); return true;
-      case "PageUp": this.moveCursor(-16); return true;
-      case "PageDown": this.moveCursor(16); return true;
-      case "Home": this.moveCursor(-64); return true;
-      case "End": this.moveCursor(64); return true;
+      case "PageUp": e.shiftKey ? this.extendSelection(-16) : this.moveCursor(-16); return true;
+      case "PageDown": e.shiftKey ? this.extendSelection(16) : this.moveCursor(16); return true;
+      case "Home": e.shiftKey ? this.extendSelection(-64) : this.moveCursor(-64); return true;
+      case "End": e.shiftKey ? this.extendSelection(64) : this.moveCursor(64); return true;
       case "BracketLeft": case "BracketRight": return false; // octave keys: global
     }
     const pattern = this.pattern();
@@ -384,6 +600,7 @@ export class PatternView {
 
     const vis = Math.floor(H / ROW_H) + 1;
     const x0 = GUTTER_W + 4;
+    const sb = this.selRowBounds(); // row-range selection (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < vis; r++) {
       const row = this.scrollRow + r;
@@ -398,6 +615,15 @@ export class PatternView {
       } else if (row % beats.pri === 0) {
         ctx.fillStyle = C.rowBeat;
         ctx.fillRect(0, y, W, ROW_H);
+      }
+      if (sb && row >= sb.r0 && row <= sb.r1) {
+        ctx.fillStyle = C.sel;
+        if (sb.colLo === 0 && sb.colHi === 4) {
+          ctx.fillRect(GUTTER_W, y, CELL_CHARS * CHAR_W + 8, ROW_H);
+        } else {
+          const cs = COL_CHAR_RANGE[sb.colLo][0], ce = COL_CHAR_RANGE[sb.colHi][1];
+          ctx.fillRect(x0 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
+        }
       }
       if (row === this.cursor.row) {
         ctx.fillStyle = C.cursor;

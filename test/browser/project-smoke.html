@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>project song rename/delete smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Bug report #1: Project-tab song Rename/Delete crashed with
+    // "this.cb is undefined" (and Delete wrongly called rename).
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, projectView } = win.__microtone;
+        const doc = win.document;
+        win.confirm = () => true; // auto-accept the delete confirm
+
+        win.document.querySelector('#tabs button[data-view="project"]').click();
+        await sleep(30);
+
+        const songs0 = store.doc.songs.length;
+        // add a song so Delete is enabled (WHEN already has several)
+        [...projectView.root.querySelectorAll("button")].find((b) => /Add song/.test(b.textContent)).click();
+        await sleep(30);
+        const added = store.doc.songs.length === songs0 + 1;
+
+        // Rename song 0 via the per-row button (previously threw this.cb undefined)
+        let threw = false;
+        const rows = projectView.root.querySelectorAll("table tbody tr");
+        const renameBtn = [...rows[0].querySelectorAll("button")].find((b) => b.textContent === "Rename");
+        try {
+          renameBtn.click();
+          await sleep(40);
+          const dlg = doc.querySelector("dialog.modal");
+          dlg.querySelector('[name="name"]').value = "Renamed via Project";
+          [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // OK
+          await sleep(40);
+        } catch (e) { threw = true; }
+        const renamed = win.__microtone.store.doc.meta.songMeta[0]?.name === "Renamed via Project";
+        log(`rename button (no crash): renamed=${renamed} threw=${threw}`);
+
+        // Delete the last song via its per-row button
+        const rows2 = projectView.root.querySelectorAll("table tbody tr");
+        const songsBeforeDel = win.__microtone.store.doc.songs.length;
+        const delBtn = [...rows2[rows2.length - 1].querySelectorAll("button")].find((b) => b.textContent === "Delete");
+        let delThrew = false;
+        try { delBtn.click(); await sleep(40); } catch (e) { delThrew = true; log("del err: " + e.message); }
+        const deleted = win.__microtone.store.doc.songs.length === songsBeforeDel - 1;
+        log(`delete button: deleted=${deleted} threw=${delThrew}`);
+
+        const pass = added && renamed && !threw && deleted && !delThrew;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

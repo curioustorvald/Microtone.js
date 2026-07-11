@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { normalise, fadeIn, fadeOut, reverse } from "../../src/doc/sampledsp.js";
-import { setSampleBytesOp, multiInstBytesOp } from "../../src/doc/ops.js";
+import { normalise, fadeIn, fadeOut, reverse, invert } from "../../src/doc/sampledsp.js";
+import { setSampleBytesOp, multiInstBytesOp, setSectionOp } from "../../src/doc/ops.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
 import { UndoStack } from "../../src/doc/undo.js";
@@ -40,6 +40,37 @@ test("DSP ops: length-preserving, input untouched, correct shapes", () => {
   const rev = reverse(src);
   assert.deepEqual([...reverse(rev)], [...src], "reverse is an involution");
   assert.equal(rev[0], src.at(-1));
+
+  // invert (polarity swap about 0x80): centre fixed, 256-s clamped, involution
+  const inv = invert(src);
+  assert.equal(inv.length, src.length);
+  assert.deepEqual([...src], [...snapshot], "input untouched");
+  assert.equal(inv[0], 128, "centre stays centre");
+  assert.equal(inv[1], 96, "160 → 96");
+  assert.equal(inv[2], 160, "96 → 160");
+  assert.deepEqual([...invert(inv)], [...src], "invert is an involution (no 0x00 in src)");
+  assert.equal(invert(Uint8Array.from([0]))[0], 255, "0x00 clamps to 0xFF");
+});
+
+test("rename: buildSampleNames splices SNam by census index; setSectionOp undoes", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const list = doc.sampleList();
+  assert.ok(list.length >= 2);
+  const before = Buffer.from(doc.toBytes());
+  const undo = new UndoStack(doc);
+
+  const idx = 1;
+  const other = doc.sampleName(0); // must stay byte-identical
+  undo.apply(setSectionOp("SNam", doc.buildSampleNames(idx, "MyKick")));
+  assert.equal(doc.sampleName(idx), "MyKick", "renamed entry");
+  assert.equal(doc.sampleName(0), other, "sibling name untouched");
+  const after = Buffer.from(doc.toBytes());
+  assert.ok(!after.equals(before));
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+  undo.redo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(after), "redo byte-exact");
 });
 
 test("setSampleBytesOp: pool write, bank dirty tag, undo/redo byte-exact", () => {

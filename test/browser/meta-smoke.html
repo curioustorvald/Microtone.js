@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>meta mix/detune edit smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/flourish.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 28: Metainstrument mix + detune are editable in the Instruments Meta tab.
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, instrumentsView } = win.__microtone;
+        const doc = store.doc;
+
+        // pick the first meta slot
+        const metaSlot = doc.usedInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+        log(`meta slot: $${metaSlot?.toString(16)}`);
+
+        win.document.querySelector('#tabs button[data-view="instruments"]').click();
+        instrumentsView.selected = metaSlot;
+        instrumentsView.tab = "meta";
+        instrumentsView.refresh();
+        await sleep(30);
+
+        const nums = [...instrumentsView.panel.querySelectorAll(".meta-num")];
+        const hasInputs = nums.length >= 2;
+        const layer0 = doc.instruments[metaSlot].metaLayers[0];
+        const mixBefore = layer0.mixOctet;
+
+        // edit the first mix input to a new value
+        const mixInput = instrumentsView.panel.querySelectorAll("tbody tr")[0].querySelector(".meta-num");
+        const newMix = mixBefore === 200 ? 120 : 200;
+        mixInput.value = String(newMix);
+        mixInput.dispatchEvent(new win.Event("change", { bubbles: true }));
+        await sleep(20);
+        const mixApplied = doc.instruments[metaSlot].metaLayers[0].mixOctet === newMix;
+
+        // edit detune on the first layer
+        const detInput = instrumentsView.panel.querySelectorAll("tbody tr")[0].querySelectorAll(".meta-num")[1];
+        detInput.value = "-341";
+        detInput.dispatchEvent(new win.Event("change", { bubbles: true }));
+        await sleep(20);
+        const detApplied = doc.instruments[metaSlot].metaLayers[0].detune === -341;
+
+        // undo twice restores
+        store.undo.undo(); store.undo.undo();
+        const restored = doc.instruments[metaSlot].metaLayers[0].mixOctet === mixBefore;
+
+        const pass = !!metaSlot && hasInputs && mixApplied && detApplied && restored;
+        log(`meta edit: inputs=${hasInputs} mix=${mixApplied} det=${detApplied} undo=${restored}`);
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

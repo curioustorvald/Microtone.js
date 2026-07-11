@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Microtone.js — Documentation</title>
+  <link rel="stylesheet" href="css/microtone.css" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body.docs-body {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "Open Sans", system-ui, sans-serif;
+    }
+    .docs-topbar {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      padding: 0.5rem 1rem;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+    .docs-topbar .docs-brand { font-weight: 700; color: var(--fg); text-decoration: none; }
+    .docs-topbar .docs-brand:hover { color: var(--accent); }
+    .docs-topbar .docs-sub { color: var(--dim); }
+    .docs-topbar .grow { flex: 1; }
+    .docs-topbar a.back { color: var(--accent-2); text-decoration: none; font-size: 0.9rem; }
+    .docs-topbar button {
+      background: var(--panel-2); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 5px;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+    }
+    .docs-main { flex: 1; display: flex; min-height: 0; }
+    .docs-toc {
+      flex: 0 0 260px;
+      overflow-y: auto;
+      padding: 1rem 0.75rem;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+    }
+    .toc-section { margin-bottom: 1rem; }
+    .toc-headings { border-top: 1px solid var(--border); padding-top: 0.6rem; }
+    .toc-doc {
+      display: block; width: 100%; text-align: left;
+      background: none; color: var(--fg); border: 0;
+      padding: 0.3rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.95rem;
+    }
+    .toc-doc:hover { background: var(--panel-2); }
+    .toc-doc.active { background: var(--panel-2); color: var(--accent); font-weight: 600; }
+    .docs-toc a {
+      display: block; color: var(--dim); text-decoration: none;
+      padding: 0.12rem 0.5rem; border-radius: 4px; font-size: 0.85rem;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .docs-toc a:hover { color: var(--fg); background: var(--panel-2); }
+    .docs-toc a.toc-h3 { padding-left: 1.4rem; font-size: 0.8rem; }
+    .docs-content {
+      flex: 1; overflow-y: auto; padding: 2rem;
+    }
+    .docs-content > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+    .docs-content h1 { font-size: 1.9rem; margin: 1.2rem auto 0.8rem; }
+    .docs-content h2 {
+      font-size: 1.4rem; margin: 2rem auto 0.7rem;
+      padding-bottom: 0.3rem; border-bottom: 1px solid var(--border);
+    }
+    .docs-content h3 { font-size: 1.15rem; margin: 1.4rem auto 0.5rem; }
+    .docs-content h4 { font-size: 1rem; margin: 1.1rem auto 0.4rem; }
+    .docs-content p, .docs-content li { line-height: 1.65; }
+    .docs-content a { color: var(--accent-2); }
+    .docs-content code {
+      font-family: "Roboto Mono", ui-monospace, monospace;
+      background: var(--panel-2); padding: 0.05em 0.35em; border-radius: 4px; font-size: 0.9em;
+    }
+    .docs-content pre {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.8rem 1rem; overflow-x: auto;
+    }
+    .docs-content pre code { background: none; padding: 0; }
+    .docs-content blockquote {
+      margin: 1rem auto; padding: 0.4rem 1rem;
+      border-left: 3px solid var(--accent); background: var(--panel);
+      color: var(--fg2);
+    }
+    .docs-content hr { border: 0; border-top: 1px solid var(--border); margin: 2rem auto; }
+    .md-table { max-width: 960px; margin: 1rem auto; overflow-x: auto; }
+    .docs-content table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+    .docs-content th, .docs-content td {
+      border: 1px solid var(--border); padding: 0.35rem 0.6rem; text-align: left; vertical-align: top;
+    }
+    .docs-content th { background: var(--panel); }
+    .docs-loading, .docs-error { color: var(--dim); }
+    .docs-error { color: var(--accent); }
+    @media (max-width: 720px) {
+      .docs-toc { flex-basis: 190px; }
+      .docs-content { padding: 1rem; }
+    }
+  </style>
+</head>
+<body class="docs-body">
+  <header class="docs-topbar">
+    <a class="docs-brand" href="index.html">Microtone.js</a>
+    <span class="docs-sub">Documentation</span>
+    <div class="grow"></div>
+    <a class="back" href="index.html">← Back to the app</a>
+    <button id="themeBtn" title="Toggle dark/light theme">◐</button>
+  </header>
+  <div class="docs-main">
+    <nav class="docs-toc" id="toc"></nav>
+    <main class="docs-content" id="content"></main>
+  </div>
+  <script type="module" src="src/ui/docs.js"></script>
+</body>
+</html>

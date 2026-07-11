@@ -20,6 +20,7 @@ export function showAbout() {
     <p>${esc(t("about.blurb"))}</p>
     <p class="dim">${esc(t("about.license"))}</p>
     <p>
+      <a href="docs.html" target="_blank" rel="noopener">${esc(t("about.docs"))}</a> ·
       <a href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener">GitHub</a> ·
       <a href="https://paypal.me/curioustorvald" target="_blank" rel="noopener">${esc(t("topbar.donate"))}</a> ·
       <a href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener">${esc(t("topbar.sponsor"))}</a>

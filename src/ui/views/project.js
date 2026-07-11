@@ -7,11 +7,13 @@ import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitc
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
+import { t } from "../i18n.js";
 
 export class ProjectView {
-  constructor(store, host) {
+  constructor(store, host, cb = {}) {
     this.store = store;
     this.host = host;
+    this.cb = cb; // { renameSong(index) } — the app's interactive rename modal
     this.visible = false;
     this.root = document.createElement("div");
     this.root.className = "project-view";
@@ -140,16 +142,14 @@ export class ProjectView {
         `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || "(unnamed)")}</td><td>${s.numVoices}</td>` +
         `<td>${s.patterns.length}</td><td>${s.bpm}</td><td>${s.tickRate}</td>`;
       const td = document.createElement("td");
-      const rn = mkBtn("Rename", async () => {
-        await this.cb.renameSong(i);
+      const rn = mkBtn(t("common.rename"), async () => {
+        await this.cb.renameSong?.(i);
         this.refresh();
       });
-      rn.title = "Rename this song";
-      const rm = mkBtn("Delete", async () => {
-        await this.cb.renameSong(i);
-        this.refresh();
-      });
-      rm.title = "Delete this song";
+      rn.title = t("song.renameBtnTitle");
+      const rm = mkBtn(t("common.delete"), () => this.removeSong(i));
+      rm.title = t("song.deleteBtnTitle");
+      rm.disabled = doc.songs.length <= 1; // can't delete the last song
       td.appendChild(rn);
       td.appendChild(rm);
       tr.appendChild(td);
@@ -243,14 +243,17 @@ export class ProjectView {
     store.emit("songs", { select: idx });
   }
 
-  /** Remove the current song (guarded against removing the last one). */
-  removeSong() {
+  /** Remove song `index` (default: current), guarded against emptying the
+   *  project. The re-selection keeps the currently-viewed song when a DIFFERENT
+   *  one is deleted. */
+  removeSong(index = this.store.songIndex) {
     const store = this.store;
     const doc = store.doc;
     if (doc.songs.length <= 1) return;
-    const idx = store.songIndex;
+    const idx = index;
     const nm = unescapeName(doc.meta.songMeta[idx]?.name ?? "");
-    if (!confirm(`Remove song ${idx}${nm ? ` "${nm}"` : ""}? This cannot be undone.`)) return;
+    if (!confirm(t("confirm.removeSong", { idx, name: nm ? ` "${nm}"` : "" }))) return;
+    const cur = store.songIndex;
     doc.songs.splice(idx, 1);
     // songMeta is keyed by song index — shift entries above `idx` down by one.
     const newMeta = {};
@@ -261,7 +264,10 @@ export class ProjectView {
     doc.meta.songMeta = newMeta;
     doc.smetEdited = true;
     doc.dirty = true;
-    store.emit("songs", { select: Math.min(idx, doc.songs.length - 1) });
+    // Keep the viewer on the same song where possible.
+    const select = idx === cur ? Math.min(idx, doc.songs.length - 1)
+      : idx < cur ? cur - 1 : cur;
+    store.emit("songs", { select });
   }
 
   /** Retune dialog: snap every note onto a new pitch table (nearest-pitch).
@@ -271,27 +277,27 @@ export class ProjectView {
     this.store.doc?.meta.songMeta[this.store.songIndex]?.notation ?? 120)) {
     const store = this.store;
     const result = await showModal({
-      title: "Retune all patterns",
-      body: `Current: ${currentPreset.name}. Notes remap onto the new table; percussion instruments are skipped. One undo step.`,
+      title: t("retune.title"),
+      body: t("retune.body", { name: currentPreset.name }),
       fields: [
         {
-          name: "preset", label: "New pitch table", type: "select",
+          name: "preset", label: t("retune.preset"), type: "select",
           value: String(currentPreset.index),
           options: Object.values(pitchTablePresets)
             .filter((p) => p.table.length > 0)
             .map((p) => ({ value: String(p.index), label: p.name })),
         },
         {
-          name: "method", label: "Method", type: "select", value: "pitch",
+          name: "method", label: t("retune.method"), type: "select", value: "pitch",
           options: [
-            { value: "pitch", label: "Nearest pitch (snap each note)" },
-            { value: "delta", label: "Nearest delta (preserve intervals)" },
-            { value: "cadence", label: "Nearest cadence (tonal tension)" },
-            { value: "harmonic", label: "Cadence-aware harmonic" },
+            { value: "pitch", label: t("retune.methodPitch") },
+            { value: "delta", label: t("retune.methodDelta") },
+            { value: "cadence", label: t("retune.methodCadence") },
+            { value: "harmonic", label: t("retune.methodHarmonic") },
           ],
         },
       ],
-      okLabel: "Retune",
+      okLabel: t("retune.ok"),
     });
     if (!result) return;
     const newPreset = pitchTablePresets[parseInt(result.preset, 10)];

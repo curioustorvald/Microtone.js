@@ -40,6 +40,29 @@ export function subCharPos(sub, nib) {
   }
 }
 
+// ── logical clipboard columns ──
+// Coarser than the six sub-cursor positions: note / inst / vol / pan / fx (the
+// effect opcode + arg are ONE column). Block copy/paste records which of these
+// a selection covers, so a partial-column paste overwrites only those bytes.
+export const COL_NOTE = 0, COL_INST = 1, COL_VOL = 2, COL_PAN = 3, COL_FX = 4;
+export const ALL_COLS = [COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX];
+/** Raw cell byte offsets each logical column occupies. */
+export const COL_BYTES = [[0, 1], [2], [3], [4], [5, 6, 7]];
+/** Inclusive [startChar, endChar] span of each column within the cell (for the
+ *  selection highlight); contiguous, covering all CELL_CHARS. */
+export const COL_CHAR_RANGE = [[0, 5], [5, 8], [8, 12], [12, 16], [16, 21]];
+
+/** Logical column of a sub-cursor position (fx-op and fx-arg → COL_FX). */
+export function subToCol(sub) { return sub <= COL_PAN ? sub : COL_FX; }
+
+/** Logical column ids spanned by an inclusive sub-cursor range [subA..subB]. */
+export function colsForSubs(subA, subB) {
+  const lo = subToCol(Math.min(subA, subB)), hi = subToCol(Math.max(subA, subB));
+  const cols = [];
+  for (let c = lo; c <= hi; c++) cols.push(c);
+  return cols;
+}
+
 /** Map a character offset within a cell to [sub, nib]. */
 export function charToSub(charX) {
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -133,10 +156,11 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
       return { fields, jamNote: note, advanceRow: true };
     }
     switch (code) {
-      case "Backquote": return { fields: { note: 0x0001 }, advanceRow: true }; // key-off
-      case "Digit1": return { fields: { note: 0x0002 }, advanceRow: true };    // note cut
-      case "Digit2": return { fields: { note: 0x0003 }, advanceRow: true };    // note fade
-      case "Digit3": return { fields: { note: 0x0004 }, advanceRow: true };    // fast fade
+      // Sentinels: taut z/x/c/v (and the legacy `/1/2/3), inserted not auditioned.
+      case "Backquote": case "KeyZ": return { fields: { note: 0x0001 }, advanceRow: true }; // key-off
+      case "Digit1": case "KeyX": return { fields: { note: 0x0002 }, advanceRow: true };    // note cut
+      case "Digit2": case "KeyC": return { fields: { note: 0x0003 }, advanceRow: true };    // note fade
+      case "Digit3": case "KeyV": return { fields: { note: 0x0004 }, advanceRow: true };    // fast fade
       case "Delete": case "Period":
         return { fields: { note: 0, instrment: 0 }, advanceRow: true };
     }

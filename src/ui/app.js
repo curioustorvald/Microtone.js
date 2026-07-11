@@ -16,6 +16,7 @@ import { SamplesView } from "./views/samples.js";
 import { InstrumentsView } from "./views/instruments.js";
 import { ProjectView } from "./views/project.js";
 import { JamKeyboard } from "./jam.js";
+import { InstLookup } from "./instlookup.js";
 import { SUB_NOTE } from "./edit.js";
 import { CommandPalette } from "./palette.js";
 import { setCellOp } from "../doc/ops.js";
@@ -30,7 +31,7 @@ import { showImportProgress } from "./popups/importlog.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange } from "./theme.js";
-import { initI18n, applyDom, t, LANGS, setLang, currentLang } from "./i18n.js";
+import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
 import { unescapeName } from "./names.js";
 import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
 
@@ -52,8 +53,12 @@ store.record = true;
 store.editStep = 1;
 let audioInitPromise = null;
 
-// ── audio bring-up (lazy, single-flight; owns DocSync creation) ──
-async function ensureAudio() {
+// ── audio bring-up (single-flight; owns DocSync creation) ──
+// The worklet is warmed up eagerly on load (resume:false → suspended context,
+// no sound, no autoplay-policy violation) so store.audio + DocSync exist before
+// the first gesture; the first pointer/key then resume()s it (resume:true).
+// That is what lets note jamming work without first pressing Play (item 26).
+async function ensureAudio({ resume = true } = {}) {
   if (!audioInitPromise) {
     audioInitPromise = (async () => {
       const audio = new AudioSystem();
@@ -62,7 +67,7 @@ async function ensureAudio() {
     })();
   }
   await audioInitPromise;
-  await store.audio.resume();
+  if (resume) await store.audio.resume();
   if (store.doc && !store.sync) {
     store.sync = new DocSync(store.audio, store.doc, store.songIndex);
     store.sync.loadAll();
@@ -76,17 +81,21 @@ async function ensureAudio() {
   }
 }
 for (const ev of ["pointerdown", "keydown"]) {
-  window.addEventListener(ev, () => { if (audioInitPromise) ensureAudio(); }, { capture: true });
+  window.addEventListener(ev, () => ensureAudio(), { capture: true });
 }
+// Warm up the engine now (suspended) so jamming is ready pre-Play. Fire-and-
+// forget: a headless/virtual-time boot where addModule never settles just
+// leaves audio uninitialised, which the rest of the app already tolerates.
+ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmup failed", e));
 
 // ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
 
 async function convertImport(name, bytes, sf2Override = null) {
   let sf2 = sf2Override;
   if (!sf2 && converterFor(name).isMidi) {
-    $("stFile").textContent = "MIDI import needs a soundfont — bundled GeneralUser or pick an .sf2";
+    $("stFile").textContent = t("midi.needSf");
     sf2 = await getSoundfont();
-    if (!sf2) { $("stFile").textContent = "MIDI import cancelled (no soundfont)"; return null; }
+    if (!sf2) { $("stFile").textContent = t("midi.cancelled"); return null; }
   }
   const progress = showImportProgress(`Importing ${name}`);
   try {
@@ -96,7 +105,7 @@ async function convertImport(name, bytes, sf2Override = null) {
   } catch (err) {
     const last = err.message.trim().split("\n").pop();
     progress.fail(last);
-    $("stFile").textContent = `import ${name} failed: ${last}`;
+    $("stFile").textContent = t("status.importFailed", { name, err: last });
     console.error("import failed:", err);
     return null;
   }
@@ -116,7 +125,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
   try {
     parsed = parseTaud(bytes);
   } catch (err) {
-    $("stFile").textContent = `parse error: ${err.message}`;
+    $("stFile").textContent = t("status.parseError", { err: err.message });
     return;
   }
 
@@ -125,7 +134,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
   // standalone it seeds a new project.
   if (parsed.kind === "tsii") {
     if (store.doc) {
-      if (!confirm(`Replace this project's samples + instruments with the bank from ${name}?`)) return;
+      if (!confirm(t("confirm.replaceBank", { name }))) return;
       store.audio?.stop(0);
       store.doc.sampleInstImage = parsed.sampleInstImage;
       store.doc.ixmp = parsed.ixmp.map((e) => ({ instId: e.instId, count: e.count, blob: Uint8Array.from(e.blob) }));
@@ -157,17 +166,17 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
       store.doc._rebuildInstRegion(); // decoded inst edits are canonical
       bank = store.doc;
     } else {
-      $("stFile").textContent = `${name} carries patterns only — pick its companion .tsii bank`;
+      $("stFile").textContent = t("status.tpifNeedsBank", { name });
       const bankFile = await pickFile(".tsii,.taud");
       if (!bankFile) return;
       try {
         bank = parseTaud(new Uint8Array(await bankFile.arrayBuffer()));
       } catch (err) {
-        $("stFile").textContent = `parse error in ${bankFile.name}: ${err.message}`;
+        $("stFile").textContent = t("status.parseErrorIn", { name: bankFile.name, err: err.message });
         return;
       }
       if (!bank.sampleInstImage) {
-        $("stFile").textContent = `${bankFile.name} carries no sample+instrument bank`;
+        $("stFile").textContent = t("status.noBankIn", { name: bankFile.name });
         return;
       }
     }
@@ -177,7 +186,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
   }
 
   if (store.doc?.dirty) {
-    if (!confirm(`Discard unsaved changes to ${store.fileName ?? "the current project"}?`)) return;
+    if (!confirm(t("confirm.discardNamed", { name: store.fileName ?? t("common.currentProject") }))) return;
   }
   store.audio?.stop(0);
   store.doc = new Document(parsed);
@@ -241,22 +250,20 @@ store.on("status", updateStatus); // e.g. project rename
 /** New Project wizard — optionally seeded from a .tsii instrument bank. */
 async function newProject({ fromBank = null, bankName = null } = {}) {
   const result = await showModal({
-    title: fromBank ? `New project from ${bankName}` : "New project",
-    body: fromBank
-      ? "Starts an empty song over the bank's samples + instruments."
-      : "Starts an empty project (no samples — load a .tsii bank or import instruments later).",
+    title: fromBank ? t("np.titleFromBank", { bank: bankName }) : t("np.title"),
+    body: fromBank ? t("np.bodyFromBank") : t("np.body"),
     fields: [
-      { name: "name", label: "Name", value: "untitled" },
-      { name: "channels", label: "Channels", type: "select", value: "32",
+      { name: "name", label: t("np.name"), value: t("np.untitled") },
+      { name: "channels", label: t("np.channels"), type: "select", value: "32",
         options: [{ value: "32", label: "32" }, { value: "64", label: "64" }] },
-      { name: "bpm", label: "BPM", type: "number", value: 125, min: 25, max: 535 },
-      { name: "speed", label: "Speed", type: "number", value: 6, min: 1, max: 127 },
+      { name: "bpm", label: t("np.bpm"), type: "number", value: 125, min: 25, max: 535 },
+      { name: "speed", label: t("np.speed"), type: "number", value: 6, min: 1, max: 127 },
     ],
-    okLabel: "Create",
+    okLabel: t("common.create"),
   });
   if (!result) return;
   if (store.doc?.dirty) {
-    if (!confirm("Discard unsaved changes?")) return;
+    if (!confirm(t("confirm.discard"))) return;
   }
   const is64 = result.channels === "64";
   const chans = is64 ? 64 : 32;
@@ -362,21 +369,21 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
   if (!file) return;
   const bundledAvail = (await getBundledSoundfont()) !== null;
   const choice = await showModal({
-    title: `Import ${file.name}`,
-    body: "The MIDI is converted through a SoundFont's instruments.",
+    title: t("midi.title", { name: file.name }),
+    body: t("midi.body"),
     fields: [{
-      name: "sf", label: "Soundfont", type: "select",
+      name: "sf", label: t("midi.soundfont"), type: "select",
       value: bundledAvail ? "bundled" : "own",
       options: [
-        ...(bundledAvail ? [{ value: "bundled", label: "Bundled GeneralUser-GS" }] : []),
-        { value: "own", label: "Choose an .sf2 file…" },
+        ...(bundledAvail ? [{ value: "bundled", label: t("midi.bundled") }] : []),
+        { value: "own", label: t("midi.chooseSf2") },
       ],
     }],
     okLabel: t("common.import"),
   });
   if (!choice) return;
   const sf2 = choice.sf === "bundled" ? await getBundledSoundfont() : await pickUserSoundfont();
-  if (!sf2) { $("stFile").textContent = "MIDI import cancelled (no soundfont)"; return; }
+  if (!sf2) { $("stFile").textContent = t("midi.cancelled"); return; }
   await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()), { sf2, saveToOpfs: toOpfs });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());
@@ -456,7 +463,10 @@ const patternView = new PatternView(store, $("patternHost"), jam);
 window.__microtoneEnsureAudio = ensureAudio; // pattern preview needs lazy audio
 const samplesView = new SamplesView(store, $("samplesHost"));
 const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
-const projectView = new ProjectView(store, $("projectHost"));
+const projectView = new ProjectView(store, $("projectHost"), {
+  renameSong: (i) => renameSongInteractive(i),
+});
+const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
 const filesView = new FilesView(store, $("filesHost"), {
   openBytes: (name, bytes) => loadBytes(name, bytes),
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
@@ -529,7 +539,10 @@ $("redoBtn").addEventListener("click", () => store.undo?.redo());
 // ── About (brand click) ──
 $("brandBtn").addEventListener("click", () => showAbout());
 
-// ── language picker (reload applies the choice everywhere) ──
+// ── on-screen help (mirrors the '?' key; works regardless of view/doc) ──
+$("helpBtn").addEventListener("click", () => showHelp());
+
+// ── language picker (applied live — no reload; item 29) ──
 $("langBtn").textContent = currentLang().toUpperCase();
 $("langBtn").addEventListener("click", async () => {
   const result = await showModal({
@@ -542,9 +555,21 @@ $("langBtn").addEventListener("click", async () => {
     okLabel: t("common.ok"),
   });
   if (!result || result.lang === currentLang()) return;
-  if (store.doc?.dirty && !confirm(`Discard unsaved changes to ${store.fileName ?? "the current project"}?`)) return;
-  setLang(result.lang);
-  location.reload();
+  await changeLang(result.lang); // swaps strings + applyDom + fires onLangChange
+});
+// Re-apply the imperatively-set (non data-i18n) labels + re-render dynamic views.
+onLangChange(() => {
+  $("langBtn").textContent = currentLang().toUpperCase();
+  $("tbRaw").textContent = t(store.rawNoteView ? "toolbox.rawOn" : "toolbox.rawOff");
+  patternView.buildBar();
+  palette.refresh();
+  instLookup.render();
+  if (store.doc) rebuildSongList();
+  if (store.view === "samples") samplesView.refresh();
+  if (store.view === "instruments") instrumentsView.refresh();
+  if (store.view === "project") projectView.refresh();
+  if (store.view === "files") filesView.refresh();
+  updateStatus();
 });
 
 // ── theme toggle ──
@@ -580,6 +605,11 @@ $("tbRaw").addEventListener("click", () => {
   timeline.invalidate();
   patternView.invalidate();
 });
+// Quick instrument lookup toggle (persists per session).
+$("tbInstList").classList.toggle("active", instLookup.visible);
+$("tbInstList").addEventListener("click", () => {
+  $("tbInstList").classList.toggle("active", instLookup.toggle());
+});
 
 // ── wheelable topbar controls (hover + wheel) ──
 function onWheelCtl(id, fn) {
@@ -600,6 +630,7 @@ onWheelCtl("instCtl", (dir) => {
   else i = Math.min(Math.max(i + dir, 0), slots.length - 1);
   jam.currentInst = slots[i];
   updateStatus();
+  store.emit("instsel");
 });
 onWheelCtl("spdCtl", (dir) => {
   // live playback speed tweak (device only — the A effect can still override)
@@ -640,6 +671,11 @@ for (const topic of ["cursor", "edit", "view", "doc"]) {
   store.on(topic, () => palette.refresh());
 }
 
+// The two grid views that support block selection + clipboard (item 17).
+function selView() {
+  return store.view === "timeline" ? timeline : store.view === "pattern" ? patternView : null;
+}
+
 // ── keyboard dispatch ──
 window.addEventListener("keydown", (e) => {
   if (!store.doc) {
@@ -675,6 +711,27 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openGoto();
     return;
+  }
+  // Block clipboard (Timeline / Patterns): copy / cut / paste.
+  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyC" || e.code === "KeyX" || e.code === "KeyV")) {
+    const v = selView();
+    if (v) {
+      e.preventDefault();
+      if (e.code === "KeyC") v.copySelection();
+      else if (e.code === "KeyX") v.cutSelection();
+      else v.paste();
+      updateStatus();
+      return;
+    }
+  }
+  // Escape clears a block selection; Delete/Backspace blanks a selected block.
+  if (e.code === "Escape") {
+    const v = selView();
+    if (v?.hasSelection()) { v.clearSelection(); e.preventDefault(); return; }
+  }
+  if (e.code === "Delete" || e.code === "Backspace") {
+    const v = selView();
+    if (v?.hasSelection()) { e.preventDefault(); v.deleteSelection(); updateStatus(); return; }
   }
   if (e.key === "?" && store.view !== "files") {
     e.preventDefault();
@@ -719,34 +776,46 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (store.view === "samples" || store.view === "instruments" || store.view === "project") {
-    // DOM views: piano keys jam on the cursor channel
+  if (store.view === "samples" || store.view === "instruments") {
+    // Instrument/sample DOM views audition through the piano keys.
     if (jam.down(e.code, e.repeat)) { e.preventDefault(); return; }
     return;
   }
+  // Cues / Project / File never jam — piano keys are inert there (item 24).
+  // (Cues returns above; Project + File fall through to no-op.)
+  if (store.view === "project" || store.view === "files") return;
 
   if (store.view === "timeline") {
     switch (e.code) {
-      case "ArrowUp": e.preventDefault(); timeline.moveCursor(-store.editStep || -1, 0); return;
-      case "ArrowDown": e.preventDefault(); timeline.moveCursor(store.editStep || 1, 0); return;
-      case "ArrowLeft": e.preventDefault(); timeline.moveSubCursor(-1); return;
-      case "ArrowRight": e.preventDefault(); timeline.moveSubCursor(1); return;
+      case "ArrowUp": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(-1, 0) : timeline.moveCursor(-store.editStep || -1, 0); return;
+      case "ArrowDown": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(1, 0) : timeline.moveCursor(store.editStep || 1, 0); return;
+      case "ArrowLeft": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(0, -1) : timeline.moveSubCursor(-1); return;
+      case "ArrowRight": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(0, 1) : timeline.moveSubCursor(1); return;
       case "Tab":
         e.preventDefault();
         store.cursor.sub = SUB_NOTE;
         store.cursor.nib = 0;
         timeline.moveCursor(0, e.shiftKey ? -1 : 1);
         return;
-      case "PageUp": e.preventDefault(); timeline.moveCursor(-16, 0); return;
-      case "PageDown": e.preventDefault(); timeline.moveCursor(16, 0); return;
-      case "Home": e.preventDefault(); timeline.moveCursor(-1e9, 0); return;
-      case "End": e.preventDefault(); timeline.moveCursor(1e9, 0); return;
+      case "PageUp": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(-16, 0) : timeline.moveCursor(-16, 0); return;
+      case "PageDown": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(16, 0) : timeline.moveCursor(16, 0); return;
+      case "Home": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(-1e9, 0) : timeline.moveCursor(-1e9, 0); return;
+      case "End": e.preventDefault();
+        e.shiftKey ? timeline.extendSelection(1e9, 0) : timeline.moveCursor(1e9, 0); return;
       case "Enter": { // pick up the cell's instrument as current
         e.preventDefault();
         const target = timeline.cursorCell();
         if (target && target.cell.instrment !== 0) {
           jam.currentInst = target.cell.instrment;
           updateStatus();
+          store.emit("instsel");
         }
         return;
       }
@@ -776,12 +845,12 @@ window.addEventListener("keyup", (e) => jam.up(e.code));
 async function openGoto() {
   if (!store.doc) return;
   const result = await showModal({
-    title: "Go to",
+    title: t("goto.title"),
     fields: [
-      { name: "cue", label: "Cue (hex)", value: "0" },
-      { name: "row", label: "Row", type: "number", value: 0, min: 0, max: 63 },
+      { name: "cue", label: t("goto.cue"), value: "0" },
+      { name: "row", label: t("goto.row"), type: "number", value: 0, min: 0, max: 63 },
     ],
-    okLabel: "Go",
+    okLabel: t("common.go"),
   });
   if (!result) return;
   const cue = parseInt(result.cue || "0", 16);
@@ -823,10 +892,10 @@ store.on("saved", (name) => opfs.removeAutosave(name)); // clean save supersedes
   if (autosaves.length === 0) return;
   const newest = autosaves.sort((a, b) => b.mtime - a.mtime)[0];
   const result = await showModal({
-    title: "Recover unsaved work?",
-    body: `An autosave of "${newest.name}" from ${new Date(newest.mtime).toLocaleString()} exists.`,
+    title: t("recover.title"),
+    body: t("recover.body", { name: newest.name, when: new Date(newest.mtime).toLocaleString() }),
     fields: [],
-    okLabel: "Recover",
+    okLabel: t("recover.ok"),
   });
   if (result) {
     await loadBytes(newest.name, await opfs.readAutosave(newest.name));
@@ -855,7 +924,7 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, projectView, jam, loadBytes };
+window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, projectView, jam, instLookup, loadBytes };
 
 // ── frame loop ──
 function frame() {

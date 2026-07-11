@@ -41,6 +41,36 @@ export function setLang(code) {
   try { localStorage.setItem("microtone-lang", code); } catch { /* private mode */ }
 }
 
+const langListeners = new Set();
+
+/** Register a callback fired after a runtime language change (views re-render).
+ *  Returns an unsubscribe function. */
+export function onLangChange(fn) {
+  langListeners.add(fn);
+  return () => langListeners.delete(fn);
+}
+
+/** Swap the active language at runtime — no page reload (item 29). Re-applies
+ *  the static DOM (data-i18n) and notifies listeners so dynamic views re-render.
+ *  Resolves true on a real change. */
+export async function changeLang(code) {
+  if (!LANGS[code] || code === activeCode) return false;
+  if (code === "en") { active = en; activeCode = "en"; }
+  else {
+    try {
+      active = (await import(`./lang/${code}.js`)).default;
+      activeCode = code;
+    } catch (err) {
+      console.warn(`i18n: can't load "${code}" (${err.message})`);
+      return false;
+    }
+  }
+  try { localStorage.setItem("microtone-lang", code); } catch { /* private mode */ }
+  applyDom();
+  for (const fn of langListeners) fn(code);
+  return true;
+}
+
 /** Translate a key; "{name}" placeholders are substituted from params. */
 export function t(key, params = null) {
   let s = active[key] ?? en[key] ?? key;

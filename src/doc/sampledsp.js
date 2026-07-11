@@ -48,9 +48,21 @@ export function reverse(bytes) {
   return out;
 }
 
+/** Polarity swap: reflect every sample about the 0x80 DC centre (out = 256-s,
+ *  clamped). Silence (0x80) is fixed; 0x00 clamps to 0xFF (its ideal +128
+ *  partner has no 8-bit slot). */
+export function invert(bytes) {
+  const out = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = Math.max(0, Math.min(255, 256 - bytes[i]));
+  }
+  return out;
+}
+
 export const SAMPLE_DSP = [
   ["Normalise", normalise],
   ["Fade in", fadeIn],
   ["Fade out", fadeOut],
   ["Reverse", reverse],
+  ["Invert", invert],
 ];

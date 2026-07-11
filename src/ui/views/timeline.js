@@ -10,8 +10,10 @@ import { paintNoteCell } from "../glyphs.js";
 import {
   interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
+  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
-import { setCellOp } from "../../doc/ops.js";
+import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
+import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 
@@ -32,8 +34,10 @@ export class TimelineView {
     this.map = null;      // songMap cache
     this.needsRedraw = true;
     this.lastPlayRow = -1; // remembered so resize() can repaint synchronously
+    this.sel = null;       // block selection {aRow, aCh, row, ch} (absolute rows/channels)
+    this._drag = null;     // active pointer-drag anchor {aRow, aCh}
 
-    store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.invalidate(); });
+    store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.sel = null; this.invalidate(); });
     store.on("edit", () => { this.map = null; this.invalidate(); });
     store.on("cursor", () => this.invalidate());
     store.on("mutes", () => this.invalidate());
@@ -54,7 +58,9 @@ export class TimelineView {
       }
     }, { passive: false });
 
-    canvas.addEventListener("pointerdown", (e) => this.onPointer(e));
+    canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     this.resize();
@@ -126,7 +132,7 @@ export class TimelineView {
     return null;
   }
 
-  onPointer(e) {
+  onPointerDown(e) {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -142,8 +148,166 @@ export class TimelineView {
     }
     const hit = this.hitTest(x, y);
     if (!hit) return;
+    if (e.shiftKey) {
+      // Shift+click extends a FULL-column block from the current cursor.
+      const c = this.store.cursor;
+      if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: 0, row: hit.row, ch: hit.ch, sub: SUB_FX_ARG };
+      else { this.sel.row = hit.row; this.sel.ch = hit.ch; this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; }
+    } else {
+      // Mouse-drag carries sub-column granularity (the hit's sub-position).
+      this.sel = null;
+      this._drag = { aRow: hit.row, aCh: hit.ch, aSub: hit.sub };
+      this.canvas.setPointerCapture?.(e.pointerId);
+    }
     this.store.cursor = hit;
     this.store.emit("cursor");
+    this.invalidate();
+  }
+
+  onPointerMove(e) {
+    if (!this._drag) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) return;
+    if (hit.row !== this._drag.aRow || hit.ch !== this._drag.aCh || hit.sub !== this._drag.aSub) {
+      this.sel = {
+        aRow: this._drag.aRow, aCh: this._drag.aCh, aSub: this._drag.aSub,
+        row: hit.row, ch: hit.ch, sub: hit.sub,
+      };
+    } else {
+      this.sel = null; // dragged back to the origin cell — no block
+    }
+    const c = this.store.cursor;
+    c.row = hit.row; c.ch = hit.ch; c.sub = hit.sub; c.nib = hit.nib;
+    this.store.emit("cursor");
+    this.invalidate();
+  }
+
+  onPointerUp(e) {
+    if (this._drag) {
+      this.canvas.releasePointerCapture?.(e.pointerId);
+      this._drag = null;
+    }
+  }
+
+  // ── block selection + clipboard ──
+  hasSelection() { return this.sel !== null; }
+  clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
+
+  /** Normalised inclusive bounds {r0,r1,c0,c1,colLo,colHi}, or null. colLo/colHi
+   *  are the logical-column band (all columns when the selection has no sub
+   *  span, e.g. keyboard selections). */
+  selBounds() {
+    const s = this.sel;
+    if (!s) return null;
+    const aSub = s.aSub ?? 0, sub = s.sub ?? SUB_FX_ARG;
+    return {
+      r0: Math.min(s.aRow, s.row), r1: Math.max(s.aRow, s.row),
+      c0: Math.min(s.aCh, s.ch), c1: Math.max(s.aCh, s.ch),
+      colLo: subToCol(Math.min(aSub, sub)), colHi: subToCol(Math.max(aSub, sub)),
+    };
+  }
+
+  /** Logical columns the selection covers (for partial copy/paste/clear). */
+  selCols() {
+    const s = this.sel;
+    return s ? colsForSubs(s.aSub ?? 0, s.sub ?? SUB_FX_ARG) : ALL_COLS;
+  }
+
+  /** Keyboard block-extend (Shift+arrows): grow a FULL-column selection. */
+  extendSelection(dRow, dCh) {
+    const map = this.getMap();
+    if (!map) return;
+    const c = this.store.cursor;
+    const chans = this.store.doc.channelCount;
+    if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: 0, row: c.row, ch: c.ch, sub: SUB_FX_ARG };
+    c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
+    c.ch = clampInt(c.ch + dCh, 0, chans - 1);
+    this.sel.row = c.row; this.sel.ch = c.ch;
+    this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; // keyboard selection = whole cells
+    this.keepCursorVisible();
+    this.store.emit("cursor");
+  }
+
+  /** Dedupe writes by (pat,row) — channels sharing a pattern would otherwise
+   *  produce two writes to the same cell and corrupt the undo capture. */
+  dedupeWrites(fn) {
+    const map = new Map();
+    fn((pat, row, bytes) => map.set(`${pat}:${row}`, { pat, row, bytes: Uint8Array.from(bytes) }));
+    return [...map.values()];
+  }
+
+  copySelection() {
+    const b = this.selBounds();
+    if (!b) return false;
+    const rows = b.r1 - b.r0 + 1, chans = b.c1 - b.c0 + 1;
+    const block = makeBlock(rows, chans);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < chans; c++) {
+        const t = this.cellAt(b.r0 + r, b.c0 + c);
+        if (t) blockCell(block, r, c).set(cellToBytes(t.cell));
+      }
+    }
+    block.cols = this.selCols(); // which logical columns the paste will carry
+    this.store.clipboard = block;
+    return true;
+  }
+
+  cutSelection() {
+    if (!this.copySelection()) return false;
+    this.clearRegion(this.selBounds(), this.selCols());
+    return true;
+  }
+
+  deleteSelection() {
+    const b = this.selBounds();
+    if (!b) return false;
+    this.clearRegion(b, this.selCols());
+    return true;
+  }
+
+  clearRegion(b, cols = ALL_COLS) {
+    const empty = emptyCellBytes();
+    const writes = this.dedupeWrites((push) => {
+      for (let r = b.r0; r <= b.r1; r++) {
+        for (let ch = b.c0; ch <= b.c1; ch++) {
+          const t = this.cellAt(r, ch);
+          // overlay only the selected columns' empty bytes onto the cell
+          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell), empty, cols));
+        }
+      }
+    });
+    if (writes.length) {
+      this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
+      this.invalidate();
+    }
+  }
+
+  paste() {
+    const block = this.store.clipboard;
+    if (!block) return false;
+    const cols = block.cols ?? ALL_COLS;
+    const c = this.store.cursor;
+    const writes = this.dedupeWrites((push) => {
+      for (let r = 0; r < block.rows; r++) {
+        for (let ch = 0; ch < block.chans; ch++) {
+          const t = this.cellAt(c.row + r, c.ch + ch);
+          // merge only the block's columns onto the destination cell
+          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell), blockCell(block, r, ch), cols));
+        }
+      }
+    });
+    if (!writes.length) return false;
+    this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
+    const map = this.getMap();
+    const chans = this.store.doc.channelCount;
+    this.sel = {
+      aRow: c.row, aCh: c.ch, aSub: 0, sub: SUB_FX_ARG,
+      row: Math.min(c.row + block.rows - 1, map.totalRows - 1),
+      ch: Math.min(c.ch + block.chans - 1, chans - 1),
+    };
+    this.invalidate();
+    return true;
   }
 
   /** Canvas-relative coords → {row, ch, sub, nib}, or null off-grid. */
@@ -214,6 +378,7 @@ export class TimelineView {
   moveCursor(dRow, dCh) {
     const map = this.getMap();
     if (!map) return;
+    this.sel = null; // plain navigation drops any block selection
     const c = this.store.cursor;
     const chans = this.store.doc.channelCount;
     c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
@@ -224,6 +389,7 @@ export class TimelineView {
 
   /** Move through sub-positions (nibble-level), wrapping across channels. */
   moveSubCursor(dir) {
+    this.sel = null; // plain navigation drops any block selection
     const c = this.store.cursor;
     const chans = this.store.doc.channelCount;
     let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
@@ -251,17 +417,21 @@ export class TimelineView {
     }
   }
 
-  /** The pattern cell under the cursor, or null (empty cue slot / off-map). */
-  cursorCell() {
+  /** The pattern cell at (row, ch), or null (empty cue slot / off-map). */
+  cellAt(row, ch) {
     const { store } = this;
-    const loc = this.locate(store.cursor.row);
+    if (ch < 0 || ch >= store.doc.channelCount) return null;
+    const loc = this.locate(row);
     if (!loc) return null;
-    const patNum = store.song.cues[loc.entry.cue][store.cursor.ch] & 0x7fff;
+    const patNum = store.song.cues[loc.entry.cue][ch] & 0x7fff;
     if (patNum === PATTERN_EMPTY) return null;
     const pattern = store.song.patterns[patNum];
     if (!pattern) return null;
     return { pat: patNum, rowInCue: loc.rowInCue, cell: pattern[loc.rowInCue] };
   }
+
+  /** The pattern cell under the cursor, or null (empty cue slot / off-map). */
+  cursorCell() { return this.cellAt(this.store.cursor.row, this.store.cursor.ch); }
 
   /**
    * Record-mode key dispatch. Returns true when consumed. `jam` provides
@@ -418,6 +588,7 @@ export class TimelineView {
 
     // ── rows ──
     const cursor = store.cursor;
+    const sb = this.selBounds(); // block selection bounds (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
       const absRow = top + r;
@@ -459,6 +630,15 @@ export class TimelineView {
       for (let i = 0; i < visCh; i++) {
         const ch = this.scrollCh + i;
         const x = GUTTER_W + i * COL_W;
+        if (sb && absRow >= sb.r0 && absRow <= sb.r1 && ch >= sb.c0 && ch <= sb.c1) {
+          ctx.fillStyle = C.sel;
+          if (sb.colLo === 0 && sb.colHi === 4) {
+            ctx.fillRect(x - 2, y, COL_W - 2, ROW_H); // whole cell
+          } else { // partial column band
+            const cs = COL_CHAR_RANGE[sb.colLo][0], ce = COL_CHAR_RANGE[sb.colHi][1];
+            ctx.fillRect(x + 2 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
+          }
+        }
         if (absRow === cursor.row && ch === cursor.ch) {
           ctx.fillStyle = C.cursor;
           ctx.fillRect(x - 2, y, COL_W - 2, ROW_H);

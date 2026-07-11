@@ -102,6 +102,29 @@ export function setInstBytesOp(slot, pairs, gestureId = null) {
   };
 }
 
+/** Write raw metaRaw bytes of a Metainstrument (its layer table), re-deriving
+ *  metaLayers via loadRecord. setInstBytesOp/setByte can't be used for metas —
+ *  their setByte writes the DECODED sample fields, which a meta ignores (getByte
+ *  serves metaRaw verbatim). `pairs` is [[offset, byte], …]; inverse restores. */
+export function setMetaBytesOp(slot, pairs, gestureId = null) {
+  return {
+    type: "setMetaBytes",
+    slot, pairs, gestureId,
+    coalesceKey: `metabytes:${slot}:${pairs.map((p) => p[0]).join(",")}`,
+    apply(doc) {
+      const inst = doc.instruments[slot & 0x3ff];
+      const prev = pairs.map(([o]) => [o, inst.metaRaw[o]]);
+      const raw = Uint8Array.from(inst.metaRaw);
+      for (const [o, b] of pairs) raw[o] = b & 0xff;
+      inst.loadRecord(raw); // re-derive metaLayers (+ a fresh metaRaw copy)
+      doc.markInstUsed(slot);
+      doc.dirty = true;
+      return setMetaBytesOp(slot, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
 /** One envelope node on an instrument envelope array (volEnvelopes /
  *  panEnvelopes / pfEnvelopes / pf2Envelopes): sets value and/or offset
  *  (ThreeFiveMiniUfloat LUT index). */
@@ -191,6 +214,35 @@ export function setPatternBytesOp(song, pat, bytes, gestureId = null) {
       return setPatternBytesOp(song, pat, prev, gestureId);
     },
     dirty: () => [{ kind: "pattern", song, pat }],
+  };
+}
+
+/** Write raw 8-byte images to a set of cells across (possibly several)
+ *  patterns in one undo step — block paste / cut / delete-selection. `writes`
+ *  is [{pat, row, bytes: Uint8Array(8)}]; the inverse restores each cell's
+ *  previous bytes. Dirty tags cover every touched pattern. */
+export function setCellsBytesOp(song, writes, gestureId = null) {
+  return {
+    type: "setCellsBytes",
+    song, writes, gestureId,
+    coalesceKey: `cellsbytes:${song}`,
+    apply(doc) {
+      const s = doc.songs[song];
+      const inverse = new Array(writes.length);
+      for (let i = 0; i < writes.length; i++) {
+        const { pat, row, bytes } = writes[i];
+        const cell = s.patterns[pat][row];
+        const prev = new Uint8Array(8);
+        for (let b = 0; b < 8; b++) { prev[b] = cell.getByte(b); cell.setByte(b, bytes[b]); }
+        inverse[i] = { pat, row, bytes: prev };
+      }
+      doc.dirty = true;
+      return setCellsBytesOp(song, inverse, gestureId);
+    },
+    dirty() {
+      const pats = new Set(writes.map((w) => w.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
   };
 }
 
@@ -373,6 +425,27 @@ export function multiInstBytesOp(edits, gestureId = null) {
       return multiInstBytesOp(inverse, gestureId);
     },
     dirty: () => edits.map(({ slot }) => ({ kind: "inst", slot })),
+  };
+}
+
+/** Replace a Project-Data section payload (name tables: SNam/INam/PNam) as one
+ *  invertible step. `payload` null removes the section; the inverse restores
+ *  the exact previous payload (or removes it if there was none). Dirty
+ *  {kind:"section"} has no device effect (names are cosmetic) — DocSync
+ *  ignores it, but the edit/undo/dirty flow still fires. */
+export function setSectionOp(fourcc, payload, gestureId = null) {
+  return {
+    type: "setSection",
+    fourcc, payload, gestureId,
+    coalesceKey: `section:${fourcc}`,
+    apply(doc) {
+      const i = doc.projSections.findIndex((s) => s.fourcc === fourcc);
+      const prev = i >= 0 ? doc.projSections[i].payload : null;
+      doc.setSection(fourcc, payload);
+      doc.dirty = true;
+      return setSectionOp(fourcc, prev, gestureId);
+    },
+    dirty: () => [{ kind: "section", fourcc }],
   };
 }
 

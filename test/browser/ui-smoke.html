@@ -69,9 +69,9 @@
 
         // ── header click mute / ctrl+click solo ──
         const { CELL_CHARS } = await import("../../src/ui/edit.js");
-        const GUTTER_W = 76, COL_W = Math.ceil(CELL_CHARS * 7.3) + 10; // timeline.js layout
+        const GUTTER_W = 76, COL_W = Math.ceil(CELL_CHARS * 7.9) + 10; // timeline.js layout (CHAR_W)
         const rect = timeline.canvas.getBoundingClientRect();
-        const hdrClick = (chVisIdx, ctrl) => timeline.onPointer({
+        const hdrClick = (chVisIdx, ctrl) => timeline.onPointerDown({
           clientX: rect.left + GUTTER_W + chVisIdx * COL_W + 10,
           clientY: rect.top + 10,
           ctrlKey: ctrl, metaKey: false,
@@ -131,17 +131,28 @@
           let closed = openSampleDspEditor(store, s);
           let dlg = win.document.querySelector("dialog.sample-editor");
           const dspButtons = [...dlg.querySelectorAll(".smp-ops button")].map((b) => b.textContent);
-          const hasDsp = ["Normalise", "Fade in", "Fade out", "Reverse"].every((x) => dspButtons.includes(x));
-          const noMarkers = dlg.querySelectorAll(".smp-fields input").length === 0;
+          const hasDsp = ["Normalise", "Fade in", "Fade out", "Reverse", "Invert"].every((x) => dspButtons.includes(x));
+          // DSP-only tab: no marker spinners (number inputs); a rename text field IS present.
+          const noMarkers = dlg.querySelectorAll(".smp-fields input[type=number]").length === 0;
+          const nameInput = dlg.querySelector(".smp-fields input[type=text]");
+          const hasRename = !!nameInput;
           const btns = [...dlg.querySelectorAll(".modal-buttons button")].map((b) => b.textContent);
           const btnOk = btns[0] === "Apply" && btns[1] === "Cancel";
+          // rename (undoable): edit the SNam entry, then Cancel must roll it back
+          const nameBefore = doc.sampleName(s.index);
+          nameInput.value = "SmokeRenamed";
+          nameInput.dispatchEvent(new win.Event("change", { bubbles: true }));
+          const renamed = doc.sampleName(s.index) === "SmokeRenamed";
+          // invert twice = identity (polarity involution away from 0x00 clamp)
+          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Invert").click();
           [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Normalise").click();
           const changed = span().some((v, i) => v !== before[i]);
           [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
           await closed;
           const rolledBack = span().every((v, i) => v === before[i]) &&
+            doc.sampleName(s.index) === nameBefore &&
             store.undo.undoStack.length === depth0;
-          log(`DSP editor (DSP-only, Apply/Cancel, cancel rolls back): ${hasDsp && noMarkers && btnOk && changed && rolledBack ? "ok" : "FAIL"}`);
+          log(`DSP editor (DSP-only + rename/invert, Apply/Cancel rolls back): ${hasDsp && noMarkers && hasRename && btnOk && renamed && changed && rolledBack ? "ok" : "FAIL"}`);
 
           // Apply path
           closed = openSampleDspEditor(store, s);
@@ -195,9 +206,37 @@
           const exOk = JSON.stringify([...store.doc.patternBytes(0, 2)]) === JSON.stringify([...want]);
           store.undo.undo();
           const barLabels = [...patternView.bar.querySelectorAll("button")].map((b) => b.textContent);
-          const barOk = ["Duplicate", "Transpose…", "Lengthen ×2", "Shorten ÷2"]
-            .every((x) => barLabels.includes(x));
-          log(`pattern Lengthen ×2 via bar (+ all four buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
+          const barOk = ["Duplicate", "Transpose…", "Lengthen ×2", "Shorten ÷2",
+            "Volume…", "Pan…", "Instrument…"].every((x) => barLabels.includes(x));
+          log(`pattern Lengthen ×2 via bar (+ all seven buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
+
+          // ── item 22: volume / pan / instrument bulk popups ──
+          // seed pattern 2 row 0 with vol 20 / pan 40 / inst 05, then drive each popup
+          const seed = new Uint8Array(store.doc.patternBytes(0, 2));
+          seed[3] = 20; seed[4] = 40; seed[2] = 0x05;
+          const { setPatternBytesOp } = await win.eval('import("/src/doc/ops.js")');
+          store.undo.apply(setPatternBytesOp(0, 2, seed));
+          patternView.setPattern(2);
+          const cell = () => store.song.patterns[2][0];
+          const runPopup = async (btnLabel, fill) => {
+            [...patternView.bar.querySelectorAll("button")].find((b) => b.textContent === btnLabel).click();
+            await new Promise((r) => setTimeout(r, 20));
+            const dlg = win.document.querySelector("dialog.modal");
+            for (const [name, val] of Object.entries(fill)) {
+              const inp = dlg.querySelector(`[name="${name}"]`);
+              inp.value = val;
+            }
+            [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // Apply
+            await new Promise((r) => setTimeout(r, 20));
+          };
+          await runPopup("Volume…", { mult: "2", add: "0" });
+          const volOk = cell().volume === 40;
+          await runPopup("Pan…", { mult: "1", shift: "-8" });
+          const panOk = cell().pan === 32; // 40 shifted −8
+          await runPopup("Instrument…", { from: "05", to: "0A" });
+          const instOk = cell().instrment === 0x0a;
+          store.undo.undo(); store.undo.undo(); store.undo.undo(); store.undo.undo();
+          log(`pattern Volume/Pan/Instrument popups: ${volOk && panOk && instOk ? "ok" : `FAIL vol=${volOk} pan=${panOk} inst=${instOk}`}`);
         }
 
         // ── shift+wheel scrolls timeline channels (repaint + no cell edit) ──
@@ -229,6 +268,57 @@
           store.record = false;
           store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
           log(`record mode: shift+wheel over cursor cell scrolls, no edit: ${chScrolled && noEdit ? "ok" : "FAIL"}`);
+        }
+
+        // ── item 24: piano keys are inert on Cues / Project / File ──
+        {
+          const { jam } = win.__microtone;
+          const pressA = () => key(win, "KeyA", "a");
+          jam.held.clear();
+          win.document.querySelector('#tabs button[data-view="project"]').click();
+          pressA();
+          const projInert = jam.held.size === 0;
+          win.document.querySelector('#tabs button[data-view="cues"]').click();
+          pressA();
+          const cuesInert = jam.held.size === 0;
+          win.document.querySelector('#tabs button[data-view="files"]').click();
+          pressA();
+          const filesInert = jam.held.size === 0;
+          // instruments view still auditions (key registers as held)
+          win.document.querySelector('#tabs button[data-view="instruments"]').click();
+          win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "KeyA", key: "a", bubbles: true }));
+          const instJams = jam.held.has("KeyA");
+          win.dispatchEvent(new win.KeyboardEvent("keyup", { code: "KeyA", key: "a", bubbles: true }));
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          log(`jam disabled on Cues/Project/File, on in Instruments: ${projInert && cuesInert && filesInert && instJams ? "ok" : `FAIL proj=${projInert} cues=${cuesInert} files=${filesInert} inst=${instJams}`}`);
+        }
+
+        // ── item 27: quick instrument lookup panel ──
+        {
+          const { instLookup } = win.__microtone;
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          const btn = win.document.getElementById("tbInstList");
+          // ensure it starts hidden, then toggle on
+          if (!instLookup.el.hidden) btn.click();
+          btn.click();
+          const shown = !instLookup.el.hidden && instLookup.el.querySelectorAll(".il-row").length > 0;
+          // every listed slot is a top-level instrument in $01..$FF (no meta-layer children)
+          const doc = store.doc;
+          const children = new Set();
+          for (const s of doc.usedInstrumentSlots()) {
+            const layers = doc.instruments[s].metaLayers;
+            if (layers) for (const l of layers) children.add(l.instIdx);
+          }
+          const listed = [...instLookup.el.querySelectorAll(".il-row")].map((r) => +r.dataset.slot);
+          const rangeOk = listed.every((s) => s >= 1 && s <= 0xff && !children.has(s));
+          // clicking a row sets the current instrument
+          const first = instLookup.el.querySelector(".il-row");
+          first.click();
+          const picked = win.__microtone.jam.currentInst === +first.dataset.slot;
+          // toggle off hides it
+          btn.click();
+          const hidden = instLookup.el.hidden;
+          log(`inst lookup: toggle+list+range+pick+hide: ${shown && rangeOk && picked && hidden ? "ok" : `FAIL shown=${shown} range=${rangeOk} pick=${picked} hide=${hidden}`}`);
         }
 
         // ── topbar Import MIDI… + Open accept without .mid ──

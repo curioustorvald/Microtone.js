@@ -11,6 +11,7 @@ import { setCueWordOp, setCueOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
+import { t } from "../i18n.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
 const CHAR_W = 7.9;
@@ -164,19 +165,20 @@ export class CuesView {
     const info = cueInfo(store.song.cues[c.cue]);
     const current = word === 0 ? info.inst0 : info.inst1;
     const result = await showModal({
-      title: `Cue ${c.cue.toString(16).toUpperCase().padStart(4, "0")} — command word ${word + 1}`,
-      body: "LEN/HALT@ take rows (1-64); BAK/FWD/JMP take a cue count/index.",
+      title: t("cue.cmdTitle", {
+        cue: c.cue.toString(16).toUpperCase().padStart(4, "0"), word: word + 1 }),
+      body: t("cue.cmdBody"),
       fields: [
-        { name: "kind", label: "Command", type: "select", value: kindOf(current), options: [
-          { value: "nop", label: "(none)" },
-          { value: "len", label: "LEN — pattern length" },
-          { value: "halt", label: "HALT — stop after pattern" },
-          { value: "haltAt", label: "HALT@ — stop after N rows" },
-          { value: "bak", label: "BAK — go back N cues" },
-          { value: "fwd", label: "FWD — skip N cues" },
-          { value: "jmp", label: "JMP — jump to cue" },
+        { name: "kind", label: t("cue.command"), type: "select", value: kindOf(current), options: [
+          { value: "nop", label: t("cue.none") },
+          { value: "len", label: t("cue.len") },
+          { value: "halt", label: t("cue.halt") },
+          { value: "haltAt", label: t("cue.haltAt") },
+          { value: "bak", label: t("cue.bak") },
+          { value: "fwd", label: t("cue.fwd") },
+          { value: "jmp", label: t("cue.jmp") },
         ]},
-        { name: "arg", label: "Argument", type: "number", value: current.arg || 0, min: 0, max: 4095 },
+        { name: "arg", label: t("cue.argument"), type: "number", value: current.arg || 0, min: 0, max: 4095 },
       ],
     });
     if (!result) return;

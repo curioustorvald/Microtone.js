@@ -298,6 +298,7 @@ export function triggerNote(eng, voice, noteVal, instId, volOverride) {
   voice.filterResonanceCached = -1;
   voice.noteVal = noteVal;
   voice.basePitch = noteVal;
+  voice.renderPitch = noteVal; // display tap: seed before the first tick runs
   voice.amigaPeriod = -1.0;
   voice.linearFreq = -1.0;
   voice.playbackRate = computePlaybackRate(voice, noteVal);

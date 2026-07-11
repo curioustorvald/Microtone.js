@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { emptyPatternBytes, expandPatternBytes, shrinkPatternBytes } from "../../src/doc/patterntools.js";
+import {
+  emptyPatternBytes, expandPatternBytes, shrinkPatternBytes,
+  scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
+} from "../../src/doc/patterntools.js";
 import { setPatternBytesOp, appendPatternOp, bulkNotesOp } from "../../src/doc/ops.js";
 import { pitchTablePresets, transposePatternNotes, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
@@ -160,6 +163,70 @@ test("transposePatternNotes: 12-TET semitones + octaves, sentinel/perc skip", ()
     transposePatternNotes(song, 0, pitchTablePresets[0], null, -100, 0);
     assert.equal(song.patterns[0][0].note, 0x20);
   }
+});
+
+// ── item 22: volume / pan / instrument bulk transforms ──
+
+/** A blank pattern with one cell's vol/pan/inst bytes set. */
+function patWith(row, { vol, volEff = 0, pan, panEff = 0, inst }) {
+  const b = emptyPatternBytes();
+  if (vol !== undefined) b[row * 8 + 3] = (volEff << 6) | (vol & 63);
+  if (pan !== undefined) b[row * 8 + 4] = (panEff << 6) | (pan & 63);
+  if (inst !== undefined) b[row * 8 + 2] = inst & 0xff;
+  return b;
+}
+
+test("scaleVolumeBytes: amplify set volumes, skip the no-op sentinel", () => {
+  const src = patWith(3, { vol: 20 });
+  const out = scaleVolumeBytes(src, 2, 0);
+  assert.equal(out[3 * 8 + 3] & 63, 40, "20 × 2 = 40");
+  assert.equal((out[3 * 8 + 3] >>> 6) & 3, 0, "effect selector kept");
+  // empty cells (0xC0 no-op) untouched
+  assert.equal(out[0 * 8 + 3], 0xc0, "blank row stays blank");
+  // clamps at 63
+  assert.equal(scaleVolumeBytes(patWith(0, { vol: 40 }), 3, 0)[3] & 63, 63);
+  // add-only, keep slide-up selector (eff 1)
+  const slide = scaleVolumeBytes(patWith(0, { vol: 10, volEff: 1 }), 1, 5);
+  assert.equal(slide[3] & 63, 15);
+  assert.equal((slide[3] >>> 6) & 3, 1);
+});
+
+test("transformPanBytes: widen/narrow about centre + shift, L/R swap", () => {
+  // widen ×2 about centre 32: 40 (dev +8) → 48
+  assert.equal(transformPanBytes(patWith(0, { pan: 40 }), 2, 0)[4] & 63, 48);
+  // narrow ×0.5: 48 (dev +16) → 40
+  assert.equal(transformPanBytes(patWith(0, { pan: 48 }), 0.5, 0)[4] & 63, 40);
+  // negative mult swaps L/R: 40 (dev +8) → 24 (dev −8)
+  assert.equal(transformPanBytes(patWith(0, { pan: 40 }), -1, 0)[4] & 63, 24);
+  // shift only: +10
+  assert.equal(transformPanBytes(patWith(0, { pan: 20 }), 1, 10)[4] & 63, 30);
+  // no-op sentinel skipped
+  assert.equal(transformPanBytes(emptyPatternBytes(), 2, 5)[4], 0xc0);
+});
+
+test("changeInstrumentBytes: matching one vs all", () => {
+  const src = new Uint8Array(patWith(0, { inst: 0x05 }));
+  src[1 * 8 + 2] = 0x07;
+  src[2 * 8 + 2] = 0x05;
+  // matching 0x05 → 0x0A leaves 0x07 alone
+  const m = changeInstrumentBytes(src, 0x05, 0x0a);
+  assert.equal(m[0 * 8 + 2], 0x0a);
+  assert.equal(m[1 * 8 + 2], 0x07);
+  assert.equal(m[2 * 8 + 2], 0x0a);
+  // all (from=null) → every non-empty inst becomes 0x0A; empty (0) stays 0
+  const a = changeInstrumentBytes(src, null, 0x0a);
+  assert.equal(a[0 * 8 + 2], 0x0a);
+  assert.equal(a[1 * 8 + 2], 0x0a);
+  assert.equal(a[3 * 8 + 2], 0, "empty inst stays empty");
+});
+
+test("bulk transforms: rows span limits the edit", () => {
+  const src = new Uint8Array(emptyPatternBytes());
+  src[2 * 8 + 3] = 20; // row 2 vol
+  src[9 * 8 + 3] = 20; // row 9 vol
+  const out = scaleVolumeBytes(src, 2, 0, [0, 5]); // only rows 0..5
+  assert.equal(out[2 * 8 + 3] & 63, 40, "row 2 in span scaled");
+  assert.equal(out[9 * 8 + 3] & 63, 20, "row 9 outside span untouched");
 });
 
 test("bulkNotesOp: transpose one pattern on WHEN, single undo step, byte-exact", () => {

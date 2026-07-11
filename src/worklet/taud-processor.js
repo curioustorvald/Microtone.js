@@ -187,7 +187,9 @@ class TaudProcessor extends AudioWorkletProcessor {
           pan = v.channelPan;
         }
         f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        f[o + SNAP_V_NOTE] = v.noteVal & 0xffff;
+        // Per-tick sounding pitch (renderPitch: after slides/arp/vibrato/
+        // pitch-env), falling back to the row note before the first tick.
+        f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
         f[o + SNAP_V_INST] = v.instrumentId & 0x3ff;
         f[o + SNAP_V_SAMPLE_POS] = v.samplePos;
         f[o + SNAP_V_SAMPLE_PTR] = v.activeSamplePtr;

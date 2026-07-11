@@ -41,6 +41,7 @@
   --cv-caret-nav: #2f5378;  /* sub-column caret, navigate mode (blue) */
   --cv-cue-line: #4a5364;   /* cue boundary rule */
   --cv-col-pan: #d08bff;    /* pan column ink */
+  --cv-sel: #37506e;        /* block selection fill */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -88,6 +89,7 @@
   --cv-caret-nav: #a9c8e8;
   --cv-cue-line: #9aa3b4;
   --cv-col-pan: #9c3fb4;
+  --cv-sel: #b8d0ec;        /* block selection fill */
 
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;
@@ -354,6 +356,48 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .toolbox button { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
 .toolbox button.active { color: var(--accent); border-color: var(--accent); }
+
+/* Quick instrument lookup — floating panel over the Timeline/Patterns grid. */
+.inst-lookup {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 210px;
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 0.8rem;
+  z-index: 5;
+  overflow: hidden;
+}
+.inst-lookup .il-head {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.inst-lookup .il-list { overflow-y: auto; }
+.inst-lookup .il-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inst-lookup .il-row:hover { background: var(--panel-2); }
+.inst-lookup .il-row.sel { background: var(--cv-cursor); }
+.inst-lookup .il-idx { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.inst-lookup .il-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.inst-lookup .il-kind { color: var(--dim); }
+.inst-lookup .il-empty { padding: 0.5rem 0.6rem; }
+
+/* Meta-instrument layer editor: compact numeric inputs + dB readout. */
+.meta-table .meta-num { width: 4.5em; }
+.meta-table .meta-db { margin-left: 0.4rem; }
 
 .cmd-palette {
   display: flex;

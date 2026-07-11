@@ -45,6 +45,7 @@
       <span id="audioBadge" class="badge" data-i18n="topbar.audioOff">audio off</span>
       <a class="support-btn donate" href="https://paypal.me/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.donate" data-i18n-title="topbar.donateTitle">♥ Donate</a>
       <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.sponsor" data-i18n-title="topbar.sponsorTitle">Sponsor</a>
+      <button id="helpBtn" class="icon-btn" data-i18n-title="topbar.helpTitle">?</button>
       <button id="langBtn" data-i18n-title="topbar.langTitle">EN</button>
       <button id="themeBtn" data-i18n-title="topbar.themeTitle">◐</button>
     </div>
@@ -63,6 +64,7 @@
   <div id="toolbox" class="toolbox" hidden>
     <button id="tbRetune" data-i18n="toolbox.retune">Retune…</button>
     <button id="tbRaw" data-i18n-title="toolbox.rawTitle">Raw: off</button>
+    <button id="tbInstList" data-i18n="toolbox.instList" data-i18n-title="toolbox.instListTitle">Instruments</button>
   </div>
 
   <main id="viewHost" class="view-host">
@@ -77,6 +79,7 @@
     <div id="projectHost" class="view-dom" hidden></div>
     <div id="filesHost" class="files-host" hidden></div>
     <div id="placeholder" class="empty-state" hidden></div>
+    <aside id="instLookup" class="inst-lookup" hidden></aside>
   </main>
 
   <div id="cmdPalette" class="cmd-palette" hidden></div>
@@ -86,6 +89,7 @@
     <span id="stDirty" class="dirty" hidden>●</span>
     <div class="grow"></div>
     <span id="stHint" class="dim" data-i18n="status.hint">Space play/stop · arrows navigate · wheel scroll</span>
+    <a class="gh-link" href="docs.html" target="_blank" rel="noopener" data-i18n="status.docs" data-i18n-title="status.docsTitle">Docs ↗</a>
     <a class="gh-link" href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener" title="View source / fork on GitHub" data-i18n="status.fork">Fork me on GitHub ↗</a>
   </footer>
 

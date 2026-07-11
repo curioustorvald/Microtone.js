@@ -274,7 +274,9 @@ export class TaudInst {
         const vStart = b[o + 8] & 0x3f;
         const vEnd = b[o + 9] & 0x3f;
         if (instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index) {
-          layers.push(makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd));
+          const layer = makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd);
+          layer.rawOffset = o; // metaRaw byte offset of this layer (editors target it)
+          layers.push(layer);
         }
         o += 10;
       }

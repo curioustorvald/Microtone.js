@@ -163,3 +163,66 @@ test("dither stream is deterministic across engine instances", () => {
   };
   assert.deepEqual(render(), render());
 });
+
+test("renderPitch display tap: follows arpeggio per tick; noteVal stays at base", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50;   // note 0x5000
+  pat[2] = 1;                     // inst 1
+  pat[5] = 0x13;                  // OP_J arpeggio
+  pat[6] = 0x04; pat[7] = 0x03;   // arg 0x0304 → arpOff1=3, arpOff2=4 semitones
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0; cue[1] = 0;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125);
+  eng.setTickRate(0, 6);
+  eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+
+  const v = eng.playheads[0].trackerState.voices[0];
+  const out = new Uint8Array(640); // ~one tick per chunk
+  const seen = new Set();
+  for (let i = 0; i < 6; i++) {
+    eng.renderChunk(0, out);
+    seen.add(v.renderPitch);
+    assert.equal(v.noteVal, 0x5000, "base noteVal never moves under arpeggio");
+  }
+  // The arp overlay shifts the SOUNDING pitch off the base on some ticks.
+  assert.ok([...seen].some((p) => p !== 0x5000), "renderPitch deviates from base per tick");
+  assert.ok(seen.size >= 2, "renderPitch varies across ticks");
+});
+
+test("setTrackerRow clears NNA ghosts + transient state (no lingering notes on replay)", () => {
+  const eng = makeTestEngine();
+  const ts = eng.playheads[0].trackerState;
+  // Simulate a prior playback that left state behind: an active foreground
+  // voice, a lingering NNA background ghost, a pattern-delay block, a pending
+  // interrupt, a stale row jump.
+  ts.voices[3].active = true;
+  const ghost = new Voice();
+  ghost.active = true;
+  ts.backgroundVoices.push(ghost);
+  ts.patternDelayActive = true;
+  ts.patternDelayRemaining = 4;
+  ts.sexWinningChannel = 7;
+  ts.finePatternDelayExtra = 2;
+  ts.pendingInterrupts = 0b101;
+  ts.pendingRowJump = 12;
+  ts.pendingRowJumpLocal = true;
+
+  eng.setTrackerRow(0, 0);
+
+  assert.equal(ts.voices[3].active, false, "foreground voice silenced");
+  assert.equal(ts.backgroundVoices.length, 0, "NNA ghosts dropped");
+  assert.equal(ts.patternDelayActive, false);
+  assert.equal(ts.patternDelayRemaining, 0);
+  assert.equal(ts.sexWinningChannel, -1);
+  assert.equal(ts.finePatternDelayExtra, 0);
+  assert.equal(ts.pendingInterrupts, 0);
+  assert.equal(ts.pendingRowJump, -1);
+  assert.equal(ts.pendingRowJumpLocal, false);
+});

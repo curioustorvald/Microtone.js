@@ -9,11 +9,11 @@
 // Edits go through the undo stack as they happen (so playback hears them);
 // Apply keeps them, Cancel (or Esc) rolls the stack back to the open depth.
 
-import { setInstBytesOp, setSampleBytesOp } from "../../doc/ops.js";
-import { normalise, fadeIn, fadeOut, reverse } from "../../doc/sampledsp.js";
+import { setInstBytesOp, setSampleBytesOp, setSectionOp } from "../../doc/ops.js";
+import { normalise, fadeIn, fadeOut, reverse, invert } from "../../doc/sampledsp.js";
 import { themeColors } from "../theme.js";
 import { hex2 } from "../notenames.js";
-import { unescapeName } from "../names.js";
+import { escapeNonAscii, unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
 const W = 720, H = 200;
@@ -45,6 +45,27 @@ export function openSampleDspEditor(store, sample) {
       });
     };
 
+    // Rename row: edits the SNam entry for this census index (undoable, so the
+    // Cancel button rolls it back with everything else).
+    const nameRow = document.createElement("div");
+    nameRow.className = "smp-fields";
+    const nameLab = document.createElement("label");
+    nameLab.append(t("smp.name") + " ");
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = unescapeName(sample.name) || "";
+    nameInput.placeholder = t("smp.namePlaceholder");
+    nameInput.addEventListener("change", () => {
+      const escaped = escapeNonAscii(nameInput.value.trim());
+      if (escaped === (sample.name ?? "")) return;
+      store.undo.apply(setSectionOp("SNam", doc.buildSampleNames(sample.index, escaped)));
+      sample.name = escaped;
+      const h = shell.dlg.querySelector("h3");
+      if (h) h.textContent = `Sample ${String(sample.index).padStart(3, "0")} — ${unescapeName(escaped) || "(unnamed)"}`;
+    });
+    nameLab.appendChild(nameInput);
+    nameRow.appendChild(nameLab);
+
     // DSP row: each button rewrites the pool span through one undoable op.
     const opRow = document.createElement("div");
     opRow.className = "smp-ops";
@@ -53,6 +74,7 @@ export function openSampleDspEditor(store, sample) {
       [t("smp.fadeIn"), fadeIn],
       [t("smp.fadeOut"), fadeOut],
       [t("smp.reverse"), reverse],
+      [t("smp.invert"), invert],
     ];
     for (const [name, fn] of DSP) {
       const b = document.createElement("button");
@@ -66,6 +88,7 @@ export function openSampleDspEditor(store, sample) {
     }
     opRow.appendChild(shell.makeAuditionButton(sample.users[0]));
 
+    shell.dlg.insertBefore(nameRow, shell.btnRow);
     shell.dlg.insertBefore(opRow, shell.btnRow);
     paint();
     shell.show();

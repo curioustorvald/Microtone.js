@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>jam-before-play smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- real-time recipe: /hang keeps the load event pending so audio + timers run
+       in REAL time. Run with:
+         python3 tools/test-server.py
+         chromium --headless=new --autoplay-policy=no-user-gesture-required \
+           --dump-dom --timeout=60000 http://localhost:8932/test/browser/jam-smoke.html -->
+  <img src="http://localhost:8932/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1000px;height:600px"></iframe>
+  <script type="module">
+    // Item 26: the engine is warmed up on load; after a gesture resume, note
+    // jamming must sound WITHOUT the song ever being played.
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, jam } = win.__microtone;
+        log("app + doc ready");
+
+        // Resume the eagerly-warmed engine (autoplay flag lets this run headless).
+        await win.__microtoneEnsureAudio();
+        for (let i = 0; i < 50 && !store.audio?.running; i++) await sleep(50);
+        log(`audio running (pre-Play): ${store.audio?.running}`);
+        const notPlaying = !store.audio.isPlaying();
+
+        // Jam a note on channel 0 WITHOUT pressing Play.
+        store.record = false;
+        store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+        jam.currentInst = store.doc.usedInstrumentSlots()[0] ?? 1;
+        jam.down("KeyA", false); // C on the cursor channel
+        // let a few snapshots arrive
+        let active = false;
+        for (let i = 0; i < 40; i++) { await sleep(25); if (store.audio.getVoiceActive(0)) { active = true; break; } }
+        const stillNotPlaying = !store.audio.isPlaying();
+        jam.up("KeyA");
+        log(`voice active from jam (no Play): ${active} · transport idle: ${notPlaying && stillNotPlaying}`);
+
+        const pass = store.audio.running && notPlaying && active && stillNotPlaying;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

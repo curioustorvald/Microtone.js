@@ -23,7 +23,7 @@ export async function importSampleAsInstrument(store) {
   try {
     decoded = await decodeAudioToU8(new Uint8Array(await file.arrayBuffer()));
   } catch (err) {
-    alert(`Can't decode ${file.name}: ${err.message ?? err}`);
+    alert(t("import.cantDecode", { name: file.name, err: err.message ?? err }));
     return null;
   }
 

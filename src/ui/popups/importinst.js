@@ -12,6 +12,7 @@ import { bankInventory, planImport } from "../../doc/bankmerge.js";
 import { importBankOp } from "../../doc/ops.js";
 import { pickFile } from "../../storage/import-export.js";
 import { listSf2Presets, buildSf2Bank } from "../../convert/convert.js";
+import { t } from "../i18n.js";
 
 const hex3 = (n) => "$" + n.toString(16).toUpperCase().padStart(3, "0");
 
@@ -40,12 +41,12 @@ export async function showImportInstruments(store) {
     if (parsed.kind === "tpif") throw new Error("a .tpif carries patterns only — no instruments");
     src = new Document(parsed);
   } catch (err) {
-    alert(`Can't read ${file.name}: ${err.message}`);
+    alert(t("import.cantRead", { name: file.name, err: err.message }));
     return null;
   }
   const inventory = bankInventory(src);
   if (inventory.length === 0) {
-    alert(`${file.name} contains no instruments.`);
+    alert(t("import.noInstruments", { name: file.name }));
     return null;
   }
 

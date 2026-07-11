@@ -657,7 +657,9 @@ class TaudInst {
         const vStart = b[o + 8] & 0x3f;
         const vEnd = b[o + 9] & 0x3f;
         if (instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index) {
-          layers.push(makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd));
+          const layer = makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd);
+          layer.rawOffset = o; // metaRaw byte offset of this layer (editors target it)
+          layers.push(layer);
         }
         o += 10;
       }
@@ -1021,6 +1023,11 @@ class Voice {
     this.basePitch = 0x4000;
     this.amigaPeriod = -1.0; // -1.0 = needs reseed
     this.linearFreq = -1.0;
+    // JS-only display tap (no Kotlin counterpart): the last per-tick sounding
+    // pitch (finalPitch — after slides/arpeggio/vibrato/pitch-env), so the
+    // Timeline header can show what the voice is ACTUALLY playing per tick, not
+    // just the row-triggered noteVal. Never read by the DSP.
+    this.renderPitch = 0x0000;
 
     // Per-row effect state.
     this.rowEffect = 0;
@@ -2335,6 +2342,7 @@ function triggerNote(eng, voice, noteVal, instId, volOverride) {
   voice.filterResonanceCached = -1;
   voice.noteVal = noteVal;
   voice.basePitch = noteVal;
+  voice.renderPitch = noteVal; // display tap: seed before the first tick runs
   voice.amigaPeriod = -1.0;
   voice.linearFreq = -1.0;
   voice.playbackRate = computePlaybackRate(voice, noteVal);
@@ -3580,6 +3588,7 @@ function applyTrackerTick(eng, ts, playhead) {
 
     const finalPitch = clamp(pitchToMixer + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
     voice.playbackRate = computePlaybackRate(voice, finalPitch);
+    voice.renderPitch = finalPitch; // display tap (Timeline header per-tick pitch)
 
     // Filter envelope: currentCutoff = baseCut × envFilterValue (0.5 = unity at IFC).
     if (voice.hasFilterEnv && voice.filterEnvOn) {
@@ -3700,6 +3709,7 @@ function applyTrackerTick(eng, ts, playhead) {
       : 0;
     const finalPitch = clamp(bg.noteVal + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
     bg.playbackRate = computePlaybackRate(bg, finalPitch);
+    bg.renderPitch = finalPitch; // display tap (per-tick pitch)
     // Filter envelope — MUST branch on SF mode too (cents vs IT byte range).
     if (bg.hasFilterEnv && bg.filterEnvOn) {
       if (bg.filterSfMode) {
@@ -4182,7 +4192,14 @@ class TaudEngine {
   getCuePosition(ph) { return this.playheads[ph].position; }
   getTrackerRow(ph) { return this.playheads[ph].trackerState.rowIndex; }
 
-  /** Set the starting row for the next play, resetting timing + silencing voices. */
+  /** Set the starting row for the next play, resetting timing + silencing every
+   *  voice. This is the common pre-play reset point (playFrom / pattern
+   *  preview), so it clears the transient per-play state that would otherwise
+   *  bleed a prior playback into a fresh start — notably the NNA background
+   *  ghosts, which stop() leaves active and a replay would resume (the
+   *  "mysteriously lingering notes" bug). Tempo/volume are deliberately NOT
+   *  touched (a replay must keep the song's tempo — that's why this is not a
+   *  full resetParams). */
   setTrackerRow(ph, row) {
     const ts = this.playheads[ph].trackerState;
     ts.rowIndex = Math.min(Math.max(row, 0), 63);
@@ -4191,7 +4208,14 @@ class TaudEngine {
     ts.firstRow = true;
     ts.pendingOrderJump = -1;
     ts.pendingRowJump = -1;
+    ts.pendingRowJumpLocal = false;
+    ts.patternDelayRemaining = 0;
+    ts.patternDelayActive = false;
+    ts.sexWinningChannel = -1;
+    ts.finePatternDelayExtra = 0;
+    ts.pendingInterrupts = 0;
     for (const v of ts.voices) v.active = false;
+    ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
   }
 
   setTrackerMixerFlags(ph, flags) {
@@ -4396,7 +4420,7 @@ const SNAP_HEADER_SIZE = 8;
 const SNAP_V_ACTIVE = 0;
 const SNAP_V_EFF_VOL = 1;      // 0..1 (getVoiceEffectiveVolume)
 const SNAP_V_EFF_PAN = 2;      // 0..255 (getVoiceEffectivePan)
-const SNAP_V_NOTE = 3;
+const SNAP_V_NOTE = 3;      // per-tick sounding pitch (renderPitch; follows slides/arp/vibrato)
 const SNAP_V_INST = 4;
 const SNAP_V_SAMPLE_POS = 5;
 const SNAP_V_SAMPLE_PTR = 6;
@@ -4601,7 +4625,9 @@ class TaudProcessor extends AudioWorkletProcessor {
           pan = v.channelPan;
         }
         f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        f[o + SNAP_V_NOTE] = v.noteVal & 0xffff;
+        // Per-tick sounding pitch (renderPitch: after slides/arp/vibrato/
+        // pitch-env), falling back to the row note before the first tick.
+        f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
         f[o + SNAP_V_INST] = v.instrumentId & 0x3ff;
         f[o + SNAP_V_SAMPLE_POS] = v.samplePos;
         f[o + SNAP_V_SAMPLE_PTR] = v.activeSamplePtr;

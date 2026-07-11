@@ -177,6 +177,11 @@ export class Voice {
     this.basePitch = 0x4000;
     this.amigaPeriod = -1.0; // -1.0 = needs reseed
     this.linearFreq = -1.0;
+    // JS-only display tap (no Kotlin counterpart): the last per-tick sounding
+    // pitch (finalPitch — after slides/arpeggio/vibrato/pitch-env), so the
+    // Timeline header can show what the voice is ACTUALLY playing per tick, not
+    // just the row-triggered noteVal. Never read by the DSP.
+    this.renderPitch = 0x0000;
 
     // Per-row effect state.
     this.rowEffect = 0;

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>block selection + clipboard smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 17: Timeline/Patterns block selection + copy/cut/paste. Drives the
+    // real app (view APIs + the Ctrl+C/V keyboard wiring in app.js).
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const key = (win, code, k, opts = {}) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key: k, bubbles: true, ...opts }));
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key: k, bubbles: true, ...opts }));
+    };
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, timeline, patternView } = win.__microtone;
+        const { cellToBytes } = await import("../../src/doc/clipboard.js");
+        const cap = (t) => (t ? [...cellToBytes(t.cell)] : null);
+        log("app loaded, doc ready");
+
+        // ── Timeline: 2D block copy → paste ──
+        store.view = "timeline";
+        store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+        // Select rows 0..2 × channels 0..1.
+        timeline.sel = { aRow: 0, aCh: 0, row: 2, ch: 1 };
+        const src = [];
+        for (let r = 0; r < 3; r++) { src.push([]); for (let c = 0; c < 2; c++) src[r].push(cap(timeline.cellAt(r, c))); }
+        key(win, "KeyC", "c", { ctrlKey: true }); // copy selection
+        const block = store.clipboard;
+        const blockOk = block && block.rows === 3 && block.chans === 2;
+        log(`copy: block ${block?.rows}×${block?.chans}`);
+
+        // Paste at row 10 / channel 3.
+        store.cursor = { row: 10, ch: 3, sub: 0, nib: 0 };
+        key(win, "KeyV", "v", { ctrlKey: true }); // paste
+        let pasteOk = true;
+        for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) {
+          const got = cap(timeline.cellAt(10 + r, 3 + c));
+          if (!eq(got, src[r][c])) { pasteOk = false; log(`  mismatch at (${r},${c})`); }
+        }
+        log(`timeline paste matches source: ${pasteOk}`);
+        const selAfter = timeline.hasSelection(); // paste re-selects the region
+
+        // Undo the paste (byte-exactness itself is covered by the node tests).
+        key(win, "KeyZ", "z", { ctrlKey: true });
+        log(`timeline paste undo ran (hasSelection was ${selAfter})`);
+
+        // ── Timeline: cut blanks the block ──
+        store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+        timeline.sel = { aRow: 0, aCh: 0, row: 1, ch: 0 };
+        key(win, "KeyX", "x", { ctrlKey: true }); // cut
+        const cutCleared = (() => {
+          for (let r = 0; r < 2; r++) {
+            const t = timeline.cellAt(r, 0);
+            if (t && (t.cell.note !== 0 || t.cell.instrment !== 0)) return false;
+          }
+          return true;
+        })();
+        log(`timeline cut cleared the block: ${cutCleared}`);
+        key(win, "KeyZ", "z", { ctrlKey: true }); // undo the cut
+
+        // ── Pattern view: row-range copy → paste ──
+        store.view = "pattern";
+        // find a pattern with a real note in the first rows
+        let pat = 0;
+        for (let p = 0; p < store.song.patterns.length; p++) {
+          if (store.song.patterns[p].slice(0, 4).some((c) => c.note >= 0x20)) { pat = p; break; }
+        }
+        patternView.setPattern(pat);
+        patternView.sel = { aRow: 0, row: 3 };
+        const psrc = [];
+        for (let r = 0; r < 4; r++) psrc.push([...cellToBytes(store.song.patterns[pat][r])]);
+        key(win, "KeyC", "c", { ctrlKey: true });
+        patternView.cursor.row = 30;
+        key(win, "KeyV", "v", { ctrlKey: true });
+        let patPasteOk = true;
+        for (let r = 0; r < 4; r++) {
+          if (!eq([...cellToBytes(store.song.patterns[pat][30 + r])], psrc[r])) patPasteOk = false;
+        }
+        log(`pattern paste matches source: ${patPasteOk}`);
+
+        // ── sub-column paste: copy only inst+vol, leave note/pan/fx intact ──
+        // seed source rows 0..1 and dest rows 40..41 with fully-distinct cells
+        const { setCellsBytesOp } = await import("../../src/doc/ops.js");
+        const srcBytes = [
+          [0x00, 0x50, 0x07, 0x1f, 0x25, 0x05, 0x11, 0x00],
+          [0x00, 0x54, 0x08, 0x2a, 0x18, 0x06, 0x22, 0x00],
+        ];
+        const dstBytes = [
+          [0x00, 0x48, 0x03, 0x30, 0x30, 0x0a, 0xff, 0x00],
+          [0x00, 0x4a, 0x04, 0x38, 0x2c, 0x0b, 0xee, 0x00],
+        ];
+        store.undo.apply(setCellsBytesOp(store.songIndex, [
+          { pat, row: 0, bytes: Uint8Array.from(srcBytes[0]) },
+          { pat, row: 1, bytes: Uint8Array.from(srcBytes[1]) },
+          { pat, row: 40, bytes: Uint8Array.from(dstBytes[0]) },
+          { pat, row: 41, bytes: Uint8Array.from(dstBytes[1]) },
+        ]));
+        // select rows 0..1, columns inst(sub1)..vol(sub2)
+        patternView.sel = { aRow: 0, row: 1, aSub: 1, sub: 2 };
+        key(win, "KeyC", "c", { ctrlKey: true });
+        const colsOk = eq(store.clipboard.cols, [1, 2]); // COL_INST, COL_VOL
+        patternView.cursor.row = 40;
+        key(win, "KeyV", "v", { ctrlKey: true });
+        let subOk = true;
+        for (let r = 0; r < 2; r++) {
+          const got = [...cellToBytes(store.song.patterns[pat][40 + r])];
+          // inst(2) + vol(3) come from source; note(0,1) pan(4) fx(5,6,7) stay dest
+          const want = [dstBytes[r][0], dstBytes[r][1], srcBytes[r][2], srcBytes[r][3],
+            dstBytes[r][4], dstBytes[r][5], dstBytes[r][6], dstBytes[r][7]];
+          if (!eq(got, want)) { subOk = false; log(`  sub row ${r}: got ${got} want ${want}`); }
+        }
+        log(`sub-column paste (inst+vol only): cols=${colsOk} merged=${subOk}`);
+
+        // Escape clears the selection.
+        patternView.sel = { aRow: 0, row: 3 };
+        key(win, "Escape", "Escape");
+        const escOk = !patternView.hasSelection();
+        log(`escape cleared pattern selection: ${escOk}`);
+
+        const pass = blockOk && pasteOk && cutCleared && patPasteOk && colsOk && subOk && escOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL block=${blockOk} paste=${pasteOk} cut=${cutCleared} patPaste=${patPasteOk} cols=${colsOk} sub=${subOk} esc=${escOk}`);
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

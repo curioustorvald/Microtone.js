@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>i18n modal smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 20: the dialogs/popups moved to i18n render translated (en) text
+    // and the app still boots (a t() error at module load would break the app).
+    // Popups are opened through the app's OWN wiring so they build in the
+    // iframe realm (a parent-side import would target the parent document).
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const key = (win, code, k) =>
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key: k, bubbles: true }));
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        log("app booted (module-load t() calls ok)");
+        const { t } = await win.eval('import("/src/ui/i18n.js")');
+        const doc = win.document;
+
+        // Help popup (via the '?' key)
+        key(win, "Slash", "?");
+        await new Promise((r) => setTimeout(r, 30));
+        let dlg = doc.querySelector("dialog.help-modal");
+        const helpOk = !!dlg && dlg.querySelector("h3").textContent === t("help.title") &&
+          dlg.textContent.includes(t("help.clipboard")) && dlg.textContent.includes(t("help.sentinels"));
+        dlg.querySelector("button").click();
+        log(`help popup translated: ${helpOk ? "ok" : "FAIL"}`);
+
+        // Item 21: on-screen help button opens the same popup
+        doc.getElementById("helpBtn").click();
+        await new Promise((r) => setTimeout(r, 30));
+        dlg = doc.querySelector("dialog.help-modal");
+        const helpBtnOk = !!dlg && dlg.open;
+        dlg?.querySelector("button").click();
+        log(`help BUTTON opens the popup: ${helpBtnOk ? "ok" : "FAIL"}`);
+
+        // About popup (via the brand click)
+        doc.getElementById("brandBtn").click();
+        await new Promise((r) => setTimeout(r, 30));
+        dlg = doc.querySelector("dialog.about-modal");
+        const aboutOk = !!dlg && dlg.textContent.includes(t("about.thanks"));
+        dlg.querySelector(".modal-buttons button").click();
+        log(`about popup translated: ${aboutOk ? "ok" : "FAIL"}`);
+
+        // Retune popup (project view openRetune → showModal in the iframe realm)
+        win.__microtone.projectView.openRetune();
+        await new Promise((r) => setTimeout(r, 50));
+        dlg = doc.querySelector("dialog.modal");
+        const retuneOk = !!dlg && dlg.textContent.includes(t("retune.title")) &&
+          dlg.textContent.includes(t("retune.methodHarmonic"));
+        [...dlg.querySelectorAll("button")].find((b) => /cancel/i.test(b.textContent))?.click();
+        log(`retune popup translated: ${retuneOk ? "ok" : "FAIL"}`);
+
+        // Go-to popup (Ctrl+G) — verify the goto keys resolve
+        win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "KeyG", key: "g", ctrlKey: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        dlg = doc.querySelector("dialog.modal");
+        const gotoOk = !!dlg && dlg.textContent.includes(t("goto.title")) &&
+          dlg.textContent.includes(t("goto.cue"));
+        [...dlg.querySelectorAll("button")].find((b) => /cancel/i.test(b.textContent))?.click();
+        log(`goto popup translated: ${gotoOk ? "ok" : "FAIL"}`);
+
+        // Item 29: change language live (no reload)
+        const i18n = await win.eval('import("/src/ui/i18n.js")');
+        const tabBtn = doc.querySelector('#tabs button[data-view="timeline"]');
+        const enTab = tabBtn.textContent;
+        await i18n.changeLang("ko");
+        await new Promise((r) => setTimeout(r, 30));
+        const tabKo = tabBtn.textContent === "타임라인";       // data-i18n re-applied
+        const langBtnKo = doc.getElementById("langBtn").textContent === "KO";
+        const barKo = [...win.__microtone.patternView.bar.querySelectorAll("button")]
+          .some((b) => b.textContent === "복제");             // imperative bar rebuilt
+        const sameDoc = win.__microtone.store.doc !== null;   // no reload → doc preserved
+        await i18n.changeLang("en");
+        const backEn = tabBtn.textContent === enTab;
+        log(`live language switch (no reload): tab=${tabKo} langBtn=${langBtnKo} bar=${barKo} docKept=${sameDoc} back=${backEn}`);
+        const langLiveOk = tabKo && langBtnKo && barKo && sameDoc && backEn;
+
+        const pass = helpOk && helpBtnOk && aboutOk && retuneOk && gotoOk && langLiveOk;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

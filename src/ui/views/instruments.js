@@ -4,7 +4,8 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp } from "../../doc/ops.js";
+import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp, setMetaBytesOp } from "../../doc/ops.js";
+import { META_MIX_GAIN } from "../../engine/tables.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
@@ -142,6 +143,7 @@ export class InstrumentsView {
       row.addEventListener("click", () => {
         this.selected = slot;
         this.jam.currentInst = slot;
+        this.store.emit("instsel");
         this.refresh();
       });
       this.listEl.appendChild(row);
@@ -863,19 +865,48 @@ export class InstrumentsView {
 
   renderMeta(inst) {
     const doc = this.store.doc;
+    const slot = this.selected;
     const table = document.createElement("table");
-    table.className = "files-table";
+    table.className = "files-table meta-table";
     table.innerHTML =
-      "<thead><tr><th>#</th><th>sub-inst</th><th>mix</th><th>detune</th><th>pitch range</th><th>vel</th></tr></thead>";
+      `<thead><tr><th>#</th><th>${escape(t("meta.subInst"))}</th><th>${escape(t("meta.mix"))}</th>` +
+      `<th>${escape(t("meta.detune"))}</th><th>${escape(t("meta.pitchRange"))}</th><th>${escape(t("meta.vel"))}</th></tr></thead>`;
     const tbody = document.createElement("tbody");
     (inst.metaLayers ?? []).forEach((l, i) => {
       const tr = document.createElement("tr");
-      tr.innerHTML =
-        `<td>${i}</td>` +
-        `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>` +
-        `<td>${l.mixOctet}</td><td>${l.detune}</td>` +
+      const nameTd = `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ` +
+        `${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>`;
+      tr.innerHTML = `<td>${i}</td>${nameTd}<td class="mixCell"></td><td class="detCell"></td>` +
         `<td>${noteToStr(l.pitchStart)}‥${noteToStr(l.pitchEnd)}</td>` +
         `<td>${l.volStart}‥${l.volEnd}</td>`;
+
+      // Mix: raw PSO octet (0..255, 159 = 0 dB) + a live dB readout.
+      const mixIn = document.createElement("input");
+      mixIn.type = "number"; mixIn.min = 0; mixIn.max = 255; mixIn.value = l.mixOctet;
+      mixIn.className = "meta-num";
+      const dbEl = document.createElement("span");
+      dbEl.className = "dim meta-db";
+      dbEl.textContent = mixDbLabel(l.mixOctet);
+      mixIn.addEventListener("change", () => {
+        const v = clampN(Math.round(Number(mixIn.value) || 0), 0, 255);
+        this.store.undo.apply(setMetaBytesOp(slot, [[l.rawOffset + 1, v]]));
+        this.refresh();
+      });
+      const mixCell = tr.querySelector(".mixCell");
+      mixCell.append(mixIn, dbEl);
+
+      // Detune: signed 4096-TET relative pitch offset (a semitone ≈ 341).
+      const detIn = document.createElement("input");
+      detIn.type = "number"; detIn.min = -0x8000; detIn.max = 0x7fff; detIn.value = l.detune;
+      detIn.className = "meta-num";
+      detIn.addEventListener("change", () => {
+        let v = clampN(Math.round(Number(detIn.value) || 0), -0x8000, 0x7fff) & 0xffff;
+        this.store.undo.apply(setMetaBytesOp(slot,
+          [[l.rawOffset + 2, v & 0xff], [l.rawOffset + 3, (v >>> 8) & 0xff]]));
+        this.refresh();
+      });
+      tr.querySelector(".detCell").append(detIn);
+
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -897,6 +928,14 @@ function escape(s) {
 }
 
 function clampN(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/** Meta mix octet → a dB readout (159 = 0 dB unity; 0 = silence). */
+function mixDbLabel(octet) {
+  const g = META_MIX_GAIN[octet & 0xff];
+  if (!(g > 0)) return "−∞ dB";
+  const db = 20 * Math.log10(g);
+  return (db >= 0 ? "+" : "−") + Math.abs(db).toFixed(1) + " dB";
+}
 const annHex2 = (v) => "$" + (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
 const annHex4 = (v) => "$" + (v & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 const annHex6 = (v) => "$" + (v & 0xffffff).toString(16).toUpperCase().padStart(6, "0");

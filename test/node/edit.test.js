@@ -61,6 +61,16 @@ test("note column specials: keyoff/cut/fade/clear", () => {
   assert.deepEqual(clr.fields, { note: 0, instrment: 0 });
 });
 
+test("note column: taut z/x/c/v sentinels, inserted not auditioned", () => {
+  const cell = new TaudPlayData();
+  for (const [code, note] of [["KeyZ", 1], ["KeyX", 2], ["KeyC", 3], ["KeyV", 4]]) {
+    const a = interpretEditKey({ code, key: code.slice(3).toLowerCase() }, SUB_NOTE, 0, cell, ctx);
+    assert.equal(a.fields.note, note, `${code} → 0x000${note}`);
+    assert.ok(a.advanceRow, `${code} advances the row`);
+    assert.equal(a.jamNote, undefined, `${code} is not auditioned`);
+  }
+});
+
 test("inst column: two-nibble hex entry", () => {
   const cell = new TaudPlayData();
   const hi = interpretEditKey({ code: "Digit2", key: "2" }, SUB_INST, 0, cell, ctx);
