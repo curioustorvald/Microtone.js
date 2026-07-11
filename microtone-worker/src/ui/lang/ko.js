@@ -30,6 +30,7 @@ export default {
   "topbar.sponsorTitle": "GitHub 스폰서 되기",
   "topbar.themeTitle": "어두운/밝은 테마 전환",
   "topbar.langTitle": "언어",
+  "topbar.reloadTitle": "앱 새로고침 (페이지 다시 불러오기)",
   "topbar.helpTitle": "키보드 단축키 (?)",
   "topbar.aboutTitle": "Microtone 정보",
 

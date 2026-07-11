@@ -543,6 +543,12 @@ $("redoBtn").addEventListener("click", () => store.undo?.redo());
 // ── About (brand click) ──
 $("brandBtn").addEventListener("click", () => showAbout());
 
+// ── reload (refresh the page back to the initial state) ──
+$("reloadBtn").addEventListener("click", () => {
+  if (store.doc?.dirty && !confirm(t("confirm.discard"))) return;
+  location.reload();
+});
+
 // ── on-screen help (mirrors the '?' key; works regardless of view/doc) ──
 $("helpBtn").addEventListener("click", () => showHelp());
 

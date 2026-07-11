@@ -30,6 +30,7 @@ export default {
   "topbar.sponsorTitle": "Become a GitHub Sponsor",
   "topbar.themeTitle": "Toggle dark/light theme",
   "topbar.langTitle": "Language",
+  "topbar.reloadTitle": "Reload the app (refresh the page)",
   "topbar.helpTitle": "Keyboard shortcuts (?)",
   "topbar.aboutTitle": "About Microtone",
 
