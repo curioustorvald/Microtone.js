@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>profile smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- keeps the load event pending on tools/test-server.py so
+       --dump-dom --timeout runs the audio in REAL time -->
+  <img src="/hang" hidden>
+  <script type="module">
+    // Headless smoke for the dev audio profiler (?profile=1 path):
+    //   - the worklet actually emits MSG.PROFILE under real playback,
+    //   - the report carries sane per-callback + renderChunk timings,
+    //   - the overlay + pure verdict classifier run without throwing.
+    // Run (real time, COOP/COEP server):
+    //   python3 tools/test-server.py &
+    //   chromium --headless=new --disable-gpu --no-sandbox --timeout=60000 \
+    //     --autoplay-policy=no-user-gesture-required --dump-dom \
+    //     http://localhost:8932/test/browser/profile-smoke.html
+    import { parseTaud } from "../../src/format/taud-parse.js";
+    import { AudioSystem } from "../../src/audio/audio-system.js";
+    import { createProfileOverlay, profileVerdict } from "../../src/ui/profileoverlay.js";
+
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    try {
+      const audio = new AudioSystem();
+      await audio.init({ snapshotIntervalMs: 16, profile: true });
+      log(`init ok — sampleRate=${audio.context.sampleRate} bundleFallback=${audio.usedBundleFallback}`);
+      log(`snapshot path: ${audio.usingSab ? "SharedArrayBuffer" : "postMessage"}`);
+
+      // Overlay is exercised too (must render + update without throwing).
+      const overlay = createProfileOverlay();
+      document.body.appendChild(overlay.el);
+      let reports = 0;
+      audio.onProfile = (p) => { reports++; overlay.update(p); };
+
+      // Drag wiring: simulate a pointer drag on the title bar; the box must move.
+      const title = overlay.el.firstChild;
+      const b = overlay.el.getBoundingClientRect();
+      const pev = (type, x, y) => new PointerEvent(type,
+        { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y });
+      title.dispatchEvent(pev("pointerdown", b.left + 20, b.top + 5));
+      title.dispatchEvent(pev("pointermove", b.left - 50, b.top - 30));
+      title.dispatchEvent(pev("pointerup", b.left - 50, b.top - 30));
+      const a = overlay.el.getBoundingClientRect();
+      const dragMoved = Math.abs(a.left - b.left) > 5 && Math.abs(a.top - b.top) > 5;
+      log(`drag: moved=${dragMoved} (${Math.round(b.left)},${Math.round(b.top)} → ${Math.round(a.left)},${Math.round(a.top)})`);
+
+      await audio.resume();
+      const resp = await fetch("../corpus/WHEN.taud");
+      const doc = parseTaud(new Uint8Array(await resp.arrayBuffer()));
+      audio.loadDocument(doc, 0);
+      audio.play(0);
+      log("play sent — waiting for profile reports (real time)…");
+
+      // Reports arrive ≈ once per second; wait for at least two.
+      const t0 = Date.now();
+      while (reports < 2 && Date.now() - t0 < 4000) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      const p = audio.profile;
+      if (!p) throw new Error("no MSG.PROFILE received");
+      log(`reports=${reports}`);
+      log(`clock: ${p.hiResClock ? "hi-res (performance.now)" : "COARSE (Date.now " + p.clockResMs + "ms)"}`);
+      log(`callback: mean=${p.procMeanMs.toFixed(3)}ms max=${p.procMaxMs.toFixed(3)}ms budget=${p.quantumMs.toFixed(3)}ms xruns=${p.xruns}`);
+      log(`renderChunk: mean=${p.renderMeanMs.toFixed(3)}ms max=${p.renderMaxMs.toFixed(3)}ms (${Math.round(p.renderFrac * 100)}% of load)`);
+      log(`load=${Math.round(p.cpuFrac * 100)}% peakVoices=${p.peakVoices} procCount=${p.procCount} renderCount=${p.renderCount}`);
+      log(`resample step=${p.step.toFixed(3)} sab=${p.sab}`);
+      const v = profileVerdict(p);
+      log(`verdict: ${v.label} (${v.tone})`);
+
+      const sane =
+        reports >= 2 &&
+        dragMoved &&
+        p.procCount > 0 && p.renderCount > 0 &&
+        p.quantumMs > 0 && p.sampleRate > 0 &&
+        p.procMeanMs >= 0 && p.renderMeanMs >= 0 &&
+        p.cpuFrac >= 0 && isFinite(p.cpuFrac) &&
+        typeof p.hiResClock === "boolean" &&
+        p.sab === audio.usingSab &&
+        typeof v.label === "string" && v.label.length > 0 &&
+        overlay.el.textContent.includes(v.label);
+
+      log(sane ? "RESULT: PASS" : "RESULT: FAIL");
+      document.title = sane ? "SMOKE-PASS" : "SMOKE-FAIL";
+    } catch (err) {
+      log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      document.title = "SMOKE-ERROR";
+    }
+  </script>
+</body>
+</html>

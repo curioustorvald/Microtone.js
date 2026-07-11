@@ -40,6 +40,7 @@ export const MSG = Object.freeze({
   SNAPSHOT: "snapshot", // {buffer: ArrayBuffer} — Float32Array, layout below
   FUNK_MASK: "funkMask", // {slot, mask: ArrayBuffer} — S$Fx invert-loop bit mask
   READY: "ready",
+  PROFILE: "profile",   // {cpuFrac, renderFrac, ...} — dev profiler, ~1/s (opt-in)
 });
 
 // ── Snapshot layout (Float32Array; integers are exact in f32 up to 2^24) ──

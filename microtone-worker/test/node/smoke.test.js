@@ -18,7 +18,7 @@ test("vendored fzstd exposes decompress", async () => {
 test("engine constants import and are sane", async () => {
   const c = await import("../../src/engine/constants.js");
   assert.equal(c.SAMPLING_RATE, 32000);
-  assert.equal(c.TRACKER_CHUNK, 512);
+  assert.equal(c.TRACKER_CHUNK, 128); // 512→128 for the AudioWorklet callback budget (bit-exact; see constants.js)
   assert.equal(c.MAX_VOICES, 64);
   assert.equal(c.SAMPLE_BIN_TOTAL, 8 * 1024 * 1024);
   assert.equal(c.PATTERN_EMPTY, 0x7fff);

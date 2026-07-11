@@ -3,7 +3,14 @@
 // Lookup tables (sinc, SNES gauss, Amiga filter coefficients) live in tables.js.
 
 export const SAMPLING_RATE = 32000;
-export const TRACKER_CHUNK = 512;
+// Batch length of the mixer's per-sample loop. Tick/row timing is per-SAMPLE
+// (mixer.js `samplesIntoTick`), so this is pure batching granularity and does
+// NOT affect output — verified bit-exact vs the 512 baseline on the whole
+// deterministic corpus. DELIBERATE web divergence from Kotlin's 512: the
+// AudioWorklet must finish each render inside one ~2.67 ms quantum, and a 512-
+// frame (16 ms) block renders in one burst that overruns the callback on slower
+// devices (iPad: 5–14 ms/block → xruns); 128 spreads it evenly under budget.
+export const TRACKER_CHUNK = 128;
 
 // Per-voice soundscope ring-buffer length. Power of two so wrap-around is a single AND.
 export const SCOPE_BUFFER_SIZE = 2048;

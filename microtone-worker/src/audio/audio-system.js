@@ -33,13 +33,15 @@ export class AudioSystem {
     this.usingSab = false;  // shared-memory snapshots (crossOriginIsolated deploys)
     this.sabI32 = null;     // Int32Array view over the SAB interrupt latch
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
+    this.profile = null;    // latest worklet profiler report (opt-in; null when off)
+    this.onProfile = null;  // optional callback(profile) when a report arrives
   }
 
   /** Create the context + node. Must be called once; audio starts suspended
    *  until resume() is called from a user gesture.
    *  Test knobs: forceBundle loads the single-file worklet concat; sampleRate
    *  overrides the context rate (exercises the 32 kHz→context resampler). */
-  async init({ snapshotIntervalMs = 16, forceBundle = false, sampleRate = 48000 } = {}) {
+  async init({ snapshotIntervalMs = 16, forceBundle = false, sampleRate = 48000, profile = false } = {}) {
     let ctx;
     try {
       ctx = new AudioContext({ sampleRate, latencyHint: "interactive" });
@@ -65,7 +67,7 @@ export class AudioSystem {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
-      processorOptions: { snapshotIntervalMs },
+      processorOptions: { snapshotIntervalMs, profile },
     });
     this.node.port.onmessage = (e) => {
       const m = e.data;
@@ -81,6 +83,13 @@ export class AudioSystem {
         this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
       } else if (m.t === MSG.FUNK_MASK) {
         this.funkMasks.set(m.slot, new Uint8Array(m.mask));
+      } else if (m.t === MSG.PROFILE) {
+        // Enrich the worklet report with main-side facts it cannot see.
+        m.usingSab = this.usingSab;
+        m.bundleFallback = this.usedBundleFallback;
+        m.contextSampleRate = this.context.sampleRate;
+        this.profile = m;
+        if (this.onProfile) this.onProfile(m);
       }
     };
     this.node.connect(ctx.destination);

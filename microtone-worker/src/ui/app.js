@@ -7,6 +7,7 @@ import { Document, combineTpif } from "../doc/document.js";
 import { DocSync } from "../doc/sync.js";
 import { UndoStack } from "../doc/undo.js";
 import { AudioSystem } from "../audio/audio-system.js";
+import { createProfileOverlay } from "./profileoverlay.js";
 import { Store } from "./store.js";
 import { TimelineView } from "./views/timeline.js";
 import { CuesView } from "./views/cues.js";
@@ -54,6 +55,11 @@ store.record = true;
 store.editStep = 1;
 let audioInitPromise = null;
 
+// ?profile=1 attaches the dev audio profiler (worklet timing + on-screen
+// overlay). Off by default → zero overhead in production.
+const PROFILE = new URLSearchParams(location.search).has("profile");
+let profileOverlay = null;
+
 // ── audio bring-up (single-flight; owns DocSync creation) ──
 // The worklet is warmed up eagerly on load (resume:false → suspended context,
 // no sound, no autoplay-policy violation) so store.audio + DocSync exist before
@@ -63,7 +69,12 @@ async function ensureAudio({ resume = true } = {}) {
   if (!audioInitPromise) {
     audioInitPromise = (async () => {
       const audio = new AudioSystem();
-      await audio.init();
+      await audio.init({ profile: PROFILE });
+      if (PROFILE) {
+        profileOverlay = createProfileOverlay();
+        document.body.appendChild(profileOverlay.el);
+        audio.onProfile = (p) => profileOverlay.update(p);
+      }
       store.audio = audio;
     })();
   }

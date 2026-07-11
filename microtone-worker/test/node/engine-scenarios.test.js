@@ -6,12 +6,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { TaudEngine } from "../../src/engine/engine.js";
+import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
 import { envPoint } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
 import { advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox } from "../../src/engine/envelope.js";
 
 const scratch = new Int32Array(2);
+
+// Render ≈ `samples` frames of playhead 0, chunk-size-agnostic (renderChunk
+// always emits exactly TRACKER_CHUNK, so these tests advance by sample count
+// rather than counting chunks — output is bit-identical at any TRACKER_CHUNK).
+function renderSamples(eng, samples) {
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const calls = Math.ceil(samples / TRACKER_CHUNK);
+  for (let i = 0; i < calls; i++) eng.renderChunk(0, out);
+}
 
 function makeTestEngine() {
   const eng = new TaudEngine();
@@ -53,15 +63,12 @@ test("S$Dx note delay fires on a FRESH channel (stale-inst re-bind)", () => {
   eng.setCuePosition(0, 0);
   eng.play(0);
 
-  const out = new Uint8Array(1024);
   const v = eng.playheads[0].trackerState.voices[0];
 
-  eng.renderChunk(0, out); // 512 samples < 640/tick — delay not yet fired
+  renderSamples(eng, 512); // 512 samples < 640/tick — delay tick not reached
   assert.equal(v.active, false, "voice must not sound before the delay tick");
 
-  eng.renderChunk(0, out); // tick fires with tickInRow=0
-  eng.renderChunk(0, out); // tickInRow=1
-  eng.renderChunk(0, out); // tickInRow=2 → deferred trigger fires mid-tick
+  renderSamples(eng, 3 * 512); // advance through tickInRow=2 → deferred trigger fires
   assert.equal(v.active, true, "delayed note must fire");
   assert.equal(v.instrumentId, 1);
   // The stale-inst bug zeroed playbackRate via instruments[0].samplingRate == 0.
@@ -156,9 +163,9 @@ test("dither stream is deterministic across engine instances", () => {
     eng.uploadCue(0, cue);
     eng.setMasterVolume(0, 255);
     eng.play(0);
-    const out = new Uint8Array(1024);
-    const all = new Uint8Array(1024 * 8);
-    for (let i = 0; i < 8; i++) { eng.renderChunk(0, out); all.set(out, i * 1024); }
+    const out = new Uint8Array(TRACKER_CHUNK * 2);
+    const all = new Uint8Array(TRACKER_CHUNK * 2 * 8);
+    for (let i = 0; i < 8; i++) { eng.renderChunk(0, out); all.set(out, i * TRACKER_CHUNK * 2); }
     return all;
   };
   assert.deepEqual(render(), render());
@@ -184,10 +191,10 @@ test("renderPitch display tap: follows arpeggio per tick; noteVal stays at base"
   eng.play(0);
 
   const v = eng.playheads[0].trackerState.voices[0];
-  const out = new Uint8Array(640); // ~one tick per chunk
+  const SPT = 640; // samples/tick at bpm 125 (32000*2.5/125)
   const seen = new Set();
   for (let i = 0; i < 6; i++) {
-    eng.renderChunk(0, out);
+    renderSamples(eng, SPT); // advance ~one arp tick, chunk-size-agnostic
     seen.add(v.renderPitch);
     assert.equal(v.noteVal, 0x5000, "base noteVal never moves under arpeggio");
   }

@@ -53,8 +53,31 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.sabF32 = null;
     this.sabI32 = null;
 
+    // ── dev profiler (opt-in via processorOptions.profile; zero cost when off) ──
+    // Times the whole process() callback (the true xrun predictor) AND the
+    // engine.renderChunk DSP alone, so we can tell whether raw DSP throughput or
+    // the surrounding overhead (resample / snapshot) is the bottleneck. Reports
+    // rolling stats to the main thread ≈ once per second.
+    this.profiling = !!opts.profile;
+    // AudioWorkletGlobalScope does not reliably expose performance.now on older
+    // iPad Safari — feature-detect and fall back to the 1 ms-resolution
+    // Date.now, reporting which clock is live so the numbers stay interpretable.
+    const hasPerf = (typeof performance !== "undefined" && typeof performance.now === "function");
+    this.clockNow = hasPerf ? () => performance.now() : () => Date.now();
+    this.hiResClock = hasPerf;
+    this.clockResMs = hasPerf ? 0.005 : 1; // nominal resolution
+    this.profileIntervalFrames = Math.max(1, Math.round(sampleRate)); // ≈ 1 s window
+    this.pfReset();
+
     this.port.onmessage = (e) => this.onCommand(e.data);
     this.port.postMessage({ t: MSG.READY });
+  }
+
+  pfReset() {
+    this.pfFrames = 0;
+    this.pfProcBusy = 0; this.pfProcMax = 0; this.pfProcCount = 0; this.pfXruns = 0;
+    this.pfRenderBusy = 0; this.pfRenderMax = 0; this.pfRenderCount = 0;
+    this.pfPeakVoices = 0;
   }
 
   onCommand(m) {
@@ -114,7 +137,18 @@ class TaudProcessor extends AudioWorkletProcessor {
   }
 
   renderIntoRing() {
+    const t0 = this.profiling ? this.clockNow() : 0;
     const out = this.engine.renderChunk(this.playhead, this.chunk);
+    if (this.profiling) {
+      const dt = this.clockNow() - t0;
+      this.pfRenderBusy += dt;
+      if (dt > this.pfRenderMax) this.pfRenderMax = dt;
+      this.pfRenderCount++;
+      const ts0 = this.engine.playheads[this.playhead].trackerState;
+      let nv = ts0.backgroundVoices.length;
+      for (let i = 0; i < ts0.voices.length; i++) if (ts0.voices[i].active) nv++;
+      if (nv > this.pfPeakVoices) this.pfPeakVoices = nv;
+    }
     const mask = RING_FRAMES - 1;
     if (out === null) {
       for (let n = 0; n < TRACKER_CHUNK; n++) {
@@ -215,7 +249,33 @@ class TaudProcessor extends AudioWorkletProcessor {
     }
   }
 
+  emitProfile(quantumMs) {
+    const audioMs = this.pfFrames / sampleRate * 1000;
+    this.port.postMessage({
+      t: MSG.PROFILE,
+      cpuFrac: audioMs > 0 ? this.pfProcBusy / audioMs : 0,
+      renderFrac: audioMs > 0 ? this.pfRenderBusy / audioMs : 0,
+      procMeanMs: this.pfProcCount ? this.pfProcBusy / this.pfProcCount : 0,
+      procMaxMs: this.pfProcMax,
+      renderMeanMs: this.pfRenderCount ? this.pfRenderBusy / this.pfRenderCount : 0,
+      renderMaxMs: this.pfRenderMax,
+      quantumMs,
+      xruns: this.pfXruns,
+      procCount: this.pfProcCount,
+      renderCount: this.pfRenderCount,
+      peakVoices: this.pfPeakVoices,
+      windowMs: audioMs,
+      sampleRate,
+      step: this.step,
+      sab: this.sabF32 !== null,
+      hiResClock: this.hiResClock,
+      clockResMs: this.clockResMs,
+    });
+    this.pfReset();
+  }
+
   process(_inputs, outputs) {
+    const t0 = this.profiling ? this.clockNow() : 0;
     const outL = outputs[0][0];
     const outR = outputs[0].length > 1 ? outputs[0][1] : outputs[0][0];
     const frames = outL.length;
@@ -255,6 +315,20 @@ class TaudProcessor extends AudioWorkletProcessor {
     if (this.framesSinceSnapshot >= this.snapshotIntervalFrames) {
       this.framesSinceSnapshot = 0;
       this.assembleSnapshot();
+    }
+
+    if (this.profiling) {
+      // Measure the whole callback (render + resample + snapshot) — that is the
+      // work the audio thread must finish within one quantum. The report post
+      // itself is left out (dt captured before emit).
+      const dt = this.clockNow() - t0;
+      this.pfProcBusy += dt;
+      if (dt > this.pfProcMax) this.pfProcMax = dt;
+      this.pfProcCount++;
+      const quantumMs = frames / sampleRate * 1000;
+      if (dt > quantumMs) this.pfXruns++;
+      this.pfFrames += frames;
+      if (this.pfFrames >= this.profileIntervalFrames) this.emitProfile(quantumMs);
     }
     return true;
   }
