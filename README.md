@@ -14,7 +14,7 @@ A web build of the **Microtone** tracker and the **Taud** audio engine from
 
 ## Try it
 
-Simply visit **[microtone.curioustorvald.com](https://microtone.curioustorvald.com)** and start tracking; no strings attached.
+Simply visit **[microtone.cc](https://microtone.cc)** and start tracking; no strings attached.
   
 ## Running locally
 
