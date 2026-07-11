@@ -34,7 +34,7 @@
       const audio = new AudioSystem();
       await audio.init({ snapshotIntervalMs: 16, profile: true });
       log(`init ok — sampleRate=${audio.context.sampleRate} bundleFallback=${audio.usedBundleFallback}`);
-      log(`snapshot path: ${audio.usingSab ? "SharedArrayBuffer" : "postMessage"}`);
+      log(`snapshot path: ${audio.usingSab ? "SharedArrayBuffer" : "postMessage"} — render: ${audio.usingWorker ? "Worker (Tier 2)" : "in-worklet"}`);
 
       // Overlay is exercised too (must render + update without throwing).
       const overlay = createProfileOverlay();
@@ -74,14 +74,22 @@
       log(`callback: mean=${p.procMeanMs.toFixed(3)}ms max=${p.procMaxMs.toFixed(3)}ms budget=${p.quantumMs.toFixed(3)}ms xruns=${p.xruns}`);
       log(`renderChunk: mean=${p.renderMeanMs.toFixed(3)}ms max=${p.renderMaxMs.toFixed(3)}ms (${Math.round(p.renderFrac * 100)}% of load)`);
       log(`load=${Math.round(p.cpuFrac * 100)}% peakVoices=${p.peakVoices} procCount=${p.procCount} renderCount=${p.renderCount}`);
+      if (audio.usingWorker) log(`ring underruns=${p.underruns} (worker keeping up: ${p.underruns === 0})`);
       log(`resample step=${p.step.toFixed(3)} sab=${p.sab}`);
       const v = profileVerdict(p);
       log(`verdict: ${v.label} (${v.tone})`);
 
+      // Tier 2 (Worker render): the worklet only copies, so renderCount≈0 — that
+      // IS the proof the audio thread stopped rendering. In-worklet mode still
+      // renders, so renderCount must be > 0.
+      const renderOk = audio.usingWorker
+        ? (p.renderCount === 0 && p.workerRender && p.underruns === 0)
+        : (p.renderCount > 0);
       const sane =
         reports >= 2 &&
         dragMoved &&
-        p.procCount > 0 && p.renderCount > 0 &&
+        renderOk &&
+        p.procCount > 0 &&
         p.quantumMs > 0 && p.sampleRate > 0 &&
         p.procMeanMs >= 0 && p.renderMeanMs >= 0 &&
         p.cpuFrac >= 0 && isFinite(p.cpuFrac) &&

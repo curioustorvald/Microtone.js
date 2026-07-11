@@ -32,6 +32,8 @@ const FILES = [
   "src/engine/mixer.js",
   "src/engine/engine.js",
   "src/worklet/protocol.js",
+  "src/audio/audio-ring.js",
+  "src/worklet/engine-commands.js",
   "src/worklet/taud-processor.js",
 ];
 

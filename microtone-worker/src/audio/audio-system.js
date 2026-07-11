@@ -17,9 +17,11 @@ import {
   SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES,
 } from "../worklet/protocol.js";
 import { MAX_VOICES, NUM_VOICES } from "../engine/constants.js";
+import { AR_SAB_BYTES } from "./audio-ring.js";
 
 const WORKLET_MODULE = new URL("../worklet/taud-processor.js", import.meta.url);
 const WORKLET_BUNDLE = new URL("../worklet/taud-processor.bundle.js", import.meta.url);
+const RENDER_WORKER = new URL("./render.worker.js", import.meta.url);
 
 export class AudioSystem {
   constructor() {
@@ -32,6 +34,9 @@ export class AudioSystem {
     this.usedBundleFallback = false;
     this.usingSab = false;  // shared-memory snapshots (crossOriginIsolated deploys)
     this.sabI32 = null;     // Int32Array view over the SAB interrupt latch
+    this.worker = null;         // Tier 2 render Worker (isolated hosts); null in render mode
+    this.usingWorker = false;   // engine renders off the audio thread (Tier 2)
+    this.engineTarget = null;   // where engine commands go: worklet port or the worker
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
     this.profile = null;    // latest worklet profiler report (opt-in; null when off)
     this.onProfile = null;  // optional callback(profile) when a report arrives
@@ -69,46 +74,72 @@ export class AudioSystem {
       outputChannelCount: [2],
       processorOptions: { snapshotIntervalMs, profile },
     });
-    this.node.port.onmessage = (e) => {
-      const m = e.data;
-      if (m.t === MSG.SNAPSHOT) {
-        const f = new Float32Array(m.buffer);
-        // A snapshot posted before the USE_SAB switch landed must not clobber
-        // the live shared view — but its latched interrupts still count.
-        this.interruptMask |= f[SNAP_INTERRUPT_MASK];
-        if (!this.usingSab) {
-          this.snapshot.set(f);
-          if (this.onSnapshot) this.onSnapshot(this.snapshot);
-        }
-        this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
-      } else if (m.t === MSG.FUNK_MASK) {
-        this.funkMasks.set(m.slot, new Uint8Array(m.mask));
-      } else if (m.t === MSG.PROFILE) {
-        // Enrich the worklet report with main-side facts it cannot see.
-        m.usingSab = this.usingSab;
-        m.bundleFallback = this.usedBundleFallback;
-        m.contextSampleRate = this.context.sampleRate;
-        this.profile = m;
-        if (this.onProfile) this.onProfile(m);
-      }
-    };
+    this.node.port.onmessage = (e) => this._onEngineMessage(e.data);
     this.node.connect(ctx.destination);
+    this.engineTarget = this.node.port; // render mode: engine lives in the worklet
 
-    // SAB fast path: on cross-origin-isolated pages (the Cloudflare Pages
-    // deploy sends COOP/COEP via _headers) snapshots live in shared memory —
-    // the worklet writes in place and the getters below read it directly,
-    // with zero message traffic. Local dev servers usually lack the headers
-    // and keep the recycled-postMessage path.
+    // On cross-origin-isolated pages (COOP/COEP) we get SharedArrayBuffer, so:
+    //   1. snapshots live in shared memory (no message traffic), and
+    //   2. Tier 2 — a render Worker hosts the engine and streams audio into a
+    //      SAB ring, leaving the AudioWorklet to only resample+copy (it can
+    //      never overrun, whatever the channel/voice load). Non-isolated hosts
+    //      keep the engine in the worklet (render mode) with postMessage snapshots.
     if (globalThis.crossOriginIsolated && typeof SharedArrayBuffer !== "undefined") {
-      const sab = new SharedArrayBuffer(SNAP_SAB_BYTES);
-      const view = new Float32Array(sab, 0, SNAP_FLOATS);
+      const snapSab = new SharedArrayBuffer(SNAP_SAB_BYTES);
+      const view = new Float32Array(snapSab, 0, SNAP_FLOATS);
       view.set(this.snapshot); // carry the pre-init defaults (channel count)
       this.snapshot = view;
-      this.sabI32 = new Int32Array(sab, SNAP_FLOATS * 4, 1);
-      this.node.port.postMessage({ t: CMD.USE_SAB, sab });
+      this.sabI32 = new Int32Array(snapSab, SNAP_FLOATS * 4, 1);
       this.usingSab = true;
+
+      try {
+        this.worker = new Worker(RENDER_WORKER, { type: "module" });
+        this.worker.onmessage = (e) => this._onEngineMessage(e.data);
+        const audioSab = new SharedArrayBuffer(AR_SAB_BYTES);
+        this.node.port.postMessage({ t: CMD.USE_AUDIO_SAB, sab: audioSab }); // worklet → consume
+        this.worker.postMessage({ t: CMD.USE_SAB, sab: snapSab });           // worker fills snapshots
+        this.worker.postMessage({ t: CMD.USE_AUDIO_SAB, sab: audioSab });    // worker produces into the ring
+        this.worker.postMessage({ t: CMD.INIT, snapshotIntervalMs });
+        this.engineTarget = this.worker; // route engine commands to the worker
+        this.usingWorker = true;
+      } catch (e) {
+        // Module Worker unavailable → keep the engine in the worklet, just with
+        // SAB snapshots (the pre-Tier-2 isolated path).
+        this.worker = null;
+        this.node.port.postMessage({ t: CMD.USE_SAB, sab: snapSab });
+        this.node.port.postMessage({ t: CMD.INIT, snapshotIntervalMs });
+      }
+    } else {
+      this.node.port.postMessage({ t: CMD.INIT, snapshotIntervalMs });
     }
     return this;
+  }
+
+  /** Messages from whichever thread hosts the engine (worklet port in render
+   *  mode, the Worker in Tier 2). Snapshots only arrive via postMessage in
+   *  render mode without SAB. */
+  _onEngineMessage(m) {
+    if (m.t === MSG.SNAPSHOT) {
+      const f = new Float32Array(m.buffer);
+      // A snapshot posted before a USE_SAB switch landed must not clobber the
+      // live shared view — but its latched interrupts still count.
+      this.interruptMask |= f[SNAP_INTERRUPT_MASK];
+      if (!this.usingSab) {
+        this.snapshot.set(f);
+        if (this.onSnapshot) this.onSnapshot(this.snapshot);
+      }
+      this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
+    } else if (m.t === MSG.FUNK_MASK) {
+      this.funkMasks.set(m.slot, new Uint8Array(m.mask));
+    } else if (m.t === MSG.PROFILE) {
+      // Enrich the worklet report with main-side facts it cannot see.
+      m.usingSab = this.usingSab;
+      m.usingWorker = this.usingWorker;
+      m.bundleFallback = this.usedBundleFallback;
+      m.contextSampleRate = this.context.sampleRate;
+      this.profile = m;
+      if (this.onProfile) this.onProfile(m);
+    }
   }
 
   get running() { return this.context?.state === "running"; }
@@ -118,7 +149,10 @@ export class AudioSystem {
     if (this.context && this.context.state !== "running") await this.context.resume();
   }
 
-  _post(msg, transfer) { this.node.port.postMessage(msg, transfer ?? []); }
+  // Engine commands go to whichever thread hosts the engine (the worklet port
+  // in render mode, the render Worker in Tier 2). Both share the postMessage
+  // (msg, transfer) signature.
+  _post(msg, transfer) { this.engineTarget.postMessage(msg, transfer ?? []); }
 
   // ── document upload (mirror of taud.mjs uploadTaudFile order) ──
 

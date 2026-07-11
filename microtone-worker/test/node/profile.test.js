@@ -72,6 +72,26 @@ test("sustained high load without xruns is Near budget, not OK", () => {
   assert.equal(v.label, "Near budget");
 });
 
+// Tier 2 (worker render): the audio thread only copies, so xruns/load are 0 and
+// irrelevant — the verdict must key off ring underruns instead.
+test("worker render with no underruns is Off-thread OK", () => {
+  const v = profileVerdict({
+    workerRender: true, underruns: 0,
+    cpuFrac: 0, renderFrac: 0, renderCount: 0, procMaxMs: 0, quantumMs: 2.67, xruns: 0,
+  });
+  assert.equal(v.tone, "ok");
+  assert.equal(v.label, "Off-thread OK");
+});
+
+test("worker render with ring underruns flags a dropout", () => {
+  const v = profileVerdict({
+    workerRender: true, underruns: 12,
+    cpuFrac: 0, renderFrac: 0, renderCount: 0, procMaxMs: 0, quantumMs: 2.67, xruns: 0,
+  });
+  assert.equal(v.tone, "bad");
+  assert.equal(v.label, "Ring underrun");
+});
+
 // Degenerate/empty report must not throw or divide by zero.
 test("empty report is safe", () => {
   const v = profileVerdict({});

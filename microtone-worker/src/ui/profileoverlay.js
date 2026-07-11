@@ -26,6 +26,28 @@ export const PF_DSP_SHARE = 0.6;
  * DSP itself, so it is reported before the DSP-bound / overhead-bound split.
  */
 export function profileVerdict(p) {
+  // Tier 2 (render Worker): the audio thread only copies, so it cannot overrun —
+  // the real glitch signal is ring underruns (worker not refilling in time).
+  if (p.workerRender) {
+    if ((p.underruns ?? 0) > 0) {
+      return {
+        tone: "bad",
+        label: "Ring underrun",
+        detail:
+          "Rendering runs off the audio thread, but the Worker isn't refilling the " +
+          "ring in time — the engine can't keep up with playback. Deepen the ring " +
+          "(AR_HIGH_WATER), lighten the song, or move to a faster (WASM) engine.",
+      };
+    }
+    return {
+      tone: "ok",
+      label: "Off-thread OK",
+      detail:
+        "Rendering runs in the Worker; the audio thread only resamples + copies, so " +
+        "it cannot overrun at any channel count. No ring underruns — playback is clean.",
+    };
+  }
+
   const load = p.cpuFrac ?? 0;
   const quantumMs = p.quantumMs ?? Infinity;
   const overBudget = (p.xruns ?? 0) > 0 || (p.procMaxMs ?? 0) > quantumMs;
@@ -179,14 +201,19 @@ export function createProfileOverlay() {
     const rows = [
       `ctx rate     ${p.contextSampleRate ?? p.sampleRate} Hz` + (resample ? `  (resample ×${fmt(p.step, 3)})` : "  (no resample)"),
       `snapshot     ${path}${p.bundleFallback ? "  [bundle worklet]" : ""}`,
+      `render       ${p.workerRender ? "Worker (off audio thread)" : "in-worklet"}`,
       `clock        ${clock}`,
       ``,
-      `load (mean)  ${pct(p.cpuFrac)}   of real time`,
+      `load (mean)  ${pct(p.cpuFrac)}   of real time (audio thread)`,
       `callback     mean ${fmt(p.procMeanMs)}  max ${fmt(p.procMaxMs)} ms   / ${fmt(p.quantumMs)} ms budget`,
       `  xruns/win  ${p.xruns ?? 0}` + ((p.xruns ?? 0) > 0 ? "  ← GLITCHING" : ""),
-      `renderChunk  mean ${fmt(p.renderMeanMs)}  max ${fmt(p.renderMaxMs)} ms   (${pct(dspShare)} of busy time)`,
-      `voices peak  ${p.peakVoices ?? 0}`,
     ];
+    if (p.workerRender) {
+      rows.push(`  underruns  ${p.underruns ?? 0}` + ((p.underruns ?? 0) > 0 ? "  ← RING STARVED" : "  (ring OK)"));
+    } else {
+      rows.push(`renderChunk  mean ${fmt(p.renderMeanMs)}  max ${fmt(p.renderMaxMs)} ms   (${pct(dspShare)} of busy time)`);
+      rows.push(`voices peak  ${p.peakVoices ?? 0}`);
+    }
     body.textContent = rows.join("\n");
 
     const v = profileVerdict(p);

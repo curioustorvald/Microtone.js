@@ -34,6 +34,7 @@ export const CMD = Object.freeze({
   QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
   SNAPSHOT_RETURN: "snapshotReturn",               // {buffer: ArrayBuffer} (recycle)
   USE_SAB: "useSab",                               // {sab: SharedArrayBuffer} — switch to shared-memory snapshots
+  USE_AUDIO_SAB: "useAudioSab",                    // {sab: SharedArrayBuffer} — Tier 2 audio ring (worklet consumes; worker produces)
 });
 
 export const MSG = Object.freeze({

@@ -1,30 +1,29 @@
-// TaudProcessor — AudioWorkletProcessor hosting the Taud engine.
+// TaudProcessor — AudioWorkletProcessor with two modes:
 //
-// The engine ALWAYS renders at 32 kHz (512-frame U8 stereo chunks, converted
-// to float as (b−128)/128 to preserve the 8-bit dithered character). A float
-// FIFO ring decouples the 128-frame process() quantum from the 512-frame
-// engine chunk; when the context sample rate is not 32000 the ring is read
-// with a fractional cursor + linear interpolation.
+//   RENDER mode (non-isolated fallback): hosts the TaudEngine and renders
+//     32 kHz U8/float chunks into a local FIFO ring, reading them back with a
+//     fractional resample cursor. This is the original single-thread path.
 //
-// This file is loaded with audioWorklet.addModule() as an ES module (static
-// imports of ../engine/*). For browsers without module-worklet support, load
-// the committed single-file concat instead: taud-processor.bundle.js
-// (regenerate with tools/make-worklet-bundle.js).
+//   CONSUME mode (Tier 2, crossOriginIsolated): the engine lives in a separate
+//     render Worker that fills a SharedArrayBuffer audio ring; process() only
+//     resamples + copies from that ring, so it can never overrun. Entered on
+//     CMD.USE_AUDIO_SAB; no engine commands are routed here in this mode.
+//
+// The engine ALWAYS produces 32 kHz; when the context rate isn't 32000 the ring
+// is read with a fractional cursor + linear interpolation. Loaded via
+// audioWorklet.addModule() as an ES module; the committed single-file concat
+// (taud-processor.bundle.js) is the non-module-worklet fallback — regenerate
+// with tools/make-worklet-bundle.js after any change here.
 
 import { TaudEngine } from "../engine/engine.js";
-import { SAMPLING_RATE, TRACKER_CHUNK, MAX_VOICES } from "../engine/constants.js";
+import { SAMPLING_RATE, TRACKER_CHUNK } from "../engine/constants.js";
+import { CMD, MSG, SNAP_INTERRUPT_MASK, SNAP_FLOATS } from "./protocol.js";
+import { applyAudioCommand, funkMaskBuffer, fillSnapshotInto } from "./engine-commands.js";
 import {
-  CMD, MSG,
-  SNAP_CUE_POS, SNAP_ROW_INDEX, SNAP_TICK_IN_ROW, SNAP_BPM, SNAP_TICK_RATE,
-  SNAP_FLAGS, SNAP_INTERRUPT_MASK, SNAP_CHANNEL_COUNT, SNAP_HEADER_SIZE,
-  SNAP_V_ACTIVE, SNAP_V_EFF_VOL, SNAP_V_EFF_PAN, SNAP_V_NOTE, SNAP_V_INST,
-  SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
-  SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
-  SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
-  SNAP_VOICE_STRIDE, SNAP_FLOATS,
-} from "./protocol.js";
+  audioRingViews, AR_MASK, AR_WRITE, AR_READ, AR_STATE, AR_EPOCH, AR_FLUSH_POS,
+} from "../audio/audio-ring.js";
 
-const RING_FRAMES = 4096; // power of two
+const RING_FRAMES = 4096; // power of two (render-mode local ring)
 
 class TaudProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -39,6 +38,12 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.ringReadPos = 0.0;  // fractional absolute read cursor
     this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 32 kHz context
 
+    // CONSUME mode (Tier 2): audio-ring SAB views + wrap-safe read cursor.
+    this.audioRing = null;
+    this.arEpoch = -1;       // forces a re-sync on the first callback
+    this.arReadBase = 0;     // Int32-wrapping integer read frame
+    this.arReadFrac = 0.0;   // 0..1 fractional accumulator
+
     const opts = options?.processorOptions ?? {};
     this.snapshotIntervalFrames =
       Math.max(1, Math.round(((opts.snapshotIntervalMs ?? 16) / 1000) * sampleRate));
@@ -48,16 +53,15 @@ class TaudProcessor extends AudioWorkletProcessor {
       new ArrayBuffer(SNAP_FLOATS * 4),
       new ArrayBuffer(SNAP_FLOATS * 4),
     ];
-    // SAB fast path (CMD.USE_SAB): write snapshots straight into shared
-    // memory — no messaging, no buffer recycling.
+    // SAB fast path (CMD.USE_SAB): write snapshots straight into shared memory.
     this.sabF32 = null;
     this.sabI32 = null;
 
     // ── dev profiler (opt-in via processorOptions.profile; zero cost when off) ──
     // Times the whole process() callback (the true xrun predictor) AND the
-    // engine.renderChunk DSP alone, so we can tell whether raw DSP throughput or
-    // the surrounding overhead (resample / snapshot) is the bottleneck. Reports
-    // rolling stats to the main thread ≈ once per second.
+    // engine.renderChunk DSP alone. In CONSUME mode renderChunk is never called,
+    // so renderCount≈0 — which is exactly the point: the audio thread stops
+    // rendering. Reports rolling stats to the main thread ≈ once per second.
     this.profiling = !!opts.profile;
     // AudioWorkletGlobalScope does not reliably expose performance.now on older
     // iPad Safari — feature-detect and fall back to the 1 ms-resolution
@@ -78,10 +82,20 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.pfProcBusy = 0; this.pfProcMax = 0; this.pfProcCount = 0; this.pfXruns = 0;
     this.pfRenderBusy = 0; this.pfRenderMax = 0; this.pfRenderCount = 0;
     this.pfPeakVoices = 0;
+    this.pfUnderruns = 0; // CONSUME mode: callbacks starved while the producer was active
   }
 
   onCommand(m) {
+    // Enter CONSUME mode: the worker owns the engine now; free ours (~8 MB).
+    if (m.t === CMD.USE_AUDIO_SAB) {
+      this.audioRing = audioRingViews(m.sab);
+      this.engine = null;
+      return;
+    }
+    if (this.audioRing) return; // consume mode: no engine commands routed here
+
     const eng = this.engine;
+    if (applyAudioCommand(eng, m)) return;
     switch (m.t) {
       case CMD.INIT:
         if (m.snapshotIntervalMs) {
@@ -89,40 +103,8 @@ class TaudProcessor extends AudioWorkletProcessor {
             Math.max(1, Math.round((m.snapshotIntervalMs / 1000) * sampleRate));
         }
         break;
-      case CMD.UPLOAD_SAMPLE_INST_BLOB: eng.uploadSampleInstBlob(new Uint8Array(m.image)); break;
-      case CMD.UPLOAD_INSTRUMENT: eng.uploadInstrument(m.slot, new Uint8Array(m.bytes)); break;
-      case CMD.UPLOAD_INSTRUMENT_PATCHES: eng.uploadInstrumentPatches(m.slot, new Uint8Array(m.bytes)); break;
-      case CMD.CLEAR_INSTRUMENT_PATCHES: eng.clearInstrumentPatches(m.slot); break;
-      case CMD.UPLOAD_PATTERN: eng.uploadPattern(m.slot, new Uint8Array(m.bytes)); break;
-      case CMD.UPLOAD_PATTERNS: {
-        const blob = new Uint8Array(m.blob);
-        for (let i = 0; i < m.slots.length; i++) {
-          eng.uploadPattern(m.slots[i], blob.subarray(i * 512, (i + 1) * 512));
-        }
-        break;
-      }
-      case CMD.UPLOAD_CUE: eng.uploadCue(m.idx, new Uint8Array(m.bytes)); break;
-      case CMD.SET_64CH: eng.set64ChannelMode(m.on); break;
-      case CMD.SET_BPM: eng.setBPM(m.ph, m.bpm); break;
-      case CMD.SET_TICK_RATE: eng.setTickRate(m.ph, m.rate); break;
-      case CMD.SET_SONG_GLOBAL_VOLUME: eng.setSongGlobalVolume(m.ph, m.volume); break;
-      case CMD.SET_SONG_MIXING_VOLUME: eng.setSongMixingVolume(m.ph, m.volume); break;
-      case CMD.SET_MASTER_VOLUME: eng.setMasterVolume(m.ph, m.volume); break;
-      case CMD.SET_MASTER_PAN: eng.setMasterPan(m.ph, m.pan); break;
-      case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); break;
-      case CMD.PLAY: eng.play(m.ph); break;
-      case CMD.STOP: eng.stop(m.ph); break;
-      case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); break;
-      case CMD.SET_TRACKER_ROW: eng.setTrackerRow(m.ph, m.row); break;
-      case CMD.RESET_PARAMS: eng.resetParams(m.ph); break;
-      case CMD.RESET_FUNK_STATE: eng.resetFunkState(m.ph); break;
-      case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst); break;
-      case CMD.JAM_STOP: eng.jamStop(m.ph); break;
-      case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); break;
-      case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); break;
       case CMD.QUERY_FUNK_MASK: {
-        const mask = eng.getInstrumentFunkMask(m.slot); // Uint8Array (bit mask)
-        const buf = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+        const buf = funkMaskBuffer(eng, m.slot);
         this.port.postMessage({ t: MSG.FUNK_MASK, slot: m.slot, mask: buf }, [buf]);
         break;
       }
@@ -176,7 +158,7 @@ class TaudProcessor extends AudioWorkletProcessor {
     if (this.sabF32 !== null) {
       // Shared-memory path: fill in place; interrupts accumulate in the
       // trailing Int32 cell until the main thread drains it atomically.
-      this.fillSnapshot(this.sabF32);
+      fillSnapshotInto(this.engine, this.playhead, this.sabF32);
       this.sabF32[SNAP_INTERRUPT_MASK] = 0;
       const drained = this.engine.playheads[this.playhead].trackerState.drainInterrupts();
       if (drained !== 0) Atomics.or(this.sabI32, 0, drained);
@@ -185,111 +167,20 @@ class TaudProcessor extends AudioWorkletProcessor {
     const buffer = this.snapshotPool.pop();
     if (!buffer) return; // main thread slow returning — skip, never allocate
     const f = new Float32Array(buffer);
-    this.fillSnapshot(f);
+    fillSnapshotInto(this.engine, this.playhead, f);
     f[SNAP_INTERRUPT_MASK] = this.engine.playheads[this.playhead].trackerState.drainInterrupts();
     this.port.postMessage({ t: MSG.SNAPSHOT, buffer }, [buffer]);
   }
 
-  /** Write every snapshot field except the interrupt latch into `f`. */
-  fillSnapshot(f) {
-    const eng = this.engine;
-    const ph = eng.playheads[this.playhead];
-    const ts = ph.trackerState;
-    f[SNAP_CUE_POS] = ts.cuePos;
-    f[SNAP_ROW_INDEX] = ts.rowIndex;
-    f[SNAP_TICK_IN_ROW] = ts.tickInRow;
-    f[SNAP_BPM] = ph.bpm;
-    f[SNAP_TICK_RATE] = ph.tickRate;
-    f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
-    f[SNAP_CHANNEL_COUNT] = eng.channelCount();
-    for (let vi = 0; vi < MAX_VOICES; vi++) {
-      const v = ts.voices[vi];
-      const o = SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE;
-      const active = v.active;
-      f[o + SNAP_V_ACTIVE] = active ? 1 : 0;
-      if (active) {
-        const effEnvVol = v.volEnvOn ? v.envVolMix : 1.0;
-        const faderGain = (255 - v.fader) / 255.0;
-        let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
-        f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
-        let pan;
-        if (v.hasPanEnv && v.panEnvOn) {
-          let envPanRaw = Math.trunc(v.envPan * 255.0);
-          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = v.channelPan + envPanRaw - 128;
-        } else {
-          pan = v.channelPan;
-        }
-        f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        // Per-tick sounding pitch (renderPitch: after slides/arp/vibrato/
-        // pitch-env), falling back to the row note before the first tick.
-        f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
-        f[o + SNAP_V_INST] = v.instrumentId & 0x3ff;
-        f[o + SNAP_V_SAMPLE_POS] = v.samplePos;
-        f[o + SNAP_V_SAMPLE_PTR] = v.activeSamplePtr;
-        f[o + SNAP_V_SAMPLE_LEN] = v.activeSampleLength;
-        f[o + SNAP_V_ENV_VOL_IDX] = v.envIndex;
-        f[o + SNAP_V_ENV_VOL_TIME] = v.envTimeSec;
-        f[o + SNAP_V_ENV_PAN_IDX] = v.envPanIndex;
-        f[o + SNAP_V_ENV_PAN_TIME] = v.envPanTimeSec;
-        f[o + SNAP_V_ENV_PITCH_IDX] = v.envPitchIndex;
-        f[o + SNAP_V_ENV_PITCH_TIME] = v.envPitchTimeSec;
-        f[o + SNAP_V_ENV_FILTER_IDX] = v.envFilterIndex;
-        f[o + SNAP_V_ENV_FILTER_TIME] = v.envFilterTimeSec;
-      } else {
-        for (let k = 1; k < SNAP_VOICE_STRIDE; k++) f[o + k] = 0;
-        f[o + SNAP_V_EFF_PAN] = 128;
-        f[o + SNAP_V_SAMPLE_POS] = -1;
-        f[o + SNAP_V_SAMPLE_PTR] = -1;
-        f[o + SNAP_V_ENV_VOL_IDX] = -1;
-        f[o + SNAP_V_ENV_PAN_IDX] = -1;
-        f[o + SNAP_V_ENV_PITCH_IDX] = -1;
-        f[o + SNAP_V_ENV_FILTER_IDX] = -1;
-      }
-    }
-  }
-
-  emitProfile(quantumMs) {
-    const audioMs = this.pfFrames / sampleRate * 1000;
-    this.port.postMessage({
-      t: MSG.PROFILE,
-      cpuFrac: audioMs > 0 ? this.pfProcBusy / audioMs : 0,
-      renderFrac: audioMs > 0 ? this.pfRenderBusy / audioMs : 0,
-      procMeanMs: this.pfProcCount ? this.pfProcBusy / this.pfProcCount : 0,
-      procMaxMs: this.pfProcMax,
-      renderMeanMs: this.pfRenderCount ? this.pfRenderBusy / this.pfRenderCount : 0,
-      renderMaxMs: this.pfRenderMax,
-      quantumMs,
-      xruns: this.pfXruns,
-      procCount: this.pfProcCount,
-      renderCount: this.pfRenderCount,
-      peakVoices: this.pfPeakVoices,
-      windowMs: audioMs,
-      sampleRate,
-      step: this.step,
-      sab: this.sabF32 !== null,
-      hiResClock: this.hiResClock,
-      clockResMs: this.clockResMs,
-    });
-    this.pfReset();
-  }
-
-  process(_inputs, outputs) {
-    const t0 = this.profiling ? this.clockNow() : 0;
-    const outL = outputs[0][0];
-    const outR = outputs[0].length > 1 ? outputs[0][1] : outputs[0][0];
-    const frames = outL.length;
+  // RENDER mode: keep the local ring one chunk ahead, then read it out resampled.
+  renderAndPlay(outL, outR, frames) {
     const ph = this.engine.playheads[this.playhead];
     const mask = RING_FRAMES - 1;
-
     if (ph.isPlaying || ph.jamActive || this.ringReadPos < this.ringWrite) {
-      // Keep the ring at least one chunk ahead of the read cursor (+1 frame
-      // headroom for the linear-interp neighbour).
       while (this.ringWrite < this.ringReadPos + frames * this.step + 2) {
         if (ph.isPlaying || ph.jamActive) {
           this.renderIntoRing();
         } else {
-          // Drained and idle — pad silence so the cursor can pass the tail.
           const w = this.ringWrite & mask;
           this.ringL[w] = 0;
           this.ringR[w] = 0;
@@ -316,11 +207,89 @@ class TaudProcessor extends AudioWorkletProcessor {
       this.framesSinceSnapshot = 0;
       this.assembleSnapshot();
     }
+  }
+
+  // CONSUME mode: read the worker's SAB ring resampled to the context rate.
+  consumeFromRing(outL, outR, frames) {
+    const { ctrl, L, R } = this.audioRing;
+    // A transport reset (play/seek/stop) bumps the epoch and publishes a flush
+    // mark — jump the read cursor there, dropping the stale buffered tail.
+    const epoch = Atomics.load(ctrl, AR_EPOCH) | 0;
+    if (epoch !== this.arEpoch) {
+      this.arEpoch = epoch;
+      this.arReadBase = Atomics.load(ctrl, AR_FLUSH_POS) | 0;
+      this.arReadFrac = 0;
+    }
+    const write = Atomics.load(ctrl, AR_WRITE) | 0;
+    const avail = (write - this.arReadBase) | 0;
+    const need = Math.ceil(frames * this.step) + 2;
+    if (avail < need) {
+      // Silence, hold the cursor. If the PRODUCER is active (playing/jam) this
+      // is a real dropout — the worker isn't refilling the ring in time; that is
+      // the Tier 2 glitch signal the audio-thread xrun counter can no longer see.
+      if (this.profiling && Atomics.load(ctrl, AR_STATE)) this.pfUnderruns++;
+      outL.fill(0);
+      if (outR !== outL) outR.fill(0);
+      Atomics.store(ctrl, AR_READ, this.arReadBase);
+      return;
+    }
+    let base = this.arReadBase, frac = this.arReadFrac;
+    const step = this.step;
+    for (let n = 0; n < frames; n++) {
+      const a = base & AR_MASK;
+      const b = (base + 1) & AR_MASK;
+      outL[n] = L[a] * (1 - frac) + L[b] * frac;
+      outR[n] = R[a] * (1 - frac) + R[b] * frac;
+      frac += step;
+      while (frac >= 1) { frac -= 1; base = (base + 1) | 0; }
+    }
+    this.arReadBase = base;
+    this.arReadFrac = frac;
+    Atomics.store(ctrl, AR_READ, base);
+  }
+
+  emitProfile(quantumMs) {
+    const audioMs = this.pfFrames / sampleRate * 1000;
+    this.port.postMessage({
+      t: MSG.PROFILE,
+      cpuFrac: audioMs > 0 ? this.pfProcBusy / audioMs : 0,
+      renderFrac: audioMs > 0 ? this.pfRenderBusy / audioMs : 0,
+      procMeanMs: this.pfProcCount ? this.pfProcBusy / this.pfProcCount : 0,
+      procMaxMs: this.pfProcMax,
+      renderMeanMs: this.pfRenderCount ? this.pfRenderBusy / this.pfRenderCount : 0,
+      renderMaxMs: this.pfRenderMax,
+      quantumMs,
+      xruns: this.pfXruns,
+      underruns: this.pfUnderruns,
+      procCount: this.pfProcCount,
+      renderCount: this.pfRenderCount,
+      peakVoices: this.pfPeakVoices,
+      windowMs: audioMs,
+      sampleRate,
+      step: this.step,
+      sab: this.sabF32 !== null || this.audioRing !== null,
+      workerRender: this.audioRing !== null,
+      hiResClock: this.hiResClock,
+      clockResMs: this.clockResMs,
+    });
+    this.pfReset();
+  }
+
+  process(_inputs, outputs) {
+    const t0 = this.profiling ? this.clockNow() : 0;
+    const outL = outputs[0][0];
+    const outR = outputs[0].length > 1 ? outputs[0][1] : outputs[0][0];
+    const frames = outL.length;
+
+    if (this.audioRing) {
+      this.consumeFromRing(outL, outR, frames);
+    } else {
+      this.renderAndPlay(outL, outR, frames);
+    }
 
     if (this.profiling) {
-      // Measure the whole callback (render + resample + snapshot) — that is the
-      // work the audio thread must finish within one quantum. The report post
-      // itself is left out (dt captured before emit).
+      // Measure the whole callback — the work the audio thread must finish
+      // within one quantum. The report post itself is excluded (dt before emit).
       const dt = this.clockNow() - t0;
       this.pfProcBusy += dt;
       if (dt > this.pfProcMax) this.pfProcMax = dt;
