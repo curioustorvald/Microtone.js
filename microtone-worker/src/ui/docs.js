@@ -59,7 +59,7 @@ const DOCS = [
   {
     id: "effects", title: "Note Effects",
     load: async () => {
-      const resp = await fetch("TAUD_NOTE_EFFECTS.md");
+      const resp = await fetch("assets/TAUD_NOTE_EFFECTS.md");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.text();
     },
