@@ -25,7 +25,7 @@ export async function getBundledSoundfont() {
   bundled = null;
   for (const candidate of BUNDLE_CANDIDATES) {
     try {
-      const res = await fetch(new URL(candidate, document.baseURI));
+      const res = await fetch(new URL("assets/"+candidate, document.baseURI));
       if (!res.ok) continue;
       let bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
