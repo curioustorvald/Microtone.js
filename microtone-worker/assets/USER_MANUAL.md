@@ -110,7 +110,7 @@ live VU/pan meters and the channel's current pitch while playing.
 Each cell is five columns:
 
 ```
-♯C-4 01 v3F p20 A0F00
+ C--4   01   v3F  p20 A0F00
 └note┘└inst┘└vol┘└pan┘└─fx─┘
 ```
 
