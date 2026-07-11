@@ -37,7 +37,7 @@ export const GLYPH = {
   keyoffW: 0.76,      // box width
   keyoffH: 0.28,      // box height
   cutAmp: 0.17,       // ^^^ amplitude (of cell height)
-  cutPeaks: 4,
+  cutPeaks: 3,
   cutSpanX: [0.10, 0.90],
   fadeAmp: 0.13,      // ~~~ amplitude
   fadePeriods: 3,
@@ -62,7 +62,7 @@ export const GLYPH = {
 
   // double sharp (𝄪)
   dsRadius: 0.24,     // of box width
-  dsDotSize: 0.36,    // serif dot size relative to radius
+  dsDotSize: 0.48,    // serif dot size relative to radius
 
   // Kite ticks
   tickW: 0.32,
