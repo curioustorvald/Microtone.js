@@ -132,6 +132,24 @@
         const logOk = !!logChk && iv.envLogTime === true;
         log(`env log-time toggle: present=${!!logChk} flag=${iv.envLogTime} (${logOk ? "ok" : "FAIL"})`);
 
+        // Pitch/Filter "Envelope present" claim toggle (item 36): the role tabs
+        // now carry the checkbox; ON claims the resolved slot, OFF releases it.
+        const baseSlot = store.doc.usedInstrumentSlots().find((s) => !store.doc.instruments[s].isMeta);
+        iv.selected = baseSlot;
+        iv.tab = "pitch";
+        iv.renderPanel();
+        const findPresent = () => [...iv.panel.querySelectorAll("label")]
+          .find((l) => /Envelope present/.test(l.textContent))?.querySelector("input");
+        const hasPresent = !!findPresent();
+        let onC = findPresent(); onC.checked = true; fire(onC, "change");
+        iv.renderPanel();
+        const claimed = findPresent().checked === true; // roleActive → checkbox reflects it
+        let offC = findPresent(); offC.checked = false; fire(offC, "change");
+        iv.renderPanel();
+        const released = findPresent().checked === false;
+        const roleToggleOk = hasPresent && claimed && released;
+        log(`pitch env present toggle: has=${hasPresent} claimed=${claimed} released=${released} (${roleToggleOk ? "ok" : "FAIL"})`);
+
         // Notation-aware entry: a 5-TET project (NOT a 12-TET superset) → a jam
         // key snaps to a 5-TET degree, and the note differs from plain 12-EDO.
         const p5 = presetForNotation(50);
@@ -160,7 +178,7 @@
         }
 
         const pass = labelsOk && swingOk && sepOk && panSwOk && ppcOk && useDefOk && cutOk && resOk &&
-          nnaOk && detOk && logOk && notOk && nameOk;
+          nnaOk && detOk && logOk && roleToggleOk && notOk && nameOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

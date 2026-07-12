@@ -7,7 +7,8 @@ import * as opfs from "../../storage/opfs.js";
 import { pickFile, download } from "../../storage/import-export.js";
 import { converterFor, CONVERT_ACCEPT } from "../../convert/convert.js";
 import { showModal } from "../widgets/modal.js";
-import { renderToWav } from "../../audio/offline-render.js";
+import { renderToWavAsync } from "../../audio/offline-render.js";
+import { showProgress } from "../popups/progress.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
@@ -151,8 +152,19 @@ export class FilesView {
     if (!result) return;
     const cap = Math.min(Math.max(parseInt(result.cap || "300", 10), 1), 3600);
     const songIndex = this.cb.songIndex?.() ?? 0;
+    const progress = showProgress(t("files.wavRendering"), { cancellable: true });
     const t0 = performance.now();
-    const wav = renderToWav(doc.toRenderable(songIndex), songIndex, cap);
+    let wav;
+    try {
+      wav = await renderToWavAsync(doc.toRenderable(songIndex), songIndex, cap,
+        { onProgress: (f) => progress.set(f), signal: progress.signal });
+    } catch (err) {
+      progress.fail(err.message ?? String(err));
+      console.error("WAV render failed:", err);
+      return;
+    }
+    if (wav.aborted) { progress.done(); return; } // user cancelled
+    progress.done();
     console.info(`WAV render: ${wav.seconds.toFixed(1)}s in ${(performance.now() - t0).toFixed(0)}ms (halted=${wav.halted})`);
     const base = (fileName ?? "untitled.taud").replace(/\.taud$/, "");
     download(wav.bytes, `${base}.wav`);

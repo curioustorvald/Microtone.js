@@ -276,6 +276,12 @@ def parse_midi(path: str):
     merged = []
     seq = 0
     tracks_found = 0
+    # Per-channel display name. Each MIDI track's FF 03 name votes for the
+    # channels it plays note-ons on, weighted by note count; a channel is named
+    # after whichever named track drives it most (usually 1:1 in GM Format-1
+    # files). The conductor track's name — no note-ons — votes for nothing and
+    # stays the song title. Falls back downstream to the preset name, then "Ch{n}".
+    chan_name_votes = {}
     while pos + 8 <= len(data) and tracks_found < ntrk:
         cid = data[pos:pos+4]
         sz  = struct.unpack_from('>I', data, pos+4)[0]
@@ -284,11 +290,23 @@ def parse_midi(path: str):
         if cid != b'MTrk':
             continue
         tracks_found += 1
+        track_name = None
+        on_counts = {}
         for tick, ev in _parse_track(data, body_start, min(pos, len(data))):
+            if ev[0] == 'title' and track_name is None:
+                track_name = ev[1]
+            elif ev[0] == 'on':
+                on_counts[ev[1]] = on_counts.get(ev[1], 0) + 1
             merged.append((tick, seq, ev))
             seq += 1
+        if track_name:
+            for ch, cnt in on_counts.items():
+                votes = chan_name_votes.setdefault(ch, {})
+                votes[track_name] = votes.get(track_name, 0) + cnt
     merged.sort(key=lambda e: (e[0], e[1]))
-    return division, merged
+    channel_names = {ch: max(votes.items(), key=lambda kv: kv[1])[0]
+                     for ch, votes in chan_name_votes.items()}
+    return division, merged, channel_names
 
 
 # ── Note / controller extraction ──────────────────────────────────────────────
@@ -347,7 +365,8 @@ def _curve_push(fts: list, vals: list, ft: int, val):
 
 class Song:
     __slots__ = ('notes', 'channels', 'tempo_ft', 'tempo_bpm', 'title', 'end_ft',
-                 'timesig_ft', 'timesig', 'loop_start_ft', 'loop_end_ft', 'eot_ft')
+                 'timesig_ft', 'timesig', 'loop_start_ft', 'loop_end_ft', 'eot_ft',
+                 'track_names')
 
 
 # CC numbers used as loop start / end markers by various sequencers (see the
@@ -551,6 +570,7 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
     song.title     = title
     song.end_ft    = max_ft
     song.eot_ft = eot_ft
+    song.track_names = {}    # channel → MIDI FF03 name; filled by load_midi_song
     song.loop_start_ft, song.loop_end_ft = _resolve_loop(
         loop_text_start, loop_text_end, loop_cc, eot_ft, max_ft)
     return song
@@ -2443,8 +2463,44 @@ def _cell(cells: dict, v: int, row: int) -> dict:
     return c
 
 
-def allocate_voices(notes: list, speed: int, max_voices: int) -> int:
-    """Greedy per-row interval scheduling onto as few columns as possible.
+def _note_end_row(n: 'Note', speed: int) -> int:
+    """The row at which note `n` frees its column: key-off row for melodic
+    notes, next row for a drum (its NNA ghost carries the ring), extended past
+    an exclusiveClass choke so the choked note stays foreground through it."""
+    srow = n.start_ft // speed
+    if n.drum:
+        end_row = srow + 1
+    else:
+        end_row = max(srow + 1, n.end_ft // speed)
+    if n.excl_cut_ft is not None:
+        crow = n.excl_cut_ft // speed
+        if crow <= srow:
+            crow = srow + 1
+        end_row = max(end_row, crow + 1)
+    return end_row
+
+
+def _peak_columns(notes: list, speed: int) -> int:
+    """Peak simultaneous columns a part needs = the maximum number of its notes
+    overlapping at any row (= the min columns greedy interval-partitioning would
+    use, uncapped). No mutation. Column i frees at `end_row` (exclusive), so a
+    note starting on another's end row does NOT overlap it (ends sort first)."""
+    events = []
+    for n in notes:
+        srow = n.start_ft // speed
+        events.append((srow, 1))
+        events.append((_note_end_row(n, speed), -1))
+    events.sort()                       # (row, +1) after (row, -1): frees first
+    cur = peak = 0
+    for _, delta in events:
+        cur += delta
+        peak = max(peak, cur)
+    return peak
+
+
+def _schedule_part(notes: list, speed: int, cap: int) -> tuple:
+    """Greedy per-row interval scheduling of ONE part's notes onto <= `cap`
+    columns.
 
     The engine's New Note Action does the heavy lifting (matching MIDI
     polyphony semantics): a fresh trigger on an occupied voice migrates the
@@ -2454,9 +2510,9 @@ def allocate_voices(notes: list, speed: int, max_voices: int) -> int:
     key-off row; drum voices (no key-off by default) free on the very next
     row. Stealing is therefore graceful: the victim is released early, not cut.
 
-    Mutates note.voice (and truncates stolen notes' end_ft). Returns the
-    number of voices used."""
-    cap = max(1, min(max_voices, MAX_VOICES))
+    Mutates note.voice to a LOCAL column index (and truncates stolen notes'
+    end_ft). Returns (columns_used, stolen)."""
+    cap = max(1, cap)
     v_end  = []     # voice → first row at which it is free again
     v_slot = []     # voice → last instrument slot (affinity only)
     v_note = []     # voice → currently scheduled note
@@ -2484,24 +2540,117 @@ def allocate_voices(notes: list, speed: int, max_voices: int) -> int:
                 if victim is not None and victim.end_ft > n.start_ft:
                     victim.end_ft = n.start_ft
                 stolen += 1
-        if n.drum:
-            end_row = srow + 1                       # ghost carries the ring
-        else:
-            end_row = max(srow + 1, n.end_ft // speed)   # free at key-off row
-        if n.excl_cut_ft is not None:
-            # exclusiveClass choke: hold the voice through the choke row so this note stays
-            # FOREGROUND until then (the fast-fade cell must land on it, not a ghost), and so
-            # the choking same-class note cannot reuse this column at the choke row.
-            crow = n.excl_cut_ft // speed
-            if crow <= srow:
-                crow = srow + 1
-            end_row = max(end_row, crow + 1)
+        end_row = _note_end_row(n, speed)
         n.voice = v
         v_end[v], v_slot[v], v_note[v] = end_row, n.slot, n
-    if stolen:
-        vprint(f"  info: polyphony exceeded {cap} voices; {stolen} note(s) "
-               f"released early (NNA ghost keeps the tail)")
-    return len(v_end)
+    return len(v_end), stolen
+
+
+def allocate_voices(notes: list, speed: int, max_voices: int) -> tuple:
+    """Assign each note a voice column, laid out in per-part pools so a column
+    stays with ONE MIDI part for the whole song — the way a human arranges a
+    tracker, rather than the old global-greedy packing that let a column drift
+    between instruments bar to bar.
+
+    Each part (MIDI channel) reserves a contiguous block of HOME columns sized to
+    its polyphony (water-filled to the most-polyphonic parts when the summed
+    demand exceeds `max_voices`). A note prefers a free home column of its part —
+    keeping the column part-aligned — but when its part momentarily needs more
+    than it reserved it BORROWS any idle column rather than cutting a note; only
+    when every column is busy (true simultaneous polyphony > cap) does it steal
+    (soonest-ending / sustain-pedal-held first, the graceful NNA early-release).
+    Because parts peak at different times, the global peak is usually far below
+    the SUMMED per-part peaks, so borrowing absorbs the overflow with no steals on
+    typical songs — matching the old global-greedy column count while keeping the
+    per-part layout. Only when there are literally more parts than columns
+    (`--max-voices` below the channel count) do we fall back to a shared pool.
+
+    Mutates note.voice. Returns (n_voices, voice_part, voice_slot) where
+    voice_part[v] / voice_slot[v] are the dominant MIDI channel / instrument
+    slot of column v (used for pattern naming)."""
+    cap = max(1, min(max_voices, MAX_VOICES))
+    # Group notes by part, stable first-appearance order so intro parts take the
+    # low columns (notes arrive pre-sorted by start_ft).
+    parts, order = {}, []
+    for n in notes:
+        if n.ch not in parts:
+            parts[n.ch] = []
+            order.append(n.ch)
+        parts[n.ch].append(n)
+    natural = {ch: _peak_columns(parts[ch], speed) for ch in order}
+    active = [ch for ch in order if natural[ch] > 0]
+
+    total_stolen = 0
+    if 0 < len(active) <= cap:
+        # Water-fill home-column counts: each active part keeps >=1, extras go to
+        # the parts with the largest unmet peak until the budget is spent.
+        alloc = {ch: 1 for ch in active}
+        remaining = cap - len(active)
+        while remaining > 0:
+            cands = [ch for ch in active if alloc[ch] < natural[ch]]
+            if not cands:
+                break
+            ch = max(cands, key=lambda c: (natural[c] - alloc[c], natural[c]))
+            alloc[ch] += 1
+            remaining -= 1
+        col_owner, home_cols = [], {}
+        for ch in active:
+            home_cols[ch] = list(range(len(col_owner), len(col_owner) + alloc[ch]))
+            col_owner.extend([ch] * alloc[ch])
+        total_cols = len(col_owner)
+        v_end  = [0] * total_cols       # column → first row it is free again
+        v_note = [None] * total_cols    # column → currently scheduled note
+        for n in notes:                 # global start-time order
+            hcols = home_cols.get(n.ch)
+            if not hcols:
+                continue
+            srow = n.start_ft // speed
+            v = next((c for c in hcols if v_end[c] <= srow), -1)
+            if v < 0:
+                # Home full: borrow an idle column before resorting to a steal.
+                # Prefer one this part most recently held (sticky — concentrates a
+                # part's borrowed footprint onto a few columns instead of rotating
+                # through everyone's, so columns stay mostly single-part); else the
+                # column freed longest ago.
+                free = [c for c in range(total_cols) if v_end[c] <= srow]
+                if free:
+                    own = [c for c in free if v_note[c] is not None
+                           and v_note[c].ch == n.ch]
+                    v = min(own or free, key=lambda c: (v_end[c], c))
+                else:
+                    pedal = [c for c in range(total_cols)
+                             if v_note[c] is not None
+                             and v_note[c].pedal_ft is not None
+                             and v_note[c].pedal_ft <= n.start_ft]
+                    cand = pedal if pedal else range(total_cols)
+                    v = min(cand, key=lambda c: v_end[c])
+                    victim = v_note[v]
+                    if victim is not None and victim.end_ft > n.start_ft:
+                        victim.end_ft = n.start_ft
+                    total_stolen += 1
+            n.voice = v
+            v_end[v], v_note[v] = _note_end_row(n, speed), n
+    else:
+        if active:
+            vprint(f"  info: {len(active)} parts exceed the {cap}-column budget — "
+                   f"sharing columns across parts (naming falls back per column)")
+        _, total_stolen = _schedule_part(notes, speed, cap)
+
+    if total_stolen:
+        vprint(f"  info: simultaneous polyphony exceeded {cap} voices; {total_stolen} "
+               f"note(s) released early (NNA ghost keeps the tail)")
+
+    n_voices = max((n.voice for n in notes), default=-1) + 1
+    part_tally = [dict() for _ in range(n_voices)]
+    slot_tally = [dict() for _ in range(n_voices)]
+    for n in notes:
+        part_tally[n.voice][n.ch]   = part_tally[n.voice].get(n.ch, 0) + 1
+        slot_tally[n.voice][n.slot] = slot_tally[n.voice].get(n.slot, 0) + 1
+    voice_part = [max(t.items(), key=lambda kv: kv[1])[0] if t else -1
+                  for t in part_tally]
+    voice_slot = [max(t.items(), key=lambda kv: kv[1])[0] if t else 0
+                  for t in slot_tally]
+    return n_voices, voice_part, voice_slot
 
 
 def emit_cells(song: Song, insts: dict, speed: int, rpb: int,
@@ -2509,7 +2658,7 @@ def emit_cells(song: Song, insts: dict, speed: int, rpb: int,
                max_voices: int) -> tuple:
     """Place triggers, key-offs, portamento bend segments, M channel-volume
     and T tempo effects into the (voice,row) cell grid.
-    Returns (cells, n_voices, total_rows, taud_bpm0)."""
+    Returns (cells, n_voices, total_rows, taud_bpm0, voice_part, voice_slot)."""
     notes = [n for n in song.notes if n.slot > 0]
 
     def midi_bpm_at(ft):
@@ -2531,7 +2680,7 @@ def emit_cells(song: Song, insts: dict, speed: int, rpb: int,
             return ((tb - 25) & 0xFF) << 8
         return 0xFF00 | ((tb - 280) & 0xFF)
 
-    n_voices = allocate_voices(notes, speed, max_voices)
+    n_voices, voice_part, voice_slot = allocate_voices(notes, speed, max_voices)
     if n_voices == 0:
         sys.exit("error: no playable notes")
     vprint(f"  voices: {n_voices} used (cap {max_voices}; NNA carries tails)")
@@ -2733,7 +2882,7 @@ def emit_cells(song: Song, insts: dict, speed: int, rpb: int,
         vprint(f"  tempo: {t_emitted} T effect(s)"
                + (f" ({t_evict} evicted a lesser effect)" if t_evict else ""))
 
-    return cells, n_voices, total_rows, taud_bpm(bpm0)
+    return cells, n_voices, total_rows, taud_bpm(bpm0), voice_part, voice_slot
 
 
 # ── Pattern / cue emission and final assembly ────────────────────────────────
@@ -2753,6 +2902,31 @@ def _bar_align_up(row: int, timesig_ft: list, timesig: list,
     sec_start = max(b for b in breaks if b <= row)
     br = bar_rows_of(sec_start)
     return sec_start + ((row - sec_start + br - 1) // br) * br
+
+
+def _bar_number_at(row: int, timesig_ft: list, timesig: list,
+                   shift_ft: int, speed: int, rpb: int) -> int:
+    """1-based musical bar number of grid row `row`. Bars count continuously
+    from 1 at song start; bar LENGTH follows the time signature of each section
+    (sections start at time-sig changes, as in plan_cues), so the count carries
+    over correctly across meter changes. Since cues are whole-bar aligned within
+    each section, a cue start always lands exactly on a bar line."""
+    def bar_rows_of(r):
+        ft = r * speed + shift_ft
+        i = bisect.bisect_right(timesig_ft, ft) - 1
+        num, dpow = timesig[i] if i >= 0 else (4, 2)
+        return max(1, round(num * 4.0 / (2 ** dpow) * rpb))
+    breaks = sorted({0} | {(ft - shift_ft) // speed for ft in timesig_ft
+                           if (ft - shift_ft) // speed > 0})
+    bars_before = 0
+    for i, sec_start in enumerate(breaks):
+        br = bar_rows_of(sec_start)
+        sec_end = breaks[i + 1] if i + 1 < len(breaks) else None
+        if sec_end is not None and row >= sec_end:
+            bars_before += (sec_end - sec_start + br - 1) // br
+            continue
+        return bars_before + (row - sec_start) // br + 1
+    return bars_before + 1
 
 
 def plan_cues(timesig_ft: list, timesig: list, total_rows: int,
@@ -2789,6 +2963,19 @@ def plan_cues(timesig_ft: list, timesig: list, total_rows: int,
             cue_lens.append(length)
             r += length
     return cue_starts, cue_lens, bar_rows_of(timesig_at(0))
+
+
+def _pattern_is_empty(pat_bin: bytes, idx: int) -> bool:
+    """True when unique pattern `idx` carries no note / instrument / effect on any
+    row — the shared silent filler emitted for a part that rests through a cue.
+    (Only the vol/pan bytes are 0xC0 in a filler cell; note, inst and eff-op are
+    all zero. A key-off/cut cell has a nonzero note value, so it is NOT empty.)"""
+    base = idx * PATTERN_BYTES
+    for r in range(PATTERN_ROWS):
+        o = base + r * 8
+        if pat_bin[o] or pat_bin[o + 1] or pat_bin[o + 2] or pat_bin[o + 5]:
+            return False
+    return True
 
 
 def build_pattern_bin(cells: dict, n_voices: int,
@@ -2896,14 +3083,17 @@ def _inject_loop(pat_bin: bytes, cue_starts: list, cue_lens: list, n_voices: int
 
 
 def build_song_section(song: Song, speed: int, rpb: int, src_path: str,
-                       args) -> dict:
+                       args, slot_name: dict = None) -> dict:
     """Per-song pattern/cue build shared by the full .taud and the .tpif paths.
 
     Trims leading silence, emits the cell grid, plans cues, builds & dedupes the
     pattern bin, and packs the cue sheet — everything that depends on this song's
     notes but NOT on the (possibly shared) sample+instrument image. Returns a dict
     carrying the compressed pattern bin / cue sheet plus the song-table and sMet
-    fields the container assemblers need."""
+    fields the container assemblers need.
+
+    `slot_name` (slot → preset name) feeds the pattern-name (pNam) generator; when
+    omitted, patterns fall back to preset-less names."""
     # Leading-silence trim: shift the grid so the first trigger is row 0.
     first_row = min(n.start_ft // speed for n in song.notes if n.slot > 0)
     shift_ft = first_row * speed
@@ -2916,7 +3106,7 @@ def build_song_section(song: Song, speed: int, rpb: int, src_path: str,
                 n.excl_cut_ft -= shift_ft
 
     eps_units = args.bend_epsilon * 4096.0 / 1200.0
-    cells, n_voices, total_rows, bpm0 = emit_cells(
+    cells, n_voices, total_rows, bpm0, voice_part, voice_slot = emit_cells(
         song, None, speed, rpb, eps_units, args.drum_keyoff, shift_ft,
         args.max_voices)
 
@@ -3011,6 +3201,37 @@ def build_song_section(song: Song, speed: int, rpb: int, src_path: str,
            f"{n_cues} cue(s), {n_voices} voice(s), {total_rows} rows"
            + (f"; {n_breaks} time-signature break(s)" if n_breaks > 0 else ""))
 
+    # ── Pattern names (pNam): "{track name} {bar}-{dup}" ──
+    # allocate_voices lays columns out in per-part pools, so a column belongs to
+    # one part and reads as a human-tracker label: the part's MIDI track name
+    # (→ preset name → "Ch{n}"), the 1-based musical bar its cue starts on, and
+    # the column's index among all columns sharing that display name (so a
+    # polyphonic part's stacked columns stay distinct). Deduplicated patterns
+    # take the name of their FIRST occurrence; fully-silent filler stays blank.
+    def _voice_disp_name(v):
+        ch = voice_part[v] if v < len(voice_part) else -1
+        nm = song.track_names.get(ch) if (song.track_names and ch >= 0) else None
+        if not nm and slot_name:
+            nm = slot_name.get(voice_slot[v] if v < len(voice_slot) else 0)
+        if not nm:
+            nm = f"Ch{ch + 1}" if ch >= 0 else f"Voice{v + 1}"
+        return nm.strip()
+    disp_names = [_voice_disp_name(v) for v in range(n_voices)]
+    voice_dup, dup_seen = [], {}
+    for nm in disp_names:
+        voice_dup.append(dup_seen.get(nm, 0))
+        dup_seen[nm] = dup_seen.get(nm, 0) + 1
+    empty_uidx = {u for u in range(n_unique) if _pattern_is_empty(pat_bin, u)}
+    pattern_names = [''] * n_unique
+    for ci in range(n_cues):
+        bar = _bar_number_at(cue_starts[ci], song.timesig_ft, song.timesig,
+                             shift_ft, speed, rpb)
+        for v in range(n_voices):
+            uidx = remap[ci * n_voices + v]
+            if pattern_names[uidx] or uidx in empty_uidx:
+                continue
+            pattern_names[uidx] = f"{disp_names[v]} {bar}-{voice_dup[v]}"
+
     # 64-channel Taud mode kicks in only when the song ACTUALLY allocates 33+ voices
     # (which requires the user to raise --max-voices above 32). Cue width follows: 128
     # bytes / 64 channels vs the default 64 bytes / 32 channels (terranmon.txt §xHDR).
@@ -3060,6 +3281,7 @@ def build_song_section(song: Song, speed: int, rpb: int, src_path: str,
         'title':     title,
         'beat_pri':  max(1, min(255, beat_pri)),
         'beat_sec':  max(1, min(255, init_bar_rows)),
+        'pattern_names': pattern_names,
     }
 
 
@@ -3171,7 +3393,8 @@ def finish_container(kind: int, num_songs: int, comp_size: int,
 def assemble_taud(sf: SF2, song: Song, layer_insts: list, meta_records: list,
                   slot_name: dict, pool: list, args) -> bytes:
     """Full single-song .taud file: sample+inst image + song table + patterns."""
-    section = build_song_section(song, args.speed, args.rpb, args.input, args)
+    section = build_song_section(song, args.speed, args.rpb, args.input, args,
+                                 slot_name)
     compressed = build_sampleinst_blob(sf, pool, layer_insts, meta_records,
                                        section['bpm0'], args)
     comp_size  = len(compressed)
@@ -3191,6 +3414,7 @@ def assemble_taud(sf: SF2, song: Song, layer_insts: list, meta_records: list,
             project_name=section['title'],
             instrument_names=inst_names,
             sample_names=smp_names,
+            pattern_names=section.get('pattern_names'),
             song_metadata=[make_song_meta(section, 0)],
             ixmp_patches=ixmp or None,
             is_64channel=is_64ch,
@@ -3249,7 +3473,13 @@ def assemble_tpif(sections: list, args) -> bytes:
     proj_data = b''
     if not args.no_project_data:
         metas = [make_song_meta(sec, i) for i, sec in enumerate(sections)]
-        proj_data = build_project_data(song_metadata=metas, is_64channel=is_64ch)
+        # pNam is a single project-wide table; it maps cleanly only for a
+        # one-song file (directory mode builds one .tpif per MIDI), so emit
+        # pattern names only then. Multi-song .tpif files omit them.
+        pat_names = sections[0].get('pattern_names') if len(sections) == 1 else None
+        proj_data = build_project_data(song_metadata=metas,
+                                       pattern_names=pat_names,
+                                       is_64channel=is_64ch)
     elif is_64ch:
         proj_data = build_project_data(is_64channel=True)
 
@@ -3368,7 +3598,7 @@ def load_midi_song(path: str, sf: SF2, args):
     exclusive-class percussion choking. Returns (song, rpb, speed), or None when
     the MIDI carries no playable notes."""
     vprint(f"parsing MIDI '{path}'…")
-    division, merged = parse_midi(path)
+    division, merged, channel_names = parse_midi(path)
 
     # Resolve the Taud grid (Tickspeed + RPB) before mapping ticks to fine-ticks.
     # A pinned --rpb/--speed fixes that axis; the rest is auto-fit.
@@ -3377,6 +3607,7 @@ def load_midi_song(path: str, sf: SF2, args):
     vprint(f"  timing: rpb {rpb}, speed {speed} ({timing_info})")
 
     song = extract_song(division, merged, rpb, speed)
+    song.track_names = channel_names
     vprint(f"  {len(song.notes)} note(s), {len(song.tempo_ft)} tempo event(s), "
            f"{len(song.timesig_ft)} time-signature event(s)")
     if not song.notes:
@@ -3577,7 +3808,7 @@ def run_directory(args) -> None:
         if not tag_notes(song, note_slot):
             vprint(f"  warning: '{stem}' lost all notes to preset resolution — skipped")
             continue
-        section = build_song_section(song, speed, rpb, path, args)
+        section = build_song_section(song, speed, rpb, path, args, slot_name)
         tpif = assemble_tpif([section], args)
         out_path = os.path.join(out_dir, stem + '.tpif')
         with open(out_path, 'wb') as f:

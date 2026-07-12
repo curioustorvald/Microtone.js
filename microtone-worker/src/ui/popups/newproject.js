@@ -147,7 +147,7 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
           const isBar = row % bs === 0;
           const isBeat = row % bp === 0;
           const cls = isBar ? "bar" : isBeat ? "beat" : "";
-          html += `<div class="np-prev-row ${cls}">${String(row).padStart(2, "0")}</div>`;
+          html += `<div class="np-prev-row ${cls}">${row.toString(16).toUpperCase().padStart(2, "0")}</div>`;
         }
         html += "</div>";
       }

@@ -465,7 +465,16 @@ const timeline = new TimelineView(store, $("timeline"));
 const cuesView = new CuesView(store, $("cuesCanvas"));
 const patternView = new PatternView(store, $("patternHost"), jam);
 window.__microtoneEnsureAudio = ensureAudio; // pattern preview needs lazy audio
-const samplesView = new SamplesView(store, $("samplesHost"));
+const samplesView = new SamplesView(store, $("samplesHost"), {
+  // New instrument from a pooled sample (item 40): adopt it + jump to it.
+  onNewInstrument: (slot) => {
+    jam.currentInst = slot;
+    instrumentsView.selected = slot;
+    store.emit("instsel");
+    showView("instruments");
+    updateStatus();
+  },
+});
 const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
 const projectView = new ProjectView(store, $("projectHost"), {
   renameSong: (i) => renameSongInteractive(i),
@@ -521,11 +530,23 @@ async function playFrom(cue, row) {
   store.audio.play(0);
 }
 
-$("playSong").addEventListener("click", () => playFrom(0, 0));
-$("playCue").addEventListener("click", () => {
+/** Where a "play from cue"/"play from cursor" starts, honouring the active
+ *  view. The Cues view drives its OWN row cursor (item 39) — the Timeline
+ *  cursor doesn't move while you navigate cues, so playing from the Timeline
+ *  cursor there ignored the selected cue. Every other view maps the Timeline
+ *  cursor's absolute row to its cue/row. Clamped to the materialised cue list. */
+function playCursor() {
+  if (store.view === "cues") {
+    const nCues = store.song?.cues.length ?? 0;
+    const cue = Math.min(Math.max(cuesView.cursor.cue, 0), Math.max(nCues - 1, 0));
+    return { cue, row: 0 };
+  }
   const loc = timeline.locate(store.cursor.row);
-  playFrom(loc ? loc.entry.cue : 0, 0);
-});
+  return { cue: loc ? loc.entry.cue : 0, row: loc ? loc.rowInCue : 0 };
+}
+
+$("playSong").addEventListener("click", () => playFrom(0, 0));
+$("playCue").addEventListener("click", () => playFrom(playCursor().cue, 0));
 $("stopBtn").addEventListener("click", () => store.audio?.stop(0));
 $("follow").addEventListener("change", (e) => { store.follow = e.target.checked; });
 
@@ -758,10 +779,7 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       if (store.audio?.isPlaying()) store.audio.stop(0);
       else if (e.shiftKey) playFrom(0, 0);
-      else {
-        const loc = timeline.locate(store.cursor.row);
-        playFrom(loc ? loc.entry.cue : 0, loc ? loc.rowInCue : 0);
-      }
+      else { const p = playCursor(); playFrom(p.cue, p.row); }
       return;
     }
     case "Insert": setRecord(!store.record); return;
@@ -861,13 +879,13 @@ async function openGoto() {
     title: t("goto.title"),
     fields: [
       { name: "cue", label: t("goto.cue"), value: "0" },
-      { name: "row", label: t("goto.row"), type: "number", value: 0, min: 0, max: 63 },
+      { name: "row", label: t("goto.row"), value: "0" },
     ],
     okLabel: t("common.go"),
   });
   if (!result) return;
   const cue = parseInt(result.cue || "0", 16);
-  const row = parseInt(result.row || "0", 10);
+  const row = parseInt(result.row || "0", 16);
   const map = store.song.songMap();
   const entry = map.entries[Math.min(cue, map.entries.length - 1)];
   if (!entry) return;
@@ -937,14 +955,15 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, instrumentsView, projectView, jam, instLookup, loadBytes };
+window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, jam, instLookup, loadBytes, playCursor };
 
 // ── frame loop ──
 function frame() {
   const audio = store.audio;
   if (audio && store.doc) {
-    $("posCue").textContent = audio.getCuePosition();
-    $("posRow").textContent = audio.getTrackerRow();
+    // Cue/row shown in hex (matches the grid gutters + note-fx B/C hex args).
+    $("posCue").textContent = "$" + audio.getCuePosition().toString(16).toUpperCase();
+    $("posRow").textContent = "$" + audio.getTrackerRow().toString(16).toUpperCase().padStart(2, "0");
     $("posBpm").textContent = audio.getBPM() || "–";
     $("posSpd").textContent = audio.getTickRate() || "–";
   }

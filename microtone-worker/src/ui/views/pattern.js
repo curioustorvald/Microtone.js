@@ -695,7 +695,7 @@ class PatternPane {
       }
       ctx.fillStyle = row % beats.sec === 0 ? C.accent
         : row % beats.pri === 0 ? C.fg : C.dim;
-      ctx.fillText(String(row).padStart(2, "0"), 8, y + ROW_H / 2);
+      ctx.fillText(row.toString(16).toUpperCase().padStart(2, "0"), 8, y + ROW_H / 2);
 
       const cell = pattern[row];
       paintNoteCell(ctx, cell.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,

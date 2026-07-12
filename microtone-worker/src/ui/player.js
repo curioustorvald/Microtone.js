@@ -157,8 +157,8 @@ function drawMeters() {
     ctx.fillText(String(vi + 1), x + barW / 2, H - 4);
   }
 
-  $("cue").textContent = audio.getCuePosition();
-  $("rowIdx").textContent = audio.getTrackerRow();
+  $("cue").textContent = "$" + audio.getCuePosition().toString(16).toUpperCase();
+  $("rowIdx").textContent = "$" + audio.getTrackerRow().toString(16).toUpperCase().padStart(2, "0");
   $("bpm").textContent = audio.getBPM() || "—";
   $("speed").textContent = audio.getTickRate() || "—";
   requestAnimationFrame(drawMeters);

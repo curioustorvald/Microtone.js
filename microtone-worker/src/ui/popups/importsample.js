@@ -5,10 +5,10 @@
 
 import { pickFile } from "../../storage/import-export.js";
 import { decodeAudioToU8 } from "../audiodecode.js";
-import { planSampleImport } from "../../doc/bankmerge.js";
+import { planSampleImport, planExistingSampleAsInstrument } from "../../doc/bankmerge.js";
 import { importBankOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
-import { escapeNonAscii } from "../names.js";
+import { escapeNonAscii, unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
 const ACCEPT = ".wav,.mp3,.ogg,.oga,.flac,.aif,.aiff,.m4a,audio/*";
@@ -50,6 +50,30 @@ export async function importSampleAsInstrument(store) {
     alert(plan.error);
     return null;
   }
+  store.undo.apply(importBankOp(plan));
+  return { firstSlot: plan.insts[0].destSlot, count: 1 };
+}
+
+/**
+ * Create a fresh instrument that plays an EXISTING pooled sample (item 40) —
+ * `sample` is a doc.sampleList() census entry. Confirm the name, then land it
+ * through the same importBankOp pipeline (no new pool bytes; inherits the
+ * sample's loop/rate). Resolves with {firstSlot, count} on success, else null.
+ */
+export async function newInstrumentFromSample(store, sample) {
+  if (!store.doc || !sample) return null;
+  const base = unescapeName(sample.name) || `sample ${sample.index}`;
+  const result = await showModal({
+    title: t("smp.newInstTitle", { name: base }),
+    body: t("smp.newInstBody", { len: sample.len, rate: sample.rate }),
+    fields: [{ name: "name", label: t("inst.sampleImportName"), value: base }],
+    okLabel: t("common.create"),
+  });
+  if (!result) return null;
+
+  const nameBytes = new TextEncoder().encode(escapeNonAscii(result.name || base));
+  const plan = planExistingSampleAsInstrument(store.doc, sample, nameBytes);
+  if (plan.error) { alert(plan.error); return null; }
   store.undo.apply(importBankOp(plan));
   return { firstSlot: plan.insts[0].destSlot, count: 1 };
 }

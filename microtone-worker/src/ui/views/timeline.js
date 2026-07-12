@@ -680,7 +680,7 @@ export class TimelineView {
       ctx.fillStyle = rowInCue === 0 ? C.accent
         : rowInCue % beats.pri === 0 ? C.fg : C.dim;
       ctx.fillText(
-        `${entry.cue.toString(16).toUpperCase().padStart(4, "0")}:${rowInCue.toString().padStart(2, "0")}`,
+        `${entry.cue.toString(16).toUpperCase().padStart(4, "0")}:${rowInCue.toString(16).toUpperCase().padStart(2, "0")}`,
         6, y + ROW_H / 2);
 
       // cells

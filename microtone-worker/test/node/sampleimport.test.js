@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { planSampleImport, buildFreshInstRecord } from "../../src/doc/bankmerge.js";
+import { planSampleImport, buildFreshInstRecord, planExistingSampleAsInstrument } from "../../src/doc/bankmerge.js";
 import { importBankOp } from "../../src/doc/ops.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
@@ -96,6 +96,51 @@ test("planSampleImport: content dedupe reuses the pool span and keeps its name",
   const entry = doc.sampleList().find((e) => e.ptr === s0.ptr && e.len === s0.len);
   assert.ok(entry.users.includes(slot));
   assert.equal(doc.sampleName(entry.index), s0.name, "existing sample keeps its name");
+});
+
+test("planExistingSampleAsInstrument: new inst inherits an existing pool sample (item 40)", () => {
+  const doc = loadWhen();
+  const before = Buffer.from(doc.toBytes());
+  const undo = new UndoStack(doc);
+  const usedBefore = new Set(doc.usedInstrumentSlots());
+  const s0 = doc.sampleList()[0];
+  const censusBefore = doc.sampleList().length;
+  const poolBefore = Buffer.from(doc.sampleBin);
+
+  const name = escapeNonAscii("copy of " + unescapeName(s0.name));
+  const plan = planExistingSampleAsInstrument(doc, s0, enc.encode(name));
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.samples.length, 0, "no new pool bytes");
+  assert.equal(plan.writeSnam, false, "census unchanged → SNam untouched");
+  const slot = plan.insts[0].destSlot;
+  assert.ok(slot >= 1 && slot <= 255 && !usedBefore.has(slot), "lowest free note-addressable slot");
+
+  undo.apply(importBankOp(plan));
+
+  const inst = doc.instruments[slot];
+  assert.equal(inst.samplePtr, s0.ptr, "points at the existing span");
+  assert.equal(inst.sampleLength, s0.len);
+  assert.equal(inst.samplingRate, s0.rate, "inherits the rate");
+  assert.equal(inst.sampleLoopStart, s0.loopStart & 0xffff, "inherits loop start");
+  assert.equal(inst.sampleLoopEnd, s0.loopEnd & 0xffff, "inherits loop end");
+  assert.equal(inst.loopMode, s0.loopMode & 0x17, "inherits loop mode");
+  assert.ok(Buffer.from(doc.sampleBin).equals(poolBefore), "pool bytes unchanged");
+
+  const census = doc.sampleList();
+  assert.equal(census.length, censusBefore, "no new census entry (same pooled sample)");
+  const entry = census.find((e) => e.ptr === s0.ptr && e.len === s0.len);
+  assert.ok(entry.users.includes(slot), "new inst joins the sample's users");
+  assert.equal(doc.instrumentName(slot), name, "INam spliced");
+  assert.equal(doc.sampleName(entry.index), s0.name, "sample keeps its own name");
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+});
+
+test("planExistingSampleAsInstrument: rejects empty sample / no image", () => {
+  const doc = loadWhen();
+  assert.ok(planExistingSampleAsInstrument(doc, { ptr: 0, len: 0, rate: 1 }).error);
+  assert.ok(planExistingSampleAsInstrument(doc, null).error);
 });
 
 test("planSampleImport: rejects empty / oversized PCM", () => {

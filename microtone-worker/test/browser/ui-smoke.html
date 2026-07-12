@@ -186,6 +186,74 @@
           log(`inst sample editor (3 markers, single slot, cancel restores): ${openOk && wrote && scoped && instRolled ? "ok" : "FAIL"}`);
         }
 
+        // ── item 40: new instrument from an existing pooled sample ──
+        {
+          const doc = store.doc;
+          const { newInstrumentFromSample } = await win.eval('import("/src/ui/popups/importsample.js")');
+          const s = doc.sampleList()[0];
+          const usedBefore = new Set(doc.usedInstrumentSlots());
+          const censusBefore = doc.sampleList().length;
+          const depth0 = store.undo.undoStack.length;
+
+          const p = newInstrumentFromSample(store, s);
+          const dlg = [...win.document.querySelectorAll("dialog.modal")].pop();
+          dlg.querySelector('input[name="name"]').value = "SmokeFromSample";
+          [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // Create
+          const res = await p;
+          const slot = res?.firstSlot;
+          const inst = slot != null ? doc.instruments[slot] : null;
+          const madeOk = !!res && !usedBefore.has(slot) && slot >= 1 && slot <= 255 &&
+            inst.samplePtr === s.ptr && inst.sampleLength === s.len &&
+            doc.sampleList().length === censusBefore &&      // pooled sample reused, no new census entry
+            doc.instrumentName(slot) === "SmokeFromSample" &&
+            store.undo.undoStack.length === depth0 + 1;
+          store.undo.undo();
+          const undoneOk = !doc.usedInstrumentSlots().includes(slot) &&
+            store.undo.undoStack.length === depth0;
+          // the Samples-view toolbar carries the button too
+          const samplesView = win.__microtone.samplesView;
+          samplesView.show();
+          const hasBtn = !!samplesView.newInstBtn &&
+            [...samplesView.toolbar.querySelectorAll("button")].some((b) => /New instrument/.test(b.textContent));
+          samplesView.hide();
+          log(`new instrument from pooled sample (item 40): made=${madeOk} undo=${undoneOk} btn=${hasBtn} (${madeOk && undoneOk && hasBtn ? "ok" : "FAIL"})`);
+        }
+
+        // ── item 39: "play from cue" honours the Cues-view cursor ──
+        {
+          const { cuesView, playCursor } = win.__microtone;
+          const prevView = store.view;
+          const nCues = store.song.cues.length;
+          store.view = "cues";
+          const target = Math.min(2, Math.max(0, nCues - 1));
+          cuesView.cursor.cue = target;
+          const fromCues = playCursor().cue === target;
+          // clamp a phantom row past the materialised cue list to the last cue
+          cuesView.cursor.cue = 9999;
+          const clamped = playCursor().cue === nCues - 1;
+          // Timeline view still maps the Timeline cursor (row 0 → cue of that row)
+          store.view = "timeline";
+          const tlLoc = timeline.locate(store.cursor.row);
+          const fromTl = playCursor().cue === (tlLoc ? tlLoc.entry.cue : 0);
+          store.view = prevView;
+          log(`play-from-cue uses Cues cursor (item 39): cues=${fromCues} clamp=${clamped} timeline=${fromTl} (${fromCues && clamped && fromTl ? "ok" : "FAIL"})`);
+        }
+
+        // ── item 38: WAV export progress popup (bar + pct + cancel signal) ──
+        {
+          const { showProgress } = await win.eval('import("/src/ui/popups/progress.js")');
+          const prog = showProgress("Test", { cancellable: true });
+          const dlg = win.document.querySelector("dialog.progress-modal");
+          prog.set(0.5);
+          const bar = dlg?.querySelector("progress.progress-bar");
+          const midOk = !!dlg && !!bar && Math.abs(bar.value - 0.5) < 1e-6 &&
+            dlg.querySelector(".progress-pct").textContent === "50%" &&
+            prog.signal instanceof win.AbortSignal;
+          prog.done();
+          const gone = !win.document.querySelector("dialog.progress-modal");
+          log(`WAV progress popup (bar/pct/signal/close, item 38): ${midOk && gone ? "ok" : "FAIL"}`);
+        }
+
         // ── pattern ops: duplicate / lengthen / shorten ──
         {
           const song = store.song;

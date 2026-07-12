@@ -118,6 +118,7 @@ export default {
   "files.wavBody": "동일한 엔진으로 48 kHz에서 렌더링합니다. HALT가 없는 곡은 상한에서 멈춥니다.",
   "files.wavCap": "최대 길이 (초)",
   "files.render": "렌더",
+  "files.wavRendering": "WAV 렌더링 중…",
 
   // ── song rename ──
   "song.renameTitle": "곡 {n} 이름 바꾸기",
@@ -149,6 +150,10 @@ export default {
   "smp.name": "이름",
   "smp.namePlaceholder": "(이름 없음)",
   "smp.edit": "편집…",
+  "smp.newInst": "새 악기",
+  "smp.newInstTitle": "{name}에서 새 악기 만들기",
+  "smp.newInstBody": "이 풀 샘플({len} 바이트 @ {rate} Hz@C4)을 재생하는 새 악기를 만듭니다. 새 샘플 데이터는 추가되지 않습니다.",
+  "smp.newInstBtnTitle": "선택한 샘플을 재생하는 새 악기를 만듭니다",
 
   // ── instruments view ──
   "inst.add": "추가…",
@@ -274,7 +279,7 @@ export default {
   // ── go to ──
   "goto.title": "이동",
   "goto.cue": "큐 (16진수)",
-  "goto.row": "행",
+  "goto.row": "행 (16진수)",
 
   // ── import MIDI ──
   "midi.title": "{name} 가져오기",

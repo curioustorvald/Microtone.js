@@ -340,12 +340,17 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
 /** Fresh single-sample instrument record: TaudInst constructor defaults
  *  (vol-env terminator at 0x3F — a zeroed record's value-0 terminator would
  *  hit the Schism cut rule and ramp the voice out instantly) with the sample
- *  binding filled in. */
-export function buildFreshInstRecord({ samplePtr, sampleLength, samplingRate }) {
+ *  binding filled in. Loop fields default to no-loop; pass them to inherit an
+ *  existing pooled sample's loop (item 40). */
+export function buildFreshInstRecord({ samplePtr, sampleLength, samplingRate,
+                                       sampleLoopStart = 0, sampleLoopEnd = 0, loopMode = 0 }) {
   const inst = new TaudInst(0);
   inst.samplePtr = samplePtr;
   inst.sampleLength = sampleLength;
   inst.samplingRate = samplingRate;
+  inst.sampleLoopStart = sampleLoopStart;
+  inst.sampleLoopEnd = sampleLoopEnd;
+  inst.loopMode = loopMode;
   const rec = new Uint8Array(256);
   for (let i = 0; i < 256; i++) rec[i] = inst.getByteNormal(i);
   return rec;
@@ -427,6 +432,58 @@ export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, 
     slotMap: new Map([[-1, slot]]),
     newSampleBytes: samples.length > 0 ? pcm.length : 0,
     dedupedSamples: samples.length > 0 ? 0 : 1,
+  };
+}
+
+/**
+ * Plan a brand-new instrument that plays an EXISTING pooled sample (item 40):
+ * no new sample bytes, the instrument takes the lowest free note-addressable
+ * slot and inherits the sample's loop/rate. The census is unchanged (same set
+ * of pooled samples), so SNam is left verbatim. Returns {error} on failure,
+ * else a planImport-shaped plan (apply with importBankOp for full undo).
+ */
+export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new Uint8Array(0)) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image to import into." };
+  }
+  if (!sample || sample.len <= 0) return { error: "The selected sample is empty." };
+
+  const taken = new Set(destDoc.usedInstrumentSlots());
+  let slot = 1;
+  while (slot <= 255 && taken.has(slot)) slot++;
+  if (slot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+
+  const record = buildFreshInstRecord({
+    samplePtr: sample.ptr,
+    sampleLength: sample.len,
+    samplingRate: Math.max(1, Math.min(0xffff, Math.round(sample.rate) || 0)),
+    sampleLoopStart: sample.loopStart & 0xffff,
+    sampleLoopEnd: sample.loopEnd & 0xffff,
+    loopMode: sample.loopMode & 0x17,
+  });
+
+  // INam: splice the instrument name in by slot. SNam untouched — the pooled
+  // sample set (and hence the census order) does not change.
+  const destInamPayload = sectionPayload(destDoc, "INam");
+  let inamPayload = null;
+  if (nameBytes.length > 0 || destInamPayload !== null) {
+    const parts = splitNameTable(destInamPayload);
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = nameBytes;
+    inamPayload = joinNameTable(parts);
+  }
+
+  return {
+    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob: null, ixmpCount: 0 }],
+    samples: [],
+    inamPayload,
+    snamNames: new Map(),
+    writeSnam: false,
+    slotMap: new Map([[-1, slot]]),
+    newSampleBytes: 0,
+    dedupedSamples: 1,
   };
 }
 

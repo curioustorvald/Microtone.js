@@ -786,6 +786,25 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   white-space: pre-wrap;
 }
 
+/* ── determinate progress popup (WAV export) ── */
+.progress-modal { min-width: 360px; max-width: 480px; }
+.progress-bar {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 0.8rem;
+  margin: 0.8rem 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.progress-bar::-webkit-progress-bar { background: var(--panel-2); }
+.progress-bar::-webkit-progress-value { background: var(--accent); }
+.progress-bar::-moz-progress-bar { background: var(--accent); }
+.progress-pct { font-size: 0.85rem; text-align: right; }
+
 /* ── sample editor modal ── */
 .sample-editor { max-width: 780px; }
 .smp-canvas { display: block; margin: 0.4rem 0; cursor: ew-resize; border: 1px solid var(--border); border-radius: 4px; }

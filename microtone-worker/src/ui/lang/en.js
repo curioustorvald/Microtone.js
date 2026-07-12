@@ -118,6 +118,7 @@ export default {
   "files.wavBody": "Renders through the same engine at 48 kHz. Songs that never HALT stop at the cap.",
   "files.wavCap": "Max seconds",
   "files.render": "Render",
+  "files.wavRendering": "Rendering WAV…",
 
   // ── song rename ──
   "song.renameTitle": "Rename song {n}",
@@ -149,6 +150,10 @@ export default {
   "smp.name": "Name",
   "smp.namePlaceholder": "(unnamed)",
   "smp.edit": "Edit…",
+  "smp.newInst": "New instrument",
+  "smp.newInstTitle": "New instrument from {name}",
+  "smp.newInstBody": "Creates a fresh instrument that plays this pooled sample ({len} bytes @ {rate} Hz@C4). No new sample data is added.",
+  "smp.newInstBtnTitle": "Create a new instrument that plays the selected sample",
 
   // ── instruments view ──
   "inst.add": "Add…",
@@ -274,7 +279,7 @@ export default {
   // ── go to ──
   "goto.title": "Go to",
   "goto.cue": "Cue (hex)",
-  "goto.row": "Row",
+  "goto.row": "Row (hex)",
 
   // ── import MIDI ──
   "midi.title": "Import {name}",

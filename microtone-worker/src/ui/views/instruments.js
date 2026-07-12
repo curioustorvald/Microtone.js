@@ -15,6 +15,11 @@ import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { t } from "../i18n.js";
 
+// Fraction of the envelope graph's plottable width the time axis uses; the
+// rightmost 1−ENV_TIME_FRAC stays empty so the last node can always be grabbed
+// and dragged further right to extend the envelope (item 37).
+const ENV_TIME_FRAC = 0.8;
+
 const ENV_TABS = [
   { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env",
     max: 63, liveIdx: "getVoiceEnvVolIndex", liveTime: "getVoiceEnvVolTime" },
@@ -544,6 +549,19 @@ export class InstrumentsView {
     this.store.undo.apply(setInstFieldOp(this.selected, key, nw & 0xffff));
   }
 
+  /** Pitch/Filter "envelope present" toggle. Turning it ON CLAIMS the resolved
+   *  slot for the role — present bit (13) + role m-bit (bit 7: set = filter,
+   *  clear = pitch) — the same claim a first node-drag performs; OFF just clears
+   *  the present bit. renderPanel re-runs after (inst edit) and re-resolves the
+   *  tab's slot. */
+  setRolePresent(tabDef, on) {
+    const cur = this.store.doc.instruments[this.selected][tabDef.loopKey];
+    const nw = on
+      ? ((cur | 0x2000) & ~0x80) | (tabDef.role === "filter" ? 0x80 : 0)
+      : (cur & ~0x2000);
+    this.store.undo.apply(setInstFieldOp(this.selected, tabDef.loopKey, nw & 0xffff));
+  }
+
   setEnvWordField(key, shift, mask, val) {
     const cur = this.store.doc.instruments[this.selected][key];
     const v = Math.min(Math.max(val | 0, 0), mask);
@@ -662,15 +680,16 @@ export class InstrumentsView {
     // role claim, so those tabs show only the log toggle.
     const logChk = chk("Log timescale", this.envLogTime,
       (on) => { this.envLogTime = on; this.drawEnvGraph(); });
-    if (tabDef.role) {
-      wrap.appendChild(row(logChk));
-    } else {
-      wrap.appendChild(row(
-        chk("Envelope present", envPresent(inst[tabDef.loopKey]),
-          (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
-        logChk,
-      ));
-    }
+    // "Envelope present" — for Vol/Pan it toggles the LOOP-word P bit directly;
+    // for Pitch/Filter (role) tabs it claims/releases the resolved slot's role
+    // (item 36), so the checkbox tracks roleActive.
+    wrap.appendChild(row(
+      tabDef.role
+        ? chk("Envelope present", tabDef.roleActive, (on) => this.setRolePresent(tabDef, on))
+        : chk("Envelope present", envPresent(inst[tabDef.loopKey]),
+            (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
+      logChk,
+    ));
     return wrap;
   }
 
@@ -716,7 +735,7 @@ export class InstrumentsView {
     ctx.fillRect(0, 0, w, h);
 
     const { times, total } = this.envGeometry();
-    const Xt = (t) => 10 + this.envTimeFrac(t, total) * (w - 20);
+    const Xt = (t) => 10 + this.envTimeFrac(t, total) * (w - 20) * ENV_TIME_FRAC;
     const X = (i) => Xt(times[i]);
     const Y = (v) => h - 14 - (v / tabDef.max) * (h - 28);
 
@@ -808,7 +827,7 @@ export class InstrumentsView {
     const active = this.envActiveCount(this.envCanvas.env);
     let best = -1, bestD = 12;
     for (let i = 0; i < active; i++) {
-      const nx = 10 + this.envTimeFrac(times[i], total) * (w - 20);
+      const nx = 10 + this.envTimeFrac(times[i], total) * (w - 20) * ENV_TIME_FRAC;
       const d = Math.abs(nx - x);
       if (d < bestD) { bestD = d; best = i; }
     }
@@ -848,7 +867,9 @@ export class InstrumentsView {
     if (idx > 0) {
       const { w, times, total } = this.envGeometry();
       const x = e.clientX - rect.left;
-      const frac = Math.min(Math.max((x - 10) / (w - 20), 0), 1);
+      // Divide by the reserved plot width so dragging into the rightmost
+      // headroom (frac > 1, up to 1/ENV_TIME_FRAC) extends the envelope.
+      const frac = Math.min(Math.max((x - 10) / ((w - 20) * ENV_TIME_FRAC), 0), 1 / ENV_TIME_FRAC);
       const wantTime = this.envFracTime(frac, total);
       const seg = Math.max(wantTime - times[idx - 1], 0);
       change.prevOffset = minifloatFromDouble(seg);

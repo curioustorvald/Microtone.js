@@ -72,6 +72,58 @@ export function renderSong(eng, seconds) {
   };
 }
 
+/**
+ * Same as renderSong but batched + async: yields to the event loop every
+ * `yieldMs` of wall time so a progress UI can paint (the render is otherwise a
+ * multi-second main-thread block). `onProgress(frac 0..1)` is called at each
+ * yield; `signal` (AbortSignal) stops early. Bit-identical output to renderSong
+ * for the same input (chunk granularity is decoupled from timing). */
+export async function renderSongAsync(eng, seconds, { onProgress = null, signal = null, yieldMs = 60 } = {}) {
+  const maxFrames = seconds * SAMPLING_RATE;
+  const nChunks = Math.ceil(maxFrames / TRACKER_CHUNK);
+  const u8out = new Uint8Array(nChunks * TRACKER_CHUNK * 2);
+  const f32out = new Float32Array(nChunks * TRACKER_CHUNK * 2);
+  const chunk = new Uint8Array(TRACKER_CHUNK * 2);
+  const ts = eng.playheads[0].trackerState;
+
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+
+  let frames = 0;
+  let chunkIdx = 0;
+  let halted = false;
+  let aborted = false;
+  let lastYield = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  while (frames < maxFrames) {
+    if (signal?.aborted) { aborted = true; break; }
+    if (!eng.isPlaying(0)) { halted = true; break; }
+    if (eng.renderChunk(0, chunk) === null) { halted = true; break; }
+    u8out.set(chunk, chunkIdx * TRACKER_CHUNK * 2);
+    for (let n = 0; n < TRACKER_CHUNK; n++) {
+      f32out[(chunkIdx * TRACKER_CHUNK + n) * 2] = ts.mixLeft[n];
+      f32out[(chunkIdx * TRACKER_CHUNK + n) * 2 + 1] = ts.mixRight[n];
+    }
+    frames += TRACKER_CHUNK;
+    chunkIdx++;
+
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - lastYield >= yieldMs) {
+      lastYield = now;
+      onProgress?.(Math.min(frames / maxFrames, 1));
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  onProgress?.(1);
+
+  return {
+    u8: u8out.subarray(0, chunkIdx * TRACKER_CHUNK * 2),
+    f32: f32out.subarray(0, chunkIdx * TRACKER_CHUNK * 2),
+    frames,
+    halted,
+    aborted,
+  };
+}
+
 /** Linear-resample interleaved stereo Float32 from srcRate to dstRate. */
 function resampleStereoF32(f32, srcRate, dstRate) {
   if (srcRate === dstRate) return f32;
@@ -90,15 +142,9 @@ function resampleStereoF32(f32, srcRate, dstRate) {
   return out;
 }
 
-/** Offline-render a Document's song to a 16-bit stereo WAV, resampled to
- *  `outRate` (default 48 kHz), taken from the pre-dither float mix bus (no
- *  dithering). Returns {bytes, seconds, halted}. */
-export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
-  const eng = new TaudEngine();
-  loadIntoEngine(eng, docLike, songIndex);
-  const r = renderSong(eng, maxSeconds);
-
-  const pcm = resampleStereoF32(r.f32, SAMPLING_RATE, outRate);
+/** Encode a rendered f32 mix bus (32 kHz) as a 16-bit stereo WAV at `outRate`. */
+function encodeWav(f32, outRate) {
+  const pcm = resampleStereoF32(f32, SAMPLING_RATE, outRate);
   const numSamples = pcm.length; // interleaved stereo samples
   const dataBytes = numSamples * 2;
   const buf = new ArrayBuffer(44 + dataBytes);
@@ -121,5 +167,27 @@ export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
     const v = Math.max(-1, Math.min(1, pcm[i]));
     dv.setInt16(44 + i * 2, Math.round(v * 32767), true);
   }
-  return { bytes: new Uint8Array(buf), seconds: r.frames / SAMPLING_RATE, halted: r.halted };
+  return new Uint8Array(buf);
+}
+
+/** Offline-render a Document's song to a 16-bit stereo WAV, resampled to
+ *  `outRate` (default 48 kHz), taken from the pre-dither float mix bus (no
+ *  dithering). Returns {bytes, seconds, halted}. */
+export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, docLike, songIndex);
+  const r = renderSong(eng, maxSeconds);
+  return { bytes: encodeWav(r.f32, outRate), seconds: r.frames / SAMPLING_RATE, halted: r.halted };
+}
+
+/** Async twin of renderToWav — yields to the event loop so a progress UI can
+ *  paint (`onProgress(frac)`) and `signal` can cancel. Returns the same shape,
+ *  plus `aborted`; `bytes` is null when aborted. */
+export async function renderToWavAsync(docLike, songIndex, maxSeconds,
+                                       { outRate = 48000, onProgress = null, signal = null } = {}) {
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, docLike, songIndex);
+  const r = await renderSongAsync(eng, maxSeconds, { onProgress, signal });
+  if (r.aborted) return { bytes: null, seconds: r.frames / SAMPLING_RATE, halted: r.halted, aborted: true };
+  return { bytes: encodeWav(r.f32, outRate), seconds: r.frames / SAMPLING_RATE, halted: r.halted, aborted: false };
 }

@@ -9,9 +9,10 @@ import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
 export class SamplesView {
-  constructor(store, host) {
+  constructor(store, host, callbacks = {}) {
     this.store = store;
     this.host = host;
+    this.cb = callbacks;
     this.selected = 0;
     this.list = [];
     this.root = document.createElement("div");
@@ -34,7 +35,18 @@ export class SamplesView {
       await openSampleDspEditor(this.store, s);
       this.refresh();
     });
-    this.toolbar.appendChild(this.editBtn);
+    // Create a fresh instrument that plays the selected pooled sample (item 40).
+    this.newInstBtn = document.createElement("button");
+    this.newInstBtn.textContent = t("smp.newInst");
+    this.newInstBtn.title = t("smp.newInstBtnTitle");
+    this.newInstBtn.addEventListener("click", async () => {
+      const s = this.list?.[this.selected];
+      if (!s) return;
+      const { newInstrumentFromSample } = await import("../popups/importsample.js");
+      const res = await newInstrumentFromSample(this.store, s);
+      if (res) this.cb.onNewInstrument?.(res.firstSlot);
+    });
+    this.toolbar.append(this.editBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);
