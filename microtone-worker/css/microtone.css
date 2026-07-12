@@ -119,7 +119,7 @@
   --cv-font: "Roboto Mono", ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; word-break: keep-all; }
 
 /* display rules on classes must not defeat the hidden attribute */
 [hidden] { display: none !important; }

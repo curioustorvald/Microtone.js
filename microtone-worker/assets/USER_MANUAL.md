@@ -5,7 +5,7 @@ runs entirely in your browser. There is no server component: your files never
 leave your machine, projects are stored in the browser's private storage, and
 even MIDI/module conversion happens locally. The audio engine is a faithful
 port of the TSVM Taud engine — a ScreamTracker 3-lineage tracker extended with
-16-bit effect arguments and a 4096-tone-equal-temperament pitch grid, rendering
+16-bit effect arguments and a 4096 tone-equal temperament pitch grid, rendering
 32 kHz stereo 8-bit audio (the dithered 8-bit character is intentional).
 
 > Press **?** in the app (or the **?** button in the top bar) at any time for a

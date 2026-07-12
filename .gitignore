@@ -5,5 +5,6 @@ microtone-worker/test/reference/
 .DS_Store
 CLAUDE.md
 microtone-worker/vendor/converters/__pycache__
+*.sf2
 *.taud.sf2
 microtone-worker/favicon/
