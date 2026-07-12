@@ -161,11 +161,11 @@ export default {
   "inst.sampleImportBody": "{secs}초를 {len}바이트 @ {rate} Hz(8비트 모노)로 디코딩했습니다. 샘플은 풀에 들어가고 새 악기가 이를 재생합니다.",
   "inst.sampleImportName": "이름",
   "inst.namePlaceholder": "(이름 없음)",
-  "inst.nameTitle": "이 악기 이름 바꾸기 (INam)",
+  "inst.nameTitle": "이 악기 이름 바꾸기",
 
   // ── pattern view ──
   "pat.namePlaceholder": "이름…",
-  "pat.nameTitle": "이 패턴 이름 바꾸기 (pNam)",
+  "pat.nameTitle": "이 패턴 이름 바꾸기",
   "pat.preview": "▶ 미리 듣기",
   "pat.previewStop": "■ 정지",
   "pat.duplicate": "복제",

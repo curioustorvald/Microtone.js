@@ -161,11 +161,11 @@ export default {
   "inst.sampleImportBody": "{secs} s decoded to {len} bytes @ {rate} Hz (8-bit mono). The sample goes into the pool; a fresh instrument plays it.",
   "inst.sampleImportName": "Name",
   "inst.namePlaceholder": "(unnamed)",
-  "inst.nameTitle": "Rename this instrument (INam)",
+  "inst.nameTitle": "Rename this instrument",
 
   // ── pattern view ──
   "pat.namePlaceholder": "name…",
-  "pat.nameTitle": "Rename this pattern (pNam)",
+  "pat.nameTitle": "Rename this pattern",
   "pat.preview": "▶ Preview",
   "pat.previewStop": "■ Stop",
   "pat.duplicate": "Duplicate",

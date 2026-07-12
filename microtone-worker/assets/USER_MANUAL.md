@@ -103,7 +103,7 @@ From top to bottom:
 
 The Timeline unrolls the entire song: every channel side by side, every cue
 stacked vertically. The left gutter shows `cue:row`; channel headers carry
-live VU/pan meters and the channel's current pitch while playing.
+live VU/pan meters, the channel's current pitch, and the name of the pattern while playing.
 
 ### Reading a cell
 
@@ -242,14 +242,14 @@ that cue.
 
 ## Patterns (F3)
 
-A focused editor for one pattern, with the same cell editing as the Timeline.
+A focused editor for a small set of patterns, with the same cell editing as the Timeline.
 The header shows which cues (and channels) use the pattern — remember that
 editing a shared pattern changes every place it plays.
 
 - **▶ Preview** plays just this pattern in a loop-free scratch cue.
 - **Duplicate** copies the pattern into a fresh slot.
 - **Transpose…** shifts every note, notation-aware: the fine unit is semitones / steps / note units depending on the preset, the coarse unit octaves (or periods for non-octave tunings). Percussion instruments and sentinels are skipped.
-- **Lengthen ×2 / Shorten ÷2** stretch or squeeze the rows (Impulse Tracker's Alt-F/Alt-G maps).
+- **Lengthen… / Shorten…** stretch or squeeze the rows by given amount (Impulse Tracker's Alt-F/Alt-G maps).
 - **Volume…** rescales set volumes (`new = old × multiply + add`).
 - **Pan…** widens/narrows around centre and shifts (`new = 20 + (old − 20) × widen + shift`); a negative widen mirrors left/right.
 - **Instrument…** replaces instrument numbers (leave *From* blank to replace all).
