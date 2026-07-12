@@ -3,11 +3,12 @@
 // LEN/HALT, encoded in the sign bits of ch 0-15 / 16-31). Edits are eager-
 // synced to the worklet (DocSync). Feature reference: taut.js VIEW_CUES.
 
-import { CUE_EMPTY } from "../../format/taud-const.js";
+import { CUE_EMPTY, MAX_VOICES, NUM_CUES, NUM_CUES_64 } from "../../format/taud-const.js";
 import { cueInstructionWords } from "../../format/taud-parse.js";
 import { cueInfo } from "../../doc/document.js";
 import { INST_NOP, INST_GOBACK, INST_SKIP, INST_JUMP, INST_PATLEN, INST_HALTAT, INST_HALT } from "../../engine/state.js";
-import { setCueWordOp, setCueOp } from "../../doc/ops.js";
+import { setCuesOp } from "../../doc/ops.js";
+import { makeCueBlock, cueBlockIndex, mergeCueWord } from "../../doc/clipboard.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
@@ -56,9 +57,11 @@ export class CuesView {
     this.scrollCue = 0;
     this.scrollCh = 0;
     this.cursor = { cue: 0, col: 0, nib: 0 }; // col: 0/1 = cmd words, 2+ = channel-2
+    this.sel = null;   // block selection {aCue, aCh, cue, ch} (channel space)
+    this._drag = null; // active pointer-drag anchor {aCue, aCh}
     this.needsRedraw = true;
 
-    store.on("doc", () => { this.cursor = { cue: 0, col: 0, nib: 0 }; this.scrollCue = 0; this.invalidate(); });
+    store.on("doc", () => { this.cursor = { cue: 0, col: 0, nib: 0 }; this.sel = null; this.scrollCue = 0; this.invalidate(); });
     store.on("edit", () => this.invalidate());
 
     canvas.addEventListener("wheel", (e) => {
@@ -66,11 +69,13 @@ export class CuesView {
       // Shift+wheel reports its delta in deltaX on most platforms.
       const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
       if (e.shiftKey) this.scrollCh = Math.max(0, this.scrollCh + Math.sign(d) * 2);
-      else this.scrollCue = Math.max(0, this.scrollCue + Math.sign(d) * 3);
+      else this.scrollCue = clampInt(this.scrollCue + Math.sign(d) * 3, 0, this.maxScrollCue());
       this.invalidate();
     }, { passive: false });
 
-    canvas.addEventListener("pointerdown", (e) => this.onPointer(e));
+    canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
     canvas.addEventListener("dblclick", () => this.openCmdEditor());
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
   }
@@ -91,33 +96,208 @@ export class CuesView {
   visibleRows() { return Math.floor((this.canvas.height / this.dpr - HEADER_H) / ROW_H); }
   chanX(i) { return GUTTER_W + 2 * CMD_W + i * COL_W; }
   numCues() { return this.store.song?.cues.length ?? 0; }
+  /** Scrollable/editable row count = the WHOLE cue address space (8192 / 4096),
+   *  Excel-style: every row down to the hard limit is navigable and editable,
+   *  but a cue is only materialised into the document when you write to it, so
+   *  scrolling never bloats the save. Editing far down fills the gap in between
+   *  (the accepted "cue 0 and 8191 ⇒ serialise 0..8191" caveat). */
+  editRows() {
+    return this.store.doc?.is64Channel ? NUM_CUES_64 : NUM_CUES;
+  }
+  /** Top scroll position that still shows the last row (no scrolling into void). */
+  maxScrollCue() { return Math.max(0, this.editRows() - this.visibleRows()); }
+  /** Word for cue/ch, or CUE_EMPTY for an unmaterialised row past the cue list. */
+  wordAt(cue, ch) {
+    const words = this.store.song?.cues[cue];
+    return words ? words[ch] : CUE_EMPTY;
+  }
 
-  onPointer(e) {
+  /** Canvas-relative x → {col} (0/1 = Cmd words, 2+ = channel-2), or -1 off-grid. */
+  hitCol(x) {
+    if (x < GUTTER_W) return -1;
+    if (x < GUTTER_W + CMD_W) return 0;
+    if (x < GUTTER_W + 2 * CMD_W) return 1;
+    return 2 + this.scrollCh + Math.floor((x - GUTTER_W - 2 * CMD_W) / COL_W);
+  }
+
+  onPointerDown(e) {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     if (y < HEADER_H) return;
     const cue = this.scrollCue + Math.floor((y - HEADER_H) / ROW_H);
-    if (cue >= this.numCues()) return;
-    let col;
-    if (x < GUTTER_W + CMD_W) col = 0;
-    else if (x < GUTTER_W + 2 * CMD_W) col = 1;
-    else col = 2 + this.scrollCh + Math.floor((x - GUTTER_W - 2 * CMD_W) / COL_W);
+    if (cue >= this.editRows()) return;
+    const col = this.hitCol(x);
+    if (col < 0) return;
+    if (e.shiftKey && col >= 2) {
+      // Shift+click extends a channel block from the current cursor cell.
+      const c = this.cursor;
+      const aCh = c.col >= 2 ? c.col - 2 : 0;
+      if (!this.sel) this.sel = { aCue: c.cue, aCh, cue, ch: col - 2 };
+      else { this.sel.cue = cue; this.sel.ch = col - 2; }
+    } else {
+      this.sel = null;
+      if (col >= 2) {
+        this._drag = { aCue: cue, aCh: col - 2 };
+        this.canvas.setPointerCapture?.(e.pointerId);
+      }
+    }
     this.cursor = { cue, col, nib: 0 };
     this.invalidate();
+  }
+
+  onPointerMove(e) {
+    if (!this._drag) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const cue = clampInt(this.scrollCue + Math.floor((y - HEADER_H) / ROW_H), 0, this.editRows() - 1);
+    const col = this.hitCol(x);
+    if (col < 2) return;
+    const chans = this.store.doc.channelCount;
+    const ch = clampInt(col - 2, 0, chans - 1);
+    if (cue !== this._drag.aCue || ch !== this._drag.aCh) {
+      this.sel = { aCue: this._drag.aCue, aCh: this._drag.aCh, cue, ch };
+    } else {
+      this.sel = null; // dragged back to the origin cell — no block
+    }
+    this.cursor = { cue, col: ch + 2, nib: 0 };
+    this.invalidate();
+  }
+
+  onPointerUp(e) {
+    if (this._drag) {
+      this.canvas.releasePointerCapture?.(e.pointerId);
+      this._drag = null;
+    }
   }
 
   moveCursor(dRow, dCol) {
     const chans = this.store.doc.channelCount;
     const c = this.cursor;
-    c.cue = Math.min(Math.max(c.cue + dRow, 0), this.numCues() - 1);
-    c.col = Math.min(Math.max(c.col + dCol, 0), chans + 1);
+    this.sel = null; // plain navigation drops any block selection
+    c.cue = clampInt(c.cue + dRow, 0, this.editRows() - 1);
+    c.col = clampInt(c.col + dCol, 0, chans + 1);
     if (dCol !== 0) c.nib = 0;
-    // keep visible
+    this.keepCursorVisible();
+    this.invalidate();
+  }
+
+  keepCursorVisible() {
     const vis = this.visibleRows();
+    const c = this.cursor;
     if (c.cue < this.scrollCue) this.scrollCue = c.cue;
     else if (c.cue >= this.scrollCue + vis) this.scrollCue = c.cue - vis + 1;
+  }
+
+  // ── block selection + cue clipboard ──
+  hasSelection() { return this.sel !== null; }
+  clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
+
+  /** Normalised inclusive bounds {r0,r1,c0,c1} (cue rows × channels), or null. */
+  selBounds() {
+    const s = this.sel;
+    if (!s) return null;
+    return {
+      r0: Math.min(s.aCue, s.cue), r1: Math.max(s.aCue, s.cue),
+      c0: Math.min(s.aCh, s.ch), c1: Math.max(s.aCh, s.ch),
+    };
+  }
+
+  _ensureSel() {
+    const c = this.cursor;
+    if (!this.sel && c.col >= 2) {
+      this.sel = { aCue: c.cue, aCh: c.col - 2, cue: c.cue, ch: c.col - 2 };
+    }
+  }
+
+  /** Shift+arrows: grow the channel block, moving the cursor with it. Selection
+   *  is channel-only, so it seeds nothing when the cursor sits on a Cmd column. */
+  extendSelection(dCue, dCol) {
+    this._ensureSel();
+    if (!this.sel) return;
+    const c = this.cursor;
+    const chans = this.store.doc.channelCount;
+    c.cue = clampInt(c.cue + dCue, 0, this.editRows() - 1);
+    c.col = clampInt(c.col + dCol, 2, chans + 1);
+    this.sel.cue = c.cue; this.sel.ch = c.col - 2;
+    this.keepCursorVisible();
     this.invalidate();
+  }
+
+  copySelection() {
+    const b = this.selBounds();
+    if (!b) return false;
+    const rows = b.r1 - b.r0 + 1, chans = b.c1 - b.c0 + 1;
+    const block = makeCueBlock(rows, chans);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < chans; c++) {
+        // carry the pattern index only (strip the command sign bit)
+        block.words[cueBlockIndex(block, r, c)] = this.wordAt(b.r0 + r, b.c0 + c) & 0x7fff;
+      }
+    }
+    this.store.cueClipboard = block;
+    return true;
+  }
+
+  cutSelection() {
+    if (!this.copySelection()) return false;
+    this.clearRegion(this.selBounds());
+    return true;
+  }
+
+  deleteSelection() {
+    const b = this.selBounds();
+    if (!b) return false;
+    this.clearRegion(b);
+    return true;
+  }
+
+  /** Blank the pattern index of every cell in bounds, keeping command bits.
+   *  Rows past the real cue list (unmaterialised) are skipped so a delete
+   *  never materialises an empty cue. */
+  clearRegion(b) {
+    const chans = this.store.doc.channelCount;
+    const nCues = this.numCues();
+    const writes = [];
+    for (let cue = b.r0; cue <= Math.min(b.r1, nCues - 1); cue++) {
+      for (let ch = b.c0; ch <= Math.min(b.c1, chans - 1); ch++) {
+        writes.push({ cue, ch, value: (this.wordAt(cue, ch) & 0x8000) | 0x7fff });
+      }
+    }
+    if (writes.length) {
+      this.store.undo.apply(setCuesOp(this.store.songIndex, writes));
+      this.invalidate();
+    }
+  }
+
+  paste() {
+    const block = this.store.cueClipboard;
+    if (!block) return false;
+    const c = this.cursor;
+    const chans = this.store.doc.channelCount;
+    const limit = this.store.doc.is64Channel ? NUM_CUES_64 : NUM_CUES;
+    const baseCh = Math.max(0, c.col - 2);
+    const writes = [];
+    for (let r = 0; r < block.rows; r++) {
+      const cue = c.cue + r;
+      if (cue >= limit) break;
+      for (let ch = 0; ch < block.chans; ch++) {
+        const dch = baseCh + ch;
+        if (dch >= chans) break; // clip past the last channel
+        const src = block.words[cueBlockIndex(block, r, ch)];
+        writes.push({ cue, ch: dch, value: mergeCueWord(this.wordAt(cue, dch), src) });
+      }
+    }
+    if (!writes.length) return false;
+    this.store.undo.apply(setCuesOp(this.store.songIndex, writes));
+    this.sel = {
+      aCue: c.cue, aCh: baseCh,
+      cue: Math.min(c.cue + block.rows - 1, limit - 1),
+      ch: Math.min(baseCh + block.chans - 1, chans - 1),
+    };
+    this.invalidate();
+    return true;
   }
 
   /** Cue-view key handling. Returns true when consumed. */
@@ -125,33 +305,37 @@ export class CuesView {
     const store = this.store;
     const c = this.cursor;
     switch (e.code) {
-      case "ArrowUp": this.moveCursor(-1, 0); return true;
-      case "ArrowDown": this.moveCursor(1, 0); return true;
-      case "ArrowLeft": this.moveCursor(0, -1); return true;
-      case "ArrowRight": this.moveCursor(0, 1); return true;
-      case "PageUp": this.moveCursor(-16, 0); return true;
-      case "PageDown": this.moveCursor(16, 0); return true;
+      case "ArrowUp": e.shiftKey ? this.extendSelection(-1, 0) : this.moveCursor(-1, 0); return true;
+      case "ArrowDown": e.shiftKey ? this.extendSelection(1, 0) : this.moveCursor(1, 0); return true;
+      case "ArrowLeft": e.shiftKey ? this.extendSelection(0, -1) : this.moveCursor(0, -1); return true;
+      case "ArrowRight": e.shiftKey ? this.extendSelection(0, 1) : this.moveCursor(0, 1); return true;
+      case "PageUp": e.shiftKey ? this.extendSelection(-16, 0) : this.moveCursor(-16, 0); return true;
+      case "PageDown": e.shiftKey ? this.extendSelection(16, 0) : this.moveCursor(16, 0); return true;
       case "Enter": this.openCmdEditor(); return true;
     }
     if (!store.record || c.col < 2) return false;
     const ch = c.col - 2;
-    const words = store.song.cues[c.cue];
     if (e.code === "Delete" || e.code === "Period") {
-      store.undo.apply(setCueWordOp(store.songIndex, c.cue, ch,
-        (words[ch] & 0x8000) | 0x7fff));
+      if (c.cue < this.numCues()) { // nothing to delete on the phantom row
+        store.undo.apply(setCuesOp(store.songIndex,
+          [{ cue: c.cue, ch, value: (this.wordAt(c.cue, ch) & 0x8000) | 0x7fff }]));
+      }
       this.moveCursor(1, 0);
       return true;
     }
     const d = parseInt(e.key, 16);
     if (Number.isNaN(d) || e.key.length !== 1) return false;
     // 4-nibble pattern entry (0000..7FFE; the top nibble masks to 15 bits).
-    // An empty slot starts from 0.
-    const sign = words[ch] & 0x8000;
-    let pat = words[ch] & 0x7fff;
+    // An empty slot starts from 0. setCuesOp materialises the cue if it is the
+    // blank row past the end (edit beyond HALT / a new song's cue 0).
+    const cur = this.wordAt(c.cue, ch);
+    const sign = cur & 0x8000;
+    let pat = cur & 0x7fff;
     if (pat === CUE_EMPTY) pat = 0;
     const shift = (3 - c.nib) * 4;
     pat = (pat & ~(0xf << shift)) | (d << shift);
-    store.undo.apply(setCueWordOp(store.songIndex, c.cue, ch, sign | (pat & 0x7fff)));
+    store.undo.apply(setCuesOp(store.songIndex,
+      [{ cue: c.cue, ch, value: sign | (pat & 0x7fff) }]));
     if (c.nib === 3) { c.nib = 0; this.moveCursor(1, 0); }
     else { c.nib++; this.invalidate(); }
     return true;
@@ -163,7 +347,8 @@ export class CuesView {
     const c = this.cursor;
     if (c.col > 1) return;
     const word = c.col; // 0 or 1
-    const info = cueInfo(store.song.cues[c.cue]);
+    const existing = store.song.cues[c.cue]; // undefined on the phantom row
+    const info = cueInfo(existing ?? new Uint16Array(MAX_VOICES).fill(CUE_EMPTY));
     const current = word === 0 ? info.inst0 : info.inst1;
     const result = await showModal({
       title: t("cue.cmdTitle", {
@@ -185,7 +370,8 @@ export class CuesView {
     if (!result) return;
     const newWord = encodeInstWord(result.kind, parseInt(result.arg || "0", 10));
     // Repack: sign bits of ch 0-15 = word0, ch 16-31 = word1.
-    const words = Uint16Array.from(store.song.cues[c.cue]);
+    const words = existing ? Uint16Array.from(existing)
+      : new Uint16Array(MAX_VOICES).fill(CUE_EMPTY);
     const [w0, w1] = cueInstructionWords(words);
     const w = word === 0 ? newWord : w0;
     const w2 = word === 1 ? newWord : w1;
@@ -193,7 +379,12 @@ export class CuesView {
       words[ch] = (words[ch] & 0x7fff) | (((w >> ch) & 1) << 15);
       words[16 + ch] = (words[16 + ch] & 0x7fff) | (((w2 >> ch) & 1) << 15);
     }
-    store.undo.apply(setCueOp(store.songIndex, c.cue, words));
+    // Write through the growable cue op so a command on the phantom row
+    // materialises the cue (edit past HALT).
+    const chans = store.doc.channelCount;
+    const writes = [];
+    for (let ch = 0; ch < chans; ch++) writes.push({ cue: c.cue, ch, value: words[ch] });
+    store.undo.apply(setCuesOp(store.songIndex, writes));
     this.invalidate();
   }
 
@@ -231,13 +422,15 @@ export class CuesView {
     }
 
     const playCue = store.audio?.isPlaying() ? store.audio.getCuePosition() : -1;
+    const editRows = this.editRows();
+    const sb = this.selBounds();
     const vis = this.visibleRows() + 1;
     for (let r = 0; r < vis; r++) {
       const cueIdx = this.scrollCue + r;
-      if (cueIdx >= song.cues.length) break;
+      if (cueIdx >= editRows) break;
       const y = HEADER_H + r * ROW_H;
-      const words = song.cues[cueIdx];
-      const info = cueInfo(words);
+      const words = song.cues[cueIdx]; // undefined on the phantom (append) row
+      const info = words ? cueInfo(words) : cueInfo(new Uint16Array(MAX_VOICES).fill(CUE_EMPTY));
 
       if (cueIdx === playCue) {
         ctx.fillStyle = C.playhead;
@@ -245,6 +438,16 @@ export class CuesView {
       } else if (cueIdx % 4 === 0) {
         ctx.fillStyle = C.panel;
         ctx.fillRect(0, y, W, ROW_H);
+      }
+      // block selection highlight (channel columns only)
+      if (sb && cueIdx >= sb.r0 && cueIdx <= sb.r1) {
+        for (let i = 0; i < visCh; i++) {
+          const ch = this.scrollCh + i;
+          if (ch >= sb.c0 && ch <= sb.c1) {
+            ctx.fillStyle = C.sel;
+            ctx.fillRect(this.chanX(i) - 2, y, COL_W - 2, ROW_H);
+          }
+        }
       }
       if (this.cursor.cue === cueIdx) {
         const cx = this.cursor.col === 0 ? GUTTER_W :
@@ -272,7 +475,7 @@ export class CuesView {
 
       for (let i = 0; i < visCh; i++) {
         const ch = this.scrollCh + i;
-        const pat = words[ch] & 0x7fff;
+        const pat = (words ? words[ch] : CUE_EMPTY) & 0x7fff;
         const x = this.chanX(i) + 4;
         if (pat === CUE_EMPTY) {
           ctx.fillStyle = C.dim;
@@ -330,3 +533,5 @@ function kindOf(inst) {
     default: return "nop";
   }
 }
+
+function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }

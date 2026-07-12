@@ -681,9 +681,12 @@ for (const topic of ["cursor", "edit", "view", "doc"]) {
   store.on(topic, () => palette.refresh());
 }
 
-// The two grid views that support block selection + clipboard (item 17).
+// The grid views that support block selection + clipboard (item 17; Cues added
+// later — it keeps its own cue-word clipboard, store.cueClipboard).
 function selView() {
-  return store.view === "timeline" ? timeline : store.view === "pattern" ? patternView : null;
+  return store.view === "timeline" ? timeline
+    : store.view === "pattern" ? patternView
+    : store.view === "cues" ? cuesView : null;
 }
 
 // ── keyboard dispatch ──

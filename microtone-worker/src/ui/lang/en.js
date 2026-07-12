@@ -223,7 +223,7 @@ export default {
   "help.save": "save to browser disk (OPFS)",
   "help.goto": "go to cue:row",
   "help.arrowsDrag": "arrows · drag",
-  "help.selExtend": "Timeline/Patterns: extend a block selection (drag selects sub-columns)",
+  "help.selExtend": "Timeline/Patterns/Cues: extend a block selection (drag selects sub-columns)",
   "help.clipboard": "copy / cut / paste the selected block",
   "help.selClear": "clear selection · blank the selected block",
   "help.blackKeys": "piano black keys",

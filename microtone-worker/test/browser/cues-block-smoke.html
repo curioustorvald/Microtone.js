@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>cues: grow-past-HALT + block selection + clipboard smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies:
+       chromium --headless=new --virtual-time-budget=100000000 --timeout=60000 \
+         --dump-dom .../cues-block-smoke.html -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Cues view: editing/pasting past the last stored cue (grow), 2D block
+    // selection, copy/cut/paste/delete via the cue-word clipboard. Drives the
+    // real app (view APIs + the Ctrl+C/V wiring routed through selView()).
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const key = (win, code, k, opts = {}) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key: k, bubbles: true, ...opts }));
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key: k, bubbles: true, ...opts }));
+    };
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store, cuesView } = win.__microtone;
+        const { CUE_EMPTY } = await import("../../src/format/taud-const.js");
+        const song = store.song;
+        log("app loaded, doc ready");
+
+        store.view = "cues";
+        store.record = true;
+        const len0 = song.cues.length;
+
+        // ── 1. Excel-style full-range scroll: editable to the format limit, but
+        //       editing far down grows (materialises) the cue list. ──
+        const limit = store.doc.is64Channel ? 4096 : 8192;
+        const editRowsOk = cuesView.editRows() === limit;
+        // Put the cursor on the first blank row past the last cue, channel 3.
+        cuesView.cursor = { cue: len0, col: 2 + 3, nib: 0 };
+        // type "0005" into that cell (4 nibbles)
+        for (const d of ["0", "0", "0", "5"]) key(win, "Digit" + d, d);
+        const grew = song.cues.length === len0 + 1;
+        const materialised = grew && (song.cues[len0][3] & 0x7fff) === 0x0005;
+        log(`grow past end: editRows=${editRowsOk} grew=${grew} value=${materialised}`);
+        // undo the four nibble entries → truncates back
+        for (let i = 0; i < 4; i++) key(win, "KeyZ", "z", { ctrlKey: true });
+        const shrankBack = song.cues.length === len0;
+        log(`undo shrinks the cue list back: ${shrankBack}`);
+
+        // ── 1b. Scrolling far down must NOT materialise cues (no save bloat) ──
+        cuesView.scrollCue = 6000;
+        cuesView.cursor = { cue: 6000, col: 2 + 0, nib: 0 };
+        cuesView.invalidate();
+        const noBloat = song.cues.length === len0;
+        log(`scroll to cue 6000 leaves the list unmaterialised: ${noBloat}`);
+        // editing at 4000 grows to cover it (the accepted gap-fill caveat)
+        cuesView.cursor = { cue: 4000, col: 2 + 0, nib: 0 };
+        for (const d of ["0", "0", "0", "3"]) key(win, "Digit" + d, d);
+        const grewFar = song.cues.length === 4001 && (song.cues[4000][0] & 0x7fff) === 0x0003;
+        log(`edit at cue 4000 grows the list to 4001: ${grewFar}`);
+        for (let i = 0; i < 4; i++) key(win, "KeyZ", "z", { ctrlKey: true }); // undo → back to len0
+        const farUndo = song.cues.length === len0;
+        log(`undo of the far edit truncates back: ${farUndo}`);
+        cuesView.scrollCue = 0;
+
+        // ── 2. Seed a recognisable block: cue 0, voices 7..10 ──
+        const { setCuesOp } = await import("../../src/doc/ops.js");
+        store.undo.apply(setCuesOp(0, [
+          { cue: 0, ch: 7, value: 0x0071 },
+          { cue: 0, ch: 8, value: 0x0072 },
+          { cue: 0, ch: 9, value: 0x0073 },
+          { cue: 0, ch: 10, value: 0x0074 },
+        ]));
+
+        // ── 3. Mouse-style block selection + copy (Ctrl+C) ──
+        cuesView.cursor = { cue: 0, col: 2 + 7, nib: 0 };
+        cuesView.sel = { aCue: 0, aCh: 7, cue: 0, ch: 10 }; // 1×4 across voices 7..10
+        const b = cuesView.selBounds();
+        const selOk = b && b.r0 === 0 && b.r1 === 0 && b.c0 === 7 && b.c1 === 10;
+        key(win, "KeyC", "c", { ctrlKey: true }); // copy → store.cueClipboard
+        const clip = store.cueClipboard;
+        const clipOk = clip && clip.rows === 1 && clip.chans === 4 &&
+          eq([...clip.words], [0x0071, 0x0072, 0x0073, 0x0074]);
+        log(`selection+copy: sel=${selOk} clip=${clipOk}`);
+
+        // ── 4. Paste onto voices 1..4 of cue 2 ──
+        cuesView.cursor = { cue: 2, col: 2 + 1, nib: 0 };
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const pasteOk = eq([...song.cues[2].subarray(1, 5)], [0x0071, 0x0072, 0x0073, 0x0074]);
+        log(`paste onto voices 1..4: ${pasteOk}`);
+
+        // ── 5. Paste past the last cue grows the list ──
+        const lenNow = song.cues.length;
+        cuesView.cursor = { cue: lenNow, col: 2 + 1, nib: 0 }; // phantom row
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const grewOnPaste = song.cues.length === lenNow + 1 &&
+          eq([...song.cues[lenNow].subarray(1, 5)], [0x0071, 0x0072, 0x0073, 0x0074]);
+        log(`paste past the end grows: ${grewOnPaste}`);
+        key(win, "KeyZ", "z", { ctrlKey: true }); // undo → truncate
+        const undoGrow = song.cues.length === lenNow;
+        log(`undo of paste-past-end truncates: ${undoGrow}`);
+
+        // ── 6. Delete-selection blanks the pattern, keeps command bits ──
+        song.cues[2][1] |= 0x8000; // fake a command sign bit
+        cuesView.cursor = { cue: 2, col: 2 + 1, nib: 0 };
+        cuesView.sel = { aCue: 2, aCh: 1, cue: 2, ch: 4 };
+        key(win, "Delete", "Delete");
+        const delBlanked = (song.cues[2][1] & 0x7fff) === 0x7fff &&
+          (song.cues[2][2] & 0x7fff) === 0x7fff;
+        const cmdKept = (song.cues[2][1] & 0x8000) === 0x8000;
+        log(`delete-selection: blanked=${delBlanked} commandBitKept=${cmdKept}`);
+
+        // ── 7. Escape clears a selection ──
+        cuesView.sel = { aCue: 0, aCh: 7, cue: 0, ch: 10 };
+        key(win, "Escape", "Escape");
+        const escOk = !cuesView.hasSelection();
+        log(`escape clears cue selection: ${escOk}`);
+
+        // ── 8. Keyboard Shift+arrows extend a channel block ──
+        cuesView.clearSelection();
+        cuesView.cursor = { cue: 0, col: 2 + 2, nib: 0 };
+        key(win, "ArrowDown", "ArrowDown", { shiftKey: true });
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
+        const kb = cuesView.selBounds();
+        const kbOk = kb && kb.r0 === 0 && kb.r1 === 1 && kb.c0 === 2 && kb.c1 === 3;
+        log(`keyboard shift-select: ${kbOk}`);
+
+        // ── 9. draw() renders the phantom row + a selection without throwing ──
+        let drawOk = true;
+        try {
+          cuesView.cursor = { cue: song.cues.length, col: 2 + 0, nib: 0 }; // phantom row
+          cuesView.sel = { aCue: 0, aCh: 2, cue: 3, ch: 6 };
+          cuesView.resize();
+          cuesView.draw();
+        } catch (err) { drawOk = false; log(`  draw threw: ${err.message}`); }
+        log(`draw phantom row + selection: ${drawOk}`);
+
+        const pass = editRowsOk && grew && materialised && shrankBack && noBloat && grewFar &&
+          farUndo && selOk && clipOk && pasteOk && grewOnPaste && undoGrow && delBlanked &&
+          cmdKept && escOk && kbOk && drawOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL edit=${editRowsOk}/${grew}/${materialised} undo=${shrankBack} noBloat=${noBloat} grewFar=${grewFar}/${farUndo} sel=${selOk} clip=${clipOk} paste=${pasteOk} growPaste=${grewOnPaste}/${undoGrow} del=${delBlanked}/${cmdKept} esc=${escOk} kb=${kbOk} draw=${drawOk}`);
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

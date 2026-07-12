@@ -37,6 +37,28 @@ export function blockCell(block, r, c) {
   return block.cells.subarray(off, off + 8);
 }
 
+// ── Cue-block clipboard (Cues view) ──
+// A cue block is a rows×chans grid of pattern-index words (low 15 bits). The
+// per-cue command sign bits are NOT carried: they are bit-packed across the
+// channels of one cue, so a rectangular copy that moves channels around would
+// scramble them. Paste therefore preserves each destination cell's own command
+// bit and overlays only the pasted pattern index.
+import { CUE_EMPTY } from "../format/taud-const.js";
+
+/** Allocate a rows×chans cue block pre-filled with empty pattern words. */
+export function makeCueBlock(rows, chans) {
+  return { rows, chans, words: new Uint16Array(rows * chans).fill(CUE_EMPTY) };
+}
+
+/** Flat index of cue-block cell (r, c) into block.words (row-major). */
+export function cueBlockIndex(block, r, c) { return r * block.chans + c; }
+
+/** Merge a copied pattern word onto a destination cue word, keeping the
+ *  destination's command sign bit (bit 15) intact. */
+export function mergeCueWord(destWord, srcWord) {
+  return (destWord & 0x8000) | (srcWord & 0x7fff);
+}
+
 // Byte offsets per logical column (duplicated from edit.js so this pure module
 // stays DOM/UI-free): note / inst / vol / pan / fx.
 const COL_BYTE_OFFSETS = [[0, 1], [2], [3], [4], [5, 6, 7]];

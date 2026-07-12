@@ -24,7 +24,12 @@ test("Document round-trips through toBytes", () => {
     for (let p = 0; p < a.patterns.length; p++) {
       assert.ok(Buffer.from(b.patterns[p]).equals(Buffer.from(a.patterns[p])), `song${s} pat${p}`);
     }
-    for (let c = 0; c < a.cues.length; c++) {
+    // toBytes trims trailing empty cues (taud.mjs captureTrackerDataToFile);
+    // every non-empty cue is preserved, only the empty tail is dropped.
+    let kept = 1;
+    for (let c = 0; c < a.cues.length; c++) if (!a.cues[c].every((w) => w === 0x7fff)) kept = c + 1;
+    assert.equal(b.cues.length, kept, `song${s} numCues (trimmed)`);
+    for (let c = 0; c < kept; c++) {
       assert.deepEqual(Array.from(b.cues[c]), Array.from(a.cues[c]), `song${s} cue${c}`);
     }
     assert.equal(b.bpm, a.bpm);

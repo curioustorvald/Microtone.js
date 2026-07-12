@@ -240,6 +240,26 @@ that cue.
 | **FWD** | Skip forward N cues |
 | **JMP** | Jump to cue N |
 
+The grid **scrolls the whole cue address space** (up to 8192 cues, 4096 in
+64-channel mode), like a spreadsheet — you can move to any row even if it is
+empty. This is how you extend the song past a **HALT**, or grow a brand-new
+project beyond its single cue 0.
+
+The file **saves only up to the last used cue**: trailing empty cues are trimmed
+away, so scrolling far down (or deleting the tail of a long song) never bloats
+the save. The one caveat: *interior* gaps are kept — if you put content on cue 0
+and cue 2000 with nothing between, all 2001 cues are stored (gzip keeps that
+cheap).
+
+**Block copy/paste.** Select a rectangle of channel cells by dragging with the
+mouse, or with **Shift+arrows**; then **Ctrl+C** / **Ctrl+X** / **Ctrl+V** copy,
+cut and paste, **Delete**/**Backspace** blank the block, and **Esc** clears the
+selection. Paste lands with its top-left corner at the cursor, so you can move a
+group of voices onto different channels, onto other cues, or onto the blank row
+to grow the order list. Only the pattern numbers move — each destination cell
+keeps its own flow command. (The Cues clipboard is separate from the
+Timeline/Patterns cell clipboard.)
+
 ## Patterns (F3)
 
 A focused editor for a small set of patterns, with the same cell editing as the Timeline.

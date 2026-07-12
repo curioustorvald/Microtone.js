@@ -16,6 +16,16 @@ function eqBytes(a, b, label) {
     .equals(Buffer.from(b.buffer, b.byteOffset, b.length)), `${label}: bytes differ`);
 }
 
+/** Cue count after trailing-empty trimming (a cue is empty when every channel
+ *  word is CUE_EMPTY); mirrors taud-write / finalize_cue_sheet. Keeps ≥ 1. */
+function trimmedCueCount(cues) {
+  let last = 0;
+  for (let c = 0; c < cues.length; c++) {
+    if (!cues[c].every((w) => w === CUE_EMPTY)) last = c;
+  }
+  return last + 1;
+}
+
 for (const name of corpusFiles) {
   test(`parse ${name}`, async () => {
     const doc = parseTaud(await readFile(corpusDir + name));
@@ -57,9 +67,16 @@ for (const name of corpusFiles) {
       assert.ok(Math.abs(b.tuningFreq - a.tuningFreq) < 1e-3, `song${s}.tuningFreq`);
       assert.equal(b.patterns.length, a.patterns.length, `song${s}.numPats`);
       for (let p = 0; p < a.patterns.length; p++) eqBytes(b.patterns[p], a.patterns[p], `song${s}.pat${p}`);
-      assert.equal(b.cues.length, a.cues.length, `song${s}.numCues`);
-      for (let c = 0; c < a.cues.length; c++) {
+      // The writer trims TRAILING empty cues (taud.mjs captureTrackerDataToFile /
+      // taud_common.finalize_cue_sheet), so the round-trip keeps every non-empty
+      // cue verbatim and drops only the empty tail (which never affects playback).
+      const kept = trimmedCueCount(a.cues);
+      assert.equal(b.cues.length, kept, `song${s}.numCues (trimmed)`);
+      for (let c = 0; c < kept; c++) {
         assert.deepEqual(Array.from(b.cues[c]), Array.from(a.cues[c]), `song${s}.cue${c}`);
+      }
+      for (let c = kept; c < a.cues.length; c++) {
+        assert.ok(a.cues[c].every((w) => w === 0x7fff), `song${s}.cue${c} dropped tail was empty`);
       }
     }
 

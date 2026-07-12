@@ -397,14 +397,17 @@ export class Document {
     };
   }
 
-  /** Encode one cue to its upload byte payload (worklet sync). */
+  /** Encode one cue to its upload byte payload (worklet sync). An index past
+   *  the end (a just-undone cue append) serves the all-empty image so the sync
+   *  blanks the worklet's stale copy — mirrors patternBytes' empty fallback. */
   cueBytes(songIdx, cueIdx) {
     const words = this.songs[songIdx].cues[cueIdx];
     const chans = this.channelCount;
     const bytes = new Uint8Array(chans * 2);
     for (let ch = 0; ch < chans; ch++) {
-      bytes[ch * 2] = words[ch] & 0xff;
-      bytes[ch * 2 + 1] = (words[ch] >>> 8) & 0xff;
+      const w = words ? words[ch] : CUE_EMPTY;
+      bytes[ch * 2] = w & 0xff;
+      bytes[ch * 2 + 1] = (w >>> 8) & 0xff;
     }
     return bytes;
   }

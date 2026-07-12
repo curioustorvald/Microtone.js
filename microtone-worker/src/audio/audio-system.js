@@ -36,6 +36,9 @@ export class AudioSystem {
     this.sabI32 = null;     // Int32Array view over the SAB interrupt latch
     this.worker = null;         // Tier 2 render Worker (isolated hosts); null in render mode
     this.usingWorker = false;   // engine renders off the audio thread (Tier 2)
+    this._cueHighWater = 0;     // highest cue index+1 ever uploaded to the engine
+                                // (the cueSheet persists across loads — blank the
+                                // stale tail when a shorter song loads over it)
     this.engineTarget = null;   // where engine commands go: worklet port or the worker
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
     this.profile = null;    // latest worklet profiler report (opt-in; null when off)
@@ -192,6 +195,16 @@ export class AudioSystem {
       }
       this._post({ t: CMD.UPLOAD_CUE, idx: c, bytes: bytes.buffer }, [bytes.buffer]);
     }
+    // Blank any cues left over from a longer previously-loaded song (the engine
+    // keeps one persistent cueSheet). Without this a doc grown into that stale
+    // tail — now reachable via the Cues view's full-range scroll — could replay
+    // the old song's patterns. 0x7FFF = CUE_EMPTY (bytes 0xFF, 0x7F).
+    for (let c = song.cues.length; c < this._cueHighWater; c++) {
+      const empty = new Uint8Array(chans * 2);
+      for (let i = 0; i < chans * 2; i += 2) { empty[i] = 0xff; empty[i + 1] = 0x7f; }
+      this._post({ t: CMD.UPLOAD_CUE, idx: c, bytes: empty.buffer }, [empty.buffer]);
+    }
+    this._cueHighWater = song.cues.length;
 
     this.setBPM(0, song.bpm);
     this.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
@@ -230,6 +243,7 @@ export class AudioSystem {
     this._post({ t: CMD.UPLOAD_PATTERN, slot, bytes: buf }, [buf]);
   }
   uploadCue(idx, bytes) {
+    if (idx + 1 > this._cueHighWater) this._cueHighWater = idx + 1;
     const buf = bytes.slice().buffer;
     this._post({ t: CMD.UPLOAD_CUE, idx, bytes: buf }, [buf]);
   }

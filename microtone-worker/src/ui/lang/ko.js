@@ -223,7 +223,7 @@ export default {
   "help.save": "브라우저 디스크(OPFS)에 저장",
   "help.goto": "큐:행으로 이동",
   "help.arrowsDrag": "화살표 · 드래그",
-  "help.selExtend": "타임라인/패턴: 블록 선택 확장 (드래그로 하위 열 선택)",
+  "help.selExtend": "타임라인/패턴/큐: 블록 선택 확장 (드래그로 하위 열 선택)",
   "help.clipboard": "선택 블록 복사 / 잘라내기 / 붙여넣기",
   "help.selClear": "선택 해제 · 선택 블록 비우기",
   "help.blackKeys": "피아노 검은건반",

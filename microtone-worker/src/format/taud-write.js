@@ -44,14 +44,31 @@ export function writeTaud(doc) {
   const songBins = songs.map((song) => {
     const patBin = new Uint8Array(song.patterns.length * PATTERN_SIZE);
     song.patterns.forEach((p, i) => patBin.set(p, i * PATTERN_SIZE));
-    const cueBin = new Uint8Array(song.cues.length * stride);
+    const fullBin = new Uint8Array(song.cues.length * stride);
     song.cues.forEach((words, c) => {
       for (let ch = 0; ch < chans; ch++) {
-        cueBin[c * stride + ch * 2] = words[ch] & 0xff;
-        cueBin[c * stride + ch * 2 + 1] = (words[ch] >>> 8) & 0xff;
+        fullBin[c * stride + ch * 2] = words[ch] & 0xff;
+        fullBin[c * stride + ch * 2 + 1] = (words[ch] >>> 8) & 0xff;
       }
     });
-    return { patComp: comp(patBin), cueComp: comp(cueBin) };
+    // Trim TRAILING empty cues (taud_common.finalize_cue_sheet): a cue is empty
+    // only when every channel is CUE_EMPTY (0x7FFF → bytes 0xFF,0x7F) AND both
+    // instruction words are NOP, i.e. all its stride bytes are 0xFF/0x7F. Only
+    // the trailing run is dropped (interior rests survive); at least one cue is
+    // always kept. This is what makes "save only what's used": deleting content
+    // past cue N shrinks the stored count, matching the device + the converters.
+    let lastCue = 0;
+    for (let c = 0; c < song.cues.length; c++) {
+      for (let i = 0; i < stride; i += 2) {
+        if (fullBin[c * stride + i] !== 0xff || fullBin[c * stride + i + 1] !== 0x7f) {
+          lastCue = c;
+          break;
+        }
+      }
+    }
+    const numCues = Math.max(1, lastCue + 1);
+    const cueBin = fullBin.subarray(0, numCues * stride);
+    return { patComp: comp(patBin), cueComp: comp(cueBin), numCues };
   });
 
   // ── song table ──
@@ -71,7 +88,7 @@ export function writeTaud(doc) {
     table.push(song.globalFlags & 0xff, song.globalVolume & 0xff, song.mixingVolume & 0xff);
     pushU32(table, bins.patComp.length);
     pushU32(table, bins.cueComp.length);
-    pushU16(table, song.cues.length); // num_cues (v2)
+    pushU16(table, bins.numCues); // num_cues (v2) — trailing empties trimmed
     table.push(0, 0, 0, 0);           // reserved
     binOff += bins.patComp.length + bins.cueComp.length;
   });

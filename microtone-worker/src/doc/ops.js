@@ -8,6 +8,7 @@
 
 import { applyPlan, captureBankState, restoreBankState } from "./bankmerge.js";
 import { TaudPlayData } from "../engine/state.js";
+import { CUE_EMPTY, MAX_VOICES, NUM_CUES, NUM_CUES_64 } from "../format/taud-const.js";
 
 export function setCellOp(song, pat, row, fields, gestureId = null) {
   return {
@@ -58,6 +59,84 @@ export function setCueOp(song, cue, words, gestureId = null) {
       return setCueOp(song, cue, prev, gestureId);
     },
     dirty: () => [{ kind: "cue", song, cue }],
+  };
+}
+
+/** Highest cue index the doc's channel mode can address (format-limited). */
+function cueLimit(doc) { return doc.is64Channel ? NUM_CUES_64 : NUM_CUES; }
+
+/**
+ * Bulk cue-word writer that GROWS the cue list (append-only at the tail) to
+ * cover any cue index the writes reach — this is what lets the Cues view edit
+ * or paste past the last stored cue (past a HALT, or a brand-new song's single
+ * cue 0). `writes` is [{cue, ch, value}] with `value` a full 16-bit cue word
+ * (pattern index | command sign bit). The inverse restores each cell's previous
+ * word AND truncates any cues this op appended, so growth undoes cleanly.
+ * Feature reference: taut.js editCuePtn + ordersMaxRow (one blank row past the
+ * last active cue). Used by every Cues-view edit: pattern entry, delete, block
+ * paste/cut/delete, and the command popup.
+ */
+export function setCuesOp(song, writes, gestureId = null) {
+  return {
+    type: "setCues",
+    song, writes, gestureId,
+    coalesceKey: `cues:${song}`,
+    apply(doc) {
+      const s = doc.songs[song];
+      const oldLen = s.cues.length;
+      const limit = cueLimit(doc);
+      let maxCue = -1;
+      for (const w of writes) if (w.cue > maxCue) maxCue = w.cue;
+      const target = Math.min(maxCue + 1, limit);
+      while (s.cues.length < target) {
+        s.cues.push(new Uint16Array(MAX_VOICES).fill(CUE_EMPTY));
+      }
+      const inverse = [];
+      for (const w of writes) {
+        if (w.cue >= s.cues.length) continue; // past the format limit — dropped
+        const words = s.cues[w.cue];
+        inverse.push({ cue: w.cue, ch: w.ch, value: words[w.ch] });
+        words[w.ch] = w.value & 0xffff;
+      }
+      doc.dirty = true;
+      return restoreCuesOp(song, inverse, oldLen, gestureId);
+    },
+    // Post-apply: one tag per WRITTEN cue (auto-created gap-filler cues stay
+    // empty and are never uploaded — the engine's cueSheet is blanked past the
+    // song's length on load, so a fresh gap can't hold stale data). These same
+    // tags drive the eager cue upload on undo too — a written index truncated
+    // away then reads an all-empty image from cueBytes(), blanking the copy.
+    dirty(doc) {
+      const s = doc.songs[song];
+      const cues = new Set();
+      for (const w of writes) if (w.cue < s.cues.length) cues.add(w.cue);
+      return [...cues].map((cue) => ({ kind: "cue", song, cue }));
+    },
+  };
+}
+
+/** Inverse of setCuesOp: restore previous words, then pop any appended cues. */
+function restoreCuesOp(song, prevWrites, truncateTo, gestureId = null) {
+  return {
+    type: "restoreCues",
+    song, prevWrites, truncateTo, gestureId,
+    coalesceKey: `cues:${song}`,
+    apply(doc) {
+      const s = doc.songs[song];
+      // Capture the current (forward-applied) values so redo reproduces the
+      // original writes — including the ones in the cues we are about to pop.
+      const forward = prevWrites.map((w) => ({
+        cue: w.cue, ch: w.ch, value: s.cues[w.cue][w.ch],
+      }));
+      for (const w of prevWrites) s.cues[w.cue][w.ch] = w.value & 0xffff;
+      while (s.cues.length > truncateTo) s.cues.pop();
+      doc.dirty = true;
+      return setCuesOp(song, forward, gestureId);
+    },
+    dirty() {
+      const cues = new Set(prevWrites.map((w) => w.cue));
+      return [...cues].map((cue) => ({ kind: "cue", song, cue }));
+    },
   };
 }
 
