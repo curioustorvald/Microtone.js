@@ -572,6 +572,26 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   padding-bottom: 0.15rem;
   border-bottom: 1px solid var(--border);
 }
+/* Instrument name row (rename) — sits atop every instrument tab. */
+.inst-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.inst-name-idx { color: var(--accent); font-family: "Roboto Mono", monospace; font-weight: 600; }
+.inst-name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.95rem;
+}
 .inst-field {
   display: flex;
   justify-content: space-between;
@@ -679,9 +699,19 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .pattern-pane-hd .pane-num { color: var(--dim); font-family: "Roboto Mono", monospace; }
 .pattern-pane-hd .pat-input { width: 3.8rem; padding: 0.15rem; }
+.pattern-pane-hd .pat-name-input {
+  flex: 1 1 4rem;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.8rem;
+}
 .pattern-pane-hd button { padding: 0.05rem 0.4rem; font-size: 0.85rem; }
 .pattern-pane-hd .pane-info {
-  flex: 1;
+  flex: 1 1 3rem;
   min-width: 0;
   color: var(--dim);
   white-space: nowrap;

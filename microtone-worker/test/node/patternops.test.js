@@ -53,6 +53,42 @@ test("expand/shrink: IT Alt-F/Alt-G row mapping", () => {
   assert.deepEqual([...round.subarray(0, 32 * 8)], [...src.subarray(0, 32 * 8)]);
 });
 
+test("expand/shrink: arbitrary integer factor (TODO #33)", () => {
+  const src = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) for (let b = 0; b < 8; b++) src[r * 8 + b] = (r * 8 + b) & 0xff;
+
+  // ×3: source row r lands on 3r while 3r ≤ 63 (r = 0..21), rows between blank.
+  const ex3 = expandPatternBytes(src, 3);
+  for (let r = 0; 3 * r <= 63; r++) {
+    assert.deepEqual([...ex3.subarray(3 * r * 8, 3 * r * 8 + 8)], [...src.subarray(r * 8, r * 8 + 8)],
+      `row ${r} lands on ${3 * r}`);
+    if (3 * r + 1 <= 63) assert.equal(ex3[(3 * r + 1) * 8 + 3], 0xc0, "gap row is empty-convention");
+  }
+  // the highest source row that fits is r=21 (→63); r=22 (→66) is dropped.
+  assert.deepEqual([...ex3.subarray(63 * 8, 63 * 8 + 8)], [...src.subarray(21 * 8, 21 * 8 + 8)]);
+
+  // ÷3: source row 3r lands on r (r = 0..21), tail blank.
+  const sh3 = shrinkPatternBytes(src, 3);
+  for (let r = 0; 3 * r <= 63; r++) {
+    assert.deepEqual([...sh3.subarray(r * 8, r * 8 + 8)], [...src.subarray(3 * r * 8, 3 * r * 8 + 8)],
+      `row ${3 * r} lands on ${r}`);
+  }
+  assert.equal(sh3[22 * 8 + 3], 0xc0, "tail past the last kept row is blank");
+
+  // shrink(expand(x, n), n) restores every fitting source row for any n
+  for (const n of [2, 3, 4, 7]) {
+    const round = shrinkPatternBytes(expandPatternBytes(src, n), n);
+    for (let r = 0; r * n <= 63; r++) {
+      assert.deepEqual([...round.subarray(r * 8, r * 8 + 8)], [...src.subarray(r * 8, r * 8 + 8)],
+        `factor ${n} round-trip row ${r}`);
+    }
+  }
+
+  // default factor stays 2 (back-compat with the fixed ×2/÷2 call sites)
+  assert.deepEqual([...expandPatternBytes(src)], [...expandPatternBytes(src, 2)]);
+  assert.deepEqual([...shrinkPatternBytes(src)], [...shrinkPatternBytes(src, 2)]);
+});
+
 /** First pattern whose expansion differs from itself (a lone row-0 note
  *  expands to an identical image, which would make the assertions vacuous). */
 function patternWithNotes(doc) {

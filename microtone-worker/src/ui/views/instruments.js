@@ -4,7 +4,7 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp, setMetaBytesOp } from "../../doc/ops.js";
+import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp, setMetaBytesOp, setSectionOp } from "../../doc/ops.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
@@ -12,7 +12,7 @@ import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.j
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
-import { unescapeName } from "../names.js";
+import { unescapeName, escapeNonAscii } from "../names.js";
 import { t } from "../i18n.js";
 
 const ENV_TABS = [
@@ -188,6 +188,7 @@ export class InstrumentsView {
     if (!doc) return;
     const inst = doc.instruments[this.selected];
     this.panel.innerHTML = "";
+    if (inst) this.panel.appendChild(this.nameRow());
     if (this.tab === "general") this.renderGeneral(inst);
     else if (this.tab.startsWith("env")) this.renderEnv(inst, ENV_TABS[parseInt(this.tab.slice(3), 10)]);
     else if (this.tab === "pitch") this.renderEnv(inst, roleTabDef(inst, false));
@@ -198,6 +199,42 @@ export class InstrumentsView {
 
   setField(key, value) {
     this.store.undo.apply(setInstFieldOp(this.selected, key, value));
+  }
+
+  /** Editable instrument-name row (INam), shown atop every tab so it's reachable
+   *  for meta insts too. Commits via setSectionOp (undoable, cosmetic — no
+   *  device effect); updates the list-row label in place without a full rebuild
+   *  so the input keeps focus during typing. */
+  nameRow() {
+    const doc = this.store.doc;
+    const slot = this.selected;
+    const row = document.createElement("div");
+    row.className = "inst-name-row";
+    const idx = document.createElement("span");
+    idx.className = "inst-name-idx";
+    idx.textContent = "$" + slot.toString(16).toUpperCase().padStart(3, "0");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "inst-name-input";
+    input.value = unescapeName(doc.instrumentName(slot)) || "";
+    input.placeholder = t("inst.namePlaceholder");
+    input.title = t("inst.nameTitle");
+    input.addEventListener("change", () => {
+      const escaped = escapeNonAscii(input.value.trim());
+      if (escaped === (doc.instrumentName(slot) ?? "")) return;
+      this.store.undo.apply(setSectionOp("INam", doc.buildInstrumentNames(slot, escaped)));
+      this.refreshListLabel(slot);
+      this.store.emit("status"); // status bar / other views pick up the name
+    });
+    row.append(idx, input);
+    return row;
+  }
+
+  /** Repaint one list row's name span in place (after a rename). */
+  refreshListLabel(slot) {
+    const r = this.rowEls?.find((e) => e.slot === slot);
+    const nameEl = r?.el.querySelector(".name");
+    if (nameEl) nameEl.textContent = unescapeName(this.store.doc.instrumentName(slot)) || "(unnamed)";
   }
 
   /** Apply an inst op WITHOUT rebuilding the panel — for slider drags whose
@@ -224,7 +261,10 @@ export class InstrumentsView {
 
   /** label · editable number spinner · annotation · range slider. `onChange`
    *  receives (value, gestureId); a range drag reuses one gestureId so it
-   *  collapses to a single undo step. `opts`: {ann, wide}. */
+   *  collapses to a single undo step. `opts`: {ann, wide, log}. When `log` the
+   *  slider TRAVEL is logarithmic (fine control at the low end) while the
+   *  spinner/annotation still show the real value; slider bottom pins to `min`
+   *  (which may be 0 = "off"), the rest spans log(max(min,1))..log(max). */
   sliderRow(label, value, min, max, onChange, opts = {}) {
     const row = document.createElement("div");
     row.className = "slider-row" + (opts.wide ? " wide" : "");
@@ -237,8 +277,27 @@ export class InstrumentsView {
     ann.className = "sl-ann";
     const range = document.createElement("input");
     range.type = "range"; range.className = "sl-range";
-    range.min = min; range.max = max; range.step = 1;
-    range.value = clampN(value, min, max);
+
+    // Value ⇄ slider-position mapping. Linear by default; logarithmic when
+    // opts.log (position 0..LOG_STEPS, 0 → min, 1..N → exp-spaced [lo, max]).
+    const LOG_STEPS = 1000;
+    const lo = Math.max(min, 1);
+    const toPos = (v) => {
+      if (!opts.log) return v;
+      if (v <= min) return 0;
+      const t = (Math.log(Math.max(v, lo)) - Math.log(lo)) / (Math.log(max) - Math.log(lo));
+      return Math.round(1 + t * (LOG_STEPS - 1));
+    };
+    const fromPos = (p) => {
+      if (!opts.log) return p;
+      if (p <= 0) return min;
+      const t = (p - 1) / (LOG_STEPS - 1);
+      return Math.round(Math.exp(Math.log(lo) + t * (Math.log(max) - Math.log(lo))));
+    };
+    range.min = opts.log ? 0 : min;
+    range.max = opts.log ? LOG_STEPS : max;
+    range.step = 1;
+    range.value = toPos(clampN(value, min, max));
 
     const paint = (v) => { if (opts.ann) ann.textContent = opts.ann(v); };
     paint(value);
@@ -246,12 +305,12 @@ export class InstrumentsView {
     let gid = null;
     const commit = (v, g) => {
       v = clampN(Math.round(v), min, max);
-      num.value = v; range.value = v; paint(v);
+      num.value = v; range.value = toPos(v); paint(v);
       onChange(v, g);
     };
     range.addEventListener("pointerdown", () => { gid = "sl" + Date.now() + Math.random(); });
     range.addEventListener("keydown", () => { if (!gid) gid = "sl" + Date.now(); });
-    range.addEventListener("input", () => commit(parseFloat(range.value), gid ?? ("sl" + Date.now())));
+    range.addEventListener("input", () => commit(fromPos(parseFloat(range.value)), gid ?? ("sl" + Date.now())));
     range.addEventListener("change", () => { gid = null; });
     num.addEventListener("change", () => commit(parseInt(num.value || "0", 10), null));
 
@@ -340,7 +399,7 @@ export class InstrumentsView {
       this.sliderRow("Fadeout", fadeout, 0, 1024, (v, gid) =>
         this.applyQuiet(setInstBytesOp(this.selected,
           [[172, v & 0xff], [173, (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f)]], gid)),
-        { ann: annFadeout }),
+        { ann: annFadeout, log: true }),
       this.sliderRow("Swing", inst.volumeSwing, 0, 255, fSet("volumeSwing"), { ann: annHex2 }),
     );
 

@@ -11,6 +11,7 @@ import { setCueWordOp, setCueOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
+import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
@@ -291,6 +292,30 @@ export class CuesView {
     ctx.moveTo(this.chanX(0) - 2.5, 0); ctx.lineTo(this.chanX(0) - 2.5, H);
     ctx.moveTo(0, HEADER_H - 0.5); ctx.lineTo(W, HEADER_H - 0.5);
     ctx.stroke();
+
+    // Floating name tag for the pattern under the cursor (rename display). The
+    // grid cells are too narrow for names, so a tag floats by the cursor cell.
+    if (this.cursor.col >= 2) {
+      const ch = this.cursor.col - 2;
+      const vOff = ch - this.scrollCh;
+      const rOff = this.cursor.cue - this.scrollCue;
+      const words = song.cues[this.cursor.cue];
+      const pat = words ? (words[ch] & 0x7fff) : CUE_EMPTY;
+      const nm = pat !== CUE_EMPTY ? unescapeName(store.doc.patternName(pat)) : "";
+      if (nm && vOff >= 0 && vOff < visCh && rOff >= 0 && rOff < vis) {
+        const cellX = this.chanX(vOff);
+        let ty = HEADER_H + rOff * ROW_H + ROW_H;         // below the cursor row
+        if (ty + ROW_H > H) ty = HEADER_H + rOff * ROW_H - ROW_H; // flip up near bottom
+        const label = pat.toString(16).toUpperCase().padStart(4, "0") + "  " + nm;
+        const tw = ctx.measureText(label).width + 12;
+        ctx.fillStyle = C.panel;
+        ctx.fillRect(cellX, ty + 2, tw, ROW_H - 3);
+        ctx.strokeStyle = C.accent;
+        ctx.strokeRect(cellX + 0.5, ty + 2.5, tw, ROW_H - 4);
+        ctx.fillStyle = C.fg;
+        ctx.fillText(label, cellX + 6, ty + 2 + (ROW_H - 3) / 2);
+      }
+    }
   }
 }
 

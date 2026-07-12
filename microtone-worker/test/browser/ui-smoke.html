@@ -206,9 +206,9 @@
           const exOk = JSON.stringify([...store.doc.patternBytes(0, 2)]) === JSON.stringify([...want]);
           store.undo.undo();
           const barLabels = [...patternView.bar.querySelectorAll("button")].map((b) => b.textContent);
-          const barOk = ["Duplicate", "Transpose…", "Lengthen ×2", "Shorten ÷2",
+          const barOk = ["Duplicate", "Transpose…", "Lengthen…", "Shorten…",
             "Volume…", "Pan…", "Instrument…"].every((x) => barLabels.includes(x));
-          log(`pattern Lengthen ×2 via bar (+ all seven buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
+          log(`pattern Lengthen via bar (+ all seven buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
 
           // ── item 22: volume / pan / instrument bulk popups ──
           // seed pattern 2 row 0 with vol 20 / pan 40 / inst 05, then drive each popup
@@ -237,6 +237,79 @@
           const instOk = cell().instrment === 0x0a;
           store.undo.undo(); store.undo.undo(); store.undo.undo(); store.undo.undo();
           log(`pattern Volume/Pan/Instrument popups: ${volOk && panOk && instOk ? "ok" : `FAIL vol=${volOk} pan=${panOk} inst=${instOk}`}`);
+        }
+
+        // ── item 34: pattern rename (pNam) via the pane header name input ──
+        {
+          win.document.querySelector('#tabs button[data-view="pattern"]').click();
+          patternView.setPattern(2);
+          const pane = patternView.active;
+          pane.nameInput.value = "SmokePat";
+          pane.nameInput.dispatchEvent(new win.Event("change", { bubbles: true }));
+          const named = store.doc.patternName(2) === "SmokePat";
+          const hasPnam = store.doc.projSections.some((s) => s.fourcc === "pNam");
+          // display: refreshHeader repopulates the input from the doc (name shown alongside number)
+          pane.nameInput.value = "";
+          patternView.refreshAllHeaders();
+          const shown = pane.nameInput.value === "SmokePat";
+          store.undo.undo();
+          const cleared = store.doc.patternName(2) === "";
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          log(`pattern rename (pNam) + header display + undo: ${named && hasPnam && shown && cleared ? "ok" : `FAIL named=${named} pnam=${hasPnam} shown=${shown} cleared=${cleared}`}`);
+        }
+
+        // ── item 34: instrument rename (INam) + logarithmic Fadeout slider ──
+        {
+          const instView = win.__microtone.instrumentsView;
+          win.document.querySelector('#tabs button[data-view="instruments"]').click();
+          const slot = store.doc.usedInstrumentSlots()[2];
+          instView.selected = slot;
+          instView.tab = "general";
+          instView.refresh();
+          // rename via the panel name input (present atop every tab)
+          const nameInp = instView.panel.querySelector(".inst-name-input");
+          nameInp.value = "SmokeInst";
+          nameInp.dispatchEvent(new win.Event("change", { bubbles: true }));
+          const named = store.doc.instrumentName(slot) === "SmokeInst";
+          // list-row label updates in place
+          const rowEl = instView.rowEls.find((r) => r.slot === slot)?.el;
+          const listShown = rowEl?.querySelector(".name")?.textContent === "SmokeInst";
+          // Fadeout slider is logarithmic (0..1000 travel) while a linear peer stays 0..255
+          const rows = [...instView.panel.querySelectorAll(".slider-row")];
+          const rowFor = (lbl) => rows.find((r) => r.querySelector(".sl-label")?.textContent === lbl);
+          const fadeRange = rowFor("Fadeout")?.querySelector(".sl-range");
+          const volRange = rowFor("Global vol")?.querySelector(".sl-range");
+          const logOk = fadeRange?.max === "1000" && volRange?.max === "255";
+          // slider bottom maps to 0 (off), top to the real max (1024)
+          fadeRange.value = "1000";
+          fadeRange.dispatchEvent(new win.Event("input", { bubbles: true }));
+          const topMax = rowFor("Fadeout").querySelector(".sl-num").value === "1024";
+          store.undo.undo(); // fadeout drag
+          store.undo.undo(); // rename
+          const rolled = store.doc.instrumentName(slot) === "";
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          log(`instrument rename (INam) + log Fadeout slider: ${named && listShown && logOk && topMax && rolled ? "ok" : `FAIL named=${named} list=${listShown} log=${logOk} top=${topMax} rolled=${rolled}`}`);
+        }
+
+        // ── item 34: name-display render paths (Timeline corner + Cues tag) ──
+        {
+          const { cuesView } = win.__microtone;
+          const { setSectionOp } = await win.eval('import("/src/doc/ops.js")');
+          // find a cell with a real pattern and name it
+          let hit = null;
+          for (let r = 0; r < 64 && !hit; r++)
+            for (let ch = 0; ch < store.doc.channelCount && !hit; ch++)
+              hit = timeline.cellAt(r, ch);
+          store.undo.apply(setSectionOp("pNam", store.doc.buildPatternNames(hit.pat, "TagName")));
+          let threw = false;
+          try {
+            store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+            timeline.draw(-1); // exercises the top-left corner name display
+            cuesView.cursor = { cue: 0, col: 2, nib: 0 }; // channel-0 cell → floating tag
+            cuesView.draw();
+          } catch (e) { threw = true; win.console.log("render err", e); }
+          store.undo.undo();
+          log(`Timeline/Cues name render (no throw): ${!threw ? "ok" : "FAIL"}`);
         }
 
         // ── shift+wheel scrolls timeline channels (repaint + no cell edit) ──

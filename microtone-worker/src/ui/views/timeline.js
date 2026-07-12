@@ -16,11 +16,12 @@ import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
+import { unescapeName } from "../names.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
 const CHAR_W = 7.9;
 const ROW_H = 16;
-const HEADER_H = 50;   // channel header: number + pattern + VU + pan + live note
+const HEADER_H = 58;   // header: [voxnum·note+inst·patNum] / VU / pan / patName
 const GUTTER_W = 76;   // "cue:row | absrow"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 
@@ -564,47 +565,71 @@ export class TimelineView {
     ctx.font = canvasFont(FONT_PX);
     ctx.textBaseline = "middle";
 
-    // ── channel headers: number + pattern, VU bar, pan tick, live note ──
+    // ── channel headers: two text rows split by the VU/pan meters ──
+    //   upper: voxnum (L) · live note+inst (C) · pattern number (R, amber)
+    //   lower: pattern name (C) — the rename display, alongside the number above
     const headPal = { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent };
+    const NOTE_H = 15, UP_Y = 4, UP_MID = UP_Y + NOTE_H / 2; // upper row
+    const VU_Y = 23, PAN_Y = 32, NAME_Y = 49;                // meters + name row
     for (let i = 0; i < visCh; i++) {
       const ch = this.scrollCh + i;
       const x = GUTTER_W + i * COL_W;
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
       ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
-      // top line: channel number (left) + current pattern number (right)
+      const patNum = this.currentPatternFor(ch);
+
+      // upper row: channel number (left) + current pattern number (right, amber)
       ctx.fillStyle = C.dim;
       ctx.textAlign = "left";
-      ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, 9);
-      const patNum = this.currentPatternFor(ch);
+      ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, UP_MID);
       if (patNum !== null && patNum !== PATTERN_EMPTY) {
         ctx.fillStyle = C.accent;
         ctx.textAlign = "right";
-        ctx.fillText(hex4(patNum), x + COL_W - 6, 9);
+        ctx.fillText(hex4(patNum), x + COL_W - 6, UP_MID);
         ctx.textAlign = "left";
       }
+      // upper row centre: live note + instrument (only while sounding)
+      if (audio && audio.getVoiceActive(ch)) {
+        const groupX = x + Math.round((COL_W - 7 * CHAR_W) / 2);
+        paintNoteCell(ctx, audio.getVoiceNote(ch), store.pitchPreset, groupX, UP_Y,
+          CHAR_W, NOTE_H, headPal, store.rawNoteView);
+        ctx.fillStyle = C.dim;
+        ctx.fillText(hex2(audio.getVoiceInstrument(ch)), groupX + 5 * CHAR_W, UP_MID);
+      }
+
       // VU
       const barX = x + 4;
       const barW = COL_W - 12;
       ctx.fillStyle = C.meterBg;
-      ctx.fillRect(barX, 16, barW, 7);
+      ctx.fillRect(barX, VU_Y, barW, 7);
       if (audio && audio.getVoiceActive(ch)) {
         const vol = audio.getVoiceEffectiveVolume(ch);
         ctx.fillStyle = C.meter;
-        ctx.fillRect(barX, 16, Math.round(barW * vol), 7);
+        ctx.fillRect(barX, VU_Y, Math.round(barW * vol), 7);
       }
       // pan
       ctx.fillStyle = C.meterBg;
-      ctx.fillRect(barX, 27, barW, 3);
+      ctx.fillRect(barX, PAN_Y + 2, barW, 3);
       const pan = audio ? audio.getVoiceEffectivePan(ch) / 255 : 0.5;
       ctx.fillStyle = C.accent2;
-      ctx.fillRect(barX + pan * (barW - 3), 25, 3, 7);
-      // live note — same 4-char glyph font as the pattern cells (raw-aware)
-      if (audio && audio.getVoiceActive(ch)) {
-        paintNoteCell(ctx, audio.getVoiceNote(ch), store.pitchPreset, x + 4, 33,
-          CHAR_W, 15, headPal, store.rawNoteView);
-        ctx.fillStyle = C.dim;
-        ctx.fillText(hex2(audio.getVoiceInstrument(ch)), x + 4 + 5 * CHAR_W, 40.5);
+      ctx.fillRect(barX + pan * (barW - 3), PAN_Y, 3, 7);
+
+      // lower row: pattern name, centred + clipped to the column width
+      if (patNum !== null && patNum !== PATTERN_EMPTY) {
+        const nm = unescapeName(this.store.doc.patternName(patNum));
+        if (nm) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x + 2, NAME_Y - 8, COL_W - 6, 16);
+          ctx.clip();
+          ctx.fillStyle = C.fg2;
+          ctx.textAlign = "center";
+          ctx.fillText(nm, x + (COL_W - 2) / 2, NAME_Y);
+          ctx.restore();
+          ctx.textAlign = "left";
+        }
       }
+
       // muted channel: dim the header, MUTE tag over the meters
       if (store.voiceMutes[ch]) {
         ctx.globalAlpha = 0.6;
@@ -613,7 +638,7 @@ export class TimelineView {
         ctx.globalAlpha = 1;
         ctx.fillStyle = C.fg2;
         ctx.textAlign = "center";
-        ctx.fillText("MUTE", x + (COL_W - 2) / 2, 20);
+        ctx.fillText("MUTE", x + (COL_W - 2) / 2, (VU_Y + PAN_Y) / 2 + 3);
         ctx.textAlign = "left";
       }
     }

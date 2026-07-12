@@ -15,7 +15,8 @@ import {
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
-import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp } from "../../doc/ops.js";
+import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp } from "../../doc/ops.js";
+import { escapeNonAscii, unescapeName } from "../names.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import {
   expandPatternBytes, shrinkPatternBytes,
@@ -71,9 +72,21 @@ class PatternPane {
     this.patInput.addEventListener("change", () => this.setPattern(parseInt(this.patInput.value, 16) || 0));
     const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
     const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
+    // Editable pattern name (pNam) — doubles as the name display alongside the
+    // number. Commit on blur/Enter; Enter also returns focus to the grid.
+    this.nameInput = document.createElement("input");
+    this.nameInput.type = "text";
+    this.nameInput.className = "pat-name-input";
+    this.nameInput.placeholder = t("pat.namePlaceholder");
+    this.nameInput.title = t("pat.nameTitle");
+    this.nameInput.addEventListener("change", () => this.commitName());
+    this.nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { this.commitName(); this.canvas.focus?.(); }
+      e.stopPropagation(); // keep grid shortcuts from firing while typing a name
+    });
     this.info = document.createElement("span");
     this.info.className = "pane-info";
-    this.header.append(this.numEl, prev, this.patInput, next, this.info);
+    this.header.append(this.numEl, prev, this.patInput, next, this.nameInput, this.info);
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "pattern-canvas";
@@ -255,9 +268,24 @@ class PatternPane {
     return true;
   }
 
-  /** Update this column's header — pattern number + which cues use it. */
+  /** Commit this pane's pattern name (pNam) as one undoable step. */
+  commitName() {
+    const doc = this.store.doc;
+    if (!doc) return;
+    const escaped = escapeNonAscii(this.nameInput.value.trim());
+    if (escaped === (doc.patternName(this.patIdx) ?? "")) return;
+    this.store.undo.apply(setSectionOp("pNam", doc.buildPatternNames(this.patIdx, escaped)));
+    this.container.refreshAllHeaders(); // other panes on the same pattern update
+    this.store.emit("edit"); // repaint the Timeline's name display
+  }
+
+  /** Update this column's header — pattern number + name + which cues use it. */
   refreshHeader() {
     this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
+    const doc = this.store.doc;
+    if (this.nameInput !== document.activeElement) {
+      this.nameInput.value = doc ? (unescapeName(doc.patternName(this.patIdx)) || "") : "";
+    }
     const song = this.store.song;
     if (!song) { this.info.textContent = ""; return; }
     const users = [];
@@ -331,6 +359,28 @@ class PatternPane {
     this.refreshHeader();
     this.invalidate();
   }
+
+  /** Prompt for an integer factor, then lengthen (space rows out) or shorten
+   *  (keep every nth row) the whole pattern. Rows pushed past the end are
+   *  dropped — the IT Alt-F/Alt-G behaviour, generalised past the fixed ×2. */
+  async _resizeOp(kind) {
+    if (!this.pattern()) return;
+    const result = await showModal({
+      title: t(`pat.${kind}ModalTitle`, { pat: this._titlePat() }),
+      body: t(`pat.${kind}Body`),
+      fields: [
+        { name: "factor", label: t("pat.factor"), type: "number", value: 2, min: 2, max: 63 },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const n = clampInt(parseInt(result.factor || "2", 10) | 0, 2, 63);
+    const fn = kind === "lengthen" ? expandPatternBytes : shrinkPatternBytes;
+    this.applyPatternBytes((src) => fn(src, n));
+  }
+
+  lengthenOp() { return this._resizeOp("lengthen"); }
+  shortenOp() { return this._resizeOp("shorten"); }
 
   /** Notation-aware transpose of this pattern. The fine unit follows the
    *  song's tuning — semitones in 12-TET, steps in other TETs, raw note
@@ -753,9 +803,9 @@ export class PatternView {
     dupBtn.title = t("pat.duplicateTitle");
     const trBtn = mkBtn(t("pat.transpose"), () => this.active.transpose());
     trBtn.title = t("pat.transposeTitle");
-    const lenBtn = mkBtn(t("pat.lengthen"), () => this.active.applyPatternBytes(expandPatternBytes));
+    const lenBtn = mkBtn(t("pat.lengthen"), () => this.active.lengthenOp());
     lenBtn.title = t("pat.lengthenTitle");
-    const shortBtn = mkBtn(t("pat.shorten"), () => this.active.applyPatternBytes(shrinkPatternBytes));
+    const shortBtn = mkBtn(t("pat.shorten"), () => this.active.shortenOp());
     shortBtn.title = t("pat.shortenTitle");
     const volBtn = mkBtn(t("pat.volume"), () => this.active.volumeOp());
     volBtn.title = t("pat.volumeTitle");

@@ -235,13 +235,14 @@ export class Document {
 
   instrumentName(slot) { return this._nameTable("INam")[slot] ?? ""; }
   sampleName(index) { return this._nameTable("SNam")[index] ?? ""; }
+  patternName(idx) { return this._nameTable("pNam")[idx] ?? ""; }
 
-  /** Build a new SNam payload with `escaped` (ASCII, \uHHHH-escaped) at census
-   *  `index`. Untouched entries keep their exact bytes — the section is split
-   *  on 0x1E at the byte level (not re-encoded) so an imported bank's names
-   *  round-trip verbatim. Missing leading entries are padded empty. */
-  buildSampleNames(index, escaped) {
-    const sec = this.projSections.find((s) => s.fourcc === "SNam");
+  /** Build a new name-table payload (`fourcc`) with `escaped` (ASCII,
+   *  \uHHHH-escaped) at `index`. Untouched entries keep their exact bytes — the
+   *  section is split on 0x1E at the byte level (not re-encoded) so imported
+   *  names round-trip verbatim. Missing leading entries are padded empty. */
+  _buildNameTable(fourcc, index, escaped) {
+    const sec = this.projSections.find((s) => s.fourcc === fourcc);
     const src = sec ? sec.payload : new Uint8Array(0);
     const segs = [];
     let start = 0;
@@ -256,6 +257,10 @@ export class Document {
     segs.forEach((s, i) => { if (i > 0) out[off++] = 0x1e; out.set(s, off); off += s.length; });
     return out;
   }
+
+  buildSampleNames(index, escaped) { return this._buildNameTable("SNam", index, escaped); }
+  buildInstrumentNames(slot, escaped) { return this._buildNameTable("INam", slot, escaped); }
+  buildPatternNames(idx, escaped) { return this._buildNameTable("pNam", idx, escaped); }
 
   /**
    * Deduped sample census across base instruments + Ixmp patches, sorted by

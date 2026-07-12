@@ -15,19 +15,23 @@ export function emptyPatternBytes() {
   return bytes;
 }
 
-/** Lengthen ×2: row r → row 2r with blanks between (rows 32..63 push out —
- *  the Impulse Tracker Alt-F "expand pattern" behaviour). */
-export function expandPatternBytes(src) {
+/** Lengthen ×n: row r → row n·r with blanks between, rows past 63 pushed out
+ *  (the Impulse Tracker Alt-F "expand pattern" behaviour, generalised from the
+ *  fixed ×2 to any integer factor ≥ 1). */
+export function expandPatternBytes(src, factor = 2) {
+  const n = Math.max(1, factor | 0);
   const out = emptyPatternBytes();
-  for (let r = 0; r < 32; r++) out.set(src.subarray(r * 8, r * 8 + 8), r * 2 * 8);
+  for (let r = 0; r * n <= 63; r++) out.set(src.subarray(r * 8, r * 8 + 8), r * n * 8);
   return out;
 }
 
-/** Shorten ÷2: row 2r → row r, odd rows dropped, the tail left blank (the
- *  Impulse Tracker Alt-G "shrink pattern" behaviour). */
-export function shrinkPatternBytes(src) {
+/** Shorten ÷n: row n·r → row r, the rows between dropped, the tail left blank
+ *  (the Impulse Tracker Alt-G "shrink pattern" behaviour, generalised from the
+ *  fixed ÷2 to any integer factor ≥ 1). */
+export function shrinkPatternBytes(src, factor = 2) {
+  const n = Math.max(1, factor | 0);
   const out = emptyPatternBytes();
-  for (let r = 0; r < 32; r++) out.set(src.subarray(r * 2 * 8, r * 2 * 8 + 8), r * 8);
+  for (let r = 0; r * n <= 63; r++) out.set(src.subarray(r * n * 8, r * n * 8 + 8), r * 8);
   return out;
 }
 
