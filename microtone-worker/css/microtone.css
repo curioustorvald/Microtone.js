@@ -143,6 +143,13 @@ body {
   color: var(--fg);
 }
 
+.pal-hint, .cmd-palette, .statusbar, .smol {
+  font-family: "Open Sans", sans-serif;
+  font-optical-sizing: auto;
+  font-variation-settings:
+    "wdth" 96 !important;
+}
+
 .player {
   max-width: 1060px;
   margin: 2rem auto;
@@ -183,7 +190,7 @@ button {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.35rem 0.8rem;
+  padding: 0.2rem 0.6rem;
   cursor: pointer;
   font-size: 0.95rem;
 }
@@ -238,8 +245,6 @@ select, input[type="range"] {
   border-bottom: none;
   border-top: 1px solid var(--border);
   font-size: 0.85rem;
-  font-variation-settings:
-    "wdth" 92.5;
 }
 
 .brand-container {
@@ -305,6 +310,11 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   padding: 0.3rem 0.9rem;
   background: var(--panel-2);
   color: var(--dim);
+  font-size: 0.80rem;
+  font-weight: 600;
+  font-variation-settings:
+    "wdth" 100 !important;
+  text-transform: uppercase;
 }
 .tabs button.active {
   background: var(--bg);
@@ -447,8 +457,8 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .np-col-right { flex: 0 0 236px; }
 .np-sec { border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.7rem 0.55rem; margin: 0; }
 .np-sec-grow { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.np-sec legend { color: var(--accent); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 0.35rem; }
-.np-field { display: flex; align-items: center; gap: 0.5rem; margin: 0.28rem 0; color: var(--dim); font-size: 0.85rem; }
+.np-sec legend { color: var(--accent); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600; font-variation-settings: "wdth" 96 !important; padding: 0 0.35rem; }
+.np-field { display: flex; align-items: center; gap: 0.5rem; margin: 0.28rem 0; color: var(--dim); font-size: 0.88rem; }
 .np-field > span:first-child { flex: 0 0 5.5rem; }
 .np-field input[type="number"], .np-field input[type="text"], .np-field select {
   background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
@@ -553,7 +563,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 
 .subtabs { display: flex; gap: 2px; margin-bottom: 0.7rem; }
-.subtabs button { padding: 0.2rem 0.7rem; font-size: 0.85rem; color: var(--dim); }
+.subtabs button { padding: 0.2rem 0.7rem; font-size: 0.85rem; color: var(--dim); font-variation-settings: "wdth" 96 !important; }
 .subtabs button.active { color: var(--accent); border-color: var(--accent); }
 
 .inst-grid {
@@ -564,9 +574,11 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .inst-group-head {
   color: var(--accent);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
+  font-variation-settings:
+    "wdth" 96 !important;
   letter-spacing: 0.06em;
   margin: 0.2rem 0 0.4rem;
   padding-bottom: 0.15rem;
@@ -833,7 +845,8 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   margin: 0.9rem 0 0.3rem;
   color: var(--accent);
   font-size: 0.8rem;
-  text-transform: uppercase;
+  text-transform: uppercase; font-variation-settings:
+"wdth" 100 !important;
   letter-spacing: 0.06em;
 }
 .about-modal a { color: var(--accent); }
