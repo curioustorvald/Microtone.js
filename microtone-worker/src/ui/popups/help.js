@@ -7,10 +7,10 @@ export function showHelp() {
   const dlg = document.createElement("dialog");
   dlg.className = "modal help-modal";
   const col1 = [
-    ["Space", t("help.play")],
-    ["Shift+Space", t("help.playStart")],
+    ["Enter", t("help.play")],
+    ["Enter+Space", t("help.playStart")],
     ["F1…F7", t("help.views")],
-    ["Insert", t("help.record")],
+    ["Space", t("help.record")],
     ["[ ]", t("help.octave")],
     ["Enter", t("help.enter")],
     ["M / N", t("help.muteSolo")],

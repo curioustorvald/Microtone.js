@@ -775,14 +775,22 @@ window.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch (e.code) {
-    case "Space": {
+    case "Enter": {
       e.preventDefault();
       if (store.audio?.isPlaying()) store.audio.stop(0);
       else if (e.shiftKey) playFrom(0, 0);
+      else if (e.ctrlKey || e.metaKey) playFrom(playCursor().cue, 0);
       else { const p = playCursor(); playFrom(p.cue, p.row); }
       return;
     }
-    case "Insert": setRecord(!store.record); return;
+    /* double action: stop playing, or toggle record mode (not both) */
+    case "Space": {
+      if (store.audio?.isPlaying())
+        store.audio.stop(0);
+      else
+        setRecord(!store.record);
+      return;
+    }
     case "BracketLeft": jam.octaveDelta(-1); updateStatus(); return;
     case "BracketRight": jam.octaveDelta(1); updateStatus(); return;
     case "F1": case "F2": case "F3": case "F4": case "F5": case "F6": case "F7": {
