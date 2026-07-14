@@ -198,6 +198,24 @@ export class Document {
     return [...this._usedSlots].sort((a, b) => a - b);
   }
 
+  /** Slots referenced as a layer of some metainstrument (its sub-instruments).
+   *  The editor never lets you select these directly (item 59) — they are
+   *  components of a metainstrument, not standalone playable instruments. */
+  metaChildSlots() {
+    const kids = new Set();
+    for (const s of this.usedInstrumentSlots()) {
+      const layers = this.instruments[s]?.metaLayers;
+      if (layers) for (const l of layers) kids.add(l.instIdx & 0x3ff);
+    }
+    return kids;
+  }
+
+  /** Selectable (top-level) instrument slots: used slots minus meta children. */
+  selectableInstrumentSlots() {
+    const kids = this.metaChildSlots();
+    return this.usedInstrumentSlots().filter((s) => !kids.has(s));
+  }
+
   markInstUsed(slot) {
     this.instruments;
     this._usedSlots.add(slot & 0x3ff);

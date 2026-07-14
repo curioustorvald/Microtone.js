@@ -8,6 +8,7 @@ import { cueInstructionWords } from "../../format/taud-parse.js";
 import { cueInfo } from "../../doc/document.js";
 import { INST_NOP, INST_GOBACK, INST_SKIP, INST_JUMP, INST_PATLEN, INST_HALTAT, INST_HALT } from "../../engine/state.js";
 import { setCuesOp } from "../../doc/ops.js";
+import { lookahead } from "../edit.js";
 import { makeCueBlock, cueBlockIndex, mergeCueWord } from "../../doc/clipboard.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
@@ -183,11 +184,9 @@ export class CuesView {
     this.invalidate();
   }
 
+  // Lookahead-scroll: keep the cursor in the central 64% of the view (item 42).
   keepCursorVisible() {
-    const vis = this.visibleRows();
-    const c = this.cursor;
-    if (c.cue < this.scrollCue) this.scrollCue = c.cue;
-    else if (c.cue >= this.scrollCue + vis) this.scrollCue = c.cue - vis + 1;
+    this.scrollCue = lookahead(this.cursor.cue, this.scrollCue, this.visibleRows(), this.maxScrollCue());
   }
 
   // ── block selection + cue clipboard ──

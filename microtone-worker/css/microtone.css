@@ -8,7 +8,6 @@
  * ══════════════════════════════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@450&family=Open+Sans:ital,wdth,wght@0,75..100,300..800;1,75..100,300..800&family=Geist:wght@400..900&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Asta+Sans:wght@300..800&display=swap');
 
 /* ── THEME: DARK (default) — taut.js-inspired slate + amber ───────────── */
 :root,
@@ -125,6 +124,8 @@
 [hidden] { display: none !important; }
 
 :root, body, button {
+  /* The active language may override this via i18n.applyLangChrome (item 52),
+     which injects the language's `css.font` snippet after this stylesheet. */
   font-family: "Open Sans", sans-serif;
   font-optical-sizing: auto;
   font-style: normal;
@@ -562,6 +563,25 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   touch-action: none;
 }
 
+/* Paint-a-waveform modal (item 53) */
+.wavepaint-modal { max-width: min(640px, 94vw); }
+.wavepaint-modal .wave-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin: 0.5rem 0; color: var(--dim); }
+.wavepaint-modal .wave-len { width: 6rem; }
+.wavepaint-modal .wave-name { width: 14rem; }
+.wavepaint-modal .wave-shapes { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.wavepaint-modal .wave-shapes button { padding: 0.2rem 0.6rem; font-size: 0.82rem; }
+.wave-paint {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--cv-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.wave-hint { color: var(--dim); font-size: 0.82rem; margin: 0.4rem 0 0; }
+
 .subtabs { display: flex; gap: 2px; margin-bottom: 0.7rem; }
 .subtabs button { padding: 0.2rem 0.7rem; font-size: 0.85rem; color: var(--dim); font-variation-settings: "wdth" 96 !important; }
 .subtabs button.active { color: var(--accent); border-color: var(--accent); }
@@ -857,6 +877,18 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 
 .side-toolbar {
   display: flex;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.side-toolbar-inst {
+  display: grid;
+  grid-template-columns: auto auto;
   gap: 0.5rem;
   padding: 0.35rem 0.6rem;
   border-bottom: 1px solid var(--border);

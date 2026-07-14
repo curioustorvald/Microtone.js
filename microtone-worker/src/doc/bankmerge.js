@@ -363,7 +363,7 @@ export function buildFreshInstRecord({ samplePtr, sampleLength, samplingRate,
  * `nameBytes`. Returns {error} on failure, else a plan shaped exactly like
  * planImport's — apply it with importBankOp for full undo.
  */
-export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, rate }) {
+export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, rate, loop = false }) {
   if (destDoc.sampleInstImage === null) {
     return { error: "This project has no sample+instrument image to import into." };
   }
@@ -402,6 +402,10 @@ export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, 
     samplePtr: ptr,
     sampleLength: pcm.length,
     samplingRate: Math.max(1, Math.min(0xffff, Math.round(rate) || 0)),
+    // Optional forward loop over the whole sample — a painted single-cycle
+    // waveform (item 53) needs it to sustain as a tone.
+    sampleLoopEnd: loop ? pcm.length : 0,
+    loopMode: loop ? 1 : 0,
   });
 
   // INam: splice the instrument name in by slot.

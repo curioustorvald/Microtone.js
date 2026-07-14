@@ -234,7 +234,7 @@ export class AudioSystem {
   setTrackerMixerFlags(ph, flags) { this._post({ t: CMD.SET_TRACKER_MIXER_FLAGS, ph, flags }); }
   resetParams(ph = 0) { this._post({ t: CMD.RESET_PARAMS, ph }); }
   resetFunkState(ph = 0) { this._post({ t: CMD.RESET_FUNK_STATE, ph }); }
-  jamNote(ph, voice, note, inst) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst }); }
+  jamNote(ph, voice, note, inst, audition = false) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst, audition }); }
   jamStop(ph = 0) { this._post({ t: CMD.JAM_STOP, ph }); }
   setVoiceMute(ph, voice, muted) { this._post({ t: CMD.SET_VOICE_MUTE, ph, voice, muted }); }
   setVoiceFader(ph, voice, fader) { this._post({ t: CMD.SET_VOICE_FADER, ph, voice, fader }); }

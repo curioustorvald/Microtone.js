@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>crop repro</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1000px;height:600px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function frames(win, n) { for (let i = 0; i < n; i++) await new Promise((r) => win.requestAnimationFrame(r)); }
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  // wait for the ?load= song to settle
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  await frames(win, 3);
+  const map1 = M.timeline.getMap();
+  log(`song A (WHEN) first cue rowLimit: ${map1.entries[0]?.rowLimit}`);
+
+  // Now load flourish (every cue LEN 38) WITHOUT a page refresh — the file-tab path.
+  const bytes = new Uint8Array(await (await fetch("/test/corpus/flourish.taud")).arrayBuffer());
+  await M.loadBytes("flourish.taud", bytes);
+  await frames(win, 3);
+  const map2 = M.timeline.getMap();
+  const limits = map2.entries.slice(0, 4).map((e) => e.rowLimit);
+  const cueLen = M.store.song.songMap().entries[0]?.rowLimit;
+  log(`song B (flourish) timeline map rowLimits: ${JSON.stringify(limits)}`);
+  log(`song B recomputed songMap first rowLimit: ${cueLen}`);
+  // flourish every cue LEN 0x38 = 56 rows; the map must follow the NEW song on a
+  // file-tab reload (item 49a), not keep song A's crop.
+  log(limits[0] === 56 ? "PASS crop follows the new song (56 = LEN 0x38)" : `FAIL stale crop (${limits[0]}, expected 56)`);
+})();
+</script>

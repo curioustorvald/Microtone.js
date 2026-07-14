@@ -164,9 +164,14 @@ export function generateTrackerAudio(eng, playhead, out) {
       mixL += s * vol * lGain * rampGain;
       mixR += s * vol * rGain * rampGain;
     }
-    // Background (NNA-ghost) voices.
+    // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
-      if (!bg.active || bg.fader === 255) continue;
+      // Muting a channel must also silence the NNA ghosts and layer children it
+      // spawned (item 45): fold the source channel's fader into the bg voice's
+      // own, so a channel mute/solo covers everything that came from it.
+      const srcVoice = ts.voices[bg.sourceChannel];
+      const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
+      if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
       const s = applyTaudVoiceFx(bg,
         applyVoiceFilter(bg, fetchTrackerSample(eng, bg, bgInst, ts.interpolationMode)));
@@ -175,7 +180,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       bg.envVolMix += bg.envVolStep;
       const effEnvVol = bg.volEnvOn ? bg.envVolMix : 1.0;
       advanceVolumeRamp(bg);
-      const faderGain = (255 - bg.fader) / 255.0;
+      const faderGain = (255 - bgFader) / 255.0;
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
         playhead.masterVolume) / 255.0;

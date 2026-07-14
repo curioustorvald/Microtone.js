@@ -220,6 +220,11 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
 
   rebuildSongList();
 
+  // Invalidate the views' cached song state (Timeline songMap crop, etc.) for
+  // the NEW document BEFORE showView draws — otherwise the first frame paints
+  // with the previous song's map and, if the canvas dims are unchanged, that
+  // stale crop can persist (item 49a: crop-to-length failed on a file-tab reload).
+  store.emit("doc");
   $("emptyState").hidden = true;
   showView("timeline");
   if (converted) store.doc.dirty = true; // imported, not yet saved anywhere
@@ -230,7 +235,6 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
     store.emit("saved", name);
   }
   updateStatus();
-  store.emit("doc");
 }
 
 function updateStatus() {
@@ -351,10 +355,10 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   opt.value = 0;
   opt.textContent = `0: ${projName}`;
   sel.appendChild(opt);
+  store.emit("doc"); // invalidate view caches before the first draw (item 49a)
   $("emptyState").hidden = true;
   showView("timeline");
   updateStatus();
-  store.emit("doc");
 }
 
 $("newBtn").addEventListener("click", () => newProject());
@@ -650,11 +654,13 @@ function onWheelCtl(id, fn) {
     fn(d < 0 ? 1 : -1);
   }, { passive: false });
 }
-onWheelCtl("octCtl", (dir) => { jam.octaveDelta(dir); updateStatus(); });
-onWheelCtl("instCtl", (dir) => {
+// Step the current (jam/entry) instrument by dir through the selectable
+// (top-level) slots — never land on a metainstrument's sub-instrument (item 59).
+// Wrap-free clamp at the ends. Shared by the topbar instCtl wheel and the
+// not-record bracket keys (item 47.6: { } = instrument down / up).
+function stepCurrentInst(dir) {
   if (!store.doc) return;
-  // step through the USED instrument slots (wrap-free clamp at the ends)
-  const slots = store.doc.usedInstrumentSlots();
+  const slots = store.doc.selectableInstrumentSlots();
   if (slots.length === 0) return;
   let i = slots.indexOf(jam.currentInst);
   if (i < 0) i = 0;
@@ -662,7 +668,22 @@ onWheelCtl("instCtl", (dir) => {
   jam.currentInst = slots[i];
   updateStatus();
   store.emit("instsel");
-});
+}
+onWheelCtl("octCtl", (dir) => { jam.octaveDelta(dir); updateStatus(); });
+onWheelCtl("instCtl", (dir) => stepCurrentInst(dir));
+
+/** The bracket-key scheme (items 47.2 + 47.6). `dir` = -1 for '[' / +1 for ']';
+ *  `shift` selects the '{' / '}' variant. In record mode on a grid view the
+ *  brackets edit the cell under the cursor (contextual per column); otherwise
+ *  they are the global octave ([ ]) / instrument ({ }) steppers. */
+function handleBracket(dir, shift) {
+  if (store.record && (store.view === "timeline" || store.view === "pattern")) {
+    const view = store.view === "timeline" ? timeline : patternView;
+    if (view.bracketEdit(dir, shift)) { updateStatus(); return; }
+  }
+  if (shift) stepCurrentInst(dir);                       // { } = instrument down/up
+  else { jam.octaveDelta(dir); updateStatus(); }         // [ ] = octave down/up
+}
 onWheelCtl("spdCtl", (dir) => {
   // live playback speed tweak (device only — the A effect can still override)
   const audio = store.audio;
@@ -712,6 +733,13 @@ function selView() {
 
 // ── keyboard dispatch ──
 window.addEventListener("keydown", (e) => {
+  // Save works anywhere, any time (item 47.4): before the input/dialog and
+  // no-doc guards below, so a focused field or open modal can't swallow it.
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+    e.preventDefault();
+    if (store.doc) filesView.save();
+    return;
+  }
   if (!store.doc) {
     // The File tab stays reachable before anything is loaded.
     if (e.code === "F7" && !e.ctrlKey && !e.metaKey && !e.altKey &&
@@ -736,15 +764,29 @@ window.addEventListener("keydown", (e) => {
     store.undo.redo();
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+  // Ctrl/Cmd+Enter — play from the cue under the cursor / stop (item 47.1).
+  // Plain Enter (below) keeps playing from the cursor ROW.
+  if ((e.ctrlKey || e.metaKey) && e.code === "Enter") {
     e.preventDefault();
-    filesView.save();
+    if (store.audio?.isPlaying()) store.audio.stop(0);
+    else playFrom(playCursor().cue, 0);
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
     e.preventDefault();
     openGoto();
     return;
+  }
+  // Ctrl/Cmd+A — block-select the whole column (Timeline: the cursor's single
+  // voice; Patterns: the active pane's pattern). Item 47.5.
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
+    const v = selView();
+    if (v?.selectColumn) {
+      e.preventDefault();
+      v.selectColumn();
+      updateStatus();
+      return;
+    }
   }
   // Block clipboard (Timeline / Patterns): copy / cut / paste.
   if ((e.ctrlKey || e.metaKey) && (e.code === "KeyC" || e.code === "KeyX" || e.code === "KeyV")) {
@@ -775,11 +817,13 @@ window.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch (e.code) {
+    // Enter — play from the cursor ROW / stop (item 47.1: the keyboard shortcut
+    // deliberately plays from the cursor, not the cue; Ctrl+Enter plays the cue).
+    // Shift+Enter — play from the start / stop. (Ctrl+Enter handled as a chord above.)
     case "Enter": {
       e.preventDefault();
       if (store.audio?.isPlaying()) store.audio.stop(0);
       else if (e.shiftKey) playFrom(0, 0);
-      else if (e.ctrlKey || e.metaKey) playFrom(playCursor().cue, 0);
       else { const p = playCursor(); playFrom(p.cue, p.row); }
       return;
     }
@@ -791,8 +835,8 @@ window.addEventListener("keydown", (e) => {
         setRecord(!store.record);
       return;
     }
-    case "BracketLeft": jam.octaveDelta(-1); updateStatus(); return;
-    case "BracketRight": jam.octaveDelta(1); updateStatus(); return;
+    case "BracketLeft": e.preventDefault(); handleBracket(-1, e.shiftKey); return;
+    case "BracketRight": e.preventDefault(); handleBracket(1, e.shiftKey); return;
     case "F1": case "F2": case "F3": case "F4": case "F5": case "F6": case "F7": {
       e.preventDefault();
       const views = ["timeline", "cues", "pattern", "samples", "instruments", "project", "files"];

@@ -239,7 +239,16 @@ export class TaudEngine {
     ts.sexWinningChannel = -1;
     ts.finePatternDelayExtra = 0;
     ts.pendingInterrupts = 0;
-    for (const v of ts.voices) v.active = false;
+    for (const v of ts.voices) {
+      v.active = false;
+      // Clear per-voice pattern-loop (S$Bx) + Ditto (effect 7) memory so a replay
+      // never resumes effect status from the previous play (item 44). These are
+      // transient playback state, not song settings — the same rationale as the
+      // ghost/note clears; resetPatternLoopState normally does this on cue
+      // advances, but nothing did it at play START.
+      v.loopStartRow = 0; v.loopCount = 0;
+      v.dittoActive = false; v.dittoSourceStart = 0; v.dittoLength = 0; v.dittoEndRow = 0;
+    }
     ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
   }
 
@@ -272,12 +281,61 @@ export class TaudEngine {
 
   // ── jam / audition (AudioAdapter.kt:4322-4337) ──
 
-  jamNote(ph, vi, note, inst) {
+  jamNote(ph, vi, note, inst, audition = false) {
     const p = this.playheads[ph];
     const ts = p.trackerState;
     const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
-    triggerMetaOrNote(this, ts, ts.voices[v], v, note & 0xffff, inst & 0x3ff, -1);
+    note &= 0xffff;
+    inst &= 0x3ff;
+    triggerMetaOrNote(this, ts, ts.voices[v], v, note, inst, -1);
+    // Audition-only (item 51): a STRICT metainstrument only sounds where its
+    // Ixmp zones actually place a sample, so an arbitrary jammed pitch is often
+    // silent. In pure-audition contexts (Instruments/Samples views) retry at the
+    // nearest note it can actually sound, so the user hears the instrument.
+    // Note ENTRY (Timeline/Patterns) keeps the exact pitch.
+    if (audition && !ts.voices[v].active &&
+        !ts.backgroundVoices.some((b) => b.sourceChannel === v && b.active)) {
+      const alt = this._auditionNoteFor(inst, note);
+      if (alt >= 0) triggerMetaOrNote(this, ts, ts.voices[v], v, alt, inst, -1);
+    }
     p.jamActive = true;
+  }
+
+  /** True when metainstrument `inst` would produce at least one sounding layer
+   *  at `note` (mirrors the strict-layer gating in triggerMetaOrNote). */
+  _metaSoundsAt(inst, note) {
+    let layers = inst.resolveMetaLayers(note, 0x3f);
+    if (inst.metaStrict) {
+      layers = layers.filter((l) => {
+        let n = note + l.detune;
+        n = n < 0x20 ? 0x20 : n > 0xffff ? 0xffff : n;
+        return this.instruments[l.instIdx].resolvePatch(n, 0x3f) !== null;
+      });
+    }
+    return layers.length > 0;
+  }
+
+  /** Nearest note to `note` (within the metainstrument's layer bboxes) that
+   *  actually sounds, or -1 if none / not a metainstrument. */
+  _auditionNoteFor(instId, note) {
+    const inst = this.instruments[instId];
+    if (!inst || !inst.isMeta) return -1;
+    let lo = 0xffff, hi = 0x20;
+    for (const l of inst.metaLayers) {
+      if (l.pitchStart < lo) lo = l.pitchStart;
+      if (l.pitchEnd > hi) hi = l.pitchEnd;
+    }
+    if (lo < 0x20) lo = 0x20;
+    if (hi < lo) return -1;
+    // Sweep outward from the requested note at a fine step, clamped to the
+    // bboxes' union (a jam event, so the cost is irrelevant).
+    const step = 0x20;
+    for (let d = 0; d <= hi - lo; d += step) {
+      const up = note + d, dn = note - d;
+      if (up >= lo && up <= hi && this._metaSoundsAt(inst, up)) return up;
+      if (dn >= lo && dn <= hi && this._metaSoundsAt(inst, dn)) return dn;
+    }
+    return -1;
   }
 
   jamStop(ph) {

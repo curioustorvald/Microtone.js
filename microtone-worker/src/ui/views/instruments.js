@@ -108,7 +108,7 @@ export class InstrumentsView {
     this.rowEls = [];
     if (!doc) return;
     const bar = document.createElement("div");
-    bar.className = "side-toolbar";
+    bar.className = "side-toolbar-inst";
     const adopt = (res) => {
       if (!res) return;
       this.selected = res.firstSlot;
@@ -133,9 +133,23 @@ export class InstrumentsView {
       const { importSampleAsInstrument } = await import("../popups/importsample.js");
       adopt(await importSampleAsInstrument(this.store));
     });
-    bar.append(addBtn, importBtn, smpBtn);
+    const paintBtn = document.createElement("button");
+    paintBtn.textContent = t("inst.paint");
+    paintBtn.title = t("inst.paintTitle");
+    paintBtn.addEventListener("click", async () => {
+      const { paintNewSample } = await import("../popups/waveformpaint.js");
+      adopt(await paintNewSample(this.store));
+    });
+    bar.append(addBtn, importBtn, smpBtn, paintBtn);
     this.listEl.appendChild(bar);
-    for (const slot of doc.usedInstrumentSlots()) {
+    // Only top-level instruments are listed — a metainstrument's sub-instruments
+    // are not directly selectable (item 59); edit them via their metainstrument.
+    const slots = doc.selectableInstrumentSlots();
+    if (slots.length && !slots.includes(this.selected)) {
+      this.selected = slots[0];
+      if (doc.metaChildSlots().has(this.jam.currentInst)) this.jam.currentInst = slots[0];
+    }
+    for (const slot of slots) {
       const inst = doc.instruments[slot];
       const row = document.createElement("div");
       row.className = "side-row" + (slot === this.selected ? " sel" : "");

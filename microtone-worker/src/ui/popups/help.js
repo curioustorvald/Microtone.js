@@ -7,16 +7,18 @@ export function showHelp() {
   const dlg = document.createElement("dialog");
   dlg.className = "modal help-modal";
   const col1 = [
-    ["Enter", t("help.play")],
-    ["Enter+Space", t("help.playStart")],
-    ["F1…F7", t("help.views")],
     ["Space", t("help.record")],
+    ["Enter", t("help.play")],
+    ["Shift+Enter", t("help.playStart")],
+    ["Ctrl+Enter", t("help.playCue")],
+    ["F1…F7", t("help.views")],
     ["[ ]", t("help.octave")],
-    ["Enter", t("help.enter")],
+    ["{ }", t("help.instStep")],
     ["M / N", t("help.muteSolo")],
     ["Ctrl+Z / Ctrl+Y", t("help.undoRedo")],
     ["Ctrl+S", t("help.save")],
     ["Ctrl+G", t("help.goto")],
+    ["Ctrl+A", t("help.selectCol")],
     ["Shift+" + t("help.arrowsDrag"), t("help.selExtend")],
     ["Ctrl+C / X / V", t("help.clipboard")],
     ["Esc · Delete", t("help.selClear")],
@@ -24,7 +26,7 @@ export function showHelp() {
   const col2 = [
     ["W E · T Y U", t("help.blackKeys")],
     ["A S D F G H J K", t("help.whiteKeys")],
-    ["z x c v · ` 1 2 3", t("help.sentinels")],
+    ["z x c v · `", t("help.sentinels")],
     ["0-9 A-F", t("help.hexEntry")],
     ["0-Z", t("help.fxOpcode")],
     ["+ / -", t("help.slideSel")],

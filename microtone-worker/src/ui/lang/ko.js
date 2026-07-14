@@ -2,6 +2,8 @@
 // back to English automatically.
 
 export default {
+  // Per-language UI font (item 52): loaded + applied by i18n.applyLangChrome.
+  // A Korean-covering face so Hangul renders in the app font, not a system fallback.
   "css.font": "@import url('https://fonts.googleapis.com/css2?family=Asta+Sans:wght@300..800&display=swap');",
 
   // ── topbar ──
@@ -154,6 +156,21 @@ export default {
   "smp.newInstTitle": "{name}에서 새 악기 만들기",
   "smp.newInstBody": "이 풀 샘플({len} 바이트 @ {rate} Hz@C4)을 재생하는 새 악기를 만듭니다. 새 샘플 데이터는 추가되지 않습니다.",
   "smp.newInstBtnTitle": "선택한 샘플을 재생하는 새 악기를 만듭니다",
+  "smp.paint": "그리기…",
+  "smp.paintTitle": "선택한 샘플의 파형을 직접 다시 그립니다 (이 샘플을 쓰는 모든 악기에 적용)",
+  "wave.title": "파형 그리기",
+  "wave.editTitle": "샘플 {name} 그리기 ({len} 바이트)",
+  "wave.longWarn": "이 샘플은 {len} 바이트입니다 — 손으로 그리기는 짧은 파형(≤ {limit})에 적합합니다. 계속할까요?",
+  "wave.length": "길이 (바이트)",
+  "wave.sine": "사인",
+  "wave.saw": "톱니",
+  "wave.square": "사각",
+  "wave.triangle": "삼각",
+  "wave.noise": "노이즈",
+  "wave.clear": "지우기",
+  "wave.hint": "캔버스를 드래그하여 파형을 그립니다 (위 = 큰 소리). 샘플 전체가 톤으로 반복됩니다.",
+  "wave.name": "이름",
+  "wave.defaultName": "그린 파형",
 
   // ── instruments view ──
   "inst.add": "추가…",
@@ -167,6 +184,8 @@ export default {
   "inst.sampleImportName": "이름",
   "inst.namePlaceholder": "(이름 없음)",
   "inst.nameTitle": "이 악기 이름 바꾸기",
+  "inst.paint": "샘플 그리기…",
+  "inst.paintTitle": "새 샘플 파형을 직접 그려 악기로 추가합니다",
 
   // ── pattern view ──
   "pat.namePlaceholder": "이름…",
@@ -174,6 +193,7 @@ export default {
   "pat.preview": "▶ 미리 듣기",
   "pat.previewStop": "■ 정지",
   "pat.duplicate": "복제",
+  "pat.duplicatePattern": "패턴 복제",
   "pat.duplicateTitle": "이 패턴을 새 패턴 슬롯으로 복사합니다",
   "pat.transpose": "조옮김…",
   "pat.transposeTitle": "이 패턴의 모든 음표를 옮깁니다(기보법 인식)",
@@ -187,7 +207,7 @@ export default {
   "pat.shortenModalTitle": "줄이기 — 패턴 {pat}",
   "pat.shortenBody": "행 r × 배수는 행 r로 이동하고 그 사이 행은 버려지며, 뒷부분은 빈 채로 남습니다. 실행 취소 한 단계로 묶입니다.",
   "pat.transposeModalTitle": "패턴 {pat} 조옮김",
-  "pat.transposeBody": "Key-off와 타악기는 건너뜁니다. 실행 취소 한 단계로 묶입니다.",
+  "pat.transposeBody": "Key-off와 타악기는 건너뜁니다. 실행 취소 한 단계로 묶입니다. 적용 대상: {scope}.",
   "pat.unitSemitones": "반음",
   "pat.unitSteps": "스텝",
   "pat.unitNoteUnits": "노트 단위",
@@ -217,15 +237,17 @@ export default {
 
   // ── help popup ──
   "help.title": "Microtone — 단축키",
-  "help.play": "커서 위치부터 재생 / 정지",
-  "help.playStart": "처음부터 재생",
+  "help.play": "커서 행부터 재생 / 정지",
+  "help.playStart": "처음부터 재생 / 정지",
+  "help.playCue": "커서가 있는 큐부터 재생 / 정지",
   "help.views": "화면 (타임라인, 큐, 패턴, 샘플, 악기, 프로젝트, 파일)",
-  "help.record": "녹음 모드 켬/끔",
-  "help.octave": "옥타브 내림 / 올림",
-  "help.enter": "타임라인: 셀의 악기 가져오기 · 큐: 명령 팝업",
+  "help.record": "정지 / 녹음 모드 전환",
+  "help.octave": "옥타브 내림 / 올림 · 녹음: 커서 열 조정 (노트 = 옥타브)",
+  "help.instStep": "악기 내림 / 올림 · 녹음: 커서 열 미세 조정 (노트 = 반음/스텝)",
   "help.muteSolo": "타임라인 탐색 모드: 커서 채널 음소거 / 솔로 (또는 채널 헤더 클릭 / Ctrl+클릭)",
   "help.undoRedo": "실행 취소 / 다시 실행",
-  "help.save": "브라우저 디스크(OPFS)에 저장",
+  "help.save": "프로젝트를 브라우저 디스크(OPFS)에 저장 — 언제 어디서나",
+  "help.selectCol": "타임라인(한 보이스) / 패턴: 열 전체 선택",
   "help.goto": "큐:행으로 이동",
   "help.arrowsDrag": "화살표 · 드래그",
   "help.selExtend": "타임라인/패턴/큐: 블록 선택 확장 (드래그로 하위 열 선택)",

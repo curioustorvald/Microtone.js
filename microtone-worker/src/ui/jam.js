@@ -20,7 +20,11 @@ export class JamKeyboard {
     const audio = this.store.audio;
     if (audio) {
       const note = semiToNoteInTable(this.octave, JAM_SEMIS[code], this.store.pitchPreset);
-      audio.jamNote(0, this.store.cursor.ch, note, this.currentInst);
+      // Pure audition on the DOM views (Instruments/Samples) may snap a strict
+      // metainstrument to a note it can actually sound (item 51); note-entry
+      // views keep the exact pitch.
+      const audition = this.store.view === "instruments" || this.store.view === "samples";
+      audio.jamNote(0, this.store.cursor.ch, note, this.currentInst, audition);
     }
     return true;
   }

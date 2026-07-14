@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { interpretEditKey, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
+import { interpretEditKey, interpretBracketKey, lookahead, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -52,11 +52,13 @@ test("note column: piano key writes note + adopts current inst + jams", () => {
   assert.ok(a.advanceRow);
 });
 
-test("note column specials: keyoff/cut/fade/clear", () => {
+test("note column specials: keyoff/clear (Digit1/2/3 removed, item 47.3)", () => {
   const cell = new TaudPlayData();
   assert.equal(interpretEditKey({ code: "Backquote", key: "`" }, SUB_NOTE, 0, cell, ctx).fields.note, 1);
-  assert.equal(interpretEditKey({ code: "Digit1", key: "1" }, SUB_NOTE, 0, cell, ctx).fields.note, 2);
-  assert.equal(interpretEditKey({ code: "Digit2", key: "2" }, SUB_NOTE, 0, cell, ctx).fields.note, 3);
+  // Digit 1/2/3 no longer insert sentinels on the note column.
+  assert.equal(interpretEditKey({ code: "Digit1", key: "1" }, SUB_NOTE, 0, cell, ctx), null);
+  assert.equal(interpretEditKey({ code: "Digit2", key: "2" }, SUB_NOTE, 0, cell, ctx), null);
+  assert.equal(interpretEditKey({ code: "Digit3", key: "3" }, SUB_NOTE, 0, cell, ctx), null);
   const clr = interpretEditKey({ code: "Delete", key: "Delete" }, SUB_NOTE, 0, cell, ctx);
   assert.deepEqual(clr.fields, { note: 0, instrment: 0 });
 });
@@ -107,4 +109,52 @@ test("non-edit keys pass through", () => {
   const cell = new TaudPlayData();
   assert.equal(interpretEditKey({ code: "KeyG", key: "g" }, SUB_INST, 0, cell, ctx), null);
   assert.equal(interpretEditKey({ code: "Semicolon", key: ";" }, SUB_NOTE, 0, cell, ctx), null);
+});
+
+// ── item 47.2/47.6: contextual bracket keys ──
+test("bracket note: [ ] octave, { } semitone/step (12-TET)", () => {
+  const bctx = { preset: pitchTablePresets[120], instSlots: [1, 2, 5] };
+  const cell = new TaudPlayData(); cell.note = MIDDLE_C;
+  // '[' (dir -1) = octave down, ']' (dir +1) = octave up
+  assert.equal(interpretBracketKey(-1, false, SUB_NOTE, cell, bctx).fields.note, MIDDLE_C - 0x1000);
+  assert.equal(interpretBracketKey(+1, false, SUB_NOTE, cell, bctx).fields.note, MIDDLE_C + 0x1000);
+  // Shift = one 12-TET degree (semitone)
+  assert.equal(interpretBracketKey(+1, true, SUB_NOTE, cell, bctx).fields.note,
+    MIDDLE_C + pitchTablePresets[120].table[1]);
+  // sentinels / empty note: no action
+  cell.note = 0x0001;
+  assert.equal(interpretBracketKey(-1, false, SUB_NOTE, cell, bctx), null);
+});
+
+test("bracket inst: steps through selectable slots ('[' prev, ']' next)", () => {
+  const bctx = { instSlots: [1, 2, 5] };
+  const cell = new TaudPlayData(); cell.instrment = 2;
+  assert.equal(interpretBracketKey(-1, false, SUB_INST, cell, bctx).fields.instrment, 1, "'[' = prev");
+  assert.equal(interpretBracketKey(+1, false, SUB_INST, cell, bctx).fields.instrment, 5, "']' = next");
+  cell.instrment = 5; // top of the list
+  assert.equal(interpretBracketKey(+1, false, SUB_INST, cell, bctx), null, "']' clamped at the end");
+});
+
+test("bracket vol/pan: [ ] value, { } fine (FINE selector)", () => {
+  const cell = new TaudPlayData();
+  cell.volume = 0x20; cell.volumeEff = 0;
+  // Consistent direction: '[' decreases, ']' increases.
+  assert.equal(interpretBracketKey(-1, false, SUB_VOL, cell, {}).fields.volume, 0x1f, "'[' quieter");
+  assert.equal(interpretBracketKey(+1, false, SUB_VOL, cell, {}).fields.volume, 0x21, "']' louder");
+  const fine = interpretBracketKey(+1, true, SUB_VOL, cell, {});
+  assert.equal(fine.fields.volumeEff, 3); assert.equal(fine.fields.volume, 0x21);
+  cell.pan = 0x20; cell.panEff = 0;
+  assert.equal(interpretBracketKey(-1, false, SUB_PAN, cell, {}).fields.pan, 0x1f, "'[' toward L");
+  assert.equal(interpretBracketKey(+1, false, SUB_PAN, cell, {}).fields.pan, 0x21, "']' toward R");
+});
+
+// ── item 42: lookahead-scroll (18% edge / 64% central band) ──
+test("lookahead: cursor free in the central 64%, scrolls at the 18% edge", () => {
+  // vis 20 → edge = floor(20*0.18) = 3; central band = [top+3 .. top+16].
+  assert.equal(lookahead(50, 45, 20, 1000), 45, "inside band → no scroll");
+  assert.equal(lookahead(47, 45, 20, 1000), 44, "top edge → scroll up to the band");
+  assert.equal(lookahead(63, 45, 20, 1000), 47, "bottom edge → scroll down to the band");
+  assert.equal(lookahead(2, 5, 20, 1000), 0, "clamps at 0");
+  assert.equal(lookahead(70, 45, 20, 47), 47, "clamps at maxScroll");
+  assert.equal(lookahead(3, 0, 0, 100), 0, "vis 0 → clamp only");
 });

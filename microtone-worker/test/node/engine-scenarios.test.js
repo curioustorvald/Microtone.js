@@ -5,12 +5,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
 import { envPoint } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
 import { advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox } from "../../src/engine/envelope.js";
+import { parseTaud } from "../../src/format/taud-parse.js";
+import { loadIntoEngine } from "../../src/audio/offline-render.js";
 
 const scratch = new Int32Array(2);
 
@@ -220,6 +224,10 @@ test("setTrackerRow clears NNA ghosts + transient state (no lingering notes on r
   ts.pendingInterrupts = 0b101;
   ts.pendingRowJump = 12;
   ts.pendingRowJumpLocal = true;
+  // Leftover pattern-loop + Ditto (effect 7) memory from the prior play (item 44).
+  ts.voices[3].dittoActive = true;
+  ts.voices[3].dittoSourceStart = 4; ts.voices[3].dittoLength = 2; ts.voices[3].dittoEndRow = 10;
+  ts.voices[5].loopStartRow = 8; ts.voices[5].loopCount = 3;
 
   eng.setTrackerRow(0, 0);
 
@@ -232,4 +240,95 @@ test("setTrackerRow clears NNA ghosts + transient state (no lingering notes on r
   assert.equal(ts.pendingInterrupts, 0);
   assert.equal(ts.pendingRowJump, -1);
   assert.equal(ts.pendingRowJumpLocal, false);
+  // item 44: ditto + loop status cleared so effects don't linger on replay.
+  assert.equal(ts.voices[3].dittoActive, false, "ditto cleared");
+  assert.equal(ts.voices[3].dittoSourceStart, 0);
+  assert.equal(ts.voices[3].dittoLength, 0);
+  assert.equal(ts.voices[3].dittoEndRow, 0);
+  assert.equal(ts.voices[5].loopStartRow, 0, "S$Bx loop start cleared");
+  assert.equal(ts.voices[5].loopCount, 0, "S$Bx loop count cleared");
+});
+
+// item 51: auditioning a strict metainstrument snaps to a note it can sound.
+test("jamNote audition finds an in-range note for a strict metainstrument", () => {
+  const corpus = fileURLToPath(new URL("../corpus/flourish.taud", import.meta.url));
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, parseTaud(readFileSync(corpus)), 0);
+  // meta $4 is strict; at 0x5000 its layers' Ixmp zones don't cover the note.
+  const inst = eng.instruments[4];
+  assert.ok(inst.isMeta && inst.metaStrict, "meta $4 is a strict metainstrument");
+  assert.ok(!eng._metaSoundsAt(inst, 0x5000), "silent at 0x5000 without audition");
+
+  const jam = (audition) => {
+    eng.stop(0);
+    const ts = eng.playheads[0].trackerState;
+    for (const v of ts.voices) v.active = false;
+    ts.backgroundVoices.length = 0;
+    eng.jamNote(0, 0, 0x5000, 4, audition);
+    return ts.voices[0].active || ts.backgroundVoices.some((b) => b.active);
+  };
+  assert.equal(jam(false), false, "note-entry jam stays silent (exact pitch)");
+  assert.equal(jam(true), true, "audition jam retries at an in-range note → sounds");
+  // The chosen alternative note actually sounds.
+  const alt = eng._auditionNoteFor(4, 0x5000);
+  assert.ok(alt >= 0 && eng._metaSoundsAt(inst, alt), "audition note sounds");
+});
+
+// item 45: muting a channel silences its layer children / NNA ghosts too.
+test("channel mute covers metainstrument layer children (background voices)", () => {
+  const corpus = fileURLToPath(new URL("../corpus/flourish.taud", import.meta.url));
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, parseTaud(readFileSync(corpus)), 0);
+  const ts = eng.playheads[0].trackerState;
+  const rms = () => {
+    const out = new Uint8Array(TRACKER_CHUNK * 2);
+    let sum = 0, n = 0;
+    for (let c = 0; c < 30; c++) { eng.renderChunk(0, out); for (let i = 0; i < out.length; i++) { const d = out[i] - 128; sum += d * d; n++; } }
+    return Math.sqrt(sum / n);
+  };
+  const jam = () => {
+    eng.stop(0);
+    for (const v of ts.voices) v.active = false;
+    ts.backgroundVoices.length = 0;
+    eng.jamNote(0, 0, 0x50ab, 6); // meta $6 fans out ≥1 layer child onto ch 0
+  };
+  jam();
+  assert.ok(ts.backgroundVoices.length >= 1, "meta $6 spawns a background layer child");
+  const loud = rms();
+  assert.ok(loud > 1, "sounds while unmuted");
+
+  jam();
+  eng.setVoiceMute(0, 0, true); // mute channel 0 (foreground + its children)
+  const muted = rms();
+  assert.ok(muted < loud * 0.05, `muted RMS ${muted.toFixed(2)} ≪ ${loud.toFixed(2)} (layer child silenced too)`);
+});
+
+// item 43: note 0 + instrument + a pitch effect (E/F/G) re-triggers the note.
+test("note0 + inst + Fx F triggers the note at the current pitch (item 43)", () => {
+  const eng = new TaudEngine();
+  // Short NON-looping sample so the row-0 note ends before row 1.
+  for (let i = 0; i < 200; i++) eng.sampleBin[i] = 128 + 40;
+  const rec = new Uint8Array(256);
+  const w16 = (o, v) => { rec[o] = v & 0xff; rec[o + 1] = (v >> 8) & 0xff; };
+  w16(4, 200); w16(6, 32000); rec[14] = 0; rec[21] = 0x3f; rec[171] = 255; rec[196] = 255;
+  eng.uploadInstrument(1, rec);
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;                       // row 0: C4, inst 1
+  pat[8 + 2] = 1; pat[8 + 5] = 0x0f; pat[8 + 6] = 0x01; pat[8 + 7] = 0x01; // row 1: note 0, inst 1, F 0101
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0; cue[1] = 0; // ch0 → pattern 0
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+  renderSamples(eng, 3072); // still within row 0 (< 6 ticks = 3840): the 200-frame note has ended
+  assert.equal(v.active, false, "short row-0 note ended, voice idle");
+  assert.ok(v.noteVal >= 0x20, "voice remembers the last note");
+  renderSamples(eng, 1024);  // cross into row 1 (sample 3840)
+  assert.equal(v.active, true, "note0 + inst + F re-triggered the note");
+  assert.equal(v.instrumentId, 1);
+  assert.ok(v.samplePos < 200, "re-triggered from the sample start");
 });

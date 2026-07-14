@@ -33,6 +33,29 @@ export async function initI18n() {
       console.warn(`i18n: can't load "${saved}" (${err.message}) — falling back to en`);
     }
   }
+  applyLangChrome();
+}
+
+/** Apply the per-language page chrome (item 52): set <html lang="…"> and inject
+ *  the language's `css.font` CSS (an `@import` for the webfont plus the rules
+ *  that apply it) into a dedicated <style> after the main stylesheet, so it
+ *  overrides the default UI font. Safe before or after the UI is built; a
+ *  no-op in non-DOM contexts (Node tests). */
+export function applyLangChrome() {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = activeCode;
+  const css = active["css.font"] ?? "";
+  let style = document.getElementById("lang-font-css");
+  if (css) {
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "lang-font-css";
+      document.head.appendChild(style); // last in <head> → wins the cascade
+    }
+    if (style.textContent !== css) style.textContent = css;
+  } else if (style) {
+    style.remove();
+  }
 }
 
 /** Persist a language choice. The caller reloads the page to apply it. */
@@ -66,6 +89,7 @@ export async function changeLang(code) {
     }
   }
   try { localStorage.setItem("microtone-lang", code); } catch { /* private mode */ }
+  applyLangChrome();
   applyDom();
   for (const fn of langListeners) fn(code);
   return true;

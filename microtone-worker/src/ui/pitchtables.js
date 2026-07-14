@@ -312,7 +312,8 @@ export function retuneNearest(song, newPreset, percSlots) {
  * the same running-instrument inheritance as retuneAllPatterns. Mutates the
  * cells; returns [{pat, row, prev}] for restoreNotesOp (via bulkNotesOp).
  */
-export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse) {
+export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse,
+                                      rowLo = 0, rowHi = Infinity) {
   const ptn = song.patterns[patIdx];
   const useTable = preset && preset.table.length > 0;
   const interval = preset?.interval || 0x1000;
@@ -325,6 +326,9 @@ export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coa
     if (note >= 0x0000 && note <= 0x001f) continue; // sentinels/interrupts
     const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
     if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
+    // Row window (a block selection): rows outside it still feed running-inst
+    // above, but are not transposed (item 58).
+    if (row < rowLo || row > rowHi) continue;
 
     let out;
     if (!useTable) {

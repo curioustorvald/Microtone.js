@@ -4,6 +4,11 @@
 // to these strings. "{name}" placeholders are substituted at runtime.
 
 export default {
+  // Per-language UI font (item 52): raw CSS injected by i18n.applyLangChrome —
+  // an @import for the webfont plus the rules that apply it. Empty = the default
+  // Latin UI stack. A translation may override this with a script-specific face.
+  "css.font": "",
+
   // ── topbar ──
   "topbar.playSong": "▶ Song",
   "topbar.playSongTitle": "Play from start (Shift+Space)",
@@ -154,6 +159,21 @@ export default {
   "smp.newInstTitle": "New instrument from {name}",
   "smp.newInstBody": "Creates a fresh instrument that plays this pooled sample ({len} bytes @ {rate} Hz@C4). No new sample data is added.",
   "smp.newInstBtnTitle": "Create a new instrument that plays the selected sample",
+  "smp.paint": "Paint…",
+  "smp.paintTitle": "Repaint the selected sample's waveform by hand (affects every instrument using it)",
+  "wave.title": "Paint a waveform",
+  "wave.editTitle": "Paint sample {name} ({len} bytes)",
+  "wave.longWarn": "This sample is {len} bytes — hand-painting is meant for short waveforms (≤ {limit}). Continue?",
+  "wave.length": "Length (bytes)",
+  "wave.sine": "Sine",
+  "wave.saw": "Saw",
+  "wave.square": "Square",
+  "wave.triangle": "Triangle",
+  "wave.noise": "Noise",
+  "wave.clear": "Clear",
+  "wave.hint": "Drag on the canvas to draw the waveform (up = louder). The whole sample loops as a tone.",
+  "wave.name": "Name",
+  "wave.defaultName": "Painted wave",
 
   // ── instruments view ──
   "inst.add": "Add…",
@@ -167,6 +187,8 @@ export default {
   "inst.sampleImportName": "Name",
   "inst.namePlaceholder": "(unnamed)",
   "inst.nameTitle": "Rename this instrument",
+  "inst.paint": "Paint sample…",
+  "inst.paintTitle": "Draw a new sample waveform by hand and add it as an instrument",
 
   // ── pattern view ──
   "pat.namePlaceholder": "name…",
@@ -174,6 +196,7 @@ export default {
   "pat.preview": "▶ Preview",
   "pat.previewStop": "■ Stop",
   "pat.duplicate": "Duplicate",
+  "pat.duplicatePattern": "Duplicate pattern",
   "pat.duplicateTitle": "Copy this pattern to a new pattern slot",
   "pat.transpose": "Transpose…",
   "pat.transposeTitle": "Shift every note in this pattern (notation-aware)",
@@ -187,7 +210,7 @@ export default {
   "pat.shortenModalTitle": "Shorten — pattern {pat}",
   "pat.shortenBody": "Row r × Factor moves to row r, the rows between dropped, the tail left blank. One undo step.",
   "pat.transposeModalTitle": "Transpose pattern {pat}",
-  "pat.transposeBody": "Key-offs and percussion instruments are skipped. One undo step.",
+  "pat.transposeBody": "Key-offs and percussion instruments are skipped. One undo step. Applies to {scope}.",
   "pat.unitSemitones": "Semitones",
   "pat.unitSteps": "Steps",
   "pat.unitNoteUnits": "Note units",
@@ -217,15 +240,17 @@ export default {
 
   // ── help popup ──
   "help.title": "Microtone — keys",
-  "help.play": "play from cursor / stop",
-  "help.playStart": "play from start",
+  "help.play": "play from cursor row / stop",
+  "help.playStart": "play from start / stop",
+  "help.playCue": "play from the cue under the cursor / stop",
   "help.views": "views (Timeline, Cues, Patterns, Samples, Instruments, Project, File)",
-  "help.record": "record mode on/off",
-  "help.octave": "octave down / up",
-  "help.enter": "Timeline: pick up cell's instrument · Cues: command popup",
+  "help.record": "stop / toggle record mode",
+  "help.octave": "octave down / up · record: nudge the cursor column (note = octave)",
+  "help.instStep": "instrument down / up · record: fine-adjust the cursor column (note = semitone/step)",
   "help.muteSolo": "Timeline, navigate mode: mute / solo the cursor channel (or click / Ctrl+click a channel header)",
   "help.undoRedo": "undo / redo",
-  "help.save": "save to browser disk (OPFS)",
+  "help.save": "save the project to browser disk (OPFS) — anywhere, any time",
+  "help.selectCol": "Timeline (one voice) / Patterns: select the whole column",
   "help.goto": "go to cue:row",
   "help.arrowsDrag": "arrows · drag",
   "help.selExtend": "Timeline/Patterns/Cues: extend a block selection (drag selects sub-columns)",

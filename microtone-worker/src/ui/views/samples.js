@@ -46,7 +46,19 @@ export class SamplesView {
       const res = await newInstrumentFromSample(this.store, s);
       if (res) this.cb.onNewInstrument?.(res.firstSlot);
     });
-    this.toolbar.append(this.editBtn, this.newInstBtn);
+    // "Paint…" is a second editor for the SELECTED pooled sample — repaint its
+    // waveform in place (affects every instrument using it). Sits next to Edit….
+    this.paintBtn = document.createElement("button");
+    this.paintBtn.textContent = t("smp.paint");
+    this.paintBtn.title = t("smp.paintTitle");
+    this.paintBtn.addEventListener("click", async () => {
+      const s = this.list?.[this.selected];
+      if (!s) return;
+      const { paintEditSample } = await import("../popups/waveformpaint.js");
+      await paintEditSample(this.store, s);
+      this.refresh(); // repaint the waveform view
+    });
+    this.toolbar.append(this.editBtn, this.paintBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);

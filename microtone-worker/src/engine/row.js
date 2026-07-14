@@ -102,9 +102,20 @@ export function applyTrackerRow(eng, ts, playhead) {
       ? (row.effectArg >>> 8) & 0xf : 0;
 
     if (note === 0x0000) {
-      // No note + instrument byte: latch instrument, re-seed from its DNV
-      // (PT/FT2/IT/Schism all do this; see AudioAdapter.kt:3050-3061).
-      if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
+      const pitchFx = row.effect === EffectOp.OP_E || row.effect === EffectOp.OP_F ||
+        row.effect === EffectOp.OP_G;
+      if (row.instrment !== 0 && pitchFx && voice.noteVal >= 0x20) {
+        // Note 0 + instrument + a pitch effect (E porta-down / F porta-up /
+        // G tone-porta) TRIGGERS the note at the voice's current pitch, so the
+        // slide has a sounding note to move — previously this only latched the
+        // instrument and stayed silent (item 43; needs the same TSVM fix).
+        applyDuplicateCheck(eng, ts, vi, row.instrment, voice.noteVal);
+        maybeSpawnBackgroundForNNA(eng, ts, voice, vi);
+        const trigVol = row.volumeEff === 0 ? row.volume : -1;
+        triggerMetaOrNote(eng, ts, voice, vi, voice.noteVal, row.instrment, trigVol);
+      } else if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
+        // No note + instrument byte: latch instrument, re-seed from its DNV
+        // (PT/FT2/IT/Schism all do this; see AudioAdapter.kt:3050-3061).
         voice.instrumentId = row.instrment;
         const newInst = eng.instruments[voice.instrumentId];
         const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);

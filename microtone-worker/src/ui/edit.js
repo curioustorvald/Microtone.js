@@ -6,6 +6,7 @@
 // (KeyA..KeyK white, KeyW/E/T/Y/U black) — layout-independent via e.code.
 
 import { MIDDLE_C } from "../engine/constants.js";
+import { stepNoteInTable } from "./pitchtables.js";
 
 export const SUB_NOTE = 0;
 export const SUB_INST = 1;
@@ -20,6 +21,24 @@ export const SUB_NIBBLES = [1, 2, 2, 2, 1, 4];
 // "♯C-4 01 v3F p20 A0F00": note glyphs 0-3, inst 5-6, vol 8-10, pan 12-14,
 // fx 16-20 → 21 chars per cell.
 export const CELL_CHARS = 21;
+
+/**
+ * Lookahead-scroll (item 42): given a cursor position, the current scroll
+ * offset, the number of visible cells and the max scroll, return the new scroll
+ * so the cursor stays inside the central 64% of the viewport — the view scrolls
+ * only when the cursor enters the 18% edge band, and just enough to return it to
+ * that band's boundary. Within the band the scroll is unchanged (keeps any
+ * fractional wheel offset). Used by every grid view's cursor-follow.
+ */
+export function lookahead(pos, scroll, vis, maxScroll) {
+  const clamp = (v) => Math.min(Math.max(v, 0), Math.max(0, maxScroll));
+  if (vis <= 0) return clamp(scroll);
+  const edge = Math.max(1, Math.floor(vis * 0.18));
+  const top = Math.floor(scroll);
+  if (pos < top + edge) return clamp(pos - edge);
+  if (pos > top + vis - 1 - edge) return clamp(pos - (vis - 1 - edge));
+  return clamp(scroll); // cursor already inside the central 64%
+}
 
 /** Cursor sub-position walk order within one channel: [sub, nib] pairs. */
 export const SUB_POSITIONS = [];
@@ -116,6 +135,75 @@ export function semiToNoteInTable(octave, semi, preset) {
   return Math.min(Math.max(val, 0x20), 0xffff);
 }
 
+/** Next/previous selectable instrument slot from `cur`, stepping by `step`
+ *  (+1 = up, -1 = down) through the ascending `slots` list. Off-list current
+ *  values jump to the nearest slot in the step direction. Null if none. */
+function stepInstSlot(cur, step, slots) {
+  if (!slots || slots.length === 0) return null;
+  cur &= 0xff;
+  const i = slots.indexOf(cur);
+  if (i < 0) {
+    if (step > 0) return slots.find((s) => s > cur) ?? slots[slots.length - 1];
+    for (let k = slots.length - 1; k >= 0; k--) if (slots[k] < cur) return slots[k];
+    return slots[0];
+  }
+  return slots[Math.min(Math.max(i + step, 0), slots.length - 1)];
+}
+
+/**
+ * Contextual bracket-key edit (items 47.2 + 47.6). `dir` is -1 for '[' / +1 for
+ * ']'; `shift` selects the '{' / '}' variant. This handles ONLY the record-mode,
+ * cursor-on-a-column edits; the not-record global bindings ([ ] octave, { }
+ * instrument) live in app.js. Per-column behaviour (following the 47.6 table,
+ * with the note column overridden by the 47.2 choice — octave / semitone):
+ *   note: [ ] octave down/up      · Shift {} one semitone/step down/up
+ *   inst: [ prev inst · ] next    · Shift same
+ *   vol : [ vol- · ] vol+         · Shift {} FINE selector, value ∓1
+ *   pan : [ pan- (L) · ] pan+ (R) · Shift {} FINE selector, ∓1 toward L/R
+ *   fx  : no-op
+ * ctx: { preset, instSlots } (instSlots = ascending selectable slots).
+ * Returns { fields } for setCellOp, or null (unhandled / nothing to change).
+ */
+export function interpretBracketKey(dir, shift, sub, cell, ctx) {
+  const clampV = (v) => (v < 0 ? 0 : v > 0x3f ? 0x3f : v);
+  switch (sub) {
+    case SUB_NOTE: {
+      if (cell.note < 0x20) return null; // sentinel / empty: no pitch to nudge
+      const interval = ctx.preset?.interval || 0x1000;
+      const note = shift
+        ? stepNoteInTable(cell.note, ctx.preset, dir)                        // semitone/step
+        : Math.min(Math.max(cell.note + dir * interval, 0x20), 0xffff);      // octave/period
+      return note === cell.note ? null : { fields: { note } };
+    }
+    case SUB_INST: {
+      // '[' = prev instrument (dn), ']' = next (up). '{'/'}' behave the same.
+      const instrment = stepInstSlot(cell.instrment, dir > 0 ? +1 : -1, ctx.instSlots);
+      return instrment == null || instrment === cell.instrment ? null : { fields: { instrment } };
+    }
+    case SUB_VOL: {
+      const empty = cell.volumeEff === 3 && cell.volume === 0;
+      if (shift) { // FINE selector, value ∓1
+        const base = empty ? 0x20 : cell.volume;
+        return { fields: { volume: clampV(base + dir), volumeEff: 3 } };
+      }
+      if (empty) return { fields: { volume: 0x20, volumeEff: 0 } };  // default set
+      // '[' = quieter, ']' = louder (so value += dir).
+      return { fields: { volume: clampV(cell.volume + dir), volumeEff: cell.volumeEff } };
+    }
+    case SUB_PAN: {
+      const empty = cell.panEff === 3 && cell.pan === 0;
+      if (shift) { // FINE selector, ∓1 toward L / R
+        const base = empty ? 0x20 : cell.pan;
+        return { fields: { pan: clampV(base + dir), panEff: 3 } };
+      }
+      if (empty) return { fields: { pan: 0x20, panEff: 0 } };  // default centre
+      // '[' = toward L (pan-), ']' = toward R (pan+).
+      return { fields: { pan: clampV(cell.pan + dir), panEff: cell.panEff } };
+    }
+    default: return null; // fx op/arg: no-op
+  }
+}
+
 function hexDigit(key) {
   if (key.length !== 1) return -1;
   const c = key.toLowerCase().charCodeAt(0);
@@ -156,11 +244,13 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
       return { fields, jamNote: note, advanceRow: true };
     }
     switch (code) {
-      // Sentinels: taut z/x/c/v (and the legacy `/1/2/3), inserted not auditioned.
+      // Sentinels: taut z/x/c/v (and ` for key-off), inserted not auditioned.
+      // Digit 1/2/3 were removed (item 47.3): they clashed with hex input on the
+      // note column; ` is kept because other trackers use it for key-off.
       case "Backquote": case "KeyZ": return { fields: { note: 0x0001 }, advanceRow: true }; // key-off
-      case "Digit1": case "KeyX": return { fields: { note: 0x0002 }, advanceRow: true };    // note cut
-      case "Digit2": case "KeyC": return { fields: { note: 0x0003 }, advanceRow: true };    // note fade
-      case "Digit3": case "KeyV": return { fields: { note: 0x0004 }, advanceRow: true };    // fast fade
+      case "KeyX": return { fields: { note: 0x0002 }, advanceRow: true };    // note cut
+      case "KeyC": return { fields: { note: 0x0003 }, advanceRow: true };    // note fade
+      case "KeyV": return { fields: { note: 0x0004 }, advanceRow: true };    // fast fade
       case "Delete": case "Period":
         return { fields: { note: 0, instrment: 0 }, advanceRow: true };
     }

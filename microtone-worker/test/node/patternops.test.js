@@ -199,6 +199,17 @@ test("transposePatternNotes: 12-TET semitones + octaves, sentinel/perc skip", ()
     transposePatternNotes(song, 0, pitchTablePresets[0], null, -100, 0);
     assert.equal(song.patterns[0][0].note, 0x20);
   }
+  // row window (block selection, item 58): only rows 1..2 shift, running-inst
+  // still accrues across the skipped rows so percussion stays skipped.
+  {
+    const song = mkSong([cellOf(0x5000), cellOf(0x5000), cellOf(0x5000), cellOf(0x5000)]);
+    const changes = transposePatternNotes(song, 0, pitchTablePresets[0], null, 3, 0, 1, 2);
+    assert.equal(changes.length, 2, "only rows 1 and 2 change");
+    assert.equal(song.patterns[0][0].note, 0x5000, "row 0 outside the window");
+    assert.equal(song.patterns[0][1].note, 0x5003);
+    assert.equal(song.patterns[0][2].note, 0x5003);
+    assert.equal(song.patterns[0][3].note, 0x5000, "row 3 outside the window");
+  }
 });
 
 // ── item 22: volume / pan / instrument bulk transforms ──

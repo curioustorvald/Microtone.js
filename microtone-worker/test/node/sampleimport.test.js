@@ -36,6 +36,29 @@ test("buildFreshInstRecord: sane defaults + non-zero vol-env terminator", () => 
   assert.equal(rec[182], 0xff, "filter cutoff off");
 });
 
+test("planSampleImport loop:true makes a looping instrument (item 53 paint)", () => {
+  const doc = loadWhen();
+  const undo = new UndoStack(doc);
+  const pcm = mkPcm(128);
+  const plan = planSampleImport(doc, { nameBytes: enc.encode("Painted wave"), pcm, rate: 32000, loop: true });
+  assert.ok(!plan.error, plan.error);
+  undo.apply(importBankOp(plan));
+  const inst = doc.instruments[plan.insts[0].destSlot];
+  assert.equal(inst.sampleLength, 128);
+  assert.equal(inst.loopMode, 1, "forward loop enabled");
+  assert.equal(inst.sampleLoopStart, 0);
+  assert.equal(inst.sampleLoopEnd, 128, "loops over the whole sample");
+});
+
+test("planSampleImport errors when $01–$FF is exhausted (item 50)", () => {
+  const doc = loadWhen();
+  // Fill every note-addressable slot.
+  for (let s = 1; s <= 255; s++) doc.markInstUsed(s);
+  const plan = planSampleImport(doc, { nameBytes: new Uint8Array(0), pcm: mkPcm(64), rate: 32000 });
+  assert.match(plan.error ?? "", /note-addressable/, "reports no free slot instead of silently failing");
+  assert.equal(plan.insts, undefined);
+});
+
 test("planSampleImport + importBankOp: census/record/names land; undo byte-exact", () => {
   const doc = loadWhen();
   const before = Buffer.from(doc.toBytes());

@@ -11,8 +11,8 @@ import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { paintNoteCell } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
 import {
-  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
+  interpretEditKey, interpretBracketKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
 import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp } from "../../doc/ops.js";
@@ -106,7 +106,9 @@ class PatternPane {
       e.preventDefault();
       const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
       // Wheel-edit only on the active column (record mode); reference panes scroll.
-      if (this.store.record && this.isActive() && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
+      // Never wheel-edit mid drag-selection — then the wheel only scrolls (item 57).
+      if (this.store.record && this.isActive() && this._drag === null &&
+          this.wheelEdit(e, d < 0 ? 1 : -1)) return;
       this.scrollRow = clampInt(this.scrollRow + Math.round(d / ROW_H), 0, 48);
       this.invalidate();
     }, { passive: false });
@@ -146,6 +148,12 @@ class PatternPane {
         this._drag = null;
       }
     });
+
+    // Interacting with the header — ◀/▶, the pattern-number field, or the name
+    // field — focuses this column (item 46).
+    this.header.addEventListener("pointerdown", () => this.container.setActivePane(this));
+    this.patInput.addEventListener("focus", () => this.container.setActivePane(this));
+    this.nameInput.addEventListener("focus", () => this.container.setActivePane(this));
   }
 
   pattern() { return this.store.song?.patterns[this.patIdx] ?? null; }
@@ -161,6 +169,13 @@ class PatternPane {
   // ── row-range selection + clipboard ──
   hasSelection() { return this.sel !== null; }
   clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
+
+  /** Ctrl+A — select the whole pattern column: every row, all sub-columns. */
+  selectColumn() {
+    this.sel = { aRow: 0, row: 63, aSub: 0, sub: SUB_FX_ARG };
+    this.invalidate();
+    this.store.emit("cursor");
+  }
 
   selRowBounds() {
     const s = this.sel;
@@ -192,9 +207,7 @@ class PatternPane {
     this.cursor.row = clampInt(this.cursor.row + dRow, 0, 63);
     this.sel.row = this.cursor.row;
     this.sel.sub = this.cursor.sub; // track the cursor's column band
-    const vis = Math.floor(this.canvas.clientHeight / ROW_H);
-    if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
-    else if (this.cursor.row >= this.scrollRow + vis) this.scrollRow = this.cursor.row - vis + 1;
+    this._followCursor();
     this.invalidate();
     this.store.emit("cursor");
   }
@@ -397,7 +410,7 @@ class PatternPane {
       ? t("pat.unitOctaves") : t("pat.unitPeriods");
     const result = await showModal({
       title: t("pat.transposeModalTitle", { pat: this._titlePat() }),
-      body: t("pat.transposeBody"),
+      body: t("pat.transposeBody", { scope: this._opScope().scope }),
       fields: [
         { name: "fine", label: fineLabel, type: "number", value: 0, min: -4096, max: 4096 },
         { name: "coarse", label: coarseLabel, type: "number", value: 0, min: -10, max: 10 },
@@ -415,8 +428,11 @@ class PatternPane {
       if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
     }
     const patIdx = this.patIdx;
+    // Honour a row-range block selection (item 58); else the whole pattern.
+    const b = this.selRowBounds();
+    const [rowLo, rowHi] = b ? [b.r0, b.r1] : [0, 63];
     store.undo.apply(bulkNotesOp(store.songIndex,
-      (song) => transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse)));
+      (song) => transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse, rowLo, rowHi)));
     this.invalidate();
   }
 
@@ -513,11 +529,15 @@ class PatternPane {
   moveCursor(dRow) {
     this.sel = null;
     this.cursor.row = clampInt(this.cursor.row + dRow, 0, 63);
-    const vis = Math.floor(this.canvas.clientHeight / ROW_H);
-    if (this.cursor.row < this.scrollRow) this.scrollRow = this.cursor.row;
-    else if (this.cursor.row >= this.scrollRow + vis) this.scrollRow = this.cursor.row - vis + 1;
+    this._followCursor();
     this.invalidate();
     this.store.emit("cursor");
+  }
+
+  /** Lookahead-scroll the pattern to keep the cursor in the central 64% (item 42). */
+  _followCursor() {
+    const vis = Math.floor(this.canvas.clientHeight / ROW_H);
+    this.scrollRow = lookahead(this.cursor.row, this.scrollRow, vis, Math.max(0, 64 - vis));
   }
 
   moveSubCursor(dir) {
@@ -560,6 +580,21 @@ class PatternPane {
     }
     if (action.advanceNib) this.moveSubCursor(1);
     else if (action.advanceRow) { c.nib = 0; this.moveCursor(this.store.editStep); }
+    this.invalidate();
+    return true;
+  }
+
+  /** Contextual bracket-key cell edit (item 47.6), record mode only. */
+  bracketEdit(dir, shift) {
+    const store = this.store;
+    if (!store.record) return false;
+    const pattern = this.pattern();
+    if (!pattern) return false;
+    const c = this.cursor;
+    const action = interpretBracketKey(dir, shift, c.sub, pattern[c.row],
+      { preset: store.pitchPreset, instSlots: store.doc.selectableInstrumentSlots() });
+    if (!action) return false;
+    store.undo.apply(setCellOp(store.songIndex, this.patIdx, c.row, action.fields));
     this.invalidate();
     return true;
   }
@@ -776,6 +811,8 @@ export class PatternView {
   applyPatternBytes(fn) { return this.active.applyPatternBytes(fn); }
   hasSelection() { return this.active.hasSelection(); }
   clearSelection() { return this.active.clearSelection(); }
+  selectColumn() { return this.active.selectColumn(); }
+  bracketEdit(dir, shift) { return this.active.bracketEdit(dir, shift); }
   copySelection() { return this.active.copySelection(); }
   cutSelection() { return this.active.cutSelection(); }
   deleteSelection() { return this.active.deleteSelection(); }
@@ -799,7 +836,7 @@ export class PatternView {
   buildBar() {
     this.bar.innerHTML = "";
     this.previewBtn = mkBtn(t("pat.preview"), () => this.togglePreview());
-    const dupBtn = mkBtn(t("pat.duplicate"), () => this.active.duplicate());
+    const dupBtn = mkBtn(t("pat.duplicatePattern"), () => this.active.duplicate());
     dupBtn.title = t("pat.duplicateTitle");
     const trBtn = mkBtn(t("pat.transpose"), () => this.active.transpose());
     trBtn.title = t("pat.transposeTitle");
@@ -813,7 +850,9 @@ export class PatternView {
     panBtn.title = t("pat.panTitle");
     const instBtn = mkBtn(t("pat.instrument"), () => this.active.instrumentOp());
     instBtn.title = t("pat.instrumentTitle");
-    this.bar.append(this.previewBtn, dupBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn);
+    // Duplicate moves to the very end (item 55): preview, transpose, lengthen,
+    // shorten, volume, pan, instrument, then Duplicate pattern.
+    this.bar.append(this.previewBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn, dupBtn);
     this.syncPreviewBtn();
   }
 

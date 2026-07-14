@@ -8,8 +8,8 @@ import { hex2, hex4, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell } from "../glyphs.js";
 import {
-  interpretEditKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS,
+  interpretEditKey, interpretBracketKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
@@ -50,7 +50,9 @@ export class TimelineView {
       // Record mode: wheel over the CURSOR cell increments/decrements the
       // hovered column (wheel up = +1); elsewhere the wheel scrolls. Shift
       // always means "scroll channels" — never a cell edit.
-      if (!e.shiftKey && this.store.record && this.wheelEdit(e, d < 0 ? 1 : -1)) return;
+      // Never wheel-edit mid drag-selection — then the wheel only scrolls (item 57).
+      if (!e.shiftKey && this.store.record && this._drag === null &&
+          this.wheelEdit(e, d < 0 ? 1 : -1)) return;
       if (e.shiftKey) {
         this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
         this.invalidate();
@@ -194,6 +196,17 @@ export class TimelineView {
   // ── block selection + clipboard ──
   hasSelection() { return this.sel !== null; }
   clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
+
+  /** Ctrl+A — select the whole column of the cursor's channel (single voice):
+   *  every row, all sub-columns. */
+  selectColumn() {
+    const map = this.getMap();
+    if (!map) return;
+    const ch = this.store.cursor.ch;
+    this.sel = { aRow: 0, aCh: ch, aSub: 0, row: map.totalRows - 1, ch, sub: SUB_FX_ARG };
+    this.invalidate();
+    this.store.emit("cursor");
+  }
 
   /** Normalised inclusive bounds {r0,r1,c0,c1,colLo,colHi}, or null. colLo/colHi
    *  are the logical-column band (all columns when the selection has no sub
@@ -438,16 +451,17 @@ export class TimelineView {
     this.store.emit("cursor");
   }
 
+  // Lookahead-scrolling (item 42): the cursor moves freely inside the central
+  // 64% of the viewport; the view only scrolls once the cursor enters the 18%
+  // edge band, and then just enough to bring it back to that band's boundary.
+  // (Playback follow still centres — it uses centreRow, not this.)
   keepCursorVisible() {
+    const map = this.getMap();
+    if (!map) return;
     const c = this.store.cursor;
-    const top = Math.floor(this.scrollRow);
-    const vis = this.visibleRows();
-    if (c.row < top) this.scrollRow = c.row;
-    else if (c.row >= top + vis) this.scrollRow = c.row - vis + 1;
-    if (c.ch < this.scrollCh) this.scrollCh = c.ch;
-    else if (c.ch >= this.scrollCh + this.visibleChans()) {
-      this.scrollCh = c.ch - this.visibleChans() + 1;
-    }
+    this.scrollRow = lookahead(c.row, this.scrollRow, this.visibleRows(),
+      Math.max(0, map.totalRows - this.visibleRows()));
+    this.scrollCh = lookahead(c.ch, this.scrollCh, this.visibleChans(), this.maxScrollCh());
   }
 
   /** The pattern cell at (row, ch), or null (empty cue slot / off-map). */
@@ -493,6 +507,21 @@ export class TimelineView {
       c.nib = 0; // field complete: back to its first nibble
       this.moveCursor(store.editStep, 0);
     }
+    this.invalidate();
+    return true;
+  }
+
+  /** Contextual bracket-key cell edit (item 47.6), record mode only. Returns
+   *  true when consumed. */
+  bracketEdit(dir, shift) {
+    const store = this.store;
+    if (!store.record) return false;
+    const target = this.cursorCell();
+    if (!target) return false;
+    const action = interpretBracketKey(dir, shift, store.cursor.sub, target.cell,
+      { preset: store.pitchPreset, instSlots: store.doc.selectableInstrumentSlots() });
+    if (!action) return false;
+    store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, action.fields));
     this.invalidate();
     return true;
   }

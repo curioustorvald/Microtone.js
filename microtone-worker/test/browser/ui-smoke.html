@@ -219,6 +219,58 @@
           log(`new instrument from pooled sample (item 40): made=${madeOk} undo=${undoneOk} btn=${hasBtn} (${madeOk && undoneOk && hasBtn ? "ok" : "FAIL"})`);
         }
 
+        // ── item 53: paint-a-waveform — CREATE (Instruments) + EDIT (Samples) ──
+        {
+          const doc = store.doc;
+          const { paintNewSample, paintEditSample } = await win.eval('import("/src/ui/popups/waveformpaint.js")');
+          // CREATE: new looping instrument (button lives on the Instruments view).
+          const usedBefore = new Set(doc.usedInstrumentSlots());
+          const depth0 = store.undo.undoStack.length;
+          const p = paintNewSample(store);
+          let dlg = [...win.document.querySelectorAll("dialog.wavepaint-modal")].pop();
+          dlg.querySelector(".wave-len").value = "128";
+          dlg.querySelector(".wave-len").dispatchEvent(new win.Event("change", { bubbles: true }));
+          dlg.querySelector('.wave-shapes button[data-shape="sine"]').click();
+          dlg.querySelector(".wave-name").value = "SmokePaint";
+          dlg.querySelector(".wave-ok").click();
+          const res = await p;
+          const slot = res?.firstSlot;
+          const inst = slot != null ? doc.instruments[slot] : null;
+          const madeOk = !!res && !usedBefore.has(slot) && inst && inst.sampleLength === 128 &&
+            inst.loopMode === 1 && inst.sampleLoopEnd === 128 &&
+            doc.instrumentName(slot) === "SmokePaint" && store.undo.undoStack.length === depth0 + 1;
+          store.undo.undo();
+          const undoneOk = !doc.usedInstrumentSlots().includes(slot) && store.undo.undoStack.length === depth0;
+          const iv = win.__microtone.instrumentsView; iv.show();
+          const instBtn = [...(iv.listEl?.querySelectorAll("button") ?? [])]
+            .some((b) => /Paint sample/.test(b.textContent));
+          iv.hide?.();
+
+          // EDIT: repaint a pooled sample in place → pool bytes change (1 undo step).
+          const smpView = win.__microtone.samplesView; smpView.show();
+          const sample = smpView.list.reduce((a, b) => (b.len < a.len ? b : a)); // shortest → avoid the >1024 warn
+          smpView.selected = smpView.list.indexOf(sample);
+          const before = Uint8Array.from(doc.sampleBin.subarray(sample.ptr, sample.ptr + sample.len));
+          const d0 = store.undo.undoStack.length;
+          const origConfirm = win.confirm; win.confirm = () => true; // accept any >1024 warning
+          const pe = paintEditSample(store, sample);
+          dlg = [...win.document.querySelectorAll("dialog.wavepaint-modal")].pop();
+          const noLenInput = !dlg.querySelector(".wave-len"); // fixed length in edit mode
+          dlg.querySelector('.wave-shapes button[data-shape="square"]').click();
+          dlg.querySelector(".wave-ok").click();
+          await pe;
+          win.confirm = origConfirm;
+          const changed = [...doc.sampleBin.subarray(sample.ptr, sample.ptr + sample.len)].some((v, i) => v !== before[i]);
+          const editOneStep = store.undo.undoStack.length === d0 + 1;
+          store.undo.undo();
+          const editUndone = [...doc.sampleBin.subarray(sample.ptr, sample.ptr + sample.len)].every((v, i) => v === before[i]);
+          const smpBtn = [...(smpView.toolbar?.querySelectorAll("button") ?? [])].some((b) => b.textContent === "Paint…");
+          smpView.hide();
+
+          const ok = madeOk && undoneOk && instBtn && noLenInput && changed && editOneStep && editUndone && smpBtn;
+          log(`paint waveform (item 53): create=${madeOk && undoneOk && instBtn} edit=${changed && editOneStep && editUndone} smpBtn=${smpBtn} (${ok ? "ok" : "FAIL"})`);
+        }
+
         // ── item 39: "play from cue" honours the Cues-view cursor ──
         {
           const { cuesView, playCursor } = win.__microtone;
@@ -274,8 +326,10 @@
           const exOk = JSON.stringify([...store.doc.patternBytes(0, 2)]) === JSON.stringify([...want]);
           store.undo.undo();
           const barLabels = [...patternView.bar.querySelectorAll("button")].map((b) => b.textContent);
-          const barOk = ["Duplicate", "Transpose…", "Lengthen…", "Shorten…",
-            "Volume…", "Pan…", "Instrument…"].every((x) => barLabels.includes(x));
+          // Item 55: Duplicate renamed "Duplicate pattern" and moved to the very end.
+          const barOk = ["Duplicate pattern", "Transpose…", "Lengthen…", "Shorten…",
+            "Volume…", "Pan…", "Instrument…"].every((x) => barLabels.includes(x)) &&
+            barLabels[barLabels.length - 1] === "Duplicate pattern";
           log(`pattern Lengthen via bar (+ all seven buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
 
           // ── item 22: volume / pan / instrument bulk popups ──
