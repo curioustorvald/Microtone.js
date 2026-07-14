@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { interpretEditKey, interpretBracketKey, lookahead, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
+import { interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -103,6 +103,37 @@ test("fx column: base-36 opcode then 4 arg nibbles", () => {
   const n3 = interpretEditKey({ code: "KeyF", key: "f" }, SUB_FX_ARG, 3, cell, ctx);
   assert.equal(n3.fields.effectArg, 0x700f);
   assert.ok(n3.advanceRow);
+});
+
+test("rawNoteView: Raw toggle on OR a Raw notation preset", () => {
+  assert.equal(rawNoteView(true, pitchTablePresets[120]), true, "toggle on");
+  assert.equal(rawNoteView(false, pitchTablePresets[120]), false, "12-TET, toggle off");
+  assert.equal(rawNoteView(false, pitchTablePresets[0]), true, "Raw preset (empty table)");
+  assert.equal(rawNoteView(false, null), true, "no preset");
+});
+
+test("raw-hex note entry shifts in + overrides jam/sentinels", () => {
+  const rctx = { octave: 4, currentInst: 5, preset: pitchTablePresets[120], rawHex: true };
+  const cell = new TaudPlayData();
+  // hex digits shift into the 16-bit word, left-to-right
+  cell.note = 0;
+  assert.equal(interpretEditKey({ code: "Digit5", key: "5" }, SUB_NOTE, 0, cell, rctx).fields.note, 0x0005);
+  cell.note = 0x0567;
+  const a = interpretEditKey({ code: "KeyA", key: "a" }, SUB_NOTE, 0, cell, rctx); // 'a' = hex A, NOT jam C
+  assert.equal(a.fields.note, 0x567a);
+  assert.equal(a.jamNote, undefined, "no audition on raw hex entry");
+  // 'c' is hex 0xC — shifts in, does NOT insert the fade sentinel
+  cell.note = 0x0012;
+  assert.equal(interpretEditKey({ code: "KeyC", key: "c" }, SUB_NOTE, 0, cell, rctx).fields.note, 0x012c);
+  // non-hex keys (jam 's', sentinel 'z', backquote) are swallowed: consumed, no edit, no jam
+  for (const [code, key] of [["KeyS", "s"], ["KeyZ", "z"], ["Backquote", "`"]]) {
+    const r = interpretEditKey({ code, key }, SUB_NOTE, 0, cell, rctx);
+    assert.ok(r && !r.fields && r.jamNote === undefined, `${key} swallowed (no jam/sentinel)`);
+  }
+  // Delete clears the note + instrument
+  assert.deepEqual(
+    interpretEditKey({ code: "Delete", key: "Delete" }, SUB_NOTE, 0, cell, rctx).fields,
+    { note: 0, instrment: 0 });
 });
 
 test("non-edit keys pass through", () => {

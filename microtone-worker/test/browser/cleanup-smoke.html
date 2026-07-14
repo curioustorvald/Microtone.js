@@ -1,0 +1,55 @@
+<!doctype html><meta charset="utf-8"><title>cleanup smoke (item 60)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1100px;height:640px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const { store, projectView: pv } = M;
+
+  // Buttons present on the Project view.
+  pv.show();
+  const labels = [...pv.root.querySelectorAll("button")].map((b) => b.textContent);
+  const hasBtns = ["Cleanup patterns", "Renumber patterns", "Cleanup instruments & samples"]
+    .every((x) => labels.includes(x));
+
+  const origConfirm = win.confirm; win.confirm = () => true;
+  win.alert = (m) => log("alert: " + m); // headless alert() blocks the page
+
+  // Create an UNUSED high-number pattern (item 48) so cleanup has something to do.
+  const { setCellOp } = await win.eval('import("/src/doc/ops.js")');
+  store.undo.apply(setCellOp(store.songIndex, 600, 0, { note: 0x5000, instrment: 1 }));
+  const d0 = store.undo.undoStack.length;
+
+  // Pattern cleanup + undo (rewrites cues, one undo step). Light enough for the
+  // sandboxed headless chromium; the bank cleanup op is node-tested separately.
+  const patsBefore = store.doc.songs[store.songIndex].patterns.length; // ≥ 601
+  pv.cleanupPatterns();
+  const patStep = store.undo.undoStack.length === d0 + 1;
+  const patsAfter = store.doc.songs[store.songIndex].patterns.length;
+  const removedUnused = patsAfter < patsBefore;
+  if (patStep) store.undo.undo();
+  const patUndone = store.undo.undoStack.length === d0 &&
+    store.doc.songs[store.songIndex].patterns.length === patsBefore;
+
+  win.confirm = origConfirm;
+  pv.hide();
+
+  log(`buttons present: ${hasBtns}`);
+  log(`pattern cleanup (${patsBefore}→${patsAfter} patterns) removed=${removedUnused} undo=${patUndone}`);
+  const ok = hasBtns && patStep && removedUnused && patUndone;
+  log(ok ? "PASS item 60 Project housekeeping (patterns)" : "FAIL");
+ } catch (e) { log("THROW: " + (e && e.stack || e)); }
+})();
+</script>

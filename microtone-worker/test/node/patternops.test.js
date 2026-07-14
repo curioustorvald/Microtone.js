@@ -11,7 +11,7 @@ import {
   emptyPatternBytes, expandPatternBytes, shrinkPatternBytes,
   scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
 } from "../../src/doc/patterntools.js";
-import { setPatternBytesOp, appendPatternOp, bulkNotesOp } from "../../src/doc/ops.js";
+import { setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellOp } from "../../src/doc/ops.js";
 import { pitchTablePresets, transposePatternNotes, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
@@ -118,6 +118,33 @@ test("setPatternBytesOp: whole-pattern swap, undo/redo byte-exact", () => {
   assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
   undo.redo();
   assert.ok(Buffer.from(doc.toBytes()).equals(after), "redo byte-exact");
+});
+
+test("item 48: arbitrary-number pattern — edit beyond the end materialises + round-trips", () => {
+  const doc = loadWhen();
+  const n0 = doc.songs[0].patterns.length;
+  const target = n0 + 5; // several past the end
+
+  // ensurePattern grows with NULL gaps and fills only the target.
+  doc.ensurePattern(0, target);
+  assert.equal(doc.songs[0].patterns.length, target + 1);
+  assert.equal(doc.songs[0].patterns[n0], null, "gap stays null (cheap)");
+  assert.ok(doc.songs[0].patterns[target], "target materialised");
+  assert.equal(doc.ensurePattern(0, target), doc.songs[0].patterns[target], "idempotent");
+
+  // A cell edit through the op path materialises too (from a fresh doc).
+  const doc2 = loadWhen();
+  const undo = new UndoStack(doc2);
+  undo.apply(setCellOp(0, target, 3, { note: 0x5000, instrment: 7 }));
+  assert.equal(doc2.songs[0].patterns[target][3].note, 0x5000);
+
+  // Save emits the whole 0..target range (gaps empty); reparse restores it.
+  const doc3 = new Document(parseTaud(doc2.toBytes()));
+  assert.ok(doc3.songs[0].patterns.length >= target + 1);
+  assert.equal(doc3.songs[0].patterns[target][3].note, 0x5000);
+  assert.equal(doc3.patternBytes(0, n0)[0], emptyPatternBytes()[0], "gap serialised empty");
+  // gap pattern is all-empty
+  assert.deepEqual([...doc3.patternBytes(0, n0)], [...emptyPatternBytes()]);
 });
 
 test("appendPatternOp: duplicate grows the list; undo pops it byte-exact", () => {

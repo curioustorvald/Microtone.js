@@ -97,6 +97,9 @@
           stFile.includes("Neue Œuvre") && !stFile.includes("\\u0152");
         log(`project rename escapes + status shows decoded name: ${projOk ? "ok" : "FAIL"}`);
 
+        // (item 60 Project housekeeping is covered by test/browser/cleanup-smoke.html
+        //  — it needs real-time + a stubbed alert(), so it lives in its own page.)
+
         // ── song rename now lives on the File tab's song list ──
         const gone = !win.document.getElementById("songRenameBtn");
         pv.changeName("Renamed Song", 0);
@@ -463,6 +466,34 @@
           store.record = false;
           store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
           log(`record mode: shift+wheel over cursor cell scrolls, no edit: ${chScrolled && noEdit ? "ok" : "FAIL"}`);
+        }
+
+        // ── raw-hex note entry (Raw on): hex types into the note word; jam off ──
+        {
+          const kd = (code, k, opts = {}) =>
+            win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key: k, bubbles: true, ...opts }));
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          const rawWas = store.rawNoteView;
+          store.rawNoteView = true; store.record = true;
+          store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 }; // note column
+          const target0 = timeline.cursorCell();
+          let noteOk = false, jamOverridden = false, hexA = false;
+          if (target0) {
+            const depth0 = store.undo.undoStack.length;
+            kd("Delete", "Delete");
+            kd("Digit5", "5"); kd("Digit0", "0"); kd("Digit0", "0"); kd("Digit0", "0");
+            noteOk = timeline.cursorCell().cell.note === 0x5000;
+            const before = timeline.cursorCell().cell.note;
+            win.__microtone.jam.held.clear();
+            kd("KeyS", "s"); // non-hex jam key → swallowed, no jam, no edit
+            jamOverridden = win.__microtone.jam.held.size === 0 && timeline.cursorCell().cell.note === before;
+            kd("KeyA", "a"); // 'a' = hex A, NOT jam C
+            hexA = timeline.cursorCell().cell.note === (((before << 4) | 0xa) & 0xffff);
+            while (store.undo.undoStack.length > depth0) store.undo.undo();
+          }
+          store.record = false; store.rawNoteView = rawWas;
+          store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+          log(`raw-hex note entry (Raw on): note=${noteOk} jamOff=${jamOverridden} hexA=${hexA} (${noteOk && jamOverridden && hexA ? "ok" : "FAIL"})`);
         }
 
         // ── item 24: piano keys are inert on Cues / Project / File ──

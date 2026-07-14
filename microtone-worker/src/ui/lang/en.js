@@ -320,6 +320,18 @@ export default {
   "recover.body": "An autosave of \"{name}\" from {when} exists.",
   "recover.ok": "Recover",
 
+  // ── housekeeping (project view, item 60) ──
+  "clean.title": "Housekeeping",
+  "clean.patterns": "Cleanup patterns",
+  "clean.patternsTitle": "Remove patterns that no cue references; renumber the survivors and rewrite the cues",
+  "clean.renumber": "Renumber patterns",
+  "clean.renumberTitle": "Compact every pattern into play order (drops gaps), rewriting the cues",
+  "clean.bank": "Cleanup instruments & samples",
+  "clean.bankTitle": "Remove instruments no pattern uses and free the sample data only they referenced",
+  "clean.nothing": "Nothing to clean up.",
+  "clean.patternsConfirm": "Remove {removed} unused pattern(s) and renumber the rest? Cues are rewritten. This can be undone.",
+  "clean.bankConfirm": "Remove {insts} unused instrument(s) and free {bytes} sample bytes? This can be undone.",
+
   // ── retune popup (project view) ──
   "retune.title": "Retune all patterns",
   "retune.body": "Current: {name}. Notes remap onto the new table; percussion instruments are skipped. One undo step.",

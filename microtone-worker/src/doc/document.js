@@ -325,6 +325,15 @@ export class Document {
 
   /** Fold decoded-instrument edits back into the image's inst region —
    *  edited slots only, so unedited records round-trip byte-exact. */
+  /** Drop the decoded-instrument cache so the next access re-decodes from the
+   *  (possibly replaced) image; also clears pending-edit state. Used by bank-level
+   *  ops that swap the whole image + Ixmp (import / cleanup). */
+  _resetInstrumentCache() {
+    this._instruments = null;
+    this._instrumentsEdited = false;
+    this._editedSlots.clear();
+  }
+
   _rebuildInstRegion() {
     if (!this._instrumentsEdited || this.sampleInstImage === null) return;
     const instRegion = this.sampleInstImage.subarray(SAMPLEBIN_SIZE);
@@ -382,7 +391,9 @@ export class Document {
         globalFlags: s.globalFlags,
         globalVolume: s.globalVolume,
         mixingVolume: s.mixingVolume,
-        patterns: s.patterns.map(encodePattern),
+        // Null gaps (unmaterialised arbitrary-number patterns, item 48) serialise
+        // as empty patterns — gzip compresses the sparsity.
+        patterns: s.patterns.map((p) => (p ? encodePattern(p) : emptyPatternBytes())),
         cues: s.cues,
       })),
       projSections: this.projSections,
@@ -390,11 +401,45 @@ export class Document {
   }
 
   /** Encode one pattern back to its 512-byte image (worklet sync). An index
-   *  past the end (a just-undone append) serves the empty-cell image so the
-   *  sync flush blanks the worklet's stale copy. */
+   *  past the end (a just-undone append) or a null gap (item 48) serves the
+   *  empty-cell image so the sync flush blanks the worklet's stale copy. */
   patternBytes(songIdx, patIdx) {
     const rows = this.songs[songIdx].patterns[patIdx];
     return rows ? encodePattern(rows) : emptyPatternBytes();
+  }
+
+  // ── item 48: arbitrary pattern numbers ──
+  // Every pattern 0x0000..0x7FFE is conceptually available. The in-memory array
+  // is grown (with `null` gaps — cheap) only when a pattern is actually EDITED;
+  // gaps and the whole 0..length-1 range serialise as empty patterns (gzip
+  // compresses the sparsity), so a song can reference/create any pattern number
+  // without pre-creating the ones below it.
+
+  /** Highest addressable pattern index (cue words are 15-bit, 0x7FFF = empty). */
+  static get MAX_PATTERN() { return 0x7ffe; }
+
+  /** The materialised pattern object at (songIdx, patIdx), or null (a gap /
+   *  never-edited index). Read paths that want an editable-but-empty view use
+   *  emptyPattern() instead. */
+  patternAt(songIdx, patIdx) {
+    return this.songs[songIdx].patterns[patIdx] ?? null;
+  }
+
+  /** Shared read-only empty pattern for displaying an unmaterialised index. */
+  emptyPattern() {
+    return (this._emptyPattern ??= decodePattern(emptyPatternBytes()));
+  }
+
+  /** Materialise (songIdx, patIdx) so it can be edited: pad the array with null
+   *  gaps up to patIdx, then fill patIdx with a fresh empty pattern (gaps stay
+   *  null until they too are edited). Returns the pattern object. Idempotent —
+   *  a no-op when the pattern already exists (so undo of an ordinary edit stays
+   *  byte-exact). */
+  ensurePattern(songIdx, patIdx) {
+    const pats = this.songs[songIdx].patterns;
+    for (let i = pats.length; i < patIdx; i++) pats[i] = null;
+    if (!pats[patIdx]) pats[patIdx] = decodePattern(emptyPatternBytes());
+    return pats[patIdx];
   }
 
   /** Parsed-shape view for offline rendering (offline-render.js) — includes

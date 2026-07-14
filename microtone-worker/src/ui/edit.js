@@ -100,6 +100,13 @@ export const JAM_SEMIS = Object.freeze({
   KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12,
 });
 
+/** Whether the note column is showing raw hex words (the Raw toggle is on, or
+ *  the notation preset is Raw — no degree table). When true the note column
+ *  accepts raw hex entry instead of the piano jam / sentinels. */
+export function rawNoteView(rawToggle, preset) {
+  return !!rawToggle || !preset || preset.table.length === 0;
+}
+
 /** 12-EDO note word for semitone offset from C at `octave` (C4 = MIDDLE_C). */
 export function semiToNote(octave, semi) {
   const val = MIDDLE_C + (octave - 4) * 4096 + Math.round((semi * 4096) / 12);
@@ -235,6 +242,18 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
   const { code, key } = ev;
 
   if (sub === SUB_NOTE) {
+    // Raw hex note entry — active whenever the note column shows raw hex words
+    // (Raw toggle on, or a Raw notation preset). Hex digits shift into the
+    // 16-bit note word (left-to-right), OVERRIDING the piano jam, the sentinels
+    // and any other note-column key; non-hex keys are swallowed so nothing jams.
+    if (ctx.rawHex) {
+      if (code === "Delete" || code === "Period") {
+        return { fields: { note: 0, instrment: 0 }, advanceRow: true };
+      }
+      const d = hexDigit(key);
+      if (d < 0) return { consumed: true }; // swallow (no jam / no sentinel), no edit
+      return { fields: { note: ((cell.note << 4) | d) & 0xffff } };
+    }
     if (code in JAM_SEMIS) {
       const note = semiToNoteInTable(ctx.octave, JAM_SEMIS[code], ctx.preset);
       const fields = { note };

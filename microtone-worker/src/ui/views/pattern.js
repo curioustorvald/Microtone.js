@@ -11,7 +11,7 @@ import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { paintNoteCell } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
 import {
-  interpretEditKey, interpretBracketKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
@@ -156,11 +156,15 @@ class PatternPane {
     this.nameInput.addEventListener("focus", () => this.container.setActivePane(this));
   }
 
-  pattern() { return this.store.song?.patterns[this.patIdx] ?? null; }
+  // Arbitrary-number patterns (item 48): an unmaterialised index shows the
+  // shared empty pattern (editable — the first edit materialises it).
+  pattern() {
+    return this.store.song?.patterns[this.patIdx] ?? this.store.doc?.emptyPattern() ?? null;
+  }
 
   setPattern(idx) {
-    const numPats = this.store.song?.patterns.length ?? 0;
-    this.patIdx = clampInt(idx, 0, Math.max(numPats - 1, 0));
+    // Every pattern 0x0000..0x7FFE is navigable, whether or not it exists yet.
+    this.patIdx = this.store.song ? clampInt(idx, 0, 0x7ffe) : 0;
     this.sel = null;
     this.refreshHeader();
     this.invalidate();
@@ -428,6 +432,7 @@ class PatternPane {
       if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
     }
     const patIdx = this.patIdx;
+    store.doc.ensurePattern(store.songIndex, patIdx); // materialise if arbitrary-number (item 48)
     // Honour a row-range block selection (item 58); else the whole pattern.
     const b = this.selRowBounds();
     const [rowLo, rowHi] = b ? [b.r0, b.r1] : [0, 63];
@@ -570,7 +575,8 @@ class PatternPane {
     const cell = pattern[c.row];
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, cell,
-      { octave: this.jam.octave, currentInst: this.jam.currentInst, preset: this.store.pitchPreset });
+      { octave: this.jam.octave, currentInst: this.jam.currentInst, preset: this.store.pitchPreset,
+        rawHex: rawNoteView(this.store.rawNoteView, this.store.pitchPreset) });
     if (!action) return false;
     if (action.fields) {
       this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, c.row, action.fields));

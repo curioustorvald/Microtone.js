@@ -8,7 +8,7 @@ import { hex2, hex4, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell } from "../glyphs.js";
 import {
-  interpretEditKey, interpretBracketKey, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
 } from "../edit.js";
@@ -492,7 +492,8 @@ export class TimelineView {
     const c = store.cursor;
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, target.cell,
-      { octave: jam.octave, currentInst: jam.currentInst, preset: store.pitchPreset });
+      { octave: jam.octave, currentInst: jam.currentInst, preset: store.pitchPreset,
+        rawHex: rawNoteView(store.rawNoteView, store.pitchPreset) });
     if (!action) return false;
 
     if (action.fields) {

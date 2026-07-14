@@ -16,6 +16,7 @@ export function setCellOp(song, pat, row, fields, gestureId = null) {
     song, pat, row, fields, gestureId,
     coalesceKey: `cell:${song}:${pat}:${row}`,
     apply(doc) {
+      doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
       const cell = doc.songs[song].patterns[pat][row];
       const prev = {};
       for (const k of Object.keys(fields)) {
@@ -281,6 +282,7 @@ export function setPatternBytesOp(song, pat, bytes, gestureId = null) {
     song, pat, bytes, gestureId,
     coalesceKey: `patbytes:${song}:${pat}`,
     apply(doc) {
+      doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
       const rows = doc.songs[song].patterns[pat];
       const prev = new Uint8Array(512);
       for (let r = 0; r < 64; r++) {
@@ -310,6 +312,7 @@ export function setCellsBytesOp(song, writes, gestureId = null) {
       const inverse = new Array(writes.length);
       for (let i = 0; i < writes.length; i++) {
         const { pat, row, bytes } = writes[i];
+        doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
         const cell = s.patterns[pat][row];
         const prev = new Uint8Array(8);
         for (let b = 0; b < 8; b++) { prev[b] = cell.getByte(b); cell.setByte(b, bytes[b]); }
@@ -542,5 +545,54 @@ export function setSongScalarOp(song, key, value, gestureId = null) {
       return setSongScalarOp(song, key, prev, gestureId);
     },
     dirty: () => [{ kind: "scalar", song, key }],
+  };
+}
+
+/** Structural pattern remap (item 60 cleanup / renumber): swap in a new
+ *  patterns array + rewritten cue words + reordered pNam, all in one invertible
+ *  step (snapshot swap, like importBankOp). `newPNam` is a payload or null.
+ *  The dirty tag triggers a full song re-sync (every pattern + cue changed). */
+export function remapPatternsOp(song, newPatterns, newCues, newPNam, gestureId = null) {
+  return {
+    type: "remapPatterns",
+    song, gestureId,
+    apply(doc) {
+      const s = doc.songs[song];
+      const oldPatterns = s.patterns;
+      const oldCues = s.cues;
+      const sec = doc.projSections.find((x) => x.fourcc === "pNam");
+      const oldPNam = sec ? sec.payload : null;
+      s.patterns = newPatterns;
+      s.cues = newCues;
+      doc.setSection("pNam", newPNam);
+      doc.dirty = true;
+      return remapPatternsOp(song, oldPatterns, oldCues, oldPNam, gestureId);
+    },
+    dirty: () => [{ kind: "resync", song }],
+  };
+}
+
+/** Bank cleanup (item 60): swap in the cleaned image + INam/SNam + Ixmp (unused
+ *  instruments removed, orphaned samples freed) in one invertible step. `plan`
+ *  is planBankCleanup()'s result; the inverse restores the pre-cleanup bank. */
+export function cleanupBankOp(plan, gestureId = null) {
+  return {
+    type: "cleanupBank",
+    gestureId,
+    apply(doc) {
+      const secOf = (fourcc) => {
+        const s = doc.projSections.find((x) => x.fourcc === fourcc);
+        return s ? s.payload : null;
+      };
+      const old = { image: doc.sampleInstImage, inam: secOf("INam"), snam: secOf("SNam"), ixmp: doc.ixmp };
+      doc.sampleInstImage = plan.image;
+      doc.setSection("INam", plan.inam);
+      doc.setSection("SNam", plan.snam);
+      doc.ixmp = plan.ixmp;
+      doc._resetInstrumentCache();
+      doc.dirty = true;
+      return cleanupBankOp(old, gestureId);
+    },
+    dirty: () => [{ kind: "bank" }],
   };
 }

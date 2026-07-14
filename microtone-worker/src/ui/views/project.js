@@ -2,7 +2,10 @@
 // (eager-synced via ops), tuning display, project metadata. Reference:
 // taut.js VIEW_PROJECT. Pitch-table retune is an M8 item.
 
-import { setSongScalarOp, retuneOp } from "../../doc/ops.js";
+import { setSongScalarOp, retuneOp, remapPatternsOp, cleanupBankOp } from "../../doc/ops.js";
+import {
+  planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
+} from "../../doc/cleanup.js";
 import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
@@ -167,6 +170,69 @@ export class ProjectView {
     addBtn.addEventListener("click", () => this.addSong());
     songBar.append(addBtn);
     this.root.appendChild(songBar);
+
+    // ── Housekeeping (item 60): compact the project ──
+    const houseHead = document.createElement("h3");
+    houseHead.textContent = t("clean.title");
+    this.root.appendChild(houseHead);
+    const houseBar = document.createElement("div");
+    houseBar.className = "toolbox";
+    houseBar.style.borderBottom = "none";
+    houseBar.style.padding = "0.4rem 0";
+    houseBar.style.flexWrap = "wrap";
+    const hbtn = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    houseBar.append(
+      hbtn(t("clean.patterns"), t("clean.patternsTitle"), () => this.cleanupPatterns()),
+      hbtn(t("clean.renumber"), t("clean.renumberTitle"), () => this.renumberPatterns()),
+      hbtn(t("clean.bank"), t("clean.bankTitle"), () => this.cleanupBank()),
+    );
+    this.root.appendChild(houseBar);
+  }
+
+  /** Remove patterns no cue references (renumber survivors, rewrite cues + pNam). */
+  cleanupPatterns() {
+    const store = this.store, song = store.song;
+    const order = planCleanupPatterns(song);
+    const removed = song.patterns.filter(Boolean).length - order.length;
+    if (removed <= 0 && this._isIdentityOrder(order, song)) { alert(t("clean.nothing")); return; }
+    if (!confirm(t("clean.patternsConfirm", { removed: Math.max(removed, 0) }))) return;
+    this._applyRemap(order);
+  }
+
+  /** Compact + reorder ALL materialised patterns into play order (drops gaps). */
+  renumberPatterns() {
+    const store = this.store, song = store.song;
+    const order = planRenumberPatterns(song);
+    if (this._isIdentityOrder(order, song)) { alert(t("clean.nothing")); return; }
+    this._applyRemap(order);
+  }
+
+  _isIdentityOrder(order, song) {
+    return order.length === song.patterns.length && order.every((v, i) => v === i);
+  }
+
+  _applyRemap(order) {
+    const store = this.store;
+    const plan = applyPatternOrder(store.song, order, store.doc._nameTable("pNam"));
+    store.undo.apply(remapPatternsOp(store.songIndex, plan.patterns, plan.cues, encodeNameTable(plan.pNam)));
+    store.emit("edit", [{ kind: "resync", song: store.songIndex }]);
+    this.refresh();
+  }
+
+  /** Remove unused instruments + free their orphaned samples (one undo step). */
+  cleanupBank() {
+    const store = this.store;
+    const plan = planBankCleanup(store.doc);
+    if (plan.removedInstruments === 0 && plan.freedSampleBytes === 0) { alert(t("clean.nothing")); return; }
+    if (!confirm(t("clean.bankConfirm", { insts: plan.removedInstruments, bytes: plan.freedSampleBytes }))) return;
+    store.undo.apply(cleanupBankOp(plan));
+    store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
   }
 
   /** Rename the project (PNam section). Same \uHHHH escape convention as

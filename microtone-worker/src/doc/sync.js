@@ -43,6 +43,11 @@ export class DocSync {
         case "cue":
           this.audio.uploadCue(tag.cue, this.doc.cueBytes(this.songIndex, tag.cue));
           break;
+        case "resync":
+          // A structural pattern remap (cleanup / renumber, item 60) rewrote
+          // every pattern index + cue word: re-push all patterns (lazily) + cues.
+          this.resyncSong();
+          break;
         case "scalar":
           this.pushScalar(tag.key);
           break;
@@ -76,6 +81,15 @@ export class DocSync {
       case "mixingVolume": this.audio.setSongMixingVolume(0, s.mixingVolume); break;
       case "globalFlags": this.audio.setTrackerMixerFlags(0, s.globalFlags); break;
       // tuning fields have no device state (editor-only)
+    }
+  }
+
+  /** Re-push every pattern (lazily) + cue after a structural remap (item 60). */
+  resyncSong() {
+    const s = this.doc.songs[this.songIndex];
+    for (let p = 0; p < s.patterns.length; p++) this.dirtyPatterns.add(p);
+    for (let c = 0; c < s.cues.length; c++) {
+      this.audio.uploadCue(c, this.doc.cueBytes(this.songIndex, c));
     }
   }
 

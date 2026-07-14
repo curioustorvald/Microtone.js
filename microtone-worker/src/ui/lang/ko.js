@@ -317,6 +317,18 @@ export default {
   "recover.body": "{when}에 저장된 \"{name}\"의 자동 저장본이 있습니다.",
   "recover.ok": "복구",
 
+  // ── housekeeping (project view, item 60) ──
+  "clean.title": "정리",
+  "clean.patterns": "패턴 정리",
+  "clean.patternsTitle": "어떤 큐도 참조하지 않는 패턴을 제거하고, 남은 패턴을 다시 번호 매기며 큐를 갱신합니다",
+  "clean.renumber": "패턴 번호 다시 매기기",
+  "clean.renumberTitle": "모든 패턴을 재생 순서로 압축하고(빈칸 제거) 큐를 갱신합니다",
+  "clean.bank": "악기·샘플 정리",
+  "clean.bankTitle": "어떤 패턴도 쓰지 않는 악기를 제거하고 그 악기만 참조하던 샘플 데이터를 비웁니다",
+  "clean.nothing": "정리할 항목이 없습니다.",
+  "clean.patternsConfirm": "사용하지 않는 패턴 {removed}개를 제거하고 나머지를 다시 번호 매길까요? 큐가 재작성됩니다. 실행 취소할 수 있습니다.",
+  "clean.bankConfirm": "사용하지 않는 악기 {insts}개를 제거하고 샘플 {bytes}바이트를 비울까요? 실행 취소할 수 있습니다.",
+
   // ── retune popup (project view) ──
   "retune.title": "모든 패턴 리튜닝",
   "retune.body": "현재: {name}. 음표를 새 표에 다시 매핑합니다. 타악기는 건너뜁니다. 실행 취소 한 단계.",
