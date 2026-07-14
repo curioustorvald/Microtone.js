@@ -899,6 +899,11 @@ class Voice {
     this.playbackRate = 1.0;
     this.forward = true;
     this.instrumentId = 0;
+    // Display-only: the pattern-level instrument that triggered this voice (a
+    // metainstrument's SLOT, not the layer-child it resolves to) — so the
+    // Timeline voice header shows the number the user sees in the pattern. No
+    // Kotlin counterpart (write-only, like renderPitch).
+    this.displayInst = 0;
 
     // -1 for live foreground voices; 0..NUM_VOICES-1 = source channel for background ghosts.
     this.sourceChannel = -1;
@@ -1440,6 +1445,7 @@ class Playhead {
       // "What's playing" state — cleared alongside the volume reset so a stale
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
+      it.displayInst = 0;
       it.samplePos = 0.0;
       it.playbackRate = 1.0;
       it.forward = true;
@@ -2224,6 +2230,10 @@ function cutLayerChildren(ts, vi) {
  * (or -1), used for velocity-conditional layer/patch resolution.
  */
 function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) {
+  // Remember the pattern-level instrument for the Timeline header (a meta's slot,
+  // not the layer child triggerNote resolves it to). A note with no instrument
+  // byte keeps the last one, matching what the pattern shows.
+  if (instId !== 0) voice.displayInst = instId;
   releaseLayerChildren(eng, ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {
@@ -4402,7 +4412,8 @@ class TaudEngine {
 
   getVoiceInstrument(ph, vi) {
     const v = this._voice(ph, vi);
-    return v.active ? v.instrumentId & 0x3ff : 0;
+    // Pattern-level instrument (meta slot), not the resolved layer child.
+    return v.active ? (v.displayInst || v.instrumentId) & 0x3ff : 0;
   }
 
   getVoiceSamplePos(ph, vi) {
@@ -4661,7 +4672,9 @@ function fillSnapshotInto(eng, playhead, f) {
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
-      f[o + SNAP_V_INST] = v.instrumentId & 0x3ff;
+      // Show the pattern-level instrument (a meta's slot), not the resolved
+      // layer child; fall back to instrumentId before the first meta/plain trigger.
+      f[o + SNAP_V_INST] = (v.displayInst || v.instrumentId) & 0x3ff;
       f[o + SNAP_V_SAMPLE_POS] = v.samplePos;
       f[o + SNAP_V_SAMPLE_PTR] = v.activeSamplePtr;
       f[o + SNAP_V_SAMPLE_LEN] = v.activeSampleLength;

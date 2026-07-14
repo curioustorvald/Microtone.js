@@ -46,6 +46,11 @@ export class Voice {
     this.playbackRate = 1.0;
     this.forward = true;
     this.instrumentId = 0;
+    // Display-only: the pattern-level instrument that triggered this voice (a
+    // metainstrument's SLOT, not the layer-child it resolves to) — so the
+    // Timeline voice header shows the number the user sees in the pattern. No
+    // Kotlin counterpart (write-only, like renderPitch).
+    this.displayInst = 0;
 
     // -1 for live foreground voices; 0..NUM_VOICES-1 = source channel for background ghosts.
     this.sourceChannel = -1;

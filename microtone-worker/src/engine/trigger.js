@@ -173,6 +173,10 @@ export function cutLayerChildren(ts, vi) {
  * (or -1), used for velocity-conditional layer/patch resolution.
  */
 export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) {
+  // Remember the pattern-level instrument for the Timeline header (a meta's slot,
+  // not the layer child triggerNote resolves it to). A note with no instrument
+  // byte keeps the last one, matching what the pattern shows.
+  if (instId !== 0) voice.displayInst = instId;
   releaseLayerChildren(eng, ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {

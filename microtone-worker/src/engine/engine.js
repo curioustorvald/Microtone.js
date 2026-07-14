@@ -404,7 +404,8 @@ export class TaudEngine {
 
   getVoiceInstrument(ph, vi) {
     const v = this._voice(ph, vi);
-    return v.active ? v.instrumentId & 0x3ff : 0;
+    // Pattern-level instrument (meta slot), not the resolved layer child.
+    return v.active ? (v.displayInst || v.instrumentId) & 0x3ff : 0;
   }
 
   getVoiceSamplePos(ph, vi) {

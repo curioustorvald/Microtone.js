@@ -102,7 +102,9 @@ export function fillSnapshotInto(eng, playhead, f) {
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
-      f[o + SNAP_V_INST] = v.instrumentId & 0x3ff;
+      // Show the pattern-level instrument (a meta's slot), not the resolved
+      // layer child; fall back to instrumentId before the first meta/plain trigger.
+      f[o + SNAP_V_INST] = (v.displayInst || v.instrumentId) & 0x3ff;
       f[o + SNAP_V_SAMPLE_POS] = v.samplePos;
       f[o + SNAP_V_SAMPLE_PTR] = v.activeSamplePtr;
       f[o + SNAP_V_SAMPLE_LEN] = v.activeSampleLength;

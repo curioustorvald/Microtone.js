@@ -332,3 +332,25 @@ test("note0 + inst + Fx F triggers the note at the current pitch (item 43)", () 
   assert.equal(v.instrumentId, 1);
   assert.ok(v.samplePos < 200, "re-triggered from the sample start");
 });
+
+// Timeline header: a metainstrument voice reports the META slot (what the
+// pattern shows), not the layer child it resolves to (displayInst).
+test("getVoiceInstrument reports the metainstrument slot, not the layer child", () => {
+  const corpus = fileURLToPath(new URL("../corpus/flourish.taud", import.meta.url));
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, parseTaud(readFileSync(corpus)), 0);
+  eng.jamNote(0, 0, 0x50ab, 6); // meta $6 sounds here; foreground = its layer-0 child
+  const v = eng.playheads[0].trackerState.voices[0];
+  assert.ok(v.active, "meta foreground voice is active");
+  assert.equal(eng.instruments[6].isMeta, true, "slot 6 is a metainstrument");
+  assert.notEqual(v.instrumentId, 6, "instrumentId resolved to a sub-instrument");
+  assert.equal(eng.getVoiceInstrument(0, 0), 6, "header shows the meta slot $06");
+
+  // A plain instrument still reports itself.
+  eng.jamStop(0);
+  const plain = eng.usedInstrumentSlots?.().find?.(() => false);
+  let plainSlot = 0;
+  for (let s = 1; s < 256; s++) { const i = eng.instruments[s]; if (i && !i.isMeta && i.sampleLength > 0) { plainSlot = s; break; } }
+  eng.jamNote(0, 1, 0x5000, plainSlot);
+  assert.equal(eng.getVoiceInstrument(0, 1), plainSlot, "plain instrument reports itself");
+});
