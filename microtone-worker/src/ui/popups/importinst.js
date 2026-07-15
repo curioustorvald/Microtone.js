@@ -111,7 +111,7 @@ export async function showImportInstruments(store) {
     const okBtn = document.createElement("button");
     okBtn.textContent = "Import";
     const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Cancel";
+    cancelBtn.textContent = t("common.cancel");
     btnRow.append(okBtn, cancelBtn);
 
     dlg.append(h, hint, bar, list, info, errEl, btnRow);
@@ -192,7 +192,7 @@ export function importFromSf2(store, fileName, sf2Bytes) {
     btnRow.className = "modal-buttons";
     const okBtn = el("button", "", "Import");
     okBtn.disabled = true;
-    const cancelBtn = el("button", "", "Cancel");
+    const cancelBtn = el("button", "", t("common.cancel"));
     btnRow.append(okBtn, cancelBtn);
 
     dlg.append(h, bar, list, statusEl, errEl, btnRow);

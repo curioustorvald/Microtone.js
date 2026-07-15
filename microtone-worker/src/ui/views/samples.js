@@ -112,14 +112,14 @@ export class SamplesView {
 
   updateInfo() {
     const s = this.list[this.selected];
-    if (!s) { this.info.textContent = "no samples"; return; }
-    const loopModes = ["no loop", "forward", "ping-pong", "one-shot"];
+    if (!s) { this.info.textContent = t("smp.noSamples"); return; }
+    const loopModes = [t("smp.noLoop"), t("smp.loopForward"), t("smp.loopPingpong"), t("smp.loopOneshot")];
     this.info.innerHTML =
-      `<b>${escape(unescapeName(s.name) || "(unnamed)")}</b> · ptr 0x${s.ptr.toString(16).toUpperCase()} · ` +
-      `${s.len} bytes · ${s.rate} Hz@C4 · ${loopModes[s.loopMode & 3]}` +
+      `<b>${escape(unescapeName(s.name) || escape(t("smp.namePlaceholder")))}</b> · ptr 0x${s.ptr.toString(16).toUpperCase()} · ` +
+      `${escape(t("smp.infoBytes", { n: s.len }))} · ${s.rate} Hz@C4 · ${escape(loopModes[s.loopMode & 3])}` +
       `${(s.loopMode & 3) !== 0 ? ` [${s.loopStart}..${s.loopEnd}]` : ""}` +
-      `${(s.loopMode & 4) !== 0 ? " · sustain" : ""}` +
-      ` · used by ${s.users.map((u) => "$" + hex2(u)).join(" ")}`;
+      `${(s.loopMode & 4) !== 0 ? ` · ${escape(t("smp.infoSustain"))}` : ""}` +
+      ` · ${escape(t("smp.infoUsedBy", { list: s.users.map((u) => "$" + hex2(u)).join(" ") }))}`;
   }
 
   /** Per-frame: live play cursors + list dots while audio runs. */

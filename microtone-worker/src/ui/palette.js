@@ -4,6 +4,7 @@
 // documentation (no commands) on the fx-arg column.
 
 import { SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "./edit.js";
+import { t } from "./i18n.js";
 
 // Effect reference (TAUD_NOTE_EFFECTS.md digest): name + argument format.
 export const FX_INFO = {
@@ -84,57 +85,57 @@ export class CommandPalette {
 
     switch (ctx.sub) {
       case SUB_NOTE:
-        label("note");
-        btn("key-off ===", "note word 0001 (z)", () => ctx.apply({ note: 0x0001 }));
-        btn("cut ^^^", "note word 0002 (x)", () => ctx.apply({ note: 0x0002 }));
-        btn("fade ~~~", "note word 0003 (c)", () => ctx.apply({ note: 0x0003 }));
-        btn("fast-fade ~^~", "note word 0004 (v)", () => ctx.apply({ note: 0x0004 }));
-        btn("clear", "Delete", () => ctx.apply({ note: 0, instrment: 0 }));
-        hint("A S D F G H J K piano · W E T Y U black · [ ] octave · wheel = ±1 degree");
+        label(t("pal.note"));
+        btn(t("pal.sentKeyOff"), t("pal.sentKeyOffTitle"), () => ctx.apply({ note: 0x0001 }));
+        btn(t("pal.sentCut"), t("pal.sentCutTitle"), () => ctx.apply({ note: 0x0002 }));
+        btn(t("pal.sentFade"), t("pal.sentFadeTitle"), () => ctx.apply({ note: 0x0003 }));
+        btn(t("pal.sentFastFade"), t("pal.sentFastFadeTitle"), () => ctx.apply({ note: 0x0004 }));
+        btn(t("pal.clear"), t("pal.clearNoteTitle"), () => ctx.apply({ note: 0, instrment: 0 }));
+        hint(t("pal.noteHint"));
         break;
       case SUB_INST:
-        label("instrument");
-        hint("hex 00..FF · Enter = pick up from cell · wheel ±1 · Instruments tab selects the jam instrument");
+        label(t("pal.instrument"));
+        hint(t("pal.instHint"));
         break;
       case SUB_VOL: {
-        label("vol column");
+        label(t("pal.volColumn"));
         const sel = ctx.cell.volumeEff;
         const isNoop = sel === 3 && ctx.cell.volume === 0;
-        btn("set v", "volume set (00..3F)", () => ctx.apply({ volumeEff: 0 }), !isNoop && sel === 0);
-        btn("slide up +", "per-tick slide up", () => ctx.apply({ volumeEff: 1 }), sel === 1);
-        btn("slide dn −", "per-tick slide down", () => ctx.apply({ volumeEff: 2 }), sel === 2);
-        btn("fine ±", "one-shot delta (bit5 = up)", () => ctx.apply({ volumeEff: 3 }), !isNoop && sel === 3);
-        btn("clear", "no-op sentinel", () => ctx.apply({ volume: 0, volumeEff: 3 }));
-        hint("hex digits set the value · wheel ±1");
+        btn(t("pal.volSet"), t("pal.volSetTitle"), () => ctx.apply({ volumeEff: 0 }), !isNoop && sel === 0);
+        btn(t("pal.slideUp"), t("pal.slideUpTitle"), () => ctx.apply({ volumeEff: 1 }), sel === 1);
+        btn(t("pal.slideDn"), t("pal.slideDnTitle"), () => ctx.apply({ volumeEff: 2 }), sel === 2);
+        btn(t("pal.fine"), t("pal.volFineTitle"), () => ctx.apply({ volumeEff: 3 }), !isNoop && sel === 3);
+        btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply({ volume: 0, volumeEff: 3 }));
+        hint(t("pal.hexHint"));
         break;
       }
       case SUB_PAN: {
-        label("pan column");
+        label(t("pal.panColumn"));
         const sel = ctx.cell.panEff;
         const isNoop = sel === 3 && ctx.cell.pan === 0;
-        btn("set p", "pan set (00=L..3F=R)", () => ctx.apply({ panEff: 0 }), !isNoop && sel === 0);
-        btn("slide → ", "per-tick slide right", () => ctx.apply({ panEff: 1 }), sel === 1);
-        btn("slide ←", "per-tick slide left", () => ctx.apply({ panEff: 2 }), sel === 2);
-        btn("fine ±", "one-shot delta (bit5 = right)", () => ctx.apply({ panEff: 3 }), !isNoop && sel === 3);
-        btn("clear", "no-op sentinel", () => ctx.apply({ pan: 0, panEff: 3 }));
-        hint("hex digits set the value · wheel ±1");
+        btn(t("pal.panSet"), t("pal.panSetTitle"), () => ctx.apply({ panEff: 0 }), !isNoop && sel === 0);
+        btn(t("pal.slideRight"), t("pal.slideRightTitle"), () => ctx.apply({ panEff: 1 }), sel === 1);
+        btn(t("pal.slideLeft"), t("pal.slideLeftTitle"), () => ctx.apply({ panEff: 2 }), sel === 2);
+        btn(t("pal.fine"), t("pal.panFineTitle"), () => ctx.apply({ panEff: 3 }), !isNoop && sel === 3);
+        btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply({ pan: 0, panEff: 3 }));
+        hint(t("pal.hexHint"));
         break;
       }
       case SUB_FX_OP: {
-        label("effect");
+        label(t("pal.effect"));
         for (const [op, info] of Object.entries(FX_INFO)) {
           btn(info.l, `${info.n} — ${info.a}`, () => ctx.apply({ effect: parseInt(op, 10) }),
             ctx.cell.effect === parseInt(op, 10));
         }
-        btn("×", "clear effect", () => ctx.apply({ effect: 0, effectArg: 0 }));
+        btn("×", t("pal.clearFxTitle"), () => ctx.apply({ effect: 0, effectArg: 0 }));
         break;
       }
       case SUB_FX_ARG: {
         const info = FX_INFO[ctx.cell.effect];
-        label("argument");
+        label(t("pal.argument"));
         hint(info
           ? `${info.l} ${info.n}: ${info.a}`
-          : ctx.cell.effect === 0 ? "no effect on this row" : "unknown opcode");
+          : ctx.cell.effect === 0 ? t("pal.noEffect") : t("pal.unknownOpcode"));
         break;
       }
     }

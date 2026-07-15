@@ -32,16 +32,16 @@ const ENV_TIME_FRAC = 0.8;
 // 7; vol/pan have no role bit). `base*` name the base-inst fields the fresh
 // block is seeded from (filter/pitch resolve their base slot dynamically).
 const ENV_KINDS = [
-  { key: "volEnv", loopKey: "volEnvLoop", susKey: "volEnvSustain", label: "Vol",
+  { key: "volEnv", loopKey: "volEnvLoop", susKey: "volEnvSustain", labelKey: "adv.volEnv",
     max: 63, defVal: 0x3f, mbit: null, base: "vol",
     liveIdx: "getVoiceEnvVolIndex", liveTime: "getVoiceEnvVolTime" },
-  { key: "panEnv", loopKey: "panEnvLoop", susKey: "panEnvSustain", label: "Pan",
+  { key: "panEnv", loopKey: "panEnvLoop", susKey: "panEnvSustain", labelKey: "adv.panEnv",
     max: 255, defVal: 0x80, mbit: null, base: "pan",
     liveIdx: "getVoiceEnvPanIndex", liveTime: "getVoiceEnvPanTime" },
-  { key: "filterEnv", loopKey: "filterEnvLoop", susKey: "filterEnvSustain", label: "Filter",
+  { key: "filterEnv", loopKey: "filterEnvLoop", susKey: "filterEnvSustain", labelKey: "adv.filterEnv",
     max: 255, defVal: 0x80, mbit: 1, base: "role",
     liveIdx: "getVoiceEnvFilterIndex", liveTime: "getVoiceEnvFilterTime" },
-  { key: "pitchEnv", loopKey: "pitchEnvLoop", susKey: "pitchEnvSustain", label: "Pitch",
+  { key: "pitchEnv", loopKey: "pitchEnvLoop", susKey: "pitchEnvSustain", labelKey: "adv.pitchEnv",
     max: 255, defVal: 0x80, mbit: 0, base: "role",
     liveIdx: "getVoiceEnvPitchIndex", liveTime: "getVoiceEnvPitchTime" },
 ];
@@ -572,7 +572,7 @@ export class AdvancedZoneEditor {
     tabs.className = "subtabs adv-envtabs";
     ENV_KINDS.forEach((k, i) => {
       const b = document.createElement("button");
-      b.textContent = k.label;
+      b.textContent = t(k.labelKey);
       b.className = i === this.envKind ? "active" : "";
       b.addEventListener("click", () => { this.envKind = i; this.selNode = 0; this.render(); });
       tabs.appendChild(b);
@@ -615,7 +615,7 @@ export class AdvancedZoneEditor {
       return;
     }
     const has = p[kind.key] !== null;
-    box.appendChild(this.chk(t("adv.envOverride", { env: kind.label }), has,
+    box.appendChild(this.chk(t("adv.envOverride", { env: t(kind.labelKey) }), has,
       (on) => this.setEnvBlock(kind, on), t("adv.envOverrideTitle")));
     if (!has) {
       const note = document.createElement("div");
@@ -710,11 +710,11 @@ export class AdvancedZoneEditor {
     });
 
     this.row(wrap,
-      this.num("Node", selN, 0, active - 1, (v) => { this.selNode = v; this.render(); }),
-      this.num("Value", node.value, 0, kind.max,
+      this.num(t("env.node"), selN, 0, active - 1, (v) => { this.selNode = v; this.render(); }),
+      this.num(t("env.value"), node.value, 0, kind.max,
         (v) => editEnv((q, e) => { e[selN].value = v; })),
       (() => {
-        const l = this.num("Seg (s)", minifloatToDouble(node.offset).toFixed(3), 0, 10,
+        const l = this.num(t("env.seg"), minifloatToDouble(node.offset).toFixed(3), 0, 10,
           () => {});
         const inp = l.querySelector("input");
         inp.step = 0.01;
@@ -729,17 +729,17 @@ export class AdvancedZoneEditor {
 
     const susW = p[kind.susKey];
     this.row(wrap,
-      this.chk("Sustain", ((susW >> 5) & 1) !== 0, (on) => setWordBit(kind.susKey, 5, on)),
-      this.num("start", (susW >> 8) & 0x1f, 0, active - 1, (v) => setWordField(kind.susKey, 8, 0x1f, v)),
-      this.num("end", susW & 0x1f, 0, active - 1, (v) => setWordField(kind.susKey, 0, 0x1f, v)));
+      this.chk(t("env.sustain"), ((susW >> 5) & 1) !== 0, (on) => setWordBit(kind.susKey, 5, on)),
+      this.num(t("env.start"), (susW >> 8) & 0x1f, 0, active - 1, (v) => setWordField(kind.susKey, 8, 0x1f, v)),
+      this.num(t("env.end"), susW & 0x1f, 0, active - 1, (v) => setWordField(kind.susKey, 0, 0x1f, v)));
     const loopW = p[kind.loopKey];
     this.row(wrap,
-      this.chk("Loop", ((loopW >> 5) & 1) !== 0, (on) => setWordBit(kind.loopKey, 5, on)),
-      this.num("start", (loopW >> 8) & 0x1f, 0, active - 1, (v) => setWordField(kind.loopKey, 8, 0x1f, v)),
-      this.num("end", loopW & 0x1f, 0, active - 1, (v) => setWordField(kind.loopKey, 0, 0x1f, v)));
+      this.chk(t("env.loop"), ((loopW >> 5) & 1) !== 0, (on) => setWordBit(kind.loopKey, 5, on)),
+      this.num(t("env.start"), (loopW >> 8) & 0x1f, 0, active - 1, (v) => setWordField(kind.loopKey, 8, 0x1f, v)),
+      this.num(t("env.end"), loopW & 0x1f, 0, active - 1, (v) => setWordField(kind.loopKey, 0, 0x1f, v)));
     this.row(wrap,
-      this.chk("Envelope present", envPresent(loopW), (on) => setWordBit(kind.loopKey, 13, on)),
-      this.chk("Log timescale", this.logTime, (on) => { this.logTime = on; this.drawEnv(); }));
+      this.chk(t("env.present"), envPresent(loopW), (on) => setWordBit(kind.loopKey, 13, on)),
+      this.chk(t("env.logTimescale"), this.logTime, (on) => { this.logTime = on; this.drawEnv(); }));
     return wrap;
   }
 

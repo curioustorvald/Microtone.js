@@ -22,9 +22,9 @@ import { t } from "../i18n.js";
 const ENV_TIME_FRAC = 0.8;
 
 const ENV_TABS = [
-  { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", label: "Vol env",
+  { key: "volEnvelopes", loopKey: "volEnvLoop", susKey: "volEnvSustainWord", labelKey: "inst.tabVolEnv",
     max: 63, liveIdx: "getVoiceEnvVolIndex", liveTime: "getVoiceEnvVolTime" },
-  { key: "panEnvelopes", loopKey: "panEnvLoop", susKey: "panEnvSustainWord", label: "Pan env",
+  { key: "panEnvelopes", loopKey: "panEnvLoop", susKey: "panEnvSustainWord", labelKey: "inst.tabPanEnv",
     max: 255, liveIdx: "getVoiceEnvPanIndex", liveTime: "getVoiceEnvPanTime" },
 ];
 
@@ -52,7 +52,7 @@ function roleTabDef(inst, wantFilter) {
   else { slot = SLOT1; active = false; }                            // both hold the other role → loser
   return {
     ...slot,
-    label: wantFilter ? "Filter env" : "Pitch env",
+    labelKey: wantFilter ? "inst.envFilter" : "inst.envPitch",
     max: 255,
     role: wantFilter ? "filter" : "pitch",
     roleActive: active,
@@ -170,7 +170,7 @@ export class InstrumentsView {
       row.innerHTML =
         `<span class="dot"></span>` +
         `<span class="idx">$${slot.toString(16).toUpperCase().padStart(3, "0")}</span>` +
-        `<span class="name">${escape(unescapeName(doc.instrumentName(slot)) || "(unnamed)")}</span>` +
+        `<span class="name">${escape(unescapeName(doc.instrumentName(slot)) || t("inst.unnamed"))}</span>` +
         `<span class="badge-sm">${kind}</span>`;
       row.addEventListener("click", () => {
         this.selected = slot;
@@ -202,9 +202,9 @@ export class InstrumentsView {
     this.tabBar.innerHTML = "";
     const inst = this.store.doc?.instruments[this.selected];
     const tabs = inst?.isMeta
-      ? [["meta", "Layers"]]
-      : [["general", "General"], ["env0", "Vol env"], ["env1", "Pan env"],
-         ["pitch", "Pitch"], ["filter", "Filter"], ["zones", "Zones"]];
+      ? [["meta", t("inst.tabLayers")]]
+      : [["general", t("inst.tabGeneral")], ["env0", t("inst.tabVolEnv")], ["env1", t("inst.tabPanEnv")],
+         ["pitch", t("inst.tabPitch")], ["filter", t("inst.tabFilter")], ["zones", t("inst.tabZones")]];
     for (const [key, label] of tabs) {
       const b = document.createElement("button");
       b.textContent = label;
@@ -276,7 +276,7 @@ export class InstrumentsView {
   refreshListLabel(slot) {
     const r = this.rowEls?.find((e) => e.slot === slot);
     const nameEl = r?.el.querySelector(".name");
-    if (nameEl) nameEl.textContent = unescapeName(this.store.doc.instrumentName(slot)) || "(unnamed)";
+    if (nameEl) nameEl.textContent = unescapeName(this.store.doc.instrumentName(slot)) || t("inst.unnamed");
   }
 
   /** Repaint one list row's kind badge (IXMP·n) after a patch edit. */
@@ -411,7 +411,7 @@ export class InstrumentsView {
     const c = document.createElement("input");
     c.type = "checkbox"; c.checked = checked;
     c.addEventListener("change", () => onChange(c.checked));
-    wrap.append(c, document.createTextNode(checked ? "on" : "off"));
+    wrap.append(c, document.createTextNode(checked ? t("inst.on") : t("inst.off")));
     row.append(lab, wrap);
     return row;
   }
@@ -441,7 +441,7 @@ export class InstrumentsView {
     const ann = (v) =>
       `$${(v & 0xffff).toString(16).toUpperCase().padStart(4, "0")} · ` +
       `${((v * 1200) / 4096).toFixed(1)} cents, 4096-TET`;
-    return this.sliderRow("Detune", value, min, max,
+    return this.sliderRow(t("inst.detune"), value, min, max,
       (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, "sampleDetune", v & 0xffff, gid)),
       { ann, wide: true });
   }
@@ -455,67 +455,69 @@ export class InstrumentsView {
     // NNA UI value: 4 = Key Lift (flag bit 5), else 0..3 (flag bits 0-1).
     const nna = ((inst.instrumentFlag >> 5) & 1) ? 4 : (inst.instrumentFlag & 3);
 
-    this.group("Volume",
-      this.sliderRow("Global vol", inst.instGlobalVolume, 0, 255, fSet("instGlobalVolume"), { ann: annHex2 }),
-      this.sliderRow("Default note vol", inst.defaultNoteVolume, 0, 255, fSet("defaultNoteVolume"), { ann: annHex2 }),
-      this.sliderRow("Fadeout", fadeout, 0, 1024, (v, gid) =>
+    this.group(t("inst.grpVolume"),
+      this.sliderRow(t("inst.globalVol"), inst.instGlobalVolume, 0, 255, fSet("instGlobalVolume"), { ann: annHex2 }),
+      this.sliderRow(t("inst.defaultNoteVol"), inst.defaultNoteVolume, 0, 255, fSet("defaultNoteVolume"), { ann: annHex2 }),
+      this.sliderRow(t("inst.fadeout"), fadeout, 0, 1024, (v, gid) =>
         this.applyQuiet(setInstBytesOp(this.selected,
           [[172, v & 0xff], [173, (inst.fadeoutHigh & 0x10) | ((v >> 8) & 0x0f)]], gid)),
         { ann: annFadeout, log: true }),
-      this.sliderRow("Swing", inst.volumeSwing, 0, 255, fSet("volumeSwing"), { ann: annHex2 }),
+      this.sliderRow(t("inst.swing"), inst.volumeSwing, 0, 255, fSet("volumeSwing"), { ann: annHex2 }),
     );
 
-    this.group("Panning",
-      this.sliderRow("Default pan", inst.defaultPan, 0, 255, fSet("defaultPan"), { ann: annHex2 }),
-      this.sliderRow("Pitch-pan sep", inst.pitchPanSeparation, -128, 127, fSet("pitchPanSeparation")),
-      this.sliderRow("Pan swing", inst.panSwing, 0, 255, fSet("panSwing"), { ann: annHex2 }),
-      this.sliderRow("Pitch-pan centre", inst.pitchPanCentre, 0, 0xffff, fSet("pitchPanCentre"), { ann: annHex4 }),
+    this.group(t("inst.grpPanning"),
+      this.sliderRow(t("inst.defaultPan"), inst.defaultPan, 0, 255, fSet("defaultPan"), { ann: annHex2 }),
+      this.sliderRow(t("inst.pitchPanSep"), inst.pitchPanSeparation, -128, 127, fSet("pitchPanSeparation")),
+      this.sliderRow(t("inst.panSwing"), inst.panSwing, 0, 255, fSet("panSwing"), { ann: annHex2 }),
+      this.sliderRow(t("inst.pitchPanCentre"), inst.pitchPanCentre, 0, 0xffff, fSet("pitchPanCentre"), { ann: annHex4 }),
       // Pan LOOP word bit 7 = "use default pan" (engine trigger.js:280).
-      this.checkRow("Use default pan", ((inst.panEnvLoop >> 7) & 1) !== 0,
+      this.checkRow(t("inst.useDefaultPan"), ((inst.panEnvLoop >> 7) & 1) !== 0,
         (on) => this.setEnvWordBit("panEnvLoop", 7, on)),
     );
 
-    this.group("Filter",
-      this.selectRow("Mode", sfMode ? 1 : 0, [[0, "ImpulseTracker"], [1, "SoundFont2"]],
+    this.group(t("inst.grpFilter"),
+      this.selectRow(t("inst.filterModeLabel"), sfMode ? 1 : 0, [[0, "ImpulseTracker"], [1, "SoundFont2"]],
         (v) => this.setField("fadeoutHigh", (inst.fadeoutHigh & 0x0f) | (v << 4))),
       sfMode
         // SoundFont: 16-bit cutoff (absolute cents, bytes 182/252) → Hz,
         // resonance (centibels above DC gain, bytes 183/253) → dB.
-        ? this.sliderRow("Cutoff", inst.defaultCutoff16, 1500, 13500, (v, gid) =>
+        ? this.sliderRow(t("inst.cutoff"), inst.defaultCutoff16, 1500, 13500, (v, gid) =>
             this.applyQuiet(setInstBytesOp(this.selected, [[182, (v >> 8) & 0xff], [252, v & 0xff]], gid)),
             { ann: annSfCutoff })
-        : this.sliderRow("Cutoff", inst.defaultCutoff, 0, 255, fSet("defaultCutoff"), { ann: annFilter }),
+        : this.sliderRow(t("inst.cutoff"), inst.defaultCutoff, 0, 255, fSet("defaultCutoff"), { ann: annFilter }),
       sfMode
-        ? this.sliderRow("Resonance", inst.defaultResonance16, 0, 960, (v, gid) =>
+        ? this.sliderRow(t("inst.resonance"), inst.defaultResonance16, 0, 960, (v, gid) =>
             this.applyQuiet(setInstBytesOp(this.selected, [[183, (v >> 8) & 0xff], [253, v & 0xff]], gid)),
             { ann: annSfReso })
-        : this.sliderRow("Resonance", inst.defaultResonance, 0, 255, fSet("defaultResonance"), { ann: annFilter }),
+        : this.sliderRow(t("inst.resonance"), inst.defaultResonance, 0, 255, fSet("defaultResonance"), { ann: annFilter }),
     );
 
-    this.group("Vibrato",
-      this.selectRow("Wave", (inst.instrumentFlag >> 2) & 7,
-        [[0, "sine"], [1, "ramp down"], [2, "square"], [3, "random"], [4, "ramp up"]],
+    this.group(t("inst.grpVibrato"),
+      this.selectRow(t("inst.vibWaveLabel"), (inst.instrumentFlag >> 2) & 7,
+        [[0, t("inst.vibSine")], [1, t("inst.vibRampDown")], [2, t("inst.vibSquare")],
+         [3, t("inst.vibRandom")], [4, t("inst.vibRampUp")]],
         flagSet(7, 2)),
-      this.sliderRow("Speed", inst.vibratoSpeed, 0, 255, fSet("vibratoSpeed"), { ann: annHex2 }),
-      this.sliderRow("Depth", inst.vibratoDepth, 0, 255, fSet("vibratoDepth"), { ann: annHex2 }),
-      this.sliderRow("Sweep", inst.vibratoSweep, 0, 255, fSet("vibratoSweep"), { ann: annHex2 }),
-      this.sliderRow("Rate", inst.vibratoRate, 0, 255, fSet("vibratoRate"), { ann: annHex2 }),
+      this.sliderRow(t("inst.vibSpeed"), inst.vibratoSpeed, 0, 255, fSet("vibratoSpeed"), { ann: annHex2 }),
+      this.sliderRow(t("inst.vibDepth"), inst.vibratoDepth, 0, 255, fSet("vibratoDepth"), { ann: annHex2 }),
+      this.sliderRow(t("inst.vibSweep"), inst.vibratoSweep, 0, 255, fSet("vibratoSweep"), { ann: annHex2 }),
+      this.sliderRow(t("inst.vibRate"), inst.vibratoRate, 0, 255, fSet("vibratoRate"), { ann: annHex2 }),
     );
 
-    this.group("Note actions",
-      this.selectRow("New Note Action", nna,
-        [[0, "Note off"], [1, "Note cut"], [2, "Continue"], [3, "Note fade"], [4, "Key lift"]],
+    this.group(t("inst.grpNoteActions"),
+      this.selectRow(t("inst.nna"), nna,
+        [[0, t("inst.nnaNoteOff")], [1, t("inst.nnaNoteCut")], [2, t("inst.nnaContinue")],
+         [3, t("inst.nnaNoteFade")], [4, t("inst.nnaKeyLift")]],
         (v) => {
           // Key Lift = bit 5 set, NNA bits 0-1 = 00 (the 0b100 "Nnn" pattern);
           // 0..3 = traditional NNA with bit 5 clear. Preserve vib-waveform bits.
           const base = inst.instrumentFlag & ~0x23;
           this.setField("instrumentFlag", v === 4 ? (base | 0x20) : (base | (v & 3)));
         }),
-      this.selectRow("Duplicate Check Type", inst.dupCheckFlag & 3,
-        [[0, "Never"], [1, "Note"], [2, "Sample"], [3, "Instrument"]],
+      this.selectRow(t("inst.dct"), inst.dupCheckFlag & 3,
+        [[0, t("inst.dctNever")], [1, t("inst.dctNote")], [2, t("inst.dctSample")], [3, t("inst.dctInstrument")]],
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~3) | v)),
-      this.selectRow("Duplicate Check Action", (inst.dupCheckFlag >> 2) & 3,
-        [[0, "Cut"], [1, "Off"], [2, "Fade"]],
+      this.selectRow(t("inst.dca"), (inst.dupCheckFlag >> 2) & 3,
+        [[0, t("inst.dcaCut")], [1, t("inst.dcaOff")], [2, t("inst.dcaFade")]],
         (v) => this.setField("dupCheckFlag", (inst.dupCheckFlag & ~0x0c) | (v << 2))),
     );
 
@@ -525,10 +527,10 @@ export class InstrumentsView {
     editRow.className = "slider-row";
     const editLab = document.createElement("span");
     editLab.className = "sl-label";
-    editLab.textContent = "Play/loop/sustain";
+    editLab.textContent = t("inst.playLoopSustain");
     const editBtn = document.createElement("button");
     editBtn.textContent = t("smp.edit");
-    editBtn.title = "Waveform editor for this instrument's play start / loop points / sustain";
+    editBtn.title = t("inst.sampleEditTitle");
     editBtn.disabled = inst.sampleLength <= 0;
     editBtn.addEventListener("click", async () => {
       const { openInstSampleEditor } = await import("../popups/sampleeditor.js");
@@ -537,21 +539,21 @@ export class InstrumentsView {
     });
     editRow.append(editLab, editBtn);
 
-    this.group("Sample",
-      this.numRow("Sample ptr", inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v), { ann: annHex6 }),
-      this.numRow("Sample len", inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
-      this.numRow("Rate @C4", inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v), { ann: (v) => v + " Hz" }),
-      this.numRow("Loop start", inst.sampleLoopStart, 0, 65535, (v) => this.setField("sampleLoopStart", v)),
-      this.numRow("Loop end", inst.sampleLoopEnd, 0, 65535, (v) => this.setField("sampleLoopEnd", v)),
-      this.selectRow("Loop mode", inst.loopMode & 3,
-        [[0, "off"], [1, "forward"], [2, "ping-pong"], [3, "one-shot"]],
+    this.group(t("inst.grpSample"),
+      this.numRow(t("inst.samplePtr"), inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v), { ann: annHex6 }),
+      this.numRow(t("inst.sampleLen"), inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
+      this.numRow(t("inst.rateC4"), inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v), { ann: (v) => v + " Hz" }),
+      this.numRow(t("inst.loopStart"), inst.sampleLoopStart, 0, 65535, (v) => this.setField("sampleLoopStart", v)),
+      this.numRow(t("inst.loopEnd"), inst.sampleLoopEnd, 0, 65535, (v) => this.setField("sampleLoopEnd", v)),
+      this.selectRow(t("inst.loopMode"), inst.loopMode & 3,
+        [[0, t("smp.loopOff")], [1, t("smp.loopForward")], [2, t("smp.loopPingpong")], [3, t("smp.loopOneshot")]],
         (v) => this.setField("loopMode", (inst.loopMode & ~3) | v)),
-      this.selectRow("Percussion", (inst.loopMode >> 4) & 1, [[0, "no"], [1, "yes"]],
+      this.selectRow(t("inst.percussion"), (inst.loopMode >> 4) & 1, [[0, t("inst.no")], [1, t("inst.yes")]],
         (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
       editRow,
     );
 
-    this.group("Tuning", this.detuneRow(inst));
+    this.group(t("inst.grpTuning"), this.detuneRow(inst));
   }
 
   renderEnv(inst, tabDef) {
@@ -559,15 +561,15 @@ export class InstrumentsView {
     const present = envPresent(inst[tabDef.loopKey]);
     const head = document.createElement("div");
     head.className = "detail-info";
+    const label = t(tabDef.labelKey);
     if (tabDef.role) {
       head.innerHTML = tabDef.roleActive
-        ? `${tabDef.label} — drag nodes on the graph, or use the controls below`
-        : `${tabDef.label}: <b>none</b> — drag a node (or press Add node) to add ${tabDef.role === "filter"
-            ? "a filter-cutoff modulation envelope" : "a pitch-bend envelope"}`;
+        ? t("inst.envHeaderActive", { label })
+        : t("inst.envHeaderRoleNone", { label,
+            what: t(tabDef.role === "filter" ? "inst.envAddFilter" : "inst.envAddPitch") });
     } else {
-      head.innerHTML =
-        `${tabDef.label}: ${present ? "<b>present</b>" : "<b>absent</b>"}` +
-        ` — drag nodes on the graph, or use the controls below`;
+      head.innerHTML = t("inst.envHeaderState", { label,
+        state: t(present ? "inst.envStatePresent" : "inst.envStateAbsent") });
     }
     this.panel.appendChild(head);
 
@@ -700,50 +702,50 @@ export class InstrumentsView {
 
     // node select + value + segment duration + add/remove
     wrap.appendChild(row(
-      spin("Node", sel, 0, active - 1, 1, (v) => {
+      spin(t("env.node"), sel, 0, active - 1, 1, (v) => {
         this.selectedNode = Math.min(Math.max(parseInt(v, 10) || 0, 0), active - 1);
         this.renderPanel();
       }),
-      spin("Value", node.value, 0, max, 1, (v) =>
+      spin(t("env.value"), node.value, 0, max, 1, (v) =>
         this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
           { value: Math.min(Math.max(parseInt(v, 10) || 0, 0), max) }))),
-      spin("Seg (s)", minifloatToDouble(node.offset).toFixed(3), 0, 10, 0.01, (v) =>
+      spin(t("env.seg"), minifloatToDouble(node.offset).toFixed(3), 0, 10, 0.01, (v) =>
         this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
           { offset: minifloatFromDouble(Math.max(parseFloat(v) || 0, 0)) }))),
-      btn("＋ Add node", "Insert a node after the selected one",
+      btn(t("env.addNode"), t("adv.addNodeTitle"),
         () => this.addEnvNode(tabDef, env, sel, max), active >= 25),
-      btn("－ Remove node", "Delete the selected node",
+      btn(t("env.removeNode"), t("adv.removeNodeTitle"),
         () => this.removeEnvNode(tabDef, env, sel), active <= 1 || sel === 0),
     ));
 
     // sustain point + range
     const susW = inst[tabDef.susKey];
     wrap.appendChild(row(
-      chk("Sustain", ((susW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.susKey, 5, on)),
-      spin("start", (susW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 8, 0x1f, parseInt(v, 10) || 0)),
-      spin("end", susW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 0, 0x1f, parseInt(v, 10) || 0)),
+      chk(t("env.sustain"), ((susW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.susKey, 5, on)),
+      spin(t("env.start"), (susW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 8, 0x1f, parseInt(v, 10) || 0)),
+      spin(t("env.end"), susW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.susKey, 0, 0x1f, parseInt(v, 10) || 0)),
     ));
 
     // loop point + range
     const loopW = inst[tabDef.loopKey];
     wrap.appendChild(row(
-      chk("Loop", ((loopW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.loopKey, 5, on)),
-      spin("start", (loopW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 8, 0x1f, parseInt(v, 10) || 0)),
-      spin("end", loopW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 0, 0x1f, parseInt(v, 10) || 0)),
+      chk(t("env.loop"), ((loopW >> 5) & 1) !== 0, (on) => this.setEnvWordBit(tabDef.loopKey, 5, on)),
+      spin(t("env.start"), (loopW >> 8) & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 8, 0x1f, parseInt(v, 10) || 0)),
+      spin(t("env.end"), loopW & 0x1f, 0, active - 1, 1, (v) => this.setEnvWordField(tabDef.loopKey, 0, 0x1f, parseInt(v, 10) || 0)),
     ));
 
     // Final row: logarithmic time-axis toggle for the graph above, plus (on
     // Vol/Pan tabs) the envelope-present toggle. Pitch/Filter presence is the
     // role claim, so those tabs show only the log toggle.
-    const logChk = chk("Log timescale", this.envLogTime,
+    const logChk = chk(t("env.logTimescale"), this.envLogTime,
       (on) => { this.envLogTime = on; this.drawEnvGraph(); });
     // "Envelope present" — for Vol/Pan it toggles the LOOP-word P bit directly;
     // for Pitch/Filter (role) tabs it claims/releases the resolved slot's role
     // (item 36), so the checkbox tracks roleActive.
     wrap.appendChild(row(
       tabDef.role
-        ? chk("Envelope present", tabDef.roleActive, (on) => this.setRolePresent(tabDef, on))
-        : chk("Envelope present", envPresent(inst[tabDef.loopKey]),
+        ? chk(t("env.present"), tabDef.roleActive, (on) => this.setRolePresent(tabDef, on))
+        : chk(t("env.present"), envPresent(inst[tabDef.loopKey]),
             (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
       logChk,
     ));
@@ -906,7 +908,7 @@ export class InstrumentsView {
       const claimed = ((inst[tabDef.loopKey] | 0x2000) & ~0x80) | (tabDef.role === "filter" ? 0x80 : 0);
       this.store.undo.apply(setInstFieldOp(this.selected, tabDef.loopKey, claimed, gestureId));
       tabDef.roleActive = true;
-      if (head) head.innerHTML = `${tabDef.label} — drag nodes to edit`;
+      if (head) head.innerHTML = t("inst.envHeaderClaimed", { label: t(tabDef.labelKey) });
     }
     this.envPointerMove(e);
   }
@@ -948,8 +950,9 @@ export class InstrumentsView {
     const head = document.createElement("div");
     head.className = "detail-info";
     const patches = inst.extraPatches ?? [];
-    head.textContent = `${patches.length} Ixmp ${patches.length === 1 ? "patch" : "patches"} — ` +
-      `pitch × velocity zones (live triggers highlighted)`;
+    head.textContent = patches.length === 1
+      ? t("inst.zonesInfo1")
+      : t("inst.zonesInfoN", { n: patches.length });
     this.panel.appendChild(head);
     const canvas = document.createElement("canvas");
     canvas.className = "wave-canvas";
@@ -1100,11 +1103,11 @@ function mixDbLabel(octet) {
 const annHex2 = (v) => "$" + (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
 const annHex4 = (v) => "$" + (v & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 const annHex6 = (v) => "$" + (v & 0xffffff).toString(16).toUpperCase().padStart(6, "0");
-const annFilter = (v) => (v === 0xff ? "off" : annHex2(v));
+const annFilter = (v) => (v === 0xff ? t("inst.annOff") : annHex2(v));
 function annFadeout(v) {
-  if (v <= 0) return "none";
-  if (v >= 1024) return "cut";
-  return "~" + Math.round(1024 / v) + " ticks";
+  if (v <= 0) return t("inst.annNone");
+  if (v >= 1024) return t("inst.annCut");
+  return t("inst.annTicks", { n: Math.round(1024 / v) });
 }
 // SoundFont filter units (AudioAdapter.refreshVoiceFilter): cutoff = absolute
 // cents → Hz (8.176·2^(cents/1200)); resonance = centibels above DC → dB. The
@@ -1112,14 +1115,14 @@ function annFadeout(v) {
 // from a toggled ImpulseTracker instrument can sit far outside it (the engine
 // clamps too), and the raw Hz/dB would otherwise read as an absurd number.
 function annSfCutoff(v) {
-  if (v >= 0xffff) return "off";
+  if (v >= 0xffff) return t("inst.annOff");
   const hz = 8.176 * Math.pow(2, Math.min(Math.max(v, 1500), 13500) / 1200);
   if (hz >= 10000) return Math.round(hz / 1000) + " kHz";
   if (hz >= 1000) return (hz / 1000).toFixed(2) + " kHz";
   return Math.round(hz) + " Hz";
 }
 function annSfReso(v) {
-  if (v >= 0xffff) return "flat";
+  if (v >= 0xffff) return t("inst.annFlat");
   return (Math.min(v, 960) / 10).toFixed(1) + " dB";
 }
 

@@ -41,15 +41,21 @@ export class ProjectView {
 
     const head = document.createElement("h3");
     head.className = "proj-title";
-    head.textContent = unescapeName(doc.meta.projectName ?? "") || "(untitled project)";
+    head.textContent = unescapeName(doc.meta.projectName ?? "") || t("proj.untitledProject");
     this.root.appendChild(head);
 
     const info = document.createElement("p");
     info.className = "dim";
-    info.textContent =
-      `${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ${doc.channelCount} channels · format v${doc.fmtVer ?? 2}` +
-      ` · signature "${doc.signature.trim()}"` +
-      (sm ? ` · song: "${unescapeName(sm.name)}"${sm.composer ? ` by ${unescapeName(sm.composer)}` : ""}` : "");
+    let infoTxt = t("proj.infoMain", {
+      n: doc.songs.length,
+      songs: doc.songs.length === 1 ? t("proj.song") : t("proj.songs"),
+      ch: doc.channelCount, ver: doc.fmtVer ?? 2, sig: doc.signature.trim(),
+    });
+    if (sm) {
+      infoTxt += t("proj.infoSong", { name: unescapeName(sm.name) });
+      if (sm.composer) infoTxt += t("proj.infoBy", { composer: unescapeName(sm.composer) });
+    }
+    info.textContent = infoTxt;
     this.root.appendChild(info);
 
     // Editable PROJECT name (PNam). Song renaming lives on the File tab's
@@ -59,11 +65,11 @@ export class ProjectView {
     const nameRow = document.createElement("div");
     nameRow.className = "inst-field";
     nameRow.style.maxWidth = "440px";
-    nameRow.append(document.createTextNode("Project name"));
+    nameRow.append(document.createTextNode(t("proj.projectName")));
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.value = unescapeName(doc.meta.projectName ?? "");
-    nameInput.placeholder = "(untitled project)";
+    nameInput.placeholder = t("proj.untitledProject");
     nameInput.spellcheck = false;
     nameInput.addEventListener("change", () => this.changeProjectName(nameInput.value));
     nameRow.appendChild(nameInput);
@@ -80,7 +86,7 @@ export class ProjectView {
     const notationRow = document.createElement("div");
     notationRow.className = "inst-field";
     notationRow.style.maxWidth = "440px";
-    notationRow.append(document.createTextNode("Notation (display only)"));
+    notationRow.append(document.createTextNode(t("proj.notationDisplayOnly")));
     const notSel = document.createElement("select");
     for (const p of Object.values(pitchTablePresets)) {
       const o = document.createElement("option");
@@ -96,16 +102,16 @@ export class ProjectView {
     grid.className = "inst-grid";
     grid.append(
       nameRow,
-      num("BPM", song.bpm, 25, 535, (v) => this.op("bpm", v)),
-      num("Speed (ticks/row)", song.tickRate, 1, 127, (v) => this.op("tickRate", v)),
-      num("Global volume", song.globalVolume, 0, 255, (v) => this.op("globalVolume", v)),
-      num("Mixing volume", song.mixingVolume, 0, 255, (v) => this.op("mixingVolume", v)),
-      sel("Tone-slide mode", song.globalFlags & 3, [
-        [0, "Linear (4096-TET)"], [1, "Amiga period"], [2, "Linear frequency (Hz)"],
+      num(t("proj.bpm"), song.bpm, 25, 535, (v) => this.op("bpm", v)),
+      num(t("proj.speedTicks"), song.tickRate, 1, 127, (v) => this.op("tickRate", v)),
+      num(t("proj.globalVolume"), song.globalVolume, 0, 255, (v) => this.op("globalVolume", v)),
+      num(t("proj.mixingVolume"), song.mixingVolume, 0, 255, (v) => this.op("mixingVolume", v)),
+      sel(t("proj.toneSlideMode"), song.globalFlags & 3, [
+        [0, t("proj.toneLinear")], [1, t("proj.toneAmiga")], [2, t("proj.toneLinearHz")],
       ], (v) => this.op("globalFlags", (song.globalFlags & ~3) | v)),
-      sel("Interpolation", (song.globalFlags >> 2) & 7, [
-        [0, "Fast sinc"], [1, "None (ZOH)"], [2, "Amiga 500"],
-        [3, "Amiga 1200"], [4, "SNES gaussian"], [5, "NES DPCM"],
+      sel(t("proj.interpolation"), (song.globalFlags >> 2) & 7, [
+        [0, t("proj.interpFastSinc")], [1, t("proj.interpNone")], [2, t("proj.interpAmiga500")],
+        [3, t("proj.interpAmiga1200")], [4, t("proj.interpSnes")], [5, t("proj.interpNes")],
       ], (v) => this.op("globalFlags", (song.globalFlags & ~0x1c) | (v << 2))),
       notationRow,
     );
@@ -113,36 +119,40 @@ export class ProjectView {
 
     const tuning = document.createElement("p");
     tuning.className = "dim";
-    tuning.textContent =
-      `Tuning: base note 0x${song.tuningBaseNote.toString(16).toUpperCase()} @ ${song.tuningFreq} Hz` +
-      (sm ? ` · beat ${sm.beatPri}/${sm.beatSec}` : "") +
-      ` · patterns: ${song.patterns.length} · cues used: ${song.lastUsedCue() + 1}`;
+    let tuningTxt = t("proj.tuningMain", {
+      base: song.tuningBaseNote.toString(16).toUpperCase(), freq: song.tuningFreq,
+    });
+    if (sm) tuningTxt += t("proj.tuningBeat", { pri: sm.beatPri, sec: sm.beatSec });
+    tuningTxt += t("proj.tuningPatterns", { pat: song.patterns.length, cues: song.lastUsedCue() + 1 });
+    tuning.textContent = tuningTxt;
     this.root.appendChild(tuning);
 
     const retuneP = document.createElement("p");
     retuneP.className = "dim";
-    retuneP.append(document.createTextNode("Remap notes onto a different tuning: "));
+    retuneP.append(document.createTextNode(t("proj.remapNotes")));
     const retuneBtn = document.createElement("button");
-    retuneBtn.textContent = "Retune…";
+    retuneBtn.textContent = t("toolbox.retune");
     retuneBtn.addEventListener("click", () => this.openRetune(preset));
     retuneP.appendChild(retuneBtn);
     this.root.appendChild(retuneP);
 
     const songsTableHead = document.createElement("h3");
     songsTableHead.className = "files-songs-head";
-    songsTableHead.textContent = "Songs in this project";
+    songsTableHead.textContent = t("files.songsHead");
     this.root.appendChild(songsTableHead);
 
     const songsTable = document.createElement("table");
     songsTable.className = "files-table";
-    songsTable.innerHTML = "<thead><tr><th>#</th><th>name</th><th>voices</th><th>patterns</th><th>BPM</th><th>speed</th><th>operation</th></tr></thead>";
+    songsTable.innerHTML = `<thead><tr><th>${t("files.colSong")}</th><th>${t("files.colName")}</th>` +
+      `<th>${t("files.colVoices")}</th><th>${t("files.colPatterns")}</th><th>${t("proj.colBpm")}</th>` +
+      `<th>${t("proj.colSpeed")}</th><th>${t("proj.colOperation")}</th></tr></thead>`;
     const tbody = document.createElement("tbody");
     doc.songs.forEach((s, i) => {
       const m = doc.meta.songMeta[i];
       const tr = document.createElement("tr");
       if (i === this.store.songIndex) tr.className = "files-current";
       tr.innerHTML =
-        `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || "(unnamed)")}</td><td>${s.numVoices}</td>` +
+        `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || t("instList.unnamed"))}</td><td>${s.numVoices}</td>` +
         `<td>${s.patterns.length}</td><td>${s.bpm}</td><td>${s.tickRate}</td>`;
       const td = document.createElement("td");
       const rn = mkBtn(t("common.rename"), async () => {
@@ -166,7 +176,7 @@ export class ProjectView {
     songBar.style.borderBottom = "none";
     songBar.style.padding = "0.4rem 0";
     const addBtn = document.createElement("button");
-    addBtn.textContent = "＋ Add song";
+    addBtn.textContent = t("proj.addSong");
     addBtn.addEventListener("click", () => this.addSong());
     songBar.append(addBtn);
     this.root.appendChild(songBar);

@@ -1,6 +1,8 @@
 // Minimal modal helper over <dialog>. Builds a form-style dialog from field
 // specs and resolves with the values (or null on cancel).
 
+import { t } from "../i18n.js";
+
 export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
@@ -47,7 +49,7 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
     const ok = document.createElement("button");
     ok.textContent = okLabel;
     const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
+    cancel.textContent = t("common.cancel");
     row.append(ok, cancel);
     dlg.appendChild(row);
     document.body.appendChild(dlg);
