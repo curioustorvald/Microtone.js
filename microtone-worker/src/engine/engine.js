@@ -18,7 +18,12 @@ import { TaudInst, parsePatchesBlob, writePatchesBlob } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { generateTrackerAudio } from "./mixer.js";
-import { triggerMetaOrNote } from "./trigger.js";
+import { triggerMetaOrNote, triggerNote } from "./trigger.js";
+
+// Scratch instrument slot for the raw-sample preview (jamSample). It sits just
+// past the 1024 addressable bank slots so an audition never borrows a real one;
+// every `instruments[voice.instrumentId]` lookup indexes it directly (no & mask).
+const AUDITION_SLOT = 1024;
 
 function makePattern() {
   const rows = new Array(64);
@@ -33,8 +38,8 @@ function makePattern() {
 export class TaudEngine {
   constructor() {
     this.sampleBin = new Uint8Array(SAMPLE_BIN_TOTAL);
-    this.instruments = new Array(1024);
-    for (let i = 0; i < 1024; i++) this.instruments[i] = new TaudInst(i);
+    this.instruments = new Array(AUDITION_SLOT + 1);
+    for (let i = 0; i <= AUDITION_SLOT; i++) this.instruments[i] = new TaudInst(i);
     // Pattern store — lazily allocated (memory scales with actual song size).
     this.playdata = new Array(NUM_PATTERNS).fill(null);
     this.emptyPattern = makePattern();
@@ -264,6 +269,35 @@ export class TaudEngine {
       const alt = this._auditionNoteFor(inst, note);
       if (alt >= 0) triggerMetaOrNote(this, ts, ts.voices[v], v, alt, inst, -1);
     }
+    p.jamActive = true;
+  }
+
+  /**
+   * Preview the EXACT pooled sample `spec` (ptr/len/rate/loop) on voice `vi`,
+   * BYPASSING all instrument / metainstrument zone resolution. The Samples and
+   * Instruments editors call this so the audition plays the wave the user is
+   * looking at, not whatever a metainstrument would map `note` to (bug #65).
+   * JS-only (no Kotlin counterpart): a scratch instrument in AUDITION_SLOT
+   * carries the sample and its clean default envelope so the note simply
+   * sounds at full volume until jamStop / sample end.
+   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune? }.
+   */
+  jamSample(ph, vi, note, spec) {
+    const p = this.playheads[ph];
+    const ts = p.trackerState;
+    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    note &= 0xffff;
+    const inst = this.instruments[AUDITION_SLOT];
+    inst.samplePtr = spec.ptr >>> 0;
+    inst.sampleLength = spec.len | 0;
+    inst.samplingRate = spec.rate | 0;
+    inst.samplePlayStart = spec.playStart | 0;
+    inst.sampleLoopStart = spec.loopStart | 0;
+    inst.sampleLoopEnd = spec.loopEnd | 0;
+    inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
+    inst.sampleDetune = (spec.detune | 0) & 0xffff;
+    inst.extraPatches = null;
+    triggerNote(this, ts.voices[v], note, AUDITION_SLOT, -1);
     p.jamActive = true;
   }
 

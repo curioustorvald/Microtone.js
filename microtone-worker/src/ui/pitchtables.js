@@ -59,8 +59,14 @@ export const pitchTablePresets = {
   35130: { index: 35130, name: "Equal-Tempered Bohlen-Pierce", table: [0x0, 0x1f3, 0x3e7, 0x5da, 0x7ce, 0x9c1, 0xbb4, 0xda8, 0xf9b, 0x118e, 0x1382, 0x1575, 0x1769], interval: 0x195c, t: "M", sym: [" C-", " C#", " D-", " E-", " F-", " F#", " G-", " H-", " H#", " J-", " A-", " A#", " B-"] },
 };
 
-/** Preset for an sMet notation value; unknown/absent → 12-TET. */
-export function presetForNotation(notation) {
+/** Preset for an sMet notation value; unknown/absent → 12-TET. Values in the
+ *  custom range (65520..65535) resolve against `doc`'s "nota" section when a
+ *  document is given (item 61 Notation Maker). */
+export function presetForNotation(notation, doc = null) {
+  if (doc && notation >= 0xfff0) {
+    const p = doc.customPreset?.(notation);
+    if (p) return p;
+  }
   return pitchTablePresets[notation] ?? pitchTablePresets[120];
 }
 

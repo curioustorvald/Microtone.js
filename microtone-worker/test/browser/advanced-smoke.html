@@ -111,6 +111,56 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   rows()[0].click();
   log(`base row shows fallback info: ${t11 ? "ok" : "FAIL"}`);
 
+  // The smoke drives the panel directly without switching views, so
+  // #instrumentsHost is display:none (zero rects). Unhide + re-render so the
+  // layout-dependent item 63/64 checks measure real geometry.
+  win.document.getElementById("instrumentsHost").hidden = false;
+  iv.advEditor.render();
+  await sleep(50);
+
+  // Open a full env graph tab (taller than the wave scope) so .adv-main
+  // reliably overflows its capped height for the scroll checks below.
+  [...iv.panel.querySelectorAll(".adv-envtabs button")][0].click();
+
+  // item 63 (three-region layout): the panel is capped to the pane (no outer
+  // .side-detail scroll), the header stays put, and the list + main columns
+  // EACH scroll independently within the body (bounded to the viewport).
+  const cs = (el) => win.getComputedStyle(el);
+  const advBody = iv.panel.querySelector(".adv-body");
+  const advList = iv.panel.querySelector(".adv-list");
+  const advMain = iv.panel.querySelector(".adv-main");
+  const t16css = iv.panel.classList.contains("adv-active") &&
+    cs(iv.panel).display === "flex" && cs(iv.panel).flexDirection === "column" &&
+    cs(advBody).alignItems === "stretch" && cs(advList).maxHeight === "none" &&
+    cs(advList).overflowY === "auto" && cs(advMain).overflowY === "auto";
+  const paneH = iv.right.getBoundingClientRect().height;
+  const panelH = iv.panel.getBoundingClientRect().height;
+  const listH = advList.getBoundingClientRect().height;
+  const mainH = advMain.getBoundingClientRect().height;
+  const bodyH = advBody.getBoundingClientRect().height;
+  // Real geometry: panel fits the pane (not taller), and both columns stretch
+  // to the body height while staying within the viewport. Guarded for a
+  // zero-layout headless (css is then the gate).
+  const t16rect = paneH === 0 ||
+    (panelH <= paneH + 2 && Math.abs(listH - bodyH) <= 2 && Math.abs(mainH - bodyH) <= 2 &&
+     listH <= paneH && mainH <= paneH);
+  const t16 = t16css && t16rect;
+  log(`three-region layout (css=${t16css}, panel ${panelH|0}/pane ${paneH|0}, ` +
+      `list ${listH|0} main ${mainH|0} body ${bodyH|0}): ${t16 ? "ok" : "FAIL"}`);
+
+  // item 64 (+follow-up): the pane itself does NOT scroll; .adv-main scrolls
+  // independently and its offset survives a row-click re-render.
+  const outerScrolls = iv.right.scrollHeight > iv.right.clientHeight + 4;
+  const mainScrolls = advMain.scrollHeight > advMain.clientHeight + 4;
+  advMain.scrollTop = 9999;
+  const mScrolled = advMain.scrollTop;
+  rows()[0].click(); // full re-render
+  const advMain2 = iv.panel.querySelector(".adv-main");
+  const t17 = (paneH === 0 || !outerScrolls) &&
+    (!mainScrolls || Math.abs(advMain2.scrollTop - mScrolled) <= 4);
+  log(`pane fixed + main scrolls & is preserved (outerScrolls=${outerScrolls}, ` +
+      `mainScrolls=${mainScrolls}, ${mScrolled|0}→${advMain2.scrollTop|0}): ${t17 ? "ok" : "FAIL"}`);
+
   // Undo everything applied above (env value, env override, delete, add) →
   // byte-exact against the pristine load.
   store.undo.undo(); store.undo.undo(); store.undo.undo(); store.undo.undo();
@@ -121,7 +171,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   // Back button returns to the tabbed editor (the child's plain-inst tabs).
   [...iv.panel.querySelectorAll(".adv-head button")][0].click();
   const t13 = iv.advanced === false && iv.tabBar.hidden === false &&
-    !iv.panel.querySelector(".adv-head");
+    !iv.panel.querySelector(".adv-head") && !iv.panel.classList.contains("adv-active");
   log(`back returns to the tabs: ${t13 ? "ok" : "FAIL"}`);
 
   // The child's own Zones tab carries the Advanced Edit… entry button too.
@@ -133,7 +183,34 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const t15 = iv.advanced === true && !!iv.panel.querySelector(".adv-head");
   log(`zones tab button re-enters Advanced Edit: ${t14 && t15 ? "ok" : "FAIL"}`);
 
-  const pass = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 && t13 && t14 && t15;
+  // Extra ('x') block: fadeout/cutoff/resonance annotate in conventional units
+  // (like the basic edit), and the mode selector label reads "Mode".
+  rows()[0].click();
+  const numLabelStarting = (s) => [...iv.panel.querySelectorAll("label.adv-num")]
+    .find((l) => l.firstChild && l.firstChild.textContent.trim().startsWith(s));
+  const extraChk = [...iv.panel.querySelectorAll("label.chk")]
+    .find((l) => l.textContent.includes("Extra block present"));
+  extraChk.querySelector("input").checked = true;
+  fire(extraChk.querySelector("input"), "change");
+  const p0e = doc.instruments[slot].extraPatches[0];
+  const annOf = (s) => numLabelStarting(s)?.querySelector(".sl-ann")?.textContent ?? "";
+  const modeLbl = numLabelStarting("Mode"); // renamed from "Filter units"
+  const fadeAnn = annOf("Fadeout");
+  const cutAnn = annOf("Cutoff");
+  const resAnn = annOf("Resonance");
+  // seeded from the base record → SF2-mode GM inst: Hz + dB, and fadeout is
+  // ticks/none/cut — NOT a raw $hex word.
+  const sf = p0e.filterSfMode;
+  const t18 = !!modeLbl && p0e.hasExtra &&
+    /tick|none|cut/i.test(fadeAnn) && !/^\$/.test(fadeAnn) &&
+    (sf ? /Hz|kHz/.test(cutAnn) : /off|^\$/.test(cutAnn)) &&
+    (sf ? /dB/.test(resAnn) : /off|^\$/.test(resAnn));
+  log(`extra block units (Mode label, sf=${sf}, fade="${fadeAnn}" cut="${cutAnn}" ` +
+      `res="${resAnn}"): ${t18 ? "ok" : "FAIL"}`);
+  store.undo.undo(); // revert the extra-block enable
+
+  const pass = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 &&
+    t12 && t13 && t14 && t15 && t16 && t17 && t18;
   log(pass ? "RESULT: PASS" : "RESULT: FAIL");
  } catch (err) {
   log(`RESULT: ERROR ${err.message}\n${err.stack}`);

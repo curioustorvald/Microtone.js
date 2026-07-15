@@ -424,6 +424,37 @@ methods:
 For non-destructive experiments remember **Ctrl+Z** restores the previous
 tuning exactly.
 
+### The Notation Maker (custom notations)
+
+When no preset fits — a Scala scale, a temperament of your own, a non-octave
+system — open the **Notation Maker…** from the Project view's notation row.
+A project holds up to **16 custom notations**; each definition is saved inside
+the project file (the `nota` section) and appears in the notation selector and
+the Retune target list like any built-in preset. Custom notations are
+display-and-entry only: they change how notes are written and stepped, never
+how anything sounds.
+
+Three ways to fill a slot:
+
+- **Import .scl…** — load a [Scala scale file](https://www.huygens-fokker.org/scala/scl_format.html).
+  The scale's last pitch becomes the period (octave, tritave, anything), the
+  other pitches become the degrees, and every degree gets an automatic name.
+- **Click an empty slot** — start from a 12-equal seed and reshape it by hand.
+- **Import .taudnot…** — load a definition exported from another project.
+
+The editor shows one row per degree: its pitch in **cents** (and the exact
+4096-TET word), plus a symbol built from three parts — a **tick** (Kite-style
+dot/arrows), a **letter** A–Z and an **accidental** (♮ ♯ ♭ demi, double,
+triple, quadruple) — with a live preview drawn by the same glyph engine as the
+grids. **Equal divisions…** refills the table with N equal steps of the
+period; the two **Auto-name** tools assign symbols by nearest quarter-tone or
+as a plain letter sequence. Degree 0 is always the base note: **Middle C
+($5000)** — this anchor is what keeps non-octave systems well-defined.
+
+**Save** stores the definitions as one undo step; with **Use for this song**
+ticked the current song's notation switches to the edited slot immediately.
+**Export .taudnot** shares a definition as a small standalone file.
+
 ## Effect commands
 
 A quick digest — the full specification with per-tick semantics, memory

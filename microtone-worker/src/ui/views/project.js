@@ -7,6 +7,7 @@ import {
   planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
 } from "../../doc/cleanup.js";
 import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
+import { defToPreset } from "../../doc/notation.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -82,7 +83,7 @@ export class ProjectView {
     this.root.appendChild(nameHint);
 
     // Notation (display-only): changes how notes are drawn WITHOUT moving them.
-    const preset = presetForNotation(sm?.notation ?? 120);
+    const preset = presetForNotation(sm?.notation ?? 120, doc);
     const notationRow = document.createElement("div");
     notationRow.className = "inst-field";
     notationRow.style.maxWidth = "440px";
@@ -94,9 +95,33 @@ export class ProjectView {
       o.textContent = p.name;
       notSel.appendChild(o);
     }
+    // Custom notations from the project's "nota" section (item 61).
+    const customs = doc.customNotations();
+    if (customs.length > 0) {
+      const grp = document.createElement("optgroup");
+      grp.label = t("nota.customGroup");
+      for (const d of customs) {
+        const p = defToPreset(d);
+        const o = document.createElement("option");
+        o.value = p.index;
+        o.textContent = p.name;
+        grp.appendChild(o);
+      }
+      notSel.appendChild(grp);
+    }
     notSel.value = preset.index;
     notSel.addEventListener("change", () => this.changeNotation(parseInt(notSel.value, 10)));
     notationRow.appendChild(notSel);
+    const makerBtn = document.createElement("button");
+    makerBtn.textContent = t("nota.openMaker");
+    makerBtn.title = t("nota.openMakerTitle");
+    makerBtn.style.marginLeft = "0.4rem";
+    makerBtn.addEventListener("click", async () => {
+      const { showNotationMaker } = await import("../popups/notationmaker.js");
+      await showNotationMaker(this.store);
+      this.refresh();
+    });
+    notationRow.appendChild(makerBtn);
 
     const grid = document.createElement("div");
     grid.className = "inst-grid";
@@ -286,7 +311,7 @@ export class ProjectView {
     sm.notation = newIndex;
     store.doc.smetEdited = true;
     store.doc.dirty = true;
-    store.pitchPreset = presetForNotation(newIndex);
+    store.pitchPreset = presetForNotation(newIndex, store.doc);
     store.emit("doc"); // redraw glyphs with the new table
     this.refresh();
   }
@@ -350,8 +375,12 @@ export class ProjectView {
    *  Updates the song's sMet notation so display + future retunes follow.
    *  Callable without an argument (toolbox button). */
   async openRetune(currentPreset = presetForNotation(
-    this.store.doc?.meta.songMeta[this.store.songIndex]?.notation ?? 120)) {
+    this.store.doc?.meta.songMeta[this.store.songIndex]?.notation ?? 120, this.store.doc)) {
     const store = this.store;
+    const presetPool = [
+      ...Object.values(pitchTablePresets),
+      ...store.doc.customNotations().map(defToPreset),
+    ].filter((p) => p.table.length > 0);
     const result = await showModal({
       title: t("retune.title"),
       body: t("retune.body", { name: currentPreset.name }),
@@ -359,9 +388,7 @@ export class ProjectView {
         {
           name: "preset", label: t("retune.preset"), type: "select",
           value: String(currentPreset.index),
-          options: Object.values(pitchTablePresets)
-            .filter((p) => p.table.length > 0)
-            .map((p) => ({ value: String(p.index), label: p.name })),
+          options: presetPool.map((p) => ({ value: String(p.index), label: p.name })),
         },
         {
           name: "method", label: t("retune.method"), type: "select", value: "pitch",
@@ -376,7 +403,7 @@ export class ProjectView {
       okLabel: t("retune.ok"),
     });
     if (!result) return;
-    const newPreset = pitchTablePresets[parseInt(result.preset, 10)];
+    const newPreset = presetPool.find((p) => p.index === parseInt(result.preset, 10));
     if (!newPreset) return;
     const method = result.method || "pitch";
     // A same-table retune is a no-op only for the plain 'pitch' method; the

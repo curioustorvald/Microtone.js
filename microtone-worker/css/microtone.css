@@ -508,6 +508,54 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   .np-col-right { flex: 1 1 auto; }
 }
 
+/* ── Notation Maker (item 61) ── */
+.nota-modal { max-width: min(860px, 96vw); width: min(860px, 96vw); }
+.nota-hint { margin: 0.2rem 0 0.7rem; font-size: 0.82rem; }
+.nota-grid { display: flex; gap: 1rem; align-items: stretch; min-height: 340px; }
+.nota-left { flex: 0 0 215px; display: flex; flex-direction: column; gap: 0.5rem; }
+.nota-slots { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); max-height: 380px; }
+.nota-slot { display: flex; align-items: center; gap: 0.4rem; padding: 0.18rem 0.5rem; cursor: pointer; font-size: 0.82rem; color: var(--fg); }
+.nota-slot:hover { background: var(--panel); }
+.nota-slot.sel { background: var(--cv-cursor); }
+.nota-slot.empty { color: var(--dim); font-style: italic; }
+.nota-slot-num { flex: 0 0 1.2rem; text-align: right; color: var(--dim); }
+.nota-slot-name { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nota-slot-val { font-size: 0.72rem; }
+.nota-left-btns { display: flex; flex-direction: column; gap: 0.3rem; }
+.nota-editor { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.nota-empty-hint { margin-top: 2rem; text-align: center; }
+.nota-ed-head { display: flex; flex-direction: column; gap: 0.4rem; }
+.nota-field { display: flex; align-items: center; gap: 0.45rem; color: var(--dim); font-size: 0.88rem; flex-wrap: wrap; }
+.nota-field input[type="text"] { flex: 1 1 auto; min-width: 8rem; }
+.nota-field input[type="number"] { width: 6.5rem; }
+.nota-field input, .nota-editor select {
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.15rem 0.3rem; font: inherit;
+}
+.nota-chip {
+  background: var(--panel-2); color: var(--dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.12rem 0.55rem; cursor: pointer; font: inherit;
+}
+.nota-chip.sel { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.nota-tools { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.nota-tools button { font-size: 0.82rem; }
+.nota-degrees { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; max-height: 300px; }
+.nota-degrees table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+.nota-degrees th { position: sticky; top: 0; background: var(--panel); color: var(--dim); font-weight: 500; text-align: left; padding: 0.15rem 0.4rem; font-size: 0.75rem; }
+.nota-degrees td { padding: 0.08rem 0.4rem; white-space: nowrap; }
+.nota-degrees input[type="number"] { width: 5.5rem; }
+.nota-degrees button { padding: 0 0.4rem; }
+.nota-preview { display: block; border: 1px solid var(--border); border-radius: 3px; }
+.nota-add { align-self: flex-start; font-size: 0.82rem; }
+.nota-btns { display: flex; align-items: center; gap: 0.6rem; }
+.nota-assign { display: flex; align-items: center; gap: 0.3rem; color: var(--dim); font-size: 0.85rem; margin-right: auto; }
+.nota-issues { font-size: 0.78rem; color: var(--accent-2); max-width: 22rem; }
+
+@media (max-width: 680px) {
+  .nota-grid { flex-direction: column; }
+  .nota-left { flex: 1 1 auto; }
+}
+
 /* ── files view ── */
 .files-host { position: absolute; inset: 0; overflow: auto; padding: 1rem; }
 .files-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
@@ -715,6 +763,15 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   flex: 0 0 15rem; min-width: 0; max-height: 70vh; overflow-y: auto;
   border-right: 1px solid var(--border); padding-right: 0.5rem;
 }
+/* Advanced Edit is a fixed-height three-region layout (item 63): the panel is
+   capped to the .side-detail height (no outer scroll), the header stays put,
+   and the list + main columns EACH scroll independently within the remaining
+   space — so the list separator always spans the full height. */
+.inst-panel.adv-active { height: 100%; display: flex; flex-direction: column; }
+.inst-panel.adv-active .adv-head { flex: 0 0 auto; }
+.inst-panel.adv-active .adv-body { flex: 1 1 0; min-height: 0; align-items: stretch; }
+.inst-panel.adv-active .adv-list { max-height: none; min-height: 0; overflow-y: auto; }
+.inst-panel.adv-active .adv-main { min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .adv-list-head {
   color: var(--accent); font-size: 0.75rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem;

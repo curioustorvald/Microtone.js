@@ -150,6 +150,20 @@
           [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Invert").click();
           [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Normalise").click();
           const changed = span().some((v, i) => v !== before[i]);
+          // bug #65: the audition button previews the EXACT census sample via
+          // jamSample (ptr/len on screen), not jamNote-through-the-owning-inst.
+          // Stub the audio system to capture the spec without a real device.
+          const realAudio = store.audio, realEnsure = win.__microtoneEnsureAudio;
+          let auditionSpec = null;
+          win.__microtoneEnsureAudio = async () => {};
+          store.audio = { jamSample: (ph, v, note, spec) => { auditionSpec = spec; }, jamStop: () => {} };
+          const auditionBtn = [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "▶ C4");
+          auditionBtn?.click();
+          await new Promise((r) => win.setTimeout(r, 0));
+          const auditionOk = !!auditionBtn && !!auditionSpec &&
+            auditionSpec.ptr === s.ptr && auditionSpec.len === s.len;
+          store.audio = realAudio; win.__microtoneEnsureAudio = realEnsure;
+          log(`DSP editor audition previews the exact census sample (bug #65): ${auditionOk ? "ok" : "FAIL"}`);
           [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
           await closed;
           const rolledBack = span().every((v, i) => v === before[i]) &&

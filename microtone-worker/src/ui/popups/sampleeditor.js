@@ -86,7 +86,10 @@ export function openSampleDspEditor(store, sample) {
       });
       opRow.appendChild(b);
     }
-    opRow.appendChild(shell.makeAuditionButton(sample.users[0]));
+    opRow.appendChild(shell.makeAuditionButton(() => ({
+      ptr: sample.ptr, len: sample.len, rate: sample.rate, playStart: 0,
+      loopStart: sample.loopStart, loopEnd: sample.loopEnd, loopMode: sample.loopMode,
+    })));
 
     shell.dlg.insertBefore(nameRow, shell.btnRow);
     shell.dlg.insertBefore(opRow, shell.btnRow);
@@ -159,7 +162,18 @@ export function openInstSampleEditor(store, slot) {
 
     const opRow = document.createElement("div");
     opRow.className = "smp-ops";
-    opRow.appendChild(shell.makeAuditionButton(slot));
+    // Preview the BASE sample of this slot with the live-edited markers (bug
+    // #65: even when the slot is a metainstrument layer child with patches).
+    opRow.appendChild(shell.makeAuditionButton(() => {
+      const f = fields();
+      const i = inst();
+      return {
+        ptr, len, rate: i.samplingRate, playStart: f.playStart,
+        loopStart: f.loopStart, loopEnd: f.loopEnd,
+        loopMode: (f.loopMode & 3) | (f.sustain ? 4 : 0),
+        detune: i.sampleDetuneSigned,
+      };
+    }));
 
     shell.dlg.insertBefore(fieldRow, shell.btnRow);
     shell.dlg.insertBefore(opRow, shell.btnRow);
@@ -268,12 +282,14 @@ function buildShell(store, { title, info, className, resolve }) {
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(true); });
   dlg.addEventListener("keydown", (e) => e.stopPropagation());
 
-  /** Engine audition of `slot` on the top channel; toggles play/stop. */
-  const makeAuditionButton = (slot) => {
+  /** Engine audition on the top channel; toggles play/stop. `getSpec` returns
+   *  the EXACT pooled sample to play ({ptr,len,rate,loop...}) at click time, so
+   *  the preview follows live marker edits and plays the wave on screen rather
+   *  than whatever a metainstrument would map C4 to (bug #65). */
+  const makeAuditionButton = (getSpec) => {
     const playBtn = document.createElement("button");
     playBtn.textContent = t("smp.audition");
     playBtn.title = t("smp.auditionTitle");
-    playBtn.disabled = slot === undefined;
     playBtn.addEventListener("click", async () => {
       await window.__microtoneEnsureAudio?.();
       const audio = store.audio;
@@ -281,11 +297,14 @@ function buildShell(store, { title, info, className, resolve }) {
       if (auditioning) {
         audio.jamStop(0);
         playBtn.textContent = t("smp.audition");
+        auditioning = false;
       } else {
-        audio.jamNote(0, store.doc.channelCount - 1, 0x5000, slot);
+        const spec = getSpec?.();
+        if (!spec || !(spec.len > 0)) return;
+        audio.jamSample(0, store.doc.channelCount - 1, 0x5000, spec);
         playBtn.textContent = t("smp.auditionStop");
+        auditioning = true;
       }
-      auditioning = !auditioning;
     });
     return playBtn;
   };

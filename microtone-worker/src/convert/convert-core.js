@@ -103,7 +103,12 @@ except SystemExit as e:
  *  soundfont. Converter defaults are used as-is — notably far-loop
  *  synth-loop rescue, which upstream midi2taud now applies by default
  *  (opt-out is --no-force-synth-loop). -v streams the converter's vprint
- *  diagnostics through the status channel (the import progress popup). */
-export function buildArgv({ isMidi, inPath, sf2Path, outPath }) {
-  return isMidi ? [inPath, sf2Path, outPath, "-v"] : [inPath, outPath, "-v"];
+ *  diagnostics through the status channel (the import progress popup).
+ *  `rpb` (MIDI only) pins midi2taud's rows-per-beat grid axis (one of
+ *  2/4/8/16/32/64 — argparse choices); null/"auto" leaves it auto-picked. */
+export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null }) {
+  if (!isMidi) return [inPath, outPath, "-v"];
+  const argv = [inPath, sf2Path, outPath, "-v"];
+  if (rpb != null && rpb !== "auto") argv.push("--rpb", String(rpb));
+  return argv;
 }

@@ -51,6 +51,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.RESET_PARAMS: eng.resetParams(m.ph); return true;
     case CMD.RESET_FUNK_STATE: eng.resetFunkState(m.ph); return true;
     case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst, m.audition); return true;
+    case CMD.JAM_SAMPLE: eng.jamSample(m.ph, m.voice, m.note, m.spec); return true;
     case CMD.JAM_STOP: eng.jamStop(m.ph); return true;
     case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); return true;
     case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); return true;

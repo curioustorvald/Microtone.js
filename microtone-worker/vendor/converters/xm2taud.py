@@ -1560,8 +1560,10 @@ def assemble_taud(h: XMHeader, patterns: list, instruments: list,
     if with_project_data:
         inst_names = [''] + [(inst.name if inst is not None else '')
                              for inst in instruments[:255]]
-        smp_names = [''] + [(p.name if p is not None else '')
-                            for p in proxies[1:256]]
+        # SNam is pool-ordered and 0-based (proxies[0] is the reserved null
+        # proxy, so the real pool starts at proxies[1] = SNam[0]).
+        smp_names = [(p.name if p is not None else '')
+                     for p in proxies[1:256]]
         proj_data = build_project_data(
             project_name=h.title,
             instrument_names=inst_names,

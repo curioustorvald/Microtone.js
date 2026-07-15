@@ -52,7 +52,7 @@ function jobSpec(m) {
     return {
       label: `converting ${m.fileName}…`,
       script: conv.script,
-      argv: buildArgv({ isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud" }),
+      argv: buildArgv({ isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud", rpb: m.rpb ?? null }),
       inputs,
       output: "/out.taud",
     };

@@ -506,8 +506,9 @@ def assemble_taud(mon: dict, with_project_data: bool = True) -> bytes:
     proj_off  = 0
     if with_project_data:
         proj_data = build_project_data(
+            # INam is slot-indexed (slot 0 empty); SNam is pool-ordered, 0-based.
             instrument_names=['', 'PC speaker square'],
-            sample_names=['', 'PC speaker square'],
+            sample_names=['PC speaker square'],
         )
         if proj_data:
             proj_off = cur_off

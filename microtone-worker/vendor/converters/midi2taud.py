@@ -3324,12 +3324,16 @@ def build_sampleinst_blob(sf: SF2, pool: list, layer_insts: list,
 
 
 def build_inst_names(slot_name: dict, pool: list) -> tuple:
-    """(instrument_names, sample_names) slot-indexed lists for INam / SNam."""
+    """(instrument_names, sample_names) for INam / SNam.
+
+    INam is slot-indexed (entry 0 = the unused slot 0). SNam is pool-ordered
+    and 0-based: pool sample i is named at SNam[i] (the reader dedupes records
+    by (ptr,len), sorts by ptr, and matches that list to SNam positionally)."""
     max_slot = max([0] + list(slot_name))
     inst_names = ['' for _ in range(max_slot + 1)]
     for s, nm in slot_name.items():
         inst_names[s] = nm
-    smp_names = [''] + [ms.name for ms in pool]
+    smp_names = [ms.name for ms in pool]
     return inst_names, smp_names
 
 

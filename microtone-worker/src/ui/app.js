@@ -102,7 +102,7 @@ ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmu
 
 // ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
 
-async function convertImport(name, bytes, sf2Override = null) {
+async function convertImport(name, bytes, sf2Override = null, rpb = null) {
   let sf2 = sf2Override;
   if (!sf2 && converterFor(name).isMidi) {
     $("stFile").textContent = t("midi.needSf");
@@ -111,7 +111,7 @@ async function convertImport(name, bytes, sf2Override = null) {
   }
   const progress = showImportProgress(`Importing ${name}`);
   try {
-    const out = await convertToTaud(name, bytes, { sf2, onStatus: progress.log });
+    const out = await convertToTaud(name, bytes, { sf2, rpb, onStatus: progress.log });
     progress.done();
     return out;
   } catch (err) {
@@ -124,10 +124,10 @@ async function convertImport(name, bytes, sf2Override = null) {
 }
 
 // ── document loading ──
-async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
+async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null } = {}) {
   let converted = false;
   if (converterFor(name)) {
-    bytes = await convertImport(name, bytes, sf2);
+    bytes = await convertImport(name, bytes, sf2, rpb);
     if (bytes === null) return;
     name = name.replace(/\.[^.]+$/, "") + ".taud";
     converted = true;
@@ -206,7 +206,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false } = {}) {
   store.fileName = name;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
-  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[0]?.notation ?? 120);
+  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[0]?.notation ?? 120, store.doc);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     store.emit("edit", dirty);
@@ -338,7 +338,7 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   store.fileName = null;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
-  store.pitchPreset = presetForNotation(result.notation);
+  store.pitchPreset = presetForNotation(result.notation, store.doc);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     store.emit("edit", dirty);
@@ -386,13 +386,22 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
         ...(bundledAvail ? [{ value: "bundled", label: t("midi.bundled") }] : []),
         { value: "own", label: t("midi.chooseSf2") },
       ],
+    }, {
+      // Rows-per-beat: pins midi2taud's grid (else auto from time signatures
+      // + onset analysis). Choices mirror the converter's --rpb argparse.
+      name: "rpb", label: t("midi.rpb"), type: "select", value: "auto",
+      options: [
+        { value: "auto", label: t("midi.rpbAuto") },
+        ...[2, 4, 8, 16, 32, 64].map((n) => ({ value: String(n), label: String(n) })),
+      ],
     }],
     okLabel: t("common.import"),
   });
   if (!choice) return;
   const sf2 = choice.sf === "bundled" ? await getBundledSoundfont() : await pickUserSoundfont();
   if (!sf2) { $("stFile").textContent = t("midi.cancelled"); return; }
-  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()), { sf2, saveToOpfs: toOpfs });
+  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()),
+    { sf2, saveToOpfs: toOpfs, rpb: choice.rpb });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());
 $("fileInput").addEventListener("change", async (e) => {
@@ -427,7 +436,7 @@ function selectSong(index) {
   $("songSel").value = store.songIndex;
   store.clearMutes(); // per-song state (taut finishLoadCommon)
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
-  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120);
+  store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120, store.doc);
   if (store.audio) {
     store.audio.stop(0);
     store.sync = new DocSync(store.audio, store.doc, store.songIndex);

@@ -2184,13 +2184,14 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
             inst_names = [''] + [(inst.name if inst is not None else '')
                                  for inst in instruments[:255]]
             # SNam mirrors the deduplicated sample pool: one entry per distinct
-            # sample, in pool order, named after the sample itself. taut.js dedupes
-            # instrument records by (ptr,len), sorts ascending by ptr, and matches
-            # SNam[i+1] positionally to that list, so this ordering labels every
-            # sample correctly and a shared sample (e.g. "ChipBass.looped") appears
-            # exactly once instead of once per referencing instrument slot.
-            smp_names  = [''] + [(getattr(s, 'name', '') or '')
-                                 for s in pool_order[:255]]
+            # sample, in pool order (0-based), named after the sample itself. The
+            # reader dedupes instrument records by (ptr,len), sorts ascending by
+            # ptr, and matches SNam[i] positionally to that list, so this ordering
+            # labels every sample correctly and a shared sample (e.g.
+            # "ChipBass.looped") appears exactly once instead of once per
+            # referencing instrument slot.
+            smp_names  = [(getattr(s, 'name', '') or '')
+                          for s in pool_order[:255]]
 
             # Ixmp patches — only the use_instruments branch maps IT notes to multiple
             # samples; the sample-mode branch has nothing to emit because there's no

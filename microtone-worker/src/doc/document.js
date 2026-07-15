@@ -8,6 +8,7 @@ import { decodeInstWord, INST_PATLEN, INST_HALTAT, INST_HALT, INST_GOBACK, INST_
 import { TaudInst, parsePatchesBlob } from "../engine/inst.js";
 import { CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { emptyPatternBytes } from "./patterntools.js";
+import { parseNotaPayload, defToPreset, slotForNotationValue } from "./notation.js";
 import { cueInstructionWords } from "../format/taud-parse.js";
 import { writeTaud } from "../format/taud-write.js";
 
@@ -254,6 +255,26 @@ export class Document {
   instrumentName(slot) { return this._nameTable("INam")[slot] ?? ""; }
   sampleName(index) { return this._nameTable("SNam")[index] ?? ""; }
   patternName(idx) { return this._nameTable("pNam")[idx] ?? ""; }
+
+  /** Custom notation definitions from the "nota" section, cached by payload
+   *  identity — undo/redo swaps the payload ref, invalidating naturally. */
+  customNotations() {
+    const sec = this.projSections.find((s) => s.fourcc === "nota");
+    const payload = sec ? sec.payload : null;
+    if (!this._notaCache || this._notaCache.payload !== payload) {
+      this._notaCache = { payload, defs: payload ? parseNotaPayload(payload) : [] };
+    }
+    return this._notaCache.defs;
+  }
+
+  /** Preset for an sMet notation value in the custom range (65520..65535);
+   *  null when the value is out of range or the slot is undefined here. */
+  customPreset(value) {
+    const slot = slotForNotationValue(value);
+    if (slot < 0) return null;
+    const def = this.customNotations().find((d) => d.slot === slot);
+    return def ? defToPreset(def) : null;
+  }
 
   /** Build a new name-table payload (`fourcc`) with `escaped` (ASCII,
    *  \uHHHH-escaped) at `index`. Untouched entries keep their exact bytes — the

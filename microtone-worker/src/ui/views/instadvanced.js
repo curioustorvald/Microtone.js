@@ -21,6 +21,7 @@ import { META_MIX_GAIN } from "../../engine/tables.js";
 import { noteToStr, hex4 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
+import { annFadeout, annFilter, annSfCutoff, annSfReso } from "../units.js";
 import { t } from "../i18n.js";
 
 // Fraction of the env plot width the time axis uses (item 37 headroom rule,
@@ -137,6 +138,16 @@ export class AdvancedZoneEditor {
 
   render() {
     const panel = this.iv.panel;
+    // render() rebuilds the whole panel (map/detail/env all depend on the
+    // selection). Clearing panel.innerHTML collapses the scroll regions, so the
+    // independently-scrolling list + main columns snap back to the top; capture
+    // their offsets now and restore them once the content is rebuilt (item 64).
+    // (.side-detail is capped to the pane and no longer scrolls in advanced
+    // mode — kept for robustness in case a host has no definite height.)
+    const paneEl = this.iv.right;
+    const prevPaneScroll = paneEl?.scrollTop ?? 0;
+    const prevListScroll = panel.querySelector(".adv-list")?.scrollTop ?? 0;
+    const prevMainScroll = panel.querySelector(".adv-main")?.scrollTop ?? 0;
     panel.innerHTML = "";
     const doc = this.doc;
     const inst = this.inst;
@@ -189,6 +200,10 @@ export class AdvancedZoneEditor {
 
     this.drawMap();
     this.drawEnvArea();
+    // Restore scroll AFTER the canvases are sized (scrollHeight is settled).
+    list.scrollTop = prevListScroll;
+    main.scrollTop = prevMainScroll;
+    if (paneEl) paneEl.scrollTop = prevPaneScroll;
   }
 
   btn(label, title, onClick, disabled = false) {
@@ -538,13 +553,18 @@ export class AdvancedZoneEditor {
       });
     }, t("adv.extraPresentTitle")));
     if (p.hasExtra) {
+      // Fadeout / cutoff / resonance carry the SAME units as the base-record
+      // fields, so annotate them like the basic edit: fadeout → ticks-to-cut,
+      // and cutoff/resonance in Hz/dB (SoundFont mode) or off/hex (IT mode).
       this.row(ex,
-        this.sel(t("adv.filterMode"), p.filterSfMode ? "1" : "0",
+        this.sel(t("inst.filterModeLabel"), p.filterSfMode ? "1" : "0",
           [["0", "ImpulseTracker"], ["1", "SoundFont2"]],
           (v) => this._field("filterSfMode", v === "1")),
-        this.num(t("adv.fadeout"), p.fadeoutStep, 0, 0xffff, (v) => this._field("fadeoutStep", v), annHex4),
-        this.num(t("adv.cutoff"), p.extraCutoff, 0, 0xffff, (v) => this._field("extraCutoff", v), annHex4),
-        this.num(t("adv.resonance"), p.extraResonance, 0, 0xffff, (v) => this._field("extraResonance", v), annHex4),
+        this.num(t("adv.fadeout"), p.fadeoutStep, 0, 0xffff, (v) => this._field("fadeoutStep", v), annFadeout),
+        this.num(t("adv.cutoff"), p.extraCutoff, 0, 0xffff, (v) => this._field("extraCutoff", v),
+          p.filterSfMode ? annSfCutoff : annFilter),
+        this.num(t("adv.resonance"), p.extraResonance, 0, 0xffff, (v) => this._field("extraResonance", v),
+          p.filterSfMode ? annSfReso : annFilter),
         this.num(t("adv.atten"), p.extraInitialAttenOctet, 0, 255,
           (v) => this._field("extraInitialAttenOctet", v), attenLabel));
     }

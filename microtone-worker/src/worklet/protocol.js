@@ -28,6 +28,7 @@ export const CMD = Object.freeze({
   RESET_PARAMS: "resetParams",                     // {ph}
   RESET_FUNK_STATE: "resetFunkState",              // {ph}
   JAM_NOTE: "jamNote",                             // {ph, voice, note, inst}
+  JAM_SAMPLE: "jamSample",                         // {ph, voice, note, spec} — raw pooled-sample preview
   JAM_STOP: "jamStop",                             // {ph}
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}

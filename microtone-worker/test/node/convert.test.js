@@ -47,7 +47,7 @@ function convert(fileName, opts = {}) {
   if (conv.isMidi) inputs.push({ path: "/sf.sf2", bytes: readFileSync(sf2Path) });
   return runConverter(py, {
     script: conv.script,
-    argv: buildArgv({ isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud" }),
+    argv: buildArgv({ isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud", rpb: opts.rpb ?? null }),
     inputs,
     output: "/out.taud",
     onLog: () => {},
@@ -62,6 +62,21 @@ test("converterFor maps extensions", () => {
   assert.equal(converterFor("noext"), null);
 });
 
+test("buildArgv pins MIDI rows-per-beat only when requested (item 62)", () => {
+  const midi = (rpb) => buildArgv({ isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud", rpb });
+  // auto (null / omitted / "auto") → no --rpb, converter picks the grid
+  assert.deepEqual(midi(null), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(midi("auto"), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  // pinned value → --rpb N appended (string, matching the argparse choices)
+  assert.deepEqual(midi(8), ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8"]);
+  assert.deepEqual(midi("16"), ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "16"]);
+  // rpb is MIDI-only — tracker argv never carries it
+  assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", rpb: 8 }),
+    ["/in.xm", "/out.taud", "-v"]);
+});
+
 test("xm2taud under Pyodide → parseable, loadable document", () => {
   const out = convert("milky.xm");
   const doc = new Document(parseTaud(out));
@@ -70,6 +85,11 @@ test("xm2taud under Pyodide → parseable, loadable document", () => {
   assert.ok(doc.songs[0].patterns.length > 0);
   assert.ok(doc.usedInstrumentSlots().length > 0);
   assert.ok(doc.sampleList().length > 0);
+  // #66: SNam is pool-ordered and 0-based — census sample 0 carries its own
+  // name (before the fix a reserved leading '' shifted every name by one and
+  // left sample 0 unnamed).
+  assert.deepEqual(doc.sampleList().map((s) => s.name),
+    ["beng", "bass", "perc", "lead"]);
 });
 
 test("it2taud under Pyodide → parseable, loadable document", () => {
@@ -78,6 +98,9 @@ test("it2taud under Pyodide → parseable, loadable document", () => {
   assert.equal(doc.kind, "taud");
   assert.ok(doc.songs[0].patterns.length > 0);
   assert.ok(doc.usedInstrumentSlots().length > 0);
+  // #66: 0-based SNam, no leading-empty shift.
+  assert.deepEqual(doc.sampleList().map((s) => s.name),
+    ["Aurora", "Synth Pad", "Panflute", "Low Strings", "Open Hihat", "Bass Drum"]);
 });
 
 test("failed conversion raises and leaves the runtime reusable", () => {
@@ -193,4 +216,19 @@ test("midi2taud with GeneralUser-GS → parseable document (skips without the SF
     // E1M1 layers presets → expect at least one Metainstrument, like the
     // corpus M_E1M1.taud built by the same converter natively
     assert.ok(used.some((s) => doc.instruments[s].isMeta));
+  });
+
+test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const totalRows = (bytes) =>
+      new Document(parseTaud(bytes)).songs[0].patterns
+        .reduce((n, p) => n + (p ? p.length : 0), 0);
+    const rows2 = totalRows(convert("M_E1M1.mid", { rpb: 2 }));
+    const rows16 = totalRows(convert("M_E1M1.mid", { rpb: 16 }));
+    // rows = beats × rpb (a pinned rpb is not bumped), so 16 rpb yields
+    // materially more rows than 2 — proof the --rpb flag reached the converter.
+    assert.ok(rows2 > 0 && rows16 > 0, "both conversions produced rows");
+    assert.ok(rows16 > rows2 * 2,
+      `expected 16-rpb (${rows16}) to far exceed 2-rpb (${rows2})`);
   });

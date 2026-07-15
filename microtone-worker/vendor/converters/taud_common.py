@@ -778,9 +778,12 @@ PROJECT_DATA_HEADER_SIZE = 16   # 8-byte magic + 8 reserved
 
 
 def _name_table_blob(names) -> bytes:
-    """Encode a list of names (slot-indexed; slot 0 is left empty in source) as
-    0x1E-separated UTF-8 bytes. Trailing empty slots are trimmed to save space.
-    Returns b'' when every name is empty.
+    """Encode a list of names as 0x1E-separated UTF-8 bytes. Trailing empty
+    entries are trimmed to save space; returns b'' when every name is empty.
+
+    The caller chooses the indexing: INam/pNam are slot-indexed (entry 0 = the
+    unused slot 0), while SNam is pool-ordered and 0-based (pool sample i =
+    entry i).
     """
     if not names:
         return b''
@@ -1011,9 +1014,11 @@ def build_project_data(*, project_name: str = '',
     Flags1 bit 0 (64-channel mode) — the caller MUST also set the version byte's
     xHDR bit (0x20). This forces a non-empty block even with no other sections.
 
-    `sample_names` / `instrument_names` / `pattern_names` are slot-indexed
-    lists (entry 0 is typically empty since slot 0 is reserved); they are
-    encoded as 0x1E-separated UTF-8 strings inside SNam / INam / pNam blocks.
+    `instrument_names` / `pattern_names` are slot-indexed lists (entry 0 is
+    typically empty since slot 0 is reserved); `sample_names` is pool-ordered
+    and 0-based (entry i names pool sample i — NO reserved leading entry).
+    All three are encoded as 0x1E-separated UTF-8 strings inside INam / pNam /
+    SNam blocks.
 
     `song_metadata` is an optional list of dicts, one per song:
         { 'index': int (0..255),

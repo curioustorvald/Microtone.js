@@ -922,16 +922,19 @@ def assemble_taud(mod: dict, with_project_data: bool = True) -> bytes:
         song_table += entry
         cur_off += len(pat_comp) + len(cue_comp)
 
-    # Project Data (optional). MOD samples *are* its instruments — the names
-    # populate both INam and SNam (1-based; slot 0 empty).
+    # Project Data (optional). MOD samples *are* its instruments — the same
+    # names populate INam and SNam, but with different indexing: INam is
+    # slot-indexed (slot 0 empty, sample #1 → slot $01), while SNam is
+    # pool-ordered and 0-based (pool sample i → SNam[i]).
     proj_data = b''
     proj_off  = 0
     if with_project_data:
-        names = [''] + [s.name for s in samples[:255]]
+        inst_names = [''] + [s.name for s in samples[:255]]
+        smp_names  = [s.name for s in samples[:255]]
         proj_data = build_project_data(
             project_name=mod['title'],
-            instrument_names=names,
-            sample_names=names,
+            instrument_names=inst_names,
+            sample_names=smp_names,
         )
         if proj_data:
             proj_off = cur_off

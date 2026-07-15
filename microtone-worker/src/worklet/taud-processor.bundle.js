@@ -4072,6 +4072,11 @@ function generateTrackerAudio(eng, playhead, out) {
 
 
 
+// Scratch instrument slot for the raw-sample preview (jamSample). It sits just
+// past the 1024 addressable bank slots so an audition never borrows a real one;
+// every `instruments[voice.instrumentId]` lookup indexes it directly (no & mask).
+const AUDITION_SLOT = 1024;
+
 function makePattern() {
   const rows = new Array(64);
   for (let i = 0; i < 64; i++) {
@@ -4085,8 +4090,8 @@ function makePattern() {
 class TaudEngine {
   constructor() {
     this.sampleBin = new Uint8Array(SAMPLE_BIN_TOTAL);
-    this.instruments = new Array(1024);
-    for (let i = 0; i < 1024; i++) this.instruments[i] = new TaudInst(i);
+    this.instruments = new Array(AUDITION_SLOT + 1);
+    for (let i = 0; i <= AUDITION_SLOT; i++) this.instruments[i] = new TaudInst(i);
     // Pattern store — lazily allocated (memory scales with actual song size).
     this.playdata = new Array(NUM_PATTERNS).fill(null);
     this.emptyPattern = makePattern();
@@ -4319,6 +4324,35 @@ class TaudEngine {
     p.jamActive = true;
   }
 
+  /**
+   * Preview the EXACT pooled sample `spec` (ptr/len/rate/loop) on voice `vi`,
+   * BYPASSING all instrument / metainstrument zone resolution. The Samples and
+   * Instruments editors call this so the audition plays the wave the user is
+   * looking at, not whatever a metainstrument would map `note` to (bug #65).
+   * JS-only (no Kotlin counterpart): a scratch instrument in AUDITION_SLOT
+   * carries the sample and its clean default envelope so the note simply
+   * sounds at full volume until jamStop / sample end.
+   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune? }.
+   */
+  jamSample(ph, vi, note, spec) {
+    const p = this.playheads[ph];
+    const ts = p.trackerState;
+    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    note &= 0xffff;
+    const inst = this.instruments[AUDITION_SLOT];
+    inst.samplePtr = spec.ptr >>> 0;
+    inst.sampleLength = spec.len | 0;
+    inst.samplingRate = spec.rate | 0;
+    inst.samplePlayStart = spec.playStart | 0;
+    inst.sampleLoopStart = spec.loopStart | 0;
+    inst.sampleLoopEnd = spec.loopEnd | 0;
+    inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
+    inst.sampleDetune = (spec.detune | 0) & 0xffff;
+    inst.extraPatches = null;
+    triggerNote(this, ts.voices[v], note, AUDITION_SLOT, -1);
+    p.jamActive = true;
+  }
+
   /** True when metainstrument `inst` would produce at least one sounding layer
    *  at `note` (mirrors the strict-layer gating in triggerMetaOrNote). */
   _metaSoundsAt(inst, note) {
@@ -4493,6 +4527,7 @@ const CMD = Object.freeze({
   RESET_PARAMS: "resetParams",                     // {ph}
   RESET_FUNK_STATE: "resetFunkState",              // {ph}
   JAM_NOTE: "jamNote",                             // {ph, voice, note, inst}
+  JAM_SAMPLE: "jamSample",                         // {ph, voice, note, spec} — raw pooled-sample preview
   JAM_STOP: "jamStop",                             // {ph}
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
@@ -4631,6 +4666,7 @@ function applyAudioCommand(eng, m) {
     case CMD.RESET_PARAMS: eng.resetParams(m.ph); return true;
     case CMD.RESET_FUNK_STATE: eng.resetFunkState(m.ph); return true;
     case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst, m.audition); return true;
+    case CMD.JAM_SAMPLE: eng.jamSample(m.ph, m.voice, m.note, m.spec); return true;
     case CMD.JAM_STOP: eng.jamStop(m.ph); return true;
     case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); return true;
     case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); return true;

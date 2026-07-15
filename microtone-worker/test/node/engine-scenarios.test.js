@@ -354,3 +354,46 @@ test("getVoiceInstrument reports the metainstrument slot, not the layer child", 
   eng.jamNote(0, 1, 0x5000, plainSlot);
   assert.equal(eng.getVoiceInstrument(0, 1), plainSlot, "plain instrument reports itself");
 });
+
+// bug #65: the Samples/Instruments editor preview must play the EXACT pooled
+// sample on screen, not whatever a metainstrument would map C4 to. jamSample
+// bypasses all instrument/zone resolution via a scratch AUDITION_SLOT.
+test("jamSample previews the exact pooled sample, bypassing metainstrument zones (bug #65)", () => {
+  const corpus = fileURLToPath(new URL("../corpus/flourish.taud", import.meta.url));
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, parseTaud(readFileSync(corpus)), 0);
+  assert.ok(eng.instruments[6].isMeta, "slot 6 is a metainstrument");
+
+  // A real pooled sample owned by one of the meta's layer children — exactly
+  // the kind of sample the Samples view lists and the census attributes to a
+  // metainstrument (so the old jamNote(slot) preview mis-resolved it at C4).
+  let target = null;
+  for (const l of eng.instruments[6].metaLayers) {
+    const child = eng.instruments[l.instIdx & 0x3ff];
+    if (child && !child.isMeta && child.sampleLength > 0) {
+      target = { ptr: child.samplePtr, len: child.sampleLength, rate: child.samplingRate,
+        playStart: 0, loopStart: child.sampleLoopStart, loopEnd: child.sampleLoopEnd,
+        loopMode: child.loopMode };
+      break;
+    }
+  }
+  assert.ok(target, "found a layer-child sample to preview");
+
+  // jamSample plays that exact region on the top channel regardless of the bank.
+  const vi = 5;
+  eng.jamSample(0, vi, 0x5000, target);
+  const v = eng.playheads[0].trackerState.voices[vi];
+  assert.ok(v.active, "audition voice is active");
+  assert.equal(v.activeSamplePtr, target.ptr, "plays the exact sample ptr");
+  assert.equal(v.activeSampleLength, target.len, "plays the exact sample length");
+  // The scratch slot never disturbs a real bank slot.
+  assert.equal(v.instrumentId, 1024, "audition plays through the reserved scratch slot");
+
+  // Renders end-to-end through the reserved AUDITION_SLOT — proves the extended
+  // instruments array is safe in the tick/mixer hot paths.
+  renderSamples(eng, 256);
+  assert.ok(v.samplePos > 0, "audition sample advanced");
+
+  eng.jamStop(0);
+  assert.equal(v.active, false, "jamStop ends the audition");
+});

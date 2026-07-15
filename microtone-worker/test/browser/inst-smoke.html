@@ -77,9 +77,9 @@
         const ppcOk = inst.pitchPanCentre === 0x6000;
         log(`panning: sep=${inst.pitchPanSeparation} swing=${inst.panSwing} centre=0x${inst.pitchPanCentre.toString(16)} (${sepOk && panSwOk && ppcOk ? "ok" : "FAIL"})`);
 
-        // "Use default pan" toggles pan LOOP word bit 7.
+        // "Enable default pan" toggles pan LOOP word bit 7.
         const useDefBefore = (inst.panEnvLoop >> 7) & 1;
-        const useDefChk = findRow("Use default pan").querySelector("input[type=checkbox]");
+        const useDefChk = findRow("Enable default pan").querySelector("input[type=checkbox]");
         useDefChk.checked = !useDefBefore; fire(useDefChk, "change");
         const useDefOk = !!useDefChk && ((inst.panEnvLoop >> 7) & 1) === (useDefBefore ? 0 : 1);
         log(`use default pan: bit7 ${useDefBefore}→${(inst.panEnvLoop >> 7) & 1} (${useDefOk ? "ok" : "FAIL"})`);

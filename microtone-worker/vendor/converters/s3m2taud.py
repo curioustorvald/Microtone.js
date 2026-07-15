@@ -953,9 +953,10 @@ def assemble_taud(h: S3MHeader, instruments: list, patterns: list,
     proj_data = b''
     proj_off  = 0
     if with_project_data:
+        # INam is slot-indexed (slot 0 empty); SNam is pool-ordered and 0-based.
         inst_names   = [''] + [(inst.name     if inst is not None else '')
                                for inst in instruments[:255]]
-        sample_names = [''] + [(inst.filename if inst is not None else '')
+        sample_names =        [(inst.filename if inst is not None else '')
                                for inst in instruments[:255]]
         proj_data = build_project_data(
             project_name=h.title,

@@ -14,6 +14,7 @@ import { envPresent } from "../../engine/envelope.js";
 import { hex2, noteToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
+import { annHex2, annFilter, annFadeout, annSfCutoff, annSfReso } from "../units.js";
 import { t } from "../i18n.js";
 
 // Fraction of the envelope graph's plottable width the time axis uses; the
@@ -224,6 +225,9 @@ export class InstrumentsView {
     // tab bar + panel until its Back button (metas fall back to the tabs).
     if (this.advanced && inst?.isMeta) this.advanced = false;
     this.tabBar.hidden = this.advanced;
+    // adv-active makes the panel fill the detail pane so the patch-list
+    // separator reaches the bottom of the available space (item 63).
+    this.panel.classList.toggle("adv-active", this.advanced);
     if (this.advanced) {
       this.refreshListBadge(this.selected);
       this.advEditor.render();
@@ -1100,31 +1104,8 @@ function mixDbLabel(octet) {
   const db = 20 * Math.log10(g);
   return (db >= 0 ? "+" : "−") + Math.abs(db).toFixed(1) + " dB";
 }
-const annHex2 = (v) => "$" + (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
 const annHex4 = (v) => "$" + (v & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 const annHex6 = (v) => "$" + (v & 0xffffff).toString(16).toUpperCase().padStart(6, "0");
-const annFilter = (v) => (v === 0xff ? t("inst.annOff") : annHex2(v));
-function annFadeout(v) {
-  if (v <= 0) return t("inst.annNone");
-  if (v >= 1024) return t("inst.annCut");
-  return t("inst.annTicks", { n: Math.round(1024 / v) });
-}
-// SoundFont filter units (AudioAdapter.refreshVoiceFilter): cutoff = absolute
-// cents → Hz (8.176·2^(cents/1200)); resonance = centibels above DC → dB. The
-// cents/cB are clamped to the SF2-spec range for display — a value carried over
-// from a toggled ImpulseTracker instrument can sit far outside it (the engine
-// clamps too), and the raw Hz/dB would otherwise read as an absurd number.
-function annSfCutoff(v) {
-  if (v >= 0xffff) return t("inst.annOff");
-  const hz = 8.176 * Math.pow(2, Math.min(Math.max(v, 1500), 13500) / 1200);
-  if (hz >= 10000) return Math.round(hz / 1000) + " kHz";
-  if (hz >= 1000) return (hz / 1000).toFixed(2) + " kHz";
-  return Math.round(hz) + " Hz";
-}
-function annSfReso(v) {
-  if (v >= 0xffff) return t("inst.annFlat");
-  return (Math.min(v, 960) / 10).toFixed(1) + " dB";
-}
 
 /** A "nice" time-grid interval (1/2/5 × 10ⁿ) giving ~5-8 gridlines. */
 function niceTimeStep(total) {
