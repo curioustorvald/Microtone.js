@@ -308,8 +308,19 @@ All imports are single undo steps.
 
 - **General** — global volume, volume swing, fadeout; default pan, pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / key-off / fade / key lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
-- **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in.
-- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units).
+- **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
+- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Patches…** button opens that layer instrument's Advanced Edit panel — this is how you reach the sample patches of MIDI-imported instruments, whose layers are not listed on the left.
+
+### Advanced Edit (Ixmp patches)
+
+An instrument may carry a list of **Ixmp patches**: per-zone sample bindings over a pitch × velocity rectangle, each optionally overriding envelopes, fadeout, filter and more. At trigger time the engine walks the list in order and the **first** patch whose rectangle contains the note wins; when none matches, the base instrument's sample plays. Advanced Edit is a whole-panel editor for this list:
+
+- **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
+- **Zone map** — the patches as rectangles over pitch (x) × velocity (y), with live blobs at each sounding note's pitch/velocity and lit rectangles for zones currently playing. Click a rectangle to select its patch.
+- **Detail form** — the selected patch's rectangle, sample binding (pick any pooled sample — rate and loop follow), play/loop points, rate, detune, loop mode/sustain; pan / note-volume / vibrato-waveform overrides (unchecked = inherit from the base instrument); and the *extra block*: per-patch fadeout, filter cutoff/resonance (IT or SF2 units) and SF2 initial attenuation.
+- **Vol / Pan / Filter / Pitch** sub-tabs — per-patch envelope overrides. Ticking *Patch overrides the … envelope* copies the base instrument's envelope as a starting point; the graph then edits exactly like the base envelope tabs (drag nodes, add/remove, sustain/loop ranges, log timescale). **Wave** shows the bound sample with live play positions.
+
+Jamming on the piano keys while the panel is open auditions the instrument live; the map, list and envelope graphs all follow the sounding voices. **‹ Back** returns to the normal tabs.
 
 ## Project (F6)
 

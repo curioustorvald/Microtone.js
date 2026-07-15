@@ -5,8 +5,10 @@
 //
 // Dirty tags: {kind:"pattern", song, pat} | {kind:"cue", song, cue}
 //           | {kind:"scalar", song, key} | {kind:"inst", slot} | {kind:"bank"}
+//           | {kind:"ixmp", slot} | {kind:"section", fourcc} | {kind:"resync", song}
 
-import { applyPlan, captureBankState, restoreBankState } from "./bankmerge.js";
+import { applyPlan, captureBankState, restoreBankState, buildIxmpSection } from "./bankmerge.js";
+import { parsePatchesBlob } from "../engine/inst.js";
 import { TaudPlayData } from "../engine/state.js";
 import { CUE_EMPTY, MAX_VOICES, NUM_CUES, NUM_CUES_64 } from "../format/taud-const.js";
 
@@ -528,6 +530,76 @@ export function setSectionOp(fourcc, payload, gestureId = null) {
       return setSectionOp(fourcc, prev, gestureId);
     },
     dirty: () => [{ kind: "section", fourcc }],
+  };
+}
+
+/** Refresh the live decoded TaudInst's patches from the (possibly just
+ *  swapped) doc.ixmp list — last entry for the slot wins, mirroring the
+ *  device upload order. */
+function refreshLivePatches(doc, slot) {
+  const s = slot & 0x3ff;
+  const entry = [...doc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === s);
+  const patches = entry ? parsePatchesBlob(entry.blob) : [];
+  doc.instruments[s].extraPatches = patches.length > 0 ? patches : null;
+  if (patches.length > 0) doc._usedSlots.add(s);
+}
+
+/**
+ * Replace instrument `slot`'s Ixmp patch list with the wire blob `blob`
+ * (null / < 31 bytes = remove all patches). Updates the decoded doc.ixmp
+ * entry, rebuilds the "Ixmp" section, and refreshes the live TaudInst's
+ * extraPatches so census/zones/jam see the edit immediately. `snam`
+ * (undefined = untouched) atomically swaps the SNam payload in the same
+ * step — a sample-binding change can reorder the census, whose pool order
+ * IS the SNam name mapping. The inverse is a snapshot swap of the ixmp
+ * list + the whole projSections list (payload refs are stable; keeps the
+ * section ORDER byte-exact, like captureBankState). Dirty {kind:"ixmp"} →
+ * DocSync re-uploads the slot's patch blob.
+ */
+export function setInstPatchesOp(slot, blob, snam = undefined, gestureId = null) {
+  return {
+    type: "setInstPatches",
+    slot, blob, snam, gestureId,
+    coalesceKey: `ixmp:${slot & 0x3ff}`,
+    apply(doc) {
+      const s = slot & 0x3ff;
+      const prev = captureIxmpState(doc);
+      const patches = blob !== null && blob.length >= 31 ? parsePatchesBlob(blob) : [];
+      doc.ixmp = doc.ixmp.filter((e) => (e.instId & 0x3ff) !== s);
+      if (patches.length > 0) doc.ixmp.push({ instId: s, count: patches.length, blob });
+      doc.setSection("Ixmp", doc.ixmp.length > 0 ? buildIxmpSection(doc.ixmp) : null);
+      if (snam !== undefined) doc.setSection("SNam", snam);
+      refreshLivePatches(doc, s);
+      doc.dirty = true;
+      return swapIxmpStateOp(slot, prev, gestureId);
+    },
+    dirty: () => [{ kind: "ixmp", slot: slot & 0x3ff }],
+  };
+}
+
+function captureIxmpState(doc) {
+  return {
+    ixmp: doc.ixmp.slice(),
+    sections: doc.projSections.map((x) => ({ fourcc: x.fourcc, payload: x.payload })),
+  };
+}
+
+/** Inverse of setInstPatchesOp: restore the captured ixmp list + section list
+ *  verbatim; its own inverse is the symmetric swap back (redo). */
+function swapIxmpStateOp(slot, state, gestureId = null) {
+  return {
+    type: "swapIxmpState",
+    slot, state, gestureId,
+    coalesceKey: `ixmp:${slot & 0x3ff}`,
+    apply(doc) {
+      const cur = captureIxmpState(doc);
+      doc.ixmp = state.ixmp.slice();
+      doc.projSections = state.sections.map((x) => ({ fourcc: x.fourcc, payload: x.payload }));
+      refreshLivePatches(doc, slot);
+      doc.dirty = true;
+      return swapIxmpStateOp(slot, cur, gestureId);
+    },
+    dirty: () => [{ kind: "ixmp", slot: slot & 0x3ff }],
   };
 }
 

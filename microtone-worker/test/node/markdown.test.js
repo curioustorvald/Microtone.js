@@ -85,7 +85,7 @@ test("renders the real TAUD_NOTE_EFFECTS.md without throwing + builds a TOC", ()
 test("renders the real USER_MANUAL.md without throwing + builds a TOC", () => {
   const md = readFileSync(fileURLToPath(new URL("../../assets/USER_MANUAL.md", import.meta.url)), "utf8");
   const html = renderMarkdown(md);
-  assert.match(html, /<h1 id="[^"]+">Microtone\.js User Manual<\/h1>/);
+  assert.match(html, /<h1 id="[^"]+">Microtone User Manual<\/h1>/);
   assert.match(html, /<table>/);
   assert.match(html, /<pre><code>/);
   const toc = extractToc(md);

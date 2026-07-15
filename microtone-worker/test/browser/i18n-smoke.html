@@ -78,7 +78,8 @@
         const tabKo = tabBtn.textContent === "타임라인";       // data-i18n re-applied
         const langBtnKo = doc.getElementById("langBtn").textContent === "KO";
         const barKo = [...win.__microtone.patternView.bar.querySelectorAll("button")]
-          .some((b) => b.textContent === "복제");             // imperative bar rebuilt
+          .some((b) => b.textContent.includes("복제"));       // imperative bar rebuilt
+                                                              // (item 55 renamed it 패턴 복제)
         const sameDoc = win.__microtone.store.doc !== null;   // no reload → doc preserved
         await i18n.changeLang("en");
         const backEn = tabBtn.textContent === enTab;

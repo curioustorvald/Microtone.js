@@ -284,8 +284,11 @@ export class Document {
    * Deduped sample census across base instruments + Ixmp patches, sorted by
    * pool pointer: [{ptr, len, rate, loopStart, loopEnd, loopMode, users}].
    * SNam names map by pool order (converter emission order).
+   * `patchOverrides` (Map slot → patches[]|null) substitutes a slot's Ixmp
+   * patches WITHOUT applying them — the patch editor uses it to compute the
+   * prospective census (and the SNam realignment it implies) before an edit.
    */
-  sampleList() {
+  sampleList(patchOverrides = null) {
     const byKey = new Map();
     const add = (ptr, len, rate, loopStart, loopEnd, loopMode, user) => {
       if (len <= 0) return;
@@ -303,8 +306,9 @@ export class Document {
         add(inst.samplePtr, inst.sampleLength, inst.samplingRate,
             inst.sampleLoopStart, inst.sampleLoopEnd, inst.loopMode, s);
       }
-      if (inst.extraPatches !== null) {
-        for (const p of inst.extraPatches) {
+      const patches = patchOverrides?.has(s) ? patchOverrides.get(s) : inst.extraPatches;
+      if (patches !== null) {
+        for (const p of patches) {
           add(p.samplePtr, p.sampleLength, p.samplingRate,
               p.loopStart, p.loopEnd, p.loopMode, s);
         }

@@ -55,6 +55,14 @@ export class DocSync {
           // Instruments sync eagerly — jam must always hear the current edit.
           this.audio.uploadInstrument(tag.slot, this.doc.instRecordBytes(tag.slot));
           break;
+        case "ixmp": {
+          // Ixmp patch edit (Advanced Edit): eagerly re-upload the slot's
+          // patch blob — an empty blob clears the engine's patch state.
+          const e = [...this.doc.ixmp].reverse()
+            .find((x) => (x.instId & 0x3ff) === tag.slot);
+          this.audio.uploadInstrumentPatches(tag.slot, e ? e.blob : new Uint8Array(0));
+          break;
+        }
         case "bank":
           // Bank import/undo touches the sample pool + many inst records +
           // Ixmp patches at once: re-upload the whole image (which clears all

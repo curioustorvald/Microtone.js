@@ -1,0 +1,142 @@
+<!doctype html><meta charset="utf-8"><title>advanced edit smoke (item 49b)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/M_E1M1.taud" style="width:1200px;height:760px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !(M.store.doc && M.store.undo); i++) await sleep(50);
+  const { store, instrumentsView: iv } = M;
+  win.alert = (m) => log("alert: " + m); // a real alert() blocks headless dumps
+
+  const doc = store.doc;
+  const baseline = doc.toBytes();
+
+  // M_E1M1 is a GM MIDI import: every top-level instrument is a META whose
+  // patch-carrying children are NOT list-selectable (item 59) — the entry
+  // point is the Layers table's per-row "Patches…" button.
+  iv.visible = true;
+  iv.refresh(); // selects the first meta
+  const metaSlot = iv.selected;
+  const isMeta = doc.instruments[metaSlot].isMeta;
+  const layerBtns = [...iv.panel.querySelectorAll(".advCell button")];
+  const t1 = isMeta && layerBtns.length > 0;
+  log(`meta $${metaSlot.toString(16)} layer table has Patches… buttons (${layerBtns.length}): ${t1 ? "ok" : "FAIL"}`);
+
+  // Open a child with several patches so list/reorder legs are meaningful.
+  const children = doc.instruments[metaSlot].metaLayers.map((l) => l.instIdx & 0x3ff);
+  const richChild = children.reduce((a, b) =>
+    (doc.instruments[b].extraPatches?.length ?? 0) > (doc.instruments[a].extraPatches?.length ?? 0) ? b : a);
+  const btnIdx = children.indexOf(richChild);
+  layerBtns[btnIdx].click();
+  const slot = iv.selected;
+  const patchCount = () => doc.instruments[slot].extraPatches?.length ?? 0;
+  const n0 = patchCount();
+  const t2 = slot === richChild && iv.advanced === true && iv.tabBar.hidden === true &&
+    !!iv.panel.querySelector(".adv-head") && !!iv.panel.querySelector(".adv-map");
+  log(`Patches… opens child $${slot.toString(16)} (${n0} patches) in Advanced Edit: ${t2 ? "ok" : "FAIL"}`);
+
+  // Patch list: one row per patch + the base fallback row.
+  const rows = () => [...iv.panel.querySelectorAll(".adv-row")];
+  const t3 = rows().length === n0 + 1;
+  log(`list rows = patches + base (${rows().length}): ${t3 ? "ok" : "FAIL"}`);
+
+  // Field edit: Pitch hi → patch 0 pitchEnd; one undoable op.
+  const numInput = (label) => [...iv.panel.querySelectorAll(".adv-num")]
+    .find((l) => l.textContent.startsWith(label))?.querySelector("input");
+  const before = doc.instruments[slot].extraPatches[0].pitchEnd;
+  const inp = numInput("Pitch hi");
+  inp.value = 0x1234; fire(inp, "change");
+  const t4 = doc.instruments[slot].extraPatches[0].pitchEnd === 0x1234;
+  log(`Pitch hi edit hits the patch blob (${before}→${doc.instruments[slot].extraPatches[0].pitchEnd}): ${t4 ? "ok" : "FAIL"}`);
+  store.undo.undo();
+  const t5 = doc.instruments[slot].extraPatches[0].pitchEnd === before &&
+    !!iv.panel.querySelector(".adv-head");
+  log(`undo restores + panel stays advanced: ${t5 ? "ok" : "FAIL"}`);
+
+  // Add / delete patches (badge follows).
+  const headBtn = (label) => [...iv.panel.querySelectorAll(".adv-head button")]
+    .find((b) => b.textContent.includes(label));
+  headBtn("Add").click();
+  // meta children have no list row — the IXMP badge only exists for listed slots
+  const rowEl = iv.rowEls.find((r) => r.slot === slot);
+  const badge = rowEl ? rowEl.el.querySelector(".badge-sm").textContent : `IXMP·${n0 + 1}`;
+  const t6 = patchCount() === n0 + 1 && rows().length === n0 + 2 && badge === `IXMP·${n0 + 1}`;
+  log(`add patch (${patchCount()}): ${t6 ? "ok" : "FAIL"}`);
+  headBtn("Delete").click();
+  const t7 = patchCount() === n0 && rows().length === n0 + 1;
+  log(`delete patch (${patchCount()}): ${t7 ? "ok" : "FAIL"}`);
+
+  // Envelope override: select patch 0, Filter tab → tick override → block
+  // created with the present bit (13) and the filter role m-bit (7) stamped.
+  rows()[0].click();
+  [...iv.panel.querySelectorAll(".adv-envtabs button")]
+    .find((b) => b.textContent === "Filter").click();
+  const ovChk = [...iv.panel.querySelectorAll(".adv-envbox label")]
+    .find((l) => /overrides the/.test(l.textContent))?.querySelector("input");
+  ovChk.checked = true; fire(ovChk, "change");
+  const p0 = doc.instruments[slot].extraPatches[0];
+  const t8 = p0.filterEnv !== null && (p0.filterEnvLoop & 0x2000) !== 0 &&
+    (p0.filterEnvLoop & 0x80) !== 0 && !!iv.panel.querySelector(".adv-envcv");
+  log(`filter env override created (loop $${p0.filterEnvLoop.toString(16)}): ${t8 ? "ok" : "FAIL"}`);
+
+  // Node value spinner edits the patch envelope.
+  const valInp = [...iv.panel.querySelectorAll(".env-controls .adv-num")]
+    .find((l) => l.textContent.startsWith("Value"))?.querySelector("input");
+  valInp.value = 42; fire(valInp, "change");
+  const t9 = doc.instruments[slot].extraPatches[0].filterEnv[0].value === 42;
+  log(`env node value edit: ${t9 ? "ok" : "FAIL"}`);
+
+  // Wave tab renders the scope canvas.
+  [...iv.panel.querySelectorAll(".adv-envtabs button")]
+    .find((b) => b.textContent === "Wave").click();
+  const t10 = !!iv.panel.querySelector(".adv-wavecv");
+  log(`wave scope renders: ${t10 ? "ok" : "FAIL"}`);
+
+  // Map click selects the base backdrop row (click a corner outside rects is
+  // flaky — instead click row directly, then map reselects patch 0).
+  rows()[n0].click(); // base row
+  const t11 = !!iv.panel.querySelector(".adv-detail .detail-info");
+  rows()[0].click();
+  log(`base row shows fallback info: ${t11 ? "ok" : "FAIL"}`);
+
+  // Undo everything applied above (env value, env override, delete, add) →
+  // byte-exact against the pristine load.
+  store.undo.undo(); store.undo.undo(); store.undo.undo(); store.undo.undo();
+  const bytes = doc.toBytes();
+  const t12 = bytes.length === baseline.length && bytes.every((b, i) => b === baseline[i]);
+  log(`full undo chain is byte-exact: ${t12 ? "ok" : "FAIL"}`);
+
+  // Back button returns to the tabbed editor (the child's plain-inst tabs).
+  [...iv.panel.querySelectorAll(".adv-head button")][0].click();
+  const t13 = iv.advanced === false && iv.tabBar.hidden === false &&
+    !iv.panel.querySelector(".adv-head");
+  log(`back returns to the tabs: ${t13 ? "ok" : "FAIL"}`);
+
+  // The child's own Zones tab carries the Advanced Edit… entry button too.
+  iv.tab = "zones";
+  iv.renderTabs(); iv.renderPanel();
+  const openBtn = [...iv.panel.querySelectorAll(".adv-openbar button")][0];
+  const t14 = !!openBtn && /Advanced Edit/.test(openBtn.textContent);
+  openBtn?.click();
+  const t15 = iv.advanced === true && !!iv.panel.querySelector(".adv-head");
+  log(`zones tab button re-enters Advanced Edit: ${t14 && t15 ? "ok" : "FAIL"}`);
+
+  const pass = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 && t13 && t14 && t15;
+  log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+ } catch (err) {
+  log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+ }
+})();
+</script>

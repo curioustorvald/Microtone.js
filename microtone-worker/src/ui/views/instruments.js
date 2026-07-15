@@ -5,6 +5,7 @@
 // tab + openAdvancedInstEdit.
 
 import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp, setMetaBytesOp, setSectionOp } from "../../doc/ops.js";
+import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
@@ -71,6 +72,8 @@ export class InstrumentsView {
     this.dragState = null;
     this.selectedNode = 0; // envelope node targeted by the spinner controls
     this.envLogTime = false; // logarithmic time axis for the envelope graph
+    this.advanced = false; // Advanced Edit (Ixmp patch editor, item 49b) active
+    this.advEditor = new AdvancedZoneEditor(this);
 
     this.root = document.createElement("div");
     this.root.className = "split-view";
@@ -86,7 +89,11 @@ export class InstrumentsView {
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
 
-    store.on("doc", () => { this.selected = 1; if (this.visible) this.refresh(); });
+    this._childSelected = null; // meta-layer child explicitly opened via "Patches…"
+    store.on("doc", () => {
+      this.selected = 1; this.advanced = false; this._childSelected = null;
+      if (this.visible) this.refresh();
+    });
     store.on("edit", (tags) => {
       // Suppress the rebuild WHILE an envelope node or a General-tab slider is
       // being dragged — each drag step fires an inst edit, and re-rendering
@@ -95,7 +102,7 @@ export class InstrumentsView {
       if (this.dragState || this._quiet) return;
       if (!this.visible) return;
       if (tags?.some?.((t) => t.kind === "bank")) this.refresh(); // import/undo — slots changed
-      else if (tags?.some?.((t) => t.kind === "inst")) this.renderPanel();
+      else if (tags?.some?.((t) => t.kind === "inst" || t.kind === "ixmp")) this.renderPanel();
     });
   }
 
@@ -145,8 +152,14 @@ export class InstrumentsView {
     // Only top-level instruments are listed — a metainstrument's sub-instruments
     // are not directly selectable (item 59); edit them via their metainstrument.
     const slots = doc.selectableInstrumentSlots();
-    if (slots.length && !slots.includes(this.selected)) {
+    // A meta-layer child opened via the Layers tab's "Patches…" button stays
+    // selected across rebuilds (it is not in the list — item 59 keeps it out of
+    // ordinary selection); anything else off-list resets to the first slot.
+    const keepChild = this._childSelected === this.selected &&
+      doc.metaChildSlots().has(this.selected);
+    if (slots.length && !slots.includes(this.selected) && !keepChild) {
       this.selected = slots[0];
+      this._childSelected = null;
       if (doc.metaChildSlots().has(this.jam.currentInst)) this.jam.currentInst = slots[0];
     }
     for (const slot of slots) {
@@ -161,6 +174,7 @@ export class InstrumentsView {
         `<span class="badge-sm">${kind}</span>`;
       row.addEventListener("click", () => {
         this.selected = slot;
+        this._childSelected = null;
         this.jam.currentInst = slot;
         this.store.emit("instsel");
         this.refresh();
@@ -206,6 +220,15 @@ export class InstrumentsView {
     const doc = this.store.doc;
     if (!doc) return;
     const inst = doc.instruments[this.selected];
+    // Advanced Edit (item 49b): a whole-panel Ixmp patch editor replaces the
+    // tab bar + panel until its Back button (metas fall back to the tabs).
+    if (this.advanced && inst?.isMeta) this.advanced = false;
+    this.tabBar.hidden = this.advanced;
+    if (this.advanced) {
+      this.refreshListBadge(this.selected);
+      this.advEditor.render();
+      return;
+    }
     this.panel.innerHTML = "";
     if (inst) this.panel.appendChild(this.nameRow());
     if (this.tab === "general") this.renderGeneral(inst);
@@ -254,6 +277,26 @@ export class InstrumentsView {
     const r = this.rowEls?.find((e) => e.slot === slot);
     const nameEl = r?.el.querySelector(".name");
     if (nameEl) nameEl.textContent = unescapeName(this.store.doc.instrumentName(slot)) || "(unnamed)";
+  }
+
+  /** Repaint one list row's kind badge (IXMP·n) after a patch edit. */
+  refreshListBadge(slot) {
+    const r = this.rowEls?.find((e) => e.slot === slot);
+    const badge = r?.el.querySelector(".badge-sm");
+    if (!badge) return;
+    const inst = this.store.doc.instruments[slot];
+    badge.textContent = inst.isMeta ? "META" : inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
+  }
+
+  openAdvanced() {
+    this.advanced = true;
+    this.renderPanel();
+  }
+
+  closeAdvanced() {
+    this.advanced = false;
+    this.renderTabs();
+    this.renderPanel();
   }
 
   /** Apply an inst op WITHOUT rebuilding the panel — for slider drags whose
@@ -894,6 +937,14 @@ export class InstrumentsView {
   }
 
   renderZones(inst) {
+    const bar = document.createElement("div");
+    bar.className = "adv-openbar";
+    const advBtn = document.createElement("button");
+    advBtn.textContent = t("adv.open");
+    advBtn.title = t("adv.openTitle");
+    advBtn.addEventListener("click", () => this.openAdvanced());
+    bar.appendChild(advBtn);
+    this.panel.appendChild(bar);
     const head = document.createElement("div");
     head.className = "detail-info";
     const patches = inst.extraPatches ?? [];
@@ -964,7 +1015,7 @@ export class InstrumentsView {
     table.className = "files-table meta-table";
     table.innerHTML =
       `<thead><tr><th>#</th><th>${escape(t("meta.subInst"))}</th><th>${escape(t("meta.mix"))}</th>` +
-      `<th>${escape(t("meta.detune"))}</th><th>${escape(t("meta.pitchRange"))}</th><th>${escape(t("meta.vel"))}</th></tr></thead>`;
+      `<th>${escape(t("meta.detune"))}</th><th>${escape(t("meta.pitchRange"))}</th><th>${escape(t("meta.vel"))}</th><th></th></tr></thead>`;
     const tbody = document.createElement("tbody");
     (inst.metaLayers ?? []).forEach((l, i) => {
       const tr = document.createElement("tr");
@@ -972,7 +1023,21 @@ export class InstrumentsView {
         `${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>`;
       tr.innerHTML = `<td>${i}</td>${nameTd}<td class="mixCell"></td><td class="detCell"></td>` +
         `<td>${noteToStr(l.pitchStart)}‥${noteToStr(l.pitchEnd)}</td>` +
-        `<td>${l.volStart}‥${l.volEnd}</td>`;
+        `<td>${l.volStart}‥${l.volEnd}</td><td class="advCell"></td>`;
+
+      // Layer children are not list-selectable (item 59) — this is the entry
+      // point to their Ixmp patches: open the child in Advanced Edit (49b).
+      if (!doc.instruments[l.instIdx & 0x3ff]?.isMeta) {
+        const advBtn = document.createElement("button");
+        advBtn.textContent = t("meta.advEdit");
+        advBtn.title = t("meta.advEditTitle");
+        advBtn.addEventListener("click", () => {
+          this._childSelected = l.instIdx & 0x3ff;
+          this.selected = l.instIdx & 0x3ff;
+          this.openAdvanced();
+        });
+        tr.querySelector(".advCell").append(advBtn);
+      }
 
       // Mix: raw PSO octet (0..255, 159 = 0 dB) + a live dB readout.
       const mixIn = document.createElement("input");
@@ -1009,7 +1074,9 @@ export class InstrumentsView {
 
   frame() {
     if (!this.visible) return;
-    if (this.store.audio?.isPlaying()) {
+    if (this.advanced) {
+      this.advEditor.frame();
+    } else if (this.store.audio?.isPlaying()) {
       if (this.tab.startsWith("env") && this.envCanvas) this.drawEnvGraph();
       if (this.tab === "zones" && this.zoneCanvas) this.drawZones();
     }

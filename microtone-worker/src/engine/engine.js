@@ -14,7 +14,7 @@ import {
   SAMPLE_BIN_TOTAL, NUM_PATTERNS, NUM_CUES, NUM_VOICES, MAX_VOICES,
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
 } from "./constants.js";
-import { TaudInst, parsePatchesBlob } from "./inst.js";
+import { TaudInst, parsePatchesBlob, writePatchesBlob } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { generateTrackerAudio } from "./mixer.js";
@@ -135,41 +135,7 @@ export class TaudEngine {
   getInstrumentPatches(slot) {
     const patches = this.instruments[slot & 0x3ff].extraPatches;
     if (patches === null) return new Uint8Array(0);
-    const out = [];
-    const w8 = (v) => out.push(v & 0xff);
-    const w16 = (v) => { out.push(v & 0xff, (v >>> 8) & 0xff); };
-    const w32 = (v) => { w16(v); w16(v >>> 16); };
-    const wEnv = (env, loop, sus) => {
-      w16(loop); w16(sus);
-      for (let k = 0; k < 25; k++) { w8(env[k].value); w8(env[k].offset); }
-    };
-    for (const p of patches) {
-      let ver = 0x01;
-      if (p.hasExtra) ver |= 0x80;
-      if (p.volEnv !== null) ver |= 0x02;
-      if (p.panEnv !== null) ver |= 0x04;
-      if (p.filterEnv !== null) ver |= 0x08;
-      if (p.pitchEnv !== null) ver |= 0x10;
-      w8(ver);
-      w16(p.pitchStart); w16(p.pitchEnd);
-      w8(p.volumeStart); w8(p.volumeEnd);
-      w32(p.samplePtr);
-      w16(p.sampleLength); w16(p.playStart); w16(p.loopStart); w16(p.loopEnd);
-      w16(p.samplingRate); w16(p.sampleDetune); // two's complement round-trips
-      w8(p.loopMode); w8(p.defaultPan); w8(p.defaultNoteVolume);
-      w8(p.vibratoSpeed); w8(p.vibratoSweep); w8(p.vibratoDepth);
-      w8(p.vibratoRate); w8(p.vibratoWaveform);
-      if (p.hasExtra) {
-        w32(p.filterSfMode ? 1 : 0); w32(0);
-        w16(p.fadeoutStep); w16(p.extraCutoff); w16(p.extraResonance);
-        w8(p.extraInitialAttenOctet);
-      }
-      if (p.volEnv !== null) wEnv(p.volEnv, p.volEnvLoop, p.volEnvSustain);
-      if (p.panEnv !== null) wEnv(p.panEnv, p.panEnvLoop, p.panEnvSustain);
-      if (p.filterEnv !== null) wEnv(p.filterEnv, p.filterEnvLoop, p.filterEnvSustain);
-      if (p.pitchEnv !== null) wEnv(p.pitchEnv, p.pitchEnvLoop, p.pitchEnvSustain);
-    }
-    return Uint8Array.from(out);
+    return writePatchesBlob(patches);
   }
 
   clearInstrumentPatches(slot) {

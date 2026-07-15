@@ -699,6 +699,46 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .env-ctl.chk { gap: 0.3rem; }
 .env-row button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
 
+/* Advanced Edit (item 49b) — whole-panel Ixmp patch editor over .side-detail. */
+.adv-openbar { margin-bottom: 0.6rem; }
+.adv-head {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  margin-bottom: 0.6rem; padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.adv-head .adv-title { color: var(--fg); font-weight: 600; font-size: 0.95rem; }
+.adv-head .adv-spacer { flex: 1; }
+.adv-head button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
+.adv-head .adv-back { color: var(--accent); border-color: var(--accent); }
+.adv-body { display: flex; gap: 0.8rem; align-items: flex-start; }
+.adv-list {
+  flex: 0 0 15rem; min-width: 0; max-height: 70vh; overflow-y: auto;
+  border-right: 1px solid var(--border); padding-right: 0.5rem;
+}
+.adv-list-head {
+  color: var(--accent); font-size: 0.75rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem;
+}
+.adv-row { font-size: 0.85rem; }
+.adv-row .adv-range { color: var(--dim); font-size: 0.78rem; white-space: nowrap; }
+.adv-row .adv-warn { color: var(--accent-2); }
+.adv-main { flex: 1; min-width: 0; }
+.adv-map { display: block; width: 100%; margin-bottom: 0.7rem; border: 1px solid var(--border); }
+.adv-detail { margin-bottom: 0.5rem; }
+.adv-rows { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.7rem; }
+.adv-num input[type="number"] { width: 5.5rem; }
+.adv-num select {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 0.12rem 0.3rem; max-width: 16rem;
+}
+.adv-num .sl-ann { color: var(--fg); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.adv-envtabs { margin-top: 0.4rem; align-items: center; }
+.adv-envsrc { margin-left: auto; font-size: 0.8rem; color: var(--dim); }
+.adv-envbox { margin-bottom: 0.6rem; }
+.adv-envcv, .adv-wavecv { display: block; width: 100%; margin-top: 0.4rem; border: 1px solid var(--border); }
+.adv-envcv { touch-action: none; }
+
 .project-view { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; max-width: 900px; }
 
 .pattern-view {
