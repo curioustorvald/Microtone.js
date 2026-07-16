@@ -36,6 +36,25 @@ const ACC_LABELS = { "-": "♮", "#": "♯", b: "♭", t: "♯̸ demi", p: "ɔ d
 const TICK_LABELS = { " ": "·", ".": "●", u: "˄", d: "˅", U: "˄˄", D: "˅˅" };
 const OCTAVE = 0x1000;
 const TRITAVE = 0x195c;
+const TETRAVE = 0x2000;
+const PENTAVE = 0x2527;
+const HEXAVE = 0x295C;
+const HEPTAVE = 0x2CEB;
+const EIGHTVE = 0x3000;
+const NONAVE = 0x32B8;
+const DECAVE = 0x3527;
+
+const INTERVAL_OPTIONS = [
+[t("nota.octave"), OCTAVE],
+[t("nota.tritave"), TRITAVE],
+[t("nota.tetrave"), TETRAVE],
+[t("nota.pentave"), PENTAVE],
+[t("nota.hexave"), HEXAVE],
+[t("nota.heptave"), HEPTAVE],
+[t("nota.eightve"), EIGHTVE],
+// [t("nota.nonave"), NONAVE],
+// [t("nota.decave"), DECAVE],
+]
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
@@ -175,7 +194,7 @@ export function showNotationMaker(store) {
       intHex.className = "dim";
       intHex.textContent = `($${def.interval.toString(16).toUpperCase()})`;
       intLb.appendChild(intHex);
-      for (const [label, units] of [[t("nota.octave"), OCTAVE], [t("nota.tritave"), TRITAVE]]) {
+      for (const [label, units] of INTERVAL_OPTIONS) {
         const b = document.createElement("button");
         b.textContent = label;
         b.className = "nota-chip" + (def.interval === units ? " sel" : "");

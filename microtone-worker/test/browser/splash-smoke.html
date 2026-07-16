@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>boot splash smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- REAL-TIME smoke (the ko leg reloads the iframe, which starves under
+       --virtual-time-budget): python3 tools/test-server.py, then
+       chromium --headless=new --dump-dom --timeout=45000
+         http://localhost:8932/test/browser/splash-smoke.html
+       The pending /hang image keeps the load event open for the timeout. -->
+  <img src="/hang" hidden />
+  <iframe id="app" src="../../index.html" style="width:1100px;height:650px"></iframe>
+  <script type="module">
+    // Item 67: boot splash. The inline splash script must run before the app
+    // (early theme + fake pattern grid + rotating i18n'd messages), and
+    // app.js must dismiss it (fade + DOM removal) once the shell is ready.
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        // The splash script runs during body parse — window.__splash appears
+        // long before window.__microtone.
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__splash) { clearInterval(poll); resolve(w); }
+          }, 10);
+        });
+        const doc = win.document;
+        log(`splash script ran: shown=${win.__splash.shown === true}`);
+        // Informational only — a fast (virtual-time) boot may already have
+        // removed the element by the first poll; __splash.shown is the proof.
+        log(`splash element present during boot: ${!!doc.getElementById("splash")}`);
+        const theme = doc.documentElement.dataset.theme;
+        const themed = theme === "dark" || theme === "light";
+        log(`early theme applied: ${themed} (${theme})`);
+
+        await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            if (win.__microtone) { clearInterval(poll); resolve(); }
+          }, 50);
+        });
+        log("app shell ready");
+
+        // done() lingers MIN_SHOW then fades 400 ms — allow a generous window.
+        const removed = await new Promise((resolve) => {
+          const t0 = Date.now();
+          const poll = setInterval(() => {
+            if (!doc.getElementById("splash")) { clearInterval(poll); resolve(true); }
+            else if (Date.now() - t0 > 8000) { clearInterval(poll); resolve(false); }
+          }, 100);
+        });
+        log(`splash removed after boot: ${removed}`);
+        log(`finished flag: ${win.__splash.finished === true}`);
+        const msgsOk = win.__splash.msgCount > 0;
+        log(`messages loaded from lang module: ${msgsOk} (${win.__splash.msgCount})`);
+
+        // ── ko leg: the splash imports the saved language directly and its
+        // messages override the en fallback (dicts merge). All ko lines
+        // contain Hangul, so the visible message is proof of the swap.
+        win.localStorage.setItem("microtone-lang", "ko");
+        frame.src = frame.src; // reload
+        const win2 = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__splash) { clearInterval(poll); resolve(w); }
+          }, 10);
+        });
+        const koMsg = await new Promise((resolve) => {
+          const t0 = Date.now();
+          const poll = setInterval(() => {
+            const m = win2.document.getElementById("splashMsg");
+            if (m && /[가-힣]/.test(m.textContent)) { clearInterval(poll); resolve(true); }
+            else if (Date.now() - t0 > 8000 || !win2.document.getElementById("splash")) { clearInterval(poll); resolve(false); }
+          }, 10);
+        });
+        log(`ko splash message shown: ${koMsg} (msgs ${win2.__splash.msgCount})`);
+        win2.localStorage.setItem("microtone-lang", "en"); // restore for manual runs
+
+        const pass = win.__splash.shown === true && themed && removed &&
+          win.__splash.finished === true && msgsOk && koMsg;
+        log(pass ? "ALL PASS" : "FAIL");
+      } catch (err) {
+        log("FAIL: " + err.message);
+      }
+    })();
+  </script>
+</body>
+</html>

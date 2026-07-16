@@ -509,7 +509,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 
 /* ── Notation Maker (item 61) ── */
-.nota-modal { max-width: min(860px, 96vw); width: min(860px, 96vw); }
+.nota-modal { max-width: min(960px, 96vw); width: min(960px, 96vw); }
 .nota-hint { margin: 0.2rem 0 0.7rem; font-size: 0.82rem; }
 .nota-grid { display: flex; gap: 1rem; align-items: stretch; min-height: 340px; }
 .nota-left { flex: 0 0 215px; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -539,7 +539,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .nota-chip.sel { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 .nota-tools { display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .nota-tools button { font-size: 0.82rem; }
-.nota-degrees { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; max-height: 300px; }
+.nota-degrees { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; max-height: min(600px, 90vh); }
 .nota-degrees table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
 .nota-degrees th { position: sticky; top: 0; background: var(--panel); color: var(--dim); font-weight: 500; text-align: left; padding: 0.15rem 0.4rem; font-size: 0.75rem; }
 .nota-degrees td { padding: 0.08rem 0.4rem; white-space: nowrap; }
@@ -1018,4 +1018,70 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .proj-title {
   font-variation-settings:
     "wdth" 100.0;
+}
+
+/* ── boot splash (item 67) ─────────────────────────────────────────────── */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  background: var(--bg);
+  pointer-events: none; /* purely visual — never eats a gesture */
+  transition: opacity 0.35s ease;
+}
+.splash.splash-out { opacity: 0; }
+.splash-brand {
+  font-family: "Geist", sans-serif;
+  font-weight: 900;
+  font-style: oblique;
+  font-size: 2rem;
+}
+.splash-grid {
+  position: relative;
+  overflow: hidden;
+  padding: 0.4rem 0.9rem;
+  background: var(--cv-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--cv-font);
+  font-size: 12px;
+}
+.splash-row { position: relative; display: flex; gap: 0.7em; line-height: 18px; }
+.splash-row .sc-num { color: var(--fg2); margin-right: 0.3em; }
+.splash-row .sc-note { color: var(--fg); }
+.splash-row .sc-inst { color: var(--accent-2); }
+.splash-row .sc-vol { color: var(--meter); }
+.splash-row .sc-fx { color: var(--cv-col-pan); }
+.splash-ph {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0.4rem; /* the grid's own padding-top */
+  height: 18px; /* one row */
+  background: var(--cv-playhead);
+  animation: splash-scan 1.8s steps(16, end) infinite;
+}
+@keyframes splash-scan {
+  from { transform: translateY(0); }
+  to { transform: translateY(288px); } /* 16 rows × 18px line-height */
+}
+.splash-status { display: flex; align-items: center; gap: 0.6rem; min-height: 1.5em; }
+.splash-spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--meter-bg);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: splash-spin 0.8s linear infinite;
+}
+@keyframes splash-spin { to { transform: rotate(360deg); } }
+.splash-msg { color: var(--dim); font-size: 0.9rem; transition: opacity 0.22s ease; }
+.splash-msg.fade { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .splash-ph, .splash-spin { animation: none; }
 }

@@ -10,6 +10,113 @@
   <link rel="stylesheet" href="css/microtone.css" />
 </head>
 <body class="app-page">
+  <!-- Boot splash (item 67): covers the module-graph load. Hidden markup +
+       an inline classic script (runs during parse, long before app.js's
+       module graph lands; a no-JS page never unhides it). Purely visual —
+       pointer-events:none — and app.js calls window.__splash.done() when
+       the shell is ready. Loading messages live in src/ui/lang/*.js under
+       "splash.msg.*" (the lang files are dependency-free ES modules, so the
+       splash dynamic-imports them directly, ahead of the app). -->
+  <div id="splash" class="splash" hidden>
+    <div class="splash-brand"><span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span></div>
+    <div class="splash-grid" id="splashGrid"><div class="splash-ph"></div></div>
+    <div class="splash-status"><span class="splash-spin"></span><span class="splash-msg" id="splashMsg" role="status" aria-live="polite"></span></div>
+  </div>
+  <script>
+  (function () {
+    "use strict";
+    // Early theme — the saved choice, else the OS preference (the same rule
+    // as theme.js initTheme, which re-applies the same value once the app
+    // boots), so neither the splash nor the first app paint flashes the
+    // wrong palette.
+    var theme = null;
+    try { theme = localStorage.getItem("microtone-theme"); } catch (e) { /* private mode */ }
+    document.documentElement.dataset.theme = theme ||
+      (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+
+    var el = document.getElementById("splash");
+    var grid = document.getElementById("splashGrid");
+    var msgEl = document.getElementById("splashMsg");
+    el.hidden = false;
+    var S = window.__splash = { shown: true, finished: false, msgCount: 0, done: done };
+
+    // Fake pattern grid — 16 rows of plausible tracker cells in the real
+    // column colours, freshly random each load; CSS sweeps a playhead bar
+    // down it (steps(16), like a playing pattern).
+    var NOTES = ["C-", "C♯", "D-", "D♯", "E-", "F-", "F♯", "G-", "G♯", "A-", "A♯", "B-"];
+    var FX = ["D02", "F06", "G12", "H44", "B00", "S9F"];
+    function cell(cls, txt) {
+      var s = document.createElement("span");
+      s.className = cls;
+      s.textContent = txt;
+      return s;
+    }
+    for (var r = 0; r < 16; r++) {
+      var row = document.createElement("div");
+      row.className = "splash-row";
+      row.appendChild(cell("sc-num", "0" + r.toString(16).toUpperCase()));
+      var filled = Math.random() < 0.55;
+      row.appendChild(cell("sc-note", filled ? NOTES[Math.random() * 12 | 0] + (3 + (Math.random() * 3 | 0)) : "···"));
+      row.appendChild(cell("sc-inst", filled ? "0" + (1 + (Math.random() * 3 | 0)) : "··"));
+      row.appendChild(cell("sc-vol", filled && Math.random() < 0.7 ? (16 + (Math.random() * 49 | 0)).toString(16).toUpperCase() : "··"));
+      row.appendChild(cell("sc-fx", Math.random() < 0.25 ? FX[Math.random() * FX.length | 0] : "···"));
+      grid.appendChild(row);
+    }
+
+    // Whimsical loading messages, Sims-style: shuffled "splash.msg.*" keys
+    // from the active language (en as the always-available fallback),
+    // rotated with a short fade until the app dismisses the splash.
+    var msgs = [], mi = 0;
+    function nextMsg() {
+      if (msgs.length === 0) return;
+      msgEl.classList.add("fade");
+      setTimeout(function () {
+        msgEl.textContent = msgs[mi++ % msgs.length];
+        msgEl.classList.remove("fade");
+      }, 220);
+    }
+    var rotTimer = setInterval(nextMsg, 2600);
+
+    var dicts = { en: null, lang: null };
+    function refreshMsgs() {
+      var merged = {}, k;
+      if (dicts.en) for (k in dicts.en) merged[k] = dicts.en[k];
+      if (dicts.lang) for (k in dicts.lang) merged[k] = dicts.lang[k];
+      var list = [];
+      for (k in merged) if (k.indexOf("splash.msg.") === 0) list.push(merged[k]);
+      if (list.length === 0) return;
+      for (var i = list.length - 1; i > 0; i--) { // shuffle
+        var j = (Math.random() * (i + 1)) | 0, tmp = list[i];
+        list[i] = list[j]; list[j] = tmp;
+      }
+      var first = msgs.length === 0;
+      msgs = list; mi = 0; S.msgCount = list.length;
+      if (first) nextMsg();
+    }
+    var lang = "en";
+    try { lang = localStorage.getItem("microtone-lang") || "en"; } catch (e) { /* private mode */ }
+    if (!/^[a-z-]+$/.test(lang)) lang = "en";
+    import("./src/ui/lang/en.js").then(function (m) { dicts.en = m.default; refreshMsgs(); }).catch(function () {});
+    if (lang !== "en") {
+      import("./src/ui/lang/" + lang + ".js").then(function (m) { dicts.lang = m.default; refreshMsgs(); }).catch(function () {});
+    }
+
+    // done(): fade out and remove — but only after MIN_SHOW ms on screen
+    // (a sub-perceptual flash reads as jank, not as a splash).
+    var t0 = Date.now();
+    var MIN_SHOW = 500;
+    function done() {
+      if (S.finished) return;
+      S.finished = true;
+      setTimeout(function () {
+        clearInterval(rotTimer);
+        el.classList.add("splash-out");
+        setTimeout(function () { el.remove(); }, 400);
+      }, Math.max(0, MIN_SHOW - (Date.now() - t0)));
+    }
+    setTimeout(done, 45000); // failsafe: a broken boot must never hide the page forever
+  })();
+  </script>
   <header class="topbar">
     <div class="brand-container" id="brandBtn" data-i18n-title="topbar.aboutTitle">
       <span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span>

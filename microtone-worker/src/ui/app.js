@@ -1043,3 +1043,5 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+window.__splash?.done(); // app shell ready — fade out the boot splash (item 67)

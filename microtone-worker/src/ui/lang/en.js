@@ -648,6 +648,13 @@ export default {
   "nota.cents": "cents",
   "nota.octave": "Octave",
   "nota.tritave": "Tritave",
+  "nota.tetrave": "4/1",
+  "nota.pentave": "5/1",
+  "nota.hexave": "6/1",
+  "nota.heptave": "7/1",
+  "nota.eightve": "8/1",
+  "nota.nonave": "9/1",
+  "nota.decave": "10/1",
   "nota.equalDiv": "Equal divisions…",
   "nota.equalDivTitle": "Replace the degrees with N equal steps of the interval",
   "nota.equalDivN": "Number of steps",
@@ -692,4 +699,27 @@ export default {
   "import.cantDecode": "Can't decode {name}: {err}",
   "import.cantRead": "Can't read {name}: {err}",
   "import.noInstruments": "{name} contains no instruments.",
+
+  // ── boot splash (item 67) — whimsical loading lines, Sims-style. The
+  // splash inline script in index.html imports this module directly (before
+  // the app boots) and collects every "splash.msg.*" key, so lines can be
+  // added or removed freely — only the key prefix matters.
+  "splash.msg.1": "Reticulating waveforms…",
+  "splash.msg.2": "Dithering down to 8 bits… on purpose…",
+  "splash.msg.3": "Dividing the octave by 24…",
+  "splash.msg.4": "Convincing C♯ and D♭ to get along…",
+  "splash.msg.5": "Warming up the AudioWorklet…",
+  "splash.msg.6": "Counting backwards from $FF…",
+  "splash.msg.7": "Snapping loop points to zero crossings…",
+  "splash.msg.8": "Feeding the ghost voices…",
+  "splash.msg.9": "Untangling pattern jumps…",
+  "splash.msg.10": "Quantising human error…",
+  "splash.msg.11": "Applying vibrato to the progress bar…",
+  "splash.msg.12": "Politely asking old notes to fade out…",
+  "splash.msg.13": "Tuning the tritave…",
+  "splash.msg.14": "Rewinding the tape… wrong tracker, sorry…",
+  "splash.msg.15": "Sorting samples by vibe…",
+  "splash.msg.16": "Compressing silence… it compresses beautifully…",
+  "splash.msg.17": "Interpolating between the piano keys…",
+  "splash.msg.18": "Teaching a sine wave new tricks…",
 };
