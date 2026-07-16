@@ -284,6 +284,11 @@ patches alike) with its name, length and rate. The waveform display shades
 loop regions and shows live play-position cursors while audio runs. Piano keys
 audition the selected sample's instrument.
 
+If a voice using the sample is running the funk repeat effect (`S$Fx`), the
+waveform display XORs the loop region live with the engine's invert mask, so
+you see the bit-flipped waveform actually being played back, not the sample's
+original bytes.
+
 **Edit…** opens the sample editor in DSP mode:
 
 - **Normalise**, **Fade in**, **Fade out**, **Reverse**, **Invert** (polarity) — all length-preserving, each one undo step.
