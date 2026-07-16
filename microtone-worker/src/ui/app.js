@@ -751,7 +751,7 @@ function selView() {
 window.addEventListener("keydown", (e) => {
   // Save works anywhere, any time (item 47.4): before the input/dialog and
   // no-doc guards below, so a focused field or open modal can't swallow it.
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
     if (store.doc) filesView.save();
     return;
@@ -769,13 +769,13 @@ window.addEventListener("keydown", (e) => {
       e.target.closest?.("dialog")) return;
 
   // global chords
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ") {
+  if ((e.ctrlKey || e.metaKey) && e.key === "z") {
     e.preventDefault();
     if (e.shiftKey) store.undo.redo();
     else store.undo.undo();
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyY") {
+  if ((e.ctrlKey || e.metaKey) && e.key === "y") {
     e.preventDefault();
     store.undo.redo();
     return;
@@ -788,14 +788,14 @@ window.addEventListener("keydown", (e) => {
     else playFrom(playCursor().cue, 0);
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
+  if ((e.ctrlKey || e.metaKey) && e.key === "g") {
     e.preventDefault();
     openGoto();
     return;
   }
   // Ctrl/Cmd+A — block-select the whole column (Timeline: the cursor's single
   // voice; Patterns: the active pane's pattern). Item 47.5.
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
+  if ((e.ctrlKey || e.metaKey) && e.key === "a") {
     const v = selView();
     if (v?.selectColumn) {
       e.preventDefault();
@@ -805,12 +805,12 @@ window.addEventListener("keydown", (e) => {
     }
   }
   // Block clipboard (Timeline / Patterns): copy / cut / paste.
-  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyC" || e.code === "KeyX" || e.code === "KeyV")) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "x" || e.key === "v")) {
     const v = selView();
     if (v) {
       e.preventDefault();
-      if (e.code === "KeyC") v.copySelection();
-      else if (e.code === "KeyX") v.cutSelection();
+      if (e.key === "c") v.copySelection();
+      else if (e.key === "x") v.cutSelection();
       else v.paste();
       updateStatus();
       return;
