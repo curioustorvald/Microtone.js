@@ -301,15 +301,42 @@ instrument plays. Above it:
 - **Add…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
 - **Import…** — merge instruments (with their samples and patches) from a `.taud`, `.tsii` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
 - **New from sample…** — build a fresh instrument from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded, mixed to mono and squeezed into the engine's 8-bit format.
+- **Paint sample…** — draw a waveform by hand and add it as an instrument.
+- **New metainstrument…** — layer several of the project's instruments into one (below).
 
 All imports are single undo steps.
+
+### Building a metainstrument
+
+**New metainstrument…** ticks up any number of ordinary instruments and stacks
+them into a single new one. Each pick is **copied** into a sub-instrument slot
+(`$100`+, a range pattern cells cannot address) and the copies become the
+layers, so:
+
+- the instruments you picked stay in the list, still selectable and jammable, and every pattern that already plays them keeps working;
+- the copies share their sources' samples, so the stack costs no sample-pool space.
+
+Every layer starts at unity mix (159 = 0 dB) across the whole note and velocity
+range; narrow the ranges, mix and detune on the new instrument's **Layers** tab.
+Metainstruments are not offered as picks — the engine resolves a layer directly
+to a sample, so metainstruments cannot be nested.
+
+### Renumbering an instrument
+
+The **Renumber…** button beside an instrument's name moves it to another number
+in `$01`–`$FF`. A number that is already taken is refused (free it first). Its
+patches, its name and any metainstrument layer that uses it always follow the
+move — that is internal wiring. Its **pattern cells** are a musical decision, so
+they only follow if you tick *Point those pattern cells at the new number*;
+left unticked, the notes keep naming the old (now empty) number. One undo step
+either way.
 
 ### Editing an instrument
 
 - **General** — global volume, volume swing, fadeout; default pan, pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / key-off / fade / key lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
-- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Patches…** button opens that layer instrument's Advanced Edit panel — this is how you reach the sample patches of MIDI-imported instruments, whose layers are not listed on the left.
+- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
 
 ### Advanced Edit (Ixmp patches)
 
@@ -335,6 +362,15 @@ Per-song properties, applied live to playback:
 
 Below, the songs table lets you rename, delete and add songs within the
 project; the top-bar selector switches between them.
+
+### Housekeeping
+
+Four clean-up operations, each a single undo step:
+
+- **Cleanup patterns** — drop the patterns no cue references, renumber the survivors and rewrite the cues to match.
+- **Renumber patterns** — compact every pattern into play order, dropping the gaps.
+- **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its layers) and free the sample data only they referenced.
+- **Cleanup instrument patches** — remove [Ixmp patches](#advanced-edit-ixmp-patches) that can never be triggered: patches belonging to no instrument, patches with an empty rectangle or no sample, and patches lying entirely under a higher-priority one (remember the *first* matching patch wins, so a fully covered patch is dead weight).
 
 ## File (F7)
 
@@ -371,7 +407,17 @@ runtime (a few seconds); a progress popup streams the converter's log.
 
 MIDI needs a SoundFont for its instruments. Use **Import MIDI…** and choose
 the **bundled GeneralUser-GS** bank or pick your own `.sf2`. The result loads
-as an unsaved project.
+as an unsaved project. Two options shape the conversion:
+
+- **Rows/beat** — pins the pattern grid. *Auto* picks it from the time signatures and note onsets.
+- **Trim unused patches** (off by default) — each SoundFont preset is imported with its **whole** key/velocity zone map, so an imported instrument stays playable across the entire keyboard, not just at the notes this particular song happens to use. The extra zones are inert: the song sounds exactly the same either way. Tick the box to keep only the zones the song triggers, which makes the bank considerably smaller. You can always trim later with **Project → Housekeeping → Cleanup instrument patches**.
+
+  One caveat worth knowing: the converter's sample pool is capped at 8 MB, and
+  when a bank overflows it, *every* sample is resampled down to fit — costing
+  audio quality across the whole song. Most MIDIs stay well under the cap
+  untrimmed, but a preset-heavy one (say 30+ distinct instruments) may not.
+  If the import log reports `sample pool overflow`, re-import with **Trim
+  unused patches** ticked.
 
 ### Tracker modules
 

@@ -77,6 +77,8 @@ export default {
   // ── common ──
   "common.ok": "OK",
   "common.cancel": "Cancel",
+  "common.all": "All",
+  "common.none": "None",
   "common.close": "Close",
   "common.apply": "Apply",
   "common.rename": "Rename",
@@ -194,9 +196,32 @@ export default {
   "inst.sampleImportName": "Name",
   "inst.namePlaceholder": "(unnamed)",
   "inst.nameTitle": "Rename this instrument",
+  "inst.backToMeta": "Back to the metainstrument that uses this sub-instrument",
   "inst.paint": "Paint sample…",
   "inst.paintTitle": "Draw a new sample waveform by hand and add it as an instrument",
+  "inst.newMeta": "New metainstrument…",
+  "inst.newMetaTitle": "Layer several of this project's instruments into one metainstrument",
+  "inst.renumber": "Renumber…",
+  "inst.renumberTitle": "Give this instrument a different number",
   "inst.unnamed": "(unnamed)",
+
+  // ── Renumber instrument (item 73) ──
+  "renum.title": "Renumber instrument {slot}",
+  "renum.body": "Its patches, name and any metainstrument layer that uses it follow the new number automatically.",
+  "renum.bodyRefs": "{n} pattern cells play this instrument. Its patches, name and any metainstrument layer that uses it follow the new number automatically — the pattern cells only follow if you ask.",
+  "renum.to": "New number (hex, $01–$FF)",
+  "renum.remapPatterns": "Point those pattern cells at the new number",
+  "renum.ok": "Renumber",
+  "renum.badNumber": "That isn't a hexadecimal number.",
+
+  // ── New metainstrument (item 72) ──
+  "newmeta.title": "New metainstrument",
+  "newmeta.hint": "Pick the instruments to layer. Each one is COPIED into a sub-instrument slot ($100+) and the copies become the layers — the originals stay in the list and keep playing in any pattern that uses them. Copies share their samples, so no pool space is used. Every layer starts at unity mix over the full note and velocity range; narrow them on the metainstrument's Layers tab.",
+  "newmeta.name": "Name",
+  "newmeta.namePlaceholder": "(unnamed)",
+  "newmeta.tally": "{n} selected",
+  "newmeta.create": "Create",
+  "newmeta.noCandidates": "This project has no ordinary instruments to layer (a metainstrument can't be layered inside another one).",
 
   // ── instrument editor: subtab bar ──
   "inst.tabGeneral": "General",
@@ -304,8 +329,8 @@ export default {
   "env.removeNode": "－ Remove node",
 
   // ── Advanced Edit (Ixmp patch editor) ──
-  "meta.advEdit": "Patches…",
-  "meta.advEditTitle": "Open this layer instrument's Ixmp patches in the Advanced Edit panel",
+  "meta.edit": "Edit…",
+  "meta.editTitle": "Edit this layer instrument: its own General / envelope / Zones tabs (Advanced Edit lives on the Zones tab)",
   "adv.open": "Advanced Edit…",
   "adv.openTitle": "Whole-panel Ixmp patch editor: view, edit, add and delete this instrument's sample patches",
   "adv.back": "‹ Back",
@@ -571,6 +596,7 @@ export default {
   "midi.cancelled": "MIDI import cancelled (no soundfont)",
   "midi.rpb": "Rows/beat",
   "midi.rpbAuto": "Auto (from time signatures)",
+  "midi.trimPatches": "Trim unused patches (smaller bank; Housekeeping can do this later)",
 
   // ── autosave recovery ──
   "recover.title": "Recover unsaved work?",
@@ -585,9 +611,12 @@ export default {
   "clean.renumberTitle": "Compact every pattern into play order (drops gaps), rewriting the cues",
   "clean.bank": "Cleanup instruments & samples",
   "clean.bankTitle": "Remove instruments no pattern uses and free the sample data only they referenced",
+  "clean.ixmp": "Cleanup instrument patches",
+  "clean.ixmpTitle": "Remove patches that can never be triggered: patches belonging to no instrument, empty ones, and patches fully covered by a higher-priority patch",
   "clean.nothing": "Nothing to clean up.",
   "clean.patternsConfirm": "Remove {removed} unused pattern(s) and renumber the rest? Cues are rewritten. This can be undone.",
   "clean.bankConfirm": "Remove {insts} unused instrument(s) and free {bytes} sample bytes? This can be undone.",
+  "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely? This can be undone.",
 
   // ── retune popup (project view) ──
   "retune.title": "Retune all patterns",

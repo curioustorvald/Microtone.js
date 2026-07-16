@@ -1,8 +1,9 @@
 // Length-preserving DSP over U8 PCM sample spans (centre 0x80) — the sample
 // editor's operation set. Pure functions: take a Uint8Array view, return a
 // NEW Uint8Array of the same length (callers apply via setSampleBytesOp so
-// the edit is one invertible undo step). Length-changing edits (trim,
-// resample) are deliberately out of scope — they'd ripple every pool pointer.
+// the edit is one invertible undo step). Everything here is length-preserving;
+// length changes belong to sample-IMPORT time (a future endeavour), never to
+// the in-place editor — they'd ripple every pool pointer.
 
 /** Peak-normalise to full scale (max deviation from centre → 127). */
 export function normalise(bytes) {

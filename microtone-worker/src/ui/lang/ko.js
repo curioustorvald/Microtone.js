@@ -74,6 +74,8 @@ export default {
   // ── common ──
   "common.ok": "확인",
   "common.cancel": "취소",
+  "common.all": "전체",
+  "common.none": "없음",
   "common.close": "닫기",
   "common.apply": "적용",
   "common.rename": "이름 바꾸기",
@@ -191,6 +193,30 @@ export default {
   "inst.sampleImportName": "이름",
   "inst.namePlaceholder": "(이름 없음)",
   "inst.nameTitle": "이 악기 이름 바꾸기",
+  "inst.backToMeta": "이 하위 악기를 사용하는 메타악기로 돌아갑니다",
+  "inst.newMeta": "새 메타악기…",
+  "inst.newMetaTitle": "이 프로젝트의 악기 여러 개를 하나의 메타악기로 레이어링합니다",
+  "inst.renumber": "번호 바꾸기…",
+  "inst.renumberTitle": "이 악기에 다른 번호를 지정합니다",
+
+  // ── 악기 번호 바꾸기 (항목 73) ──
+  "renum.title": "악기 {slot} 번호 바꾸기",
+  "renum.body": "패치, 이름, 이 악기를 쓰는 메타악기 레이어는 새 번호를 자동으로 따라갑니다.",
+  "renum.bodyRefs": "패턴 셀 {n}개가 이 악기를 연주합니다. 패치, 이름, 이 악기를 쓰는 메타악기 레이어는 새 번호를 자동으로 따라가지만, 패턴 셀은 요청할 때만 따라갑니다.",
+  "renum.to": "새 번호 (16진수, $01–$FF)",
+  "renum.remapPatterns": "해당 패턴 셀이 새 번호를 가리키게 합니다",
+  "renum.ok": "번호 바꾸기",
+  "renum.badNumber": "16진수가 아닙니다.",
+
+  // ── 새 메타악기 (항목 72) ──
+  "newmeta.title": "새 메타악기",
+  "newmeta.hint": "레이어로 쓸 악기를 고르세요. 고른 악기는 하위 악기 슬롯($100 이상)으로 복사되고 그 복사본이 레이어가 됩니다 — 원본은 목록에 그대로 남고, 원본을 쓰는 패턴도 계속 연주됩니다. 복사본은 샘플을 공유하므로 풀 공간을 쓰지 않습니다. 모든 레이어는 전체 음역·세기 범위에서 기준 믹스로 시작합니다. 범위는 메타악기의 레이어 탭에서 좁히세요.",
+  "newmeta.name": "이름",
+  "newmeta.namePlaceholder": "(이름 없음)",
+  "newmeta.tally": "{n}개 선택됨",
+  "newmeta.create": "만들기",
+  "newmeta.noCandidates": "레이어로 쓸 일반 악기가 없습니다 (메타악기는 다른 메타악기 안에 넣을 수 없습니다).",
+
   "inst.paint": "샘플 그리기…",
   "inst.paintTitle": "새 샘플 파형을 직접 그려 악기로 추가합니다",
   "inst.unnamed": "(이름 없음)",
@@ -300,8 +326,8 @@ export default {
   "env.removeNode": "－ 노드 삭제",
 
   // ── Advanced Edit (Ixmp patch editor) ──
-  "meta.advEdit": "패치…",
-  "meta.advEditTitle": "이 레이어 악기의 Ixmp 패치를 고급 편집 패널에서 엽니다",
+  "meta.edit": "편집…",
+  "meta.editTitle": "이 레이어 악기를 편집합니다: 자체 일반/엔벨로프/영역 탭 (고급 편집은 영역 탭에 있습니다)",
   "adv.open": "고급 편집…",
   "adv.openTitle": "전체 패널 Ixmp 패치 편집기: 이 악기의 샘플 패치를 보고, 고치고, 추가/삭제합니다",
   "adv.back": "‹ 뒤로",
@@ -567,6 +593,7 @@ export default {
   "midi.cancelled": "MIDI 가져오기 취소됨(사운드폰트 없음)",
   "midi.rpb": "비트당 행",
   "midi.rpbAuto": "자동(박자표 기준)",
+  "midi.trimPatches": "사용하지 않는 패치 정리 (뱅크가 작아집니다. 나중에 정리 기능으로도 할 수 있습니다)",
 
   // ── autosave recovery ──
   "recover.title": "저장하지 않은 작업을 복구할까요?",
@@ -584,6 +611,9 @@ export default {
   "clean.nothing": "정리할 항목이 없습니다.",
   "clean.patternsConfirm": "사용하지 않는 패턴 {removed}개를 제거하고 나머지를 다시 번호 매길까요? 큐가 재작성됩니다. 실행 취소할 수 있습니다.",
   "clean.bankConfirm": "사용하지 않는 악기 {insts}개를 제거하고 샘플 {bytes}바이트를 비울까요? 실행 취소할 수 있습니다.",
+  "clean.ixmp": "악기 패치 정리",
+  "clean.ixmpTitle": "절대 트리거될 수 없는 패치를 제거합니다: 악기가 없는 패치, 빈 패치, 우선순위가 높은 패치에 완전히 가려진 패치",
+  "clean.ixmpConfirm": "악기 {insts}개에서 도달할 수 없는 패치 {patches}개를 제거하고 패치 집합 {blobs}개를 완전히 비울까요? 실행 취소할 수 있습니다.",
 
   // ── retune popup (project view) ──
   "retune.title": "모든 패턴 리튜닝",

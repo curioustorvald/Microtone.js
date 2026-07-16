@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
-import { envPoint } from "../../src/engine/inst.js";
+import { envPoint, buildMetaRecord, makeMetaLayer } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
 import { advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox } from "../../src/engine/envelope.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
@@ -396,4 +396,36 @@ test("jamSample previews the exact pooled sample, bypassing metainstrument zones
 
   eng.jamStop(0);
   assert.equal(v.active, false, "jamStop ends the audition");
+});
+
+test("item 72: a buildMetaRecord metainstrument sounds both layers", () => {
+  const eng = makeTestEngine();
+  // A second sounding instrument in slot 2 (same shape as slot 1's ramp).
+  const rec2 = new Uint8Array(256);
+  const w16 = (o, v) => { rec2[o] = v & 0xff; rec2[o + 1] = (v >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec2[14] = 1; rec2[21] = 0x3f; rec2[171] = 255; rec2[196] = 255;
+  eng.uploadInstrument(2, rec2);
+
+  // Slot 3 = a meta layering $01 (foreground) and $02 (background child), the
+  // exact record planCreateMeta writes — full rect, unity mix, no detune.
+  eng.uploadInstrument(3, buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(2, 159, 0, 0x0000, 0xffff, 0, 63),
+  ]));
+  assert.equal(eng.instruments[3].isMeta, true);
+
+  eng.setMasterVolume(0, 255);
+  eng.jamNote(0, 0, 0x5000, 3);
+  const ts = eng.playheads[0].trackerState;
+  // The foreground voice resolves to layer 0's child instrument; layer 1 spawns
+  // a background voice (trigger.js triggerMetaOrNote).
+  assert.equal(ts.voices[0].active, true);
+  assert.equal(ts.voices[0].instrumentId, 1);
+  assert.equal(ts.voices[0].displayInst, 3, "the header shows the meta's slot");
+  assert.equal(ts.backgroundVoices.filter((v) => v.active && v.instrumentId === 2).length, 1);
+
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  eng.renderChunk(0, out);
+  assert.ok(out.some((b) => b !== 128), "the meta must produce audio");
 });

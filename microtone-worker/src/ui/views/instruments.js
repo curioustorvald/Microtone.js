@@ -4,7 +4,12 @@
 // trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
 // tab + openAdvancedInstEdit.
 
-import { setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp, setMetaBytesOp, setSectionOp } from "../../doc/ops.js";
+import {
+  setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp,
+  setMetaBytesOp, setSectionOp, renumberInstrumentOp,
+} from "../../doc/ops.js";
+import { planRenumberInstrument, instrumentCellRefs } from "../../doc/cleanup.js";
+import { showModal } from "../widgets/modal.js";
 import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
@@ -90,9 +95,11 @@ export class InstrumentsView {
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
 
-    this._childSelected = null; // meta-layer child explicitly opened via "Patches…"
+    this._childSelected = null; // meta-layer child explicitly opened via "Edit…"
+    this._childParent = null;   // the metainstrument it was opened from (breadcrumb)
     store.on("doc", () => {
-      this.selected = 1; this.advanced = false; this._childSelected = null;
+      this.selected = 1; this.advanced = false;
+      this._childSelected = null; this._childParent = null;
       if (this.visible) this.refresh();
     });
     store.on("edit", (tags) => {
@@ -148,12 +155,19 @@ export class InstrumentsView {
       const { paintNewSample } = await import("../popups/waveformpaint.js");
       adopt(await paintNewSample(this.store));
     });
-    bar.append(addBtn, importBtn, smpBtn, paintBtn);
+    const metaBtn = document.createElement("button");
+    metaBtn.textContent = t("inst.newMeta");
+    metaBtn.title = t("inst.newMetaTitle");
+    metaBtn.addEventListener("click", async () => {
+      const { showNewMeta } = await import("../popups/newmeta.js");
+      adopt(await showNewMeta(this.store));
+    });
+    bar.append(addBtn, importBtn, smpBtn, paintBtn, metaBtn);
     this.listEl.appendChild(bar);
     // Only top-level instruments are listed — a metainstrument's sub-instruments
     // are not directly selectable (item 59); edit them via their metainstrument.
     const slots = doc.selectableInstrumentSlots();
-    // A meta-layer child opened via the Layers tab's "Patches…" button stays
+    // A meta-layer child opened via the Layers tab's "Edit…" button stays
     // selected across rebuilds (it is not in the list — item 59 keeps it out of
     // ordinary selection); anything else off-list resets to the first slot.
     const keepChild = this._childSelected === this.selected &&
@@ -161,6 +175,7 @@ export class InstrumentsView {
     if (slots.length && !slots.includes(this.selected) && !keepChild) {
       this.selected = slots[0];
       this._childSelected = null;
+      this._childParent = null;
       if (doc.metaChildSlots().has(this.jam.currentInst)) this.jam.currentInst = slots[0];
     }
     for (const slot of slots) {
@@ -176,6 +191,7 @@ export class InstrumentsView {
       row.addEventListener("click", () => {
         this.selected = slot;
         this._childSelected = null;
+        this._childParent = null;
         this.jam.currentInst = slot;
         this.store.emit("instsel");
         this.refresh();
@@ -256,6 +272,24 @@ export class InstrumentsView {
     const slot = this.selected;
     const row = document.createElement("div");
     row.className = "inst-name-row";
+    // A layer child opened via the Meta tab (item 71) has no list row to return
+    // from — a breadcrumb chip walks back to the metainstrument that owns it.
+    if (this._childSelected === slot && this._childParent !== null) {
+      const parent = this._childParent;
+      const back = document.createElement("button");
+      back.className = "inst-parent-chip";
+      back.textContent = "◀ $" + parent.toString(16).toUpperCase().padStart(3, "0") + " " +
+        (unescapeName(doc.instrumentName(parent)) || t("inst.unnamed"));
+      back.title = t("inst.backToMeta");
+      back.addEventListener("click", () => {
+        this._childSelected = null;
+        this._childParent = null;
+        this.selected = parent;
+        this.tab = "meta";
+        this.refresh();
+      });
+      row.appendChild(back);
+    }
     const idx = document.createElement("span");
     idx.className = "inst-name-idx";
     idx.textContent = "$" + slot.toString(16).toUpperCase().padStart(3, "0");
@@ -272,8 +306,46 @@ export class InstrumentsView {
       this.refreshListLabel(slot);
       this.store.emit("status"); // status bar / other views pick up the name
     });
-    row.append(idx, input);
+    const renumBtn = document.createElement("button");
+    renumBtn.className = "inst-renum-btn";
+    renumBtn.textContent = t("inst.renumber");
+    renumBtn.title = t("inst.renumberTitle");
+    renumBtn.addEventListener("click", () => this.renumber());
+    row.append(idx, input, renumBtn);
     return row;
+  }
+
+  /** Renumber the selected instrument (item 73). Wiring references (Ixmp slot
+   *  id, INam, metainstrument layers) always follow; pattern cells only when the
+   *  user asks — moving an instrument out from under its notes is a musical
+   *  decision, so the box is off by default. */
+  async renumber() {
+    const doc = this.store.doc;
+    const from = this.selected;
+    if (!doc || !doc.usedInstrumentSlots().includes(from)) return;
+    const refs = instrumentCellRefs(doc, from).length;
+    const res = await showModal({
+      title: t("renum.title", { slot: "$" + from.toString(16).toUpperCase().padStart(2, "0") }),
+      body: refs > 0 ? t("renum.bodyRefs", { n: refs }) : t("renum.body"),
+      fields: [
+        { name: "to", label: t("renum.to"), type: "text",
+          value: from.toString(16).toUpperCase().padStart(2, "0") },
+        { name: "cells", label: t("renum.remapPatterns"), type: "checkbox", value: false },
+      ],
+      okLabel: t("renum.ok"),
+    });
+    if (!res) return;
+    const to = parseInt(String(res.to).replace(/^\$/, ""), 16);
+    if (!Number.isFinite(to)) { alert(t("renum.badNumber")); return; }
+    const plan = planRenumberInstrument(doc, from, to, { remapPatterns: res.cells === true });
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(renumberInstrumentOp(plan));
+    this.selected = to;
+    if (this._childSelected === from) this._childSelected = to;
+    if (this.jam.currentInst === from) this.jam.currentInst = to;
+    this.store.emit("instsel");
+    this.store.emit("status");
+    this.refresh();
   }
 
   /** Repaint one list row's name span in place (after a rename). */
@@ -290,6 +362,18 @@ export class InstrumentsView {
     if (!badge) return;
     const inst = this.store.doc.instruments[slot];
     badge.textContent = inst.isMeta ? "META" : inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
+  }
+
+  /** Open a metainstrument's layer child (item 71) in its own base editor.
+   *  Children are kept out of the list (item 59), so `_childSelected` pins the
+   *  selection across rebuilds and `_childParent` feeds the breadcrumb back. */
+  openChild(slot, parentSlot) {
+    this._childSelected = slot;
+    this._childParent = parentSlot;
+    this.selected = slot;
+    this.advanced = false;
+    this.tab = this.store.doc?.instruments[slot]?.isMeta ? "meta" : "general";
+    this.refresh();
   }
 
   openAdvanced() {
@@ -1032,19 +1116,14 @@ export class InstrumentsView {
         `<td>${noteToStr(l.pitchStart)}‥${noteToStr(l.pitchEnd)}</td>` +
         `<td>${l.volStart}‥${l.volEnd}</td><td class="advCell"></td>`;
 
-      // Layer children are not list-selectable (item 59) — this is the entry
-      // point to their Ixmp patches: open the child in Advanced Edit (49b).
-      if (!doc.instruments[l.instIdx & 0x3ff]?.isMeta) {
-        const advBtn = document.createElement("button");
-        advBtn.textContent = t("meta.advEdit");
-        advBtn.title = t("meta.advEditTitle");
-        advBtn.addEventListener("click", () => {
-          this._childSelected = l.instIdx & 0x3ff;
-          this.selected = l.instIdx & 0x3ff;
-          this.openAdvanced();
-        });
-        tr.querySelector(".advCell").append(advBtn);
-      }
+      // Layer children are not list-selectable (item 59), so this is their only
+      // entry point: open the child in its OWN base editor (item 71) — the same
+      // tabs a top-level instrument gets, Advanced Edit included via Zones.
+      const editBtn = document.createElement("button");
+      editBtn.textContent = t("meta.edit");
+      editBtn.title = t("meta.editTitle");
+      editBtn.addEventListener("click", () => this.openChild(l.instIdx & 0x3ff, slot));
+      tr.querySelector(".advCell").append(editBtn);
 
       // Mix: raw PSO octet (0..255, 159 = 0 dB) + a live dB readout.
       const mixIn = document.createElement("input");

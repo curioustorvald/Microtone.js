@@ -9,8 +9,11 @@ import { fileURLToPath } from "node:url";
 import {
   referencedPatterns, planCleanupPatterns, planRenumberPatterns,
   applyPatternOrder, encodeNameTable, usedInstrumentSlots,
+  planRenumberInstrument, instrumentCellRefs, planIxmpCleanup,
 } from "../../src/doc/cleanup.js";
-import { remapPatternsOp, cleanupBankOp } from "../../src/doc/ops.js";
+import { remapPatternsOp, cleanupBankOp, renumberInstrumentOp, importBankOp } from "../../src/doc/ops.js";
+import { writePatchesBlob } from "../../src/engine/inst.js";
+import { buildIxmpSection, planCreateMeta } from "../../src/doc/bankmerge.js";
 import { planBankCleanup } from "../../src/doc/cleanup.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
@@ -133,4 +136,263 @@ test("planBankCleanup + cleanupBankOp on WHEN: removes unused insts; survivors i
 
   undo.undo();
   assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+});
+
+// ── item 73: renumber one instrument ──
+
+test("planRenumberInstrument moves the record + name + Ixmp; wiring follows", () => {
+  const doc = loadWhen();
+  const from = doc.selectableInstrumentSlots()[0];
+  const to = 0xfe; // free in WHEN
+  assert.ok(!doc.usedInstrumentSlots().includes(to));
+  const record = doc.instRecordBytes(from);
+  const name = doc.instrumentName(from);
+  const refs = instrumentCellRefs(doc, from);
+  assert.ok(refs.length > 0, "the fixture instrument should be played somewhere");
+
+  const plan = planRenumberInstrument(doc, from, to);
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.cells.length, 0); // patterns untouched by default
+  const undo = new UndoStack(doc);
+  undo.apply(renumberInstrumentOp(plan));
+
+  assert.deepEqual([...doc.instRecordBytes(to)], [...record]);
+  assert.ok(doc.instRecordBytes(from).every((b) => b === 0), "old slot is cleared");
+  assert.equal(doc.instrumentName(to), name);
+  assert.equal(doc.instrumentName(from), "");
+  assert.ok(doc.usedInstrumentSlots().includes(to));
+  assert.ok(!doc.usedInstrumentSlots().includes(from));
+  // Default: the notes still name the OLD number (the user didn't ask to move them).
+  assert.equal(instrumentCellRefs(doc, from).length, refs.length);
+  assert.equal(instrumentCellRefs(doc, to).length, 0);
+});
+
+test("planRenumberInstrument with remapPatterns moves the notes too", () => {
+  const doc = loadWhen();
+  const from = doc.selectableInstrumentSlots()[0];
+  const to = 0xfe;
+  const refs = instrumentCellRefs(doc, from).length;
+  const plan = planRenumberInstrument(doc, from, to, { remapPatterns: true });
+  assert.equal(plan.cells.length, refs);
+  const undo = new UndoStack(doc);
+  undo.apply(renumberInstrumentOp(plan));
+  assert.equal(instrumentCellRefs(doc, to).length, refs);
+  assert.equal(instrumentCellRefs(doc, from).length, 0);
+  // Every touched pattern is flagged for re-upload.
+  const tags = renumberInstrumentOp(plan).dirty();
+  assert.ok(tags.some((x) => x.kind === "bank"));
+  assert.ok(tags.filter((x) => x.kind === "pattern").length > 0);
+});
+
+test("renumbering a metainstrument's layer child rewrites the layer table", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "M_E1M1.taud")));
+  const metaSlot = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  const child = doc.instruments[metaSlot].metaLayers[0].instIdx & 0x3ff;
+  const layerIdx = 0;
+  const to = [...Array(255).keys()].map((i) => i + 1)
+    .find((s) => !doc.usedInstrumentSlots().includes(s));
+  const plan = planRenumberInstrument(doc, child, to);
+  assert.ok(!plan.error, plan.error);
+  const undo = new UndoStack(doc);
+  undo.apply(renumberInstrumentOp(plan));
+  assert.equal(doc.instruments[metaSlot].metaLayers[layerIdx].instIdx, to);
+  assert.equal(doc.instruments[metaSlot].isMeta, true);
+});
+
+test("planRenumberInstrument refuses occupied targets and out-of-range numbers", () => {
+  const doc = loadWhen();
+  const [a, b] = doc.selectableInstrumentSlots();
+  assert.match(planRenumberInstrument(doc, a, b).error ?? "", /already taken/);
+  assert.match(planRenumberInstrument(doc, a, 0).error ?? "", /\$01–\$FF/);
+  assert.match(planRenumberInstrument(doc, a, 0x100).error ?? "", /\$01–\$FF/);
+  assert.match(planRenumberInstrument(doc, a, a).error ?? "", /already has/);
+  const free = [...Array(255).keys()].map((i) => i + 1)
+    .find((s) => !doc.usedInstrumentSlots().includes(s));
+  assert.match(planRenumberInstrument(doc, free, 0xfe).error ?? "", /empty/);
+});
+
+test("renumberInstrumentOp undo is byte-exact (with and without pattern remap)", () => {
+  for (const remapPatterns of [false, true]) {
+    const doc = loadWhen();
+    const baseline = doc.toBytes();
+    const from = doc.selectableInstrumentSlots()[0];
+    const plan = planRenumberInstrument(doc, from, 0xfe, { remapPatterns });
+    const undo = new UndoStack(doc);
+    undo.apply(renumberInstrumentOp(plan));
+    assert.notEqual(Buffer.compare(Buffer.from(doc.toBytes()), Buffer.from(baseline)), 0);
+    undo.undo();
+    assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)),
+      `undo byte-exact (remapPatterns=${remapPatterns})`);
+    undo.redo();
+    assert.ok(doc.usedInstrumentSlots().includes(0xfe));
+  }
+});
+
+// ── item 74: unreachable instrument patches ──
+
+/** Patch stub with just the fields the planner reads. */
+const mkPatch = (pitchStart, pitchEnd, volumeStart, volumeEnd, extra = {}) => ({
+  pitchStart, pitchEnd, volumeStart, volumeEnd,
+  samplePtr: 0, sampleLength: 16, playStart: 0, loopStart: 0, loopEnd: 0,
+  samplingRate: 8363, sampleDetune: 0, loopMode: 0, defaultPan: 0xff,
+  defaultNoteVolume: 0, vibratoSpeed: 0, vibratoSweep: 0, vibratoDepth: 0,
+  vibratoRate: 0, vibratoWaveform: 0xff, hasExtra: false,
+  volEnv: null, panEnv: null, filterEnv: null, pitchEnv: null, ...extra,
+});
+
+test("planIxmpCleanup drops degenerate, shadowed and orphan patches", () => {
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots()[0];
+  const orphan = [...Array(1023).keys()].find((s) => s > 0 && !doc.usedInstrumentSlots().includes(s));
+  const patches = [
+    mkPatch(0x1000, 0x8000, 0, 63),         // 0 keep
+    mkPatch(0x2000, 0x3000, 10, 40),        // 1 DROP — inside patch 0
+    mkPatch(0x9000, 0xa000, 0, 63),         // 2 keep
+    mkPatch(0x9000, 0xa000, 0, 63, { sampleLength: 0 }), // 3 DROP — no sample
+    mkPatch(0xb000, 0xa000, 0, 63),         // 4 DROP — empty pitch range
+    mkPatch(0x1000, 0xa000, 0, 63),         // 5 keep — only PARTLY covered
+  ];
+  doc.ixmp = [
+    { instId: slot, count: patches.length, blob: writePatchesBlob(patches) },
+    { instId: orphan, count: 1, blob: writePatchesBlob([mkPatch(0, 0xffff, 0, 63)]) },
+  ];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const plan = planIxmpCleanup(doc);
+  assert.ok(!plan.noop);
+  assert.equal(plan.removedPatches, 4);  // 3 unreachable + the orphan's 1
+  assert.equal(plan.removedBlobs, 1);    // the orphan blob
+  assert.equal(plan.ixmp.length, 1);
+  assert.ok(!plan.ixmp.some((e) => (e.instId & 0x3ff) === orphan));
+
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(plan));
+  const kept = doc.instruments[slot].extraPatches;
+  assert.equal(kept.length, 3);
+  assert.deepEqual(kept.map((p) => p.pitchStart), [0x1000, 0x9000, 0x1000]);
+  assert.equal(doc.instruments[orphan].extraPatches, null);
+});
+
+test("planIxmpCleanup: a union of earlier patches shadows, one that misses a corner doesn't", () => {
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots()[0];
+  const covered = [
+    mkPatch(0x1000, 0x2000, 0, 31),   // lower half
+    mkPatch(0x1000, 0x2000, 32, 63),  // upper half — together they cover…
+    mkPatch(0x1000, 0x2000, 0, 63),   // …this one exactly → DROP
+  ];
+  const notCovered = [
+    mkPatch(0x1000, 0x2000, 0, 31),
+    mkPatch(0x1000, 0x2000, 32, 62),  // one velocity short
+    mkPatch(0x1000, 0x2000, 0, 63),   // → keep
+  ];
+  const run = (patches) => {
+    const d = loadWhen();
+    d.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+    d.setSection("Ixmp", buildIxmpSection(d.ixmp));
+    d._resetInstrumentCache();
+    return planIxmpCleanup(d);
+  };
+  assert.equal(run(covered).removedPatches, 1);
+  assert.equal(run(notCovered).noop, true);
+});
+
+test("planIxmpCleanup is a no-op on the real corpus and undo stays byte-exact", () => {
+  for (const file of ["WHEN.taud", "M_E1M1.taud", "flourish.taud"]) {
+    const doc = new Document(parseTaud(readFileSync(corpusDir + file)));
+    const plan = planIxmpCleanup(doc);
+    assert.equal(plan.noop, true, `${file}: converter output has no unreachable patches`);
+  }
+  // Undo of a real cleanup restores the file bytes exactly.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots()[0];
+  doc.ixmp = [{ instId: slot, count: 2, blob: writePatchesBlob([
+    mkPatch(0x1000, 0x8000, 0, 63), mkPatch(0x2000, 0x3000, 10, 40),
+  ]) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+  const baseline = doc.toBytes();
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(planIxmpCleanup(doc)));
+  assert.notEqual(Buffer.compare(Buffer.from(doc.toBytes()), Buffer.from(baseline)), 0);
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo is byte-exact");
+});
+
+test("cleanupBankOp rebuilds the Ixmp SECTION, so a cleanup survives a save/reload", () => {
+  // Regression: toBytes() writes projSections, not doc.ixmp — an op that only
+  // swapped doc.ixmp left the dropped patches in the saved file, and reloading
+  // brought them back (and re-marked the slot used).
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots()[0];
+  const orphan = [...Array(1023).keys()].find((s) => s > 0 && !doc.usedInstrumentSlots().includes(s));
+  doc.ixmp = [
+    { instId: slot, count: 1, blob: writePatchesBlob([mkPatch(0x1000, 0x8000, 0, 63)]) },
+    { instId: orphan, count: 1, blob: writePatchesBlob([mkPatch(0, 0xffff, 0, 63)]) },
+  ];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(planIxmpCleanup(doc)));
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  assert.ok(!reloaded.ixmp.some((e) => (e.instId & 0x3ff) === orphan), "orphan blob is gone from the file");
+  assert.ok(reloaded.ixmp.some((e) => (e.instId & 0x3ff) === slot), "the live slot keeps its patches");
+  assert.equal(reloaded.instruments[orphan].extraPatches, null);
+});
+
+test("renumbering carries the Ixmp patches in the SAVED file, not just live", () => {
+  // Regression: the op swapped doc.ixmp but not the "Ixmp" SECTION, and toBytes()
+  // writes sections — so a save/reload re-bound the patches to the OLD number
+  // (an orphan blob) while the live doc looked right. WHEN has no Ixmp at all,
+  // which is why the first round of tests missed this.
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "M_E1M1.taud")));
+  const metaSlot = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  const child = doc.instruments[metaSlot].metaLayers
+    .map((l) => l.instIdx & 0x3ff)
+    .find((c) => (doc.instruments[c].extraPatches?.length ?? 0) > 0);
+  const patches = doc.instruments[child].extraPatches.length;
+  const to = [...Array(255).keys()].map((i) => i + 1)
+    .find((s) => !doc.usedInstrumentSlots().includes(s));
+
+  const baseline = doc.toBytes();
+  const undo = new UndoStack(doc);
+  undo.apply(renumberInstrumentOp(planRenumberInstrument(doc, child, to)));
+
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  assert.equal(reloaded.instruments[to].extraPatches?.length, patches, "patches followed the move");
+  assert.ok(!reloaded.ixmp.some((e) => (e.instId & 0x3ff) === child), "no orphan blob at the old number");
+  assert.equal(reloaded.instruments[metaSlot].metaLayers.some((l) => l.instIdx === to), true,
+    "the meta layer points at the new number");
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo is byte-exact");
+});
+
+test("instrumentCellRefs never masks a $100+ sub-instrument onto an $01-$FF slot", () => {
+  // Regression: `(cell.instrment & 0xff) === (slot & 0xff)` matched slot $101
+  // against every cell playing $01, so renumbering a meta child with "remap
+  // patterns" ticked would have repointed an unrelated instrument's notes.
+  // The reachable path: item 72 puts the copies at $100, $101, … and item 71's
+  // Edit… opens them, so $101 (low byte $01) is one Renumber… away.
+  const doc = loadWhen();
+  const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(planCreateMeta(doc, picks, "Stack")));
+  const child = 0x101;
+  assert.ok(doc.metaChildSlots().has(child), "item 72 puts the second copy at $101");
+
+  // $01 IS played by real cells; $101 can't be (the cell byte is 8-bit).
+  const lowRefs = instrumentCellRefs(doc, 0x01).length;
+  assert.ok(lowRefs > 0, "$01 should be a real, played instrument");
+  assert.equal(instrumentCellRefs(doc, child).length, 0);
+
+  const plan = planRenumberInstrument(doc, child, 0xfe, { remapPatterns: true });
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.cells.length, 0, "no pattern cell may follow a sub-instrument move");
+  undo.apply(renumberInstrumentOp(plan));
+  assert.equal(instrumentCellRefs(doc, 0x01).length, lowRefs, "$01's cells are untouched");
+  assert.equal(doc.instruments[0xfe].isMeta, false);
+  // Slot $100's low byte is $00 = "no instrument" — it must not match empty cells either.
+  assert.equal(instrumentCellRefs(doc, 0x100).length, 0);
 });

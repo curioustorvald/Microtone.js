@@ -1,14 +1,17 @@
-// Project cleanup / renumber operations (item 60). Pure planners compute a new
-// song layout; the invertible ops that apply them live in ops.js (snapshot
-// swaps, like importBankOp). Two families:
-//   patterns — remove unreferenced / renumber, rewriting cue references + pNam
-//   bank     — remove unused instruments and their now-orphaned samples
+// Project cleanup / renumber operations (items 60, 73, 74). Pure planners
+// compute a new song or bank layout; the invertible ops that apply them live in
+// ops.js (snapshot swaps, like importBankOp). Families:
+//   patterns    — remove unreferenced / renumber, rewriting cue references + pNam
+//   bank        — remove unused instruments and their now-orphaned samples
+//   instrument  — renumber one instrument, following every reference to it (73)
+//   ixmp        — drop unreachable instrument patches (74)
 //
 // Cue words: `cues[cue][ch]` low 15 bits = the channel's pattern index (0x7FFF =
 // empty); bit 15 is one bit of the cue's packed instruction word, so a pattern
 // remap must preserve it.
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
+import { writePatchesBlob } from "../engine/inst.js";
 
 const PAT_MASK = 0x7fff;
 
@@ -203,5 +206,189 @@ export function planBankCleanup(doc) {
   return {
     image, inam: encodeNameTable(inamArr), snam: encodeNameTable(snamArr), ixmp,
     removedInstruments: unused.length, freedSampleBytes,
+  };
+}
+
+// ── instrument renumber (item 73) ──
+
+/** Pattern cells (any song) whose instrument byte is `slot`: [{song, pat, row}].
+ *  The cell's instrument byte is 8-bit, so a sub-instrument ($100+, reachable
+ *  through its metainstrument since item 71) can never be named by one — it must
+ *  NOT be masked down to its low byte and match an unrelated $01–$FF slot. */
+export function instrumentCellRefs(doc, slot) {
+  const refs = [];
+  if (slot > 0xff) return refs;
+  doc.songs.forEach((song, si) => {
+    song.patterns.forEach((p, pi) => {
+      if (!p) return;
+      p.forEach((cell, row) => {
+        if ((cell.instrment & 0xff) === slot) refs.push({ song: si, pat: pi, row });
+      });
+    });
+  });
+  return refs;
+}
+
+/**
+ * Plan an instrument renumber `from` → `to` (item 73). The target must be a FREE
+ * note-addressable slot ($01–$FF): occupied targets are refused rather than
+ * silently swapped, and $100+ targets aren't offered because a metainstrument's
+ * layer copies (item 72) are the way to reach that range.
+ *
+ * References that are pure wiring always follow the move — the Ixmp blob's slot
+ * id, the INam entry, and every metainstrument layer that points at `from`.
+ * Pattern cells are a musical choice: they only follow when `remapPatterns` is
+ * set, otherwise cells keep referencing the (now empty) old number.
+ *
+ * Returns {error} or a renumberInstrumentOp plan: {image, inam, ixmp, cells}.
+ */
+export function planRenumberInstrument(doc, from, to, { remapPatterns = false } = {}) {
+  if (!doc.sampleInstImage) return { error: "This project has no sample+instrument image." };
+  if (to < 1 || to > 255) return { error: "An instrument number must be $01–$FF." };
+  if (from === to) return { error: "The instrument already has that number." };
+  const used = new Set(doc.usedInstrumentSlots());
+  if (!used.has(from)) return { error: "That instrument slot is empty." };
+  if (used.has(to)) {
+    return { error: `$${to.toString(16).toUpperCase().padStart(2, "0")} is already taken.` };
+  }
+  doc._rebuildInstRegion(); // flush pending inst edits into the image
+
+  const image = doc.sampleInstImage.slice();
+  const recOff = (slot) => SAMPLEBIN_SIZE + slot * 256;
+  image.set(image.slice(recOff(from), recOff(from) + 256), recOff(to));
+  image.fill(0, recOff(from), recOff(from) + 256);
+
+  // Metainstrument layers are raw record bytes, so patch them in the image: the
+  // layer's low 8 index bits live at its byte 0, bits 8..9 in the top two bits
+  // of its vol-start byte (+8). A meta that moved is patched at its NEW record.
+  for (const s of used) {
+    const layers = doc.instruments[s].metaLayers;
+    if (!layers) continue;
+    const base = recOff(s === from ? to : s);
+    for (const l of layers) {
+      if ((l.instIdx & 0x3ff) !== from) continue;
+      image[base + l.rawOffset] = to & 0xff;
+      image[base + l.rawOffset + 8] = (l.volStart & 0x3f) | (((to >>> 8) & 0x3) << 6);
+    }
+  }
+
+  const inamArr = doc._nameTable("INam").slice();
+  while (inamArr.length <= Math.max(from, to)) inamArr.push("");
+  inamArr[to] = inamArr[from];
+  inamArr[from] = "";
+  while (inamArr.length && inamArr[inamArr.length - 1] === "") inamArr.pop();
+
+  const ixmp = doc.ixmp.map((e) =>
+    (e.instId & 0x3ff) === from ? { instId: to, count: e.count, blob: e.blob } : e);
+
+  const cells = remapPatterns
+    ? instrumentCellRefs(doc, from).map((r) => ({ ...r, inst: to }))
+    : [];
+
+  return { image, inam: encodeNameTable(inamArr), ixmp, cells, from, to };
+}
+
+// ── Ixmp patch cleanup (item 74) ──
+
+/** A patch that can never sound: an empty pitch/velocity range, or no sample. */
+function patchIsDegenerate(p) {
+  return p.sampleLength <= 0 || p.pitchEnd < p.pitchStart || p.volumeEnd < p.volumeStart;
+}
+
+/**
+ * Is `p`'s rectangle fully covered by the union of `earlier`'s rectangles? Patch
+ * order IS trigger-match priority (engine resolvePatch returns the first hit), so
+ * a fully-covered patch is unreachable. Exact test: compress the coordinates of
+ * every boundary inside p into a grid and check each cell has a coverer — pairwise
+ * containment would miss rectangles that only cover p when combined.
+ */
+function patchIsShadowed(p, earlier) {
+  const covers = earlier.filter((q) =>
+    !patchIsDegenerate(q) &&
+    q.pitchStart <= p.pitchEnd && q.pitchEnd >= p.pitchStart &&
+    q.volumeStart <= p.volumeEnd && q.volumeEnd >= p.volumeStart);
+  if (covers.length === 0) return false;
+  const axis = (lo, hi, starts, ends) => {
+    const cuts = new Set([lo]);
+    for (const v of starts) if (v > lo && v <= hi) cuts.add(v);
+    for (const v of ends) if (v >= lo && v < hi) cuts.add(v + 1);
+    return [...cuts].sort((a, b) => a - b);
+  };
+  const xs = axis(p.pitchStart, p.pitchEnd, covers.map((q) => q.pitchStart), covers.map((q) => q.pitchEnd));
+  const ys = axis(p.volumeStart, p.volumeEnd, covers.map((q) => q.volumeStart), covers.map((q) => q.volumeEnd));
+  for (const x of xs) {
+    for (const y of ys) {
+      // (x, y) is the lowest corner of a compressed cell: if it is covered, the
+      // whole cell is (no rectangle boundary runs through a cell's interior).
+      const hit = covers.some((q) =>
+        x >= q.pitchStart && x <= q.pitchEnd && y >= q.volumeStart && y <= q.volumeEnd);
+      if (!hit) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Plan an Ixmp cleanup (item 74): drop patch entries that can never be triggered.
+ *   * orphan    — the blob's instrument slot holds no record at all
+ *   * degenerate— empty pitch/velocity range, or a zero-length sample
+ *   * shadowed  — fully covered by higher-priority (earlier) patches
+ * A slot whose patches all drop loses its Ixmp entry. Removing patches can change
+ * the sample census, so SNam is realigned by (ptr:len) identity like planBankCleanup.
+ * Returns {noop:true, …} when nothing is unreachable, else a cleanupBankOp plan
+ * (image + INam pass through unchanged) with a per-slot report.
+ */
+export function planIxmpCleanup(doc) {
+  if (!doc.sampleInstImage) return { noop: true, removedPatches: 0, removedBlobs: 0 };
+  doc._rebuildInstRegion();
+  const instRegion = doc.sampleInstImage.subarray(SAMPLEBIN_SIZE);
+  const hasRecord = (slot) =>
+    !instRegion.subarray(slot * 256, (slot + 1) * 256).every((b) => b === 0);
+
+  const ixmp = [];
+  const report = [];
+  let removedPatches = 0;
+  let removedBlobs = 0;
+  for (const e of doc.ixmp) {
+    const slot = e.instId & 0x3ff;
+    const patches = doc.instruments[slot].extraPatches ?? [];
+    if (!hasRecord(slot)) { // orphan blob: nothing to trigger it
+      removedBlobs++;
+      removedPatches += patches.length;
+      report.push({ slot, reason: "orphan", dropped: patches.length, kept: 0, keep: [] });
+      continue;
+    }
+    const keep = [];
+    let dropped = 0;
+    for (const p of patches) {
+      if (patchIsDegenerate(p) || patchIsShadowed(p, keep)) { dropped++; continue; }
+      keep.push(p);
+    }
+    if (dropped === 0) { ixmp.push(e); continue; }
+    removedPatches += dropped;
+    report.push({ slot, reason: "unreachable", dropped, kept: keep.length, keep });
+    if (keep.length === 0) { removedBlobs++; continue; }
+    ixmp.push({ instId: e.instId, count: keep.length, blob: writePatchesBlob(keep) });
+  }
+  if (removedPatches === 0) {
+    return { noop: true, removedPatches: 0, removedBlobs: 0, report: [] };
+  }
+
+  // SNam realigns to the post-cleanup census: preview it with each touched
+  // slot's SURVIVING patches, then key the names by (ptr:len) identity.
+  const overrides = new Map(report.map((r) => [r.slot, r.keep]));
+  const oldNameByKey = new Map();
+  for (const s of doc.sampleList()) oldNameByKey.set(s.ptr + ":" + s.len, s.name);
+  const snamArr = doc.sampleList(overrides).map((s) => oldNameByKey.get(s.ptr + ":" + s.len) ?? "");
+  while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
+
+  return {
+    image: doc.sampleInstImage,
+    inam: doc.projSections.find((s) => s.fourcc === "INam")?.payload ?? null,
+    snam: encodeNameTable(snamArr),
+    ixmp,
+    report,
+    removedPatches,
+    removedBlobs,
   };
 }

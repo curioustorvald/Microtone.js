@@ -102,7 +102,7 @@ ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmu
 
 // ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
 
-async function convertImport(name, bytes, sf2Override = null, rpb = null) {
+async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null, trimPatches = false } = {}) {
   let sf2 = sf2Override;
   if (!sf2 && converterFor(name).isMidi) {
     $("stFile").textContent = t("midi.needSf");
@@ -111,7 +111,7 @@ async function convertImport(name, bytes, sf2Override = null, rpb = null) {
   }
   const progress = showImportProgress(`Importing ${name}`);
   try {
-    const out = await convertToTaud(name, bytes, { sf2, rpb, onStatus: progress.log });
+    const out = await convertToTaud(name, bytes, { sf2, rpb, trimPatches, onStatus: progress.log });
     progress.done();
     return out;
   } catch (err) {
@@ -124,10 +124,10 @@ async function convertImport(name, bytes, sf2Override = null, rpb = null) {
 }
 
 // ── document loading ──
-async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null } = {}) {
+async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null, trimPatches = false } = {}) {
   let converted = false;
   if (converterFor(name)) {
-    bytes = await convertImport(name, bytes, sf2, rpb);
+    bytes = await convertImport(name, bytes, { sf2, rpb, trimPatches });
     if (bytes === null) return;
     name = name.replace(/\.[^.]+$/, "") + ".taud";
     converted = true;
@@ -394,6 +394,13 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
         { value: "auto", label: t("midi.rpbAuto") },
         ...[2, 4, 8, 16, 32, 64].map((n) => ({ value: String(n), label: String(n) })),
       ],
+    }, {
+      // Item 75: the converter keeps every preset's full zone map by default, so
+      // imported instruments stay playable beyond the notes this song uses and
+      // Housekeeping cleans up on demand. Ticking this restores the old
+      // trim-to-triggered behaviour — worth it for a preset-heavy MIDI whose
+      // untrimmed pool would overflow 8 MB (that path resamples EVERYTHING down).
+      name: "trim", label: t("midi.trimPatches"), type: "checkbox", value: false,
     }],
     okLabel: t("common.import"),
   });
@@ -401,7 +408,7 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
   const sf2 = choice.sf === "bundled" ? await getBundledSoundfont() : await pickUserSoundfont();
   if (!sf2) { $("stFile").textContent = t("midi.cancelled"); return; }
   await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()),
-    { sf2, saveToOpfs: toOpfs, rpb: choice.rpb });
+    { sf2, saveToOpfs: toOpfs, rpb: choice.rpb, trimPatches: choice.trim === true });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());
 $("fileInput").addEventListener("change", async (e) => {

@@ -13,7 +13,9 @@
 //     order always matches the post-merge sampleList() census.
 
 import { SAMPLEBIN_SIZE, ixmpPatchLen } from "../format/taud-const.js";
-import { parsePatchesBlob, TaudInst } from "../engine/inst.js";
+import {
+  parsePatchesBlob, TaudInst, buildMetaRecord, makeMetaLayer, META_MAX_LAYERS,
+} from "../engine/inst.js";
 
 const sampleKey = (ptr, len) => `${ptr}:${len}`;
 
@@ -488,6 +490,99 @@ export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new 
     slotMap: new Map([[-1, slot]]),
     newSampleBytes: 0,
     dedupedSamples: 1,
+  };
+}
+
+/**
+ * Plan a new metainstrument built from instruments already in this project
+ * (item 72). Each pick is COPIED into a fresh sub-instrument slot ($100+, which
+ * pattern cells can't address) and the copies become the layers, so the picked
+ * originals stay in $01–$FF — selectable, jammable and still valid in every
+ * pattern cell that references them. A copy shares its source's sample pointers,
+ * so no pool bytes are spent and the census (hence SNam) is unchanged.
+ *
+ * `picks` are slots in this doc; a pick must not be a metainstrument (layers
+ * resolve through triggerNote, which never re-enters the meta branch — see
+ * buildMetaRecord). `name` is the escaped INam text for the new meta.
+ * Returns {error} or a planImport-shaped plan (apply with importBankOp).
+ */
+export function planCreateMeta(destDoc, picks, name = "") {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const used = new Set(destDoc.usedInstrumentSlots());
+  const slots = [...new Set(picks)].filter((s) => used.has(s));
+  if (slots.length === 0) return { error: "No instruments selected." };
+  if (slots.some((s) => destDoc.instruments[s].isMeta)) {
+    return { error: "A metainstrument can't be layered inside another metainstrument." };
+  }
+  if (slots.length > META_MAX_LAYERS) {
+    return { error: `A metainstrument holds at most ${META_MAX_LAYERS} layers (${slots.length} selected).` };
+  }
+
+  // The meta itself must stay note-addressable ($01–$FF); its layer copies go
+  // to $100+ ascending, where only a layer table can reach them.
+  const taken = new Set(used);
+  let metaSlot = 1;
+  while (metaSlot <= 255 && taken.has(metaSlot)) metaSlot++;
+  if (metaSlot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+  taken.add(metaSlot);
+
+  const insts = [];
+  const layers = [];
+  let child = 0x100;
+  for (const src of slots) {
+    while (child <= 0x3ff && taken.has(child)) child++;
+    if (child > 0x3ff) return { error: "No free sub-instrument slots left in $100–$3FF." };
+    taken.add(child);
+    const blob = [...destDoc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === src);
+    insts.push({
+      srcSlot: src,
+      destSlot: child,
+      topLevel: false,
+      record: destDoc.instRecordBytes(src),
+      ixmpBlob: blob ? blob.blob : null,
+      ixmpCount: blob ? blob.count : 0,
+    });
+    // Full-rect layer at unity mix, no detune: every layer sounds on every
+    // trigger until the user narrows it in the Meta tab.
+    layers.push(makeMetaLayer(child, 159, 0, 0x0000, 0xffff, 0, 63));
+  }
+  insts.push({
+    srcSlot: -1,
+    destSlot: metaSlot,
+    topLevel: true,
+    record: buildMetaRecord(layers),
+    ixmpBlob: null,
+    ixmpCount: 0,
+  });
+
+  // INam: the meta's name by slot; each copy inherits its source's name so the
+  // layer table reads meaningfully.
+  const parts = splitNameTable(sectionPayload(destDoc, "INam"));
+  const enc = new TextEncoder();
+  const put = (slot, text) => {
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = enc.encode(text);
+  };
+  for (const it of insts) {
+    if (it.srcSlot >= 0) put(it.destSlot, destDoc.instrumentName(it.srcSlot));
+  }
+  put(metaSlot, name);
+
+  return {
+    insts,
+    samples: [],
+    inamPayload: joinNameTable(parts),
+    snamNames: new Map(),
+    writeSnam: false, // copies reuse existing (ptr:len) spans — census unchanged
+    slotMap: new Map(insts.map((it) => [it.srcSlot, it.destSlot])),
+    newSampleBytes: 0,
+    dedupedSamples: 0,
+    metaSlot,
+    childSlots: insts.filter((it) => it.srcSlot >= 0).map((it) => it.destSlot),
   };
 }
 

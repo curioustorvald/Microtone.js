@@ -662,6 +662,22 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   border-bottom: 1px solid var(--border);
 }
 .inst-name-idx { color: var(--accent); font-family: "Roboto Mono", monospace; font-weight: 600; }
+.inst-renum-btn { flex: 0 0 auto; }
+/* Breadcrumb back to the metainstrument that owns the open layer child (item 71). */
+.inst-parent-chip {
+  background: var(--panel-2);
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inst-parent-chip:hover { color: var(--fg); border-color: var(--accent); }
 .inst-name-input {
   flex: 1;
   min-width: 0;

@@ -15,7 +15,11 @@ import { UndoStack } from "../../src/doc/undo.js";
 import { importBankOp } from "../../src/doc/ops.js";
 import {
   planImport, bankInventory, splitNameTable, joinNameTable, buildIxmpSection,
+  planCreateMeta,
 } from "../../src/doc/bankmerge.js";
+import {
+  TaudInst, buildMetaRecord, makeMetaLayer, META_MAX_LAYERS,
+} from "../../src/engine/inst.js";
 
 const corpusDir = fileURLToPath(new URL("../corpus/", import.meta.url));
 const when = new Document(parseTaud(await readFile(corpusDir + "WHEN.taud")));
@@ -256,4 +260,122 @@ test("buildIxmpSection is the exact inverse of parseIxmpSection", () => {
   const sec = e1m1.projSections.find((s) => s.fourcc === "Ixmp");
   const entries = parseIxmpSection(sec.payload);
   assert.ok(Buffer.from(buildIxmpSection(entries)).equals(Buffer.from(sec.payload)));
+});
+
+// ── item 72: build a metainstrument out of existing instruments ──
+
+test("buildMetaRecord round-trips through TaudInst.loadRecord", () => {
+  const layers = [
+    makeMetaLayer(0x101, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(0x3ff, 0, -12345, 0x1234, 0x5678, 3, 60),   // 10-bit idx + negative detune
+    makeMetaLayer(0x0002, 255, 32767, 0xffff, 0xffff, 63, 63), // extremes
+  ];
+  const inst = new TaudInst(7);
+  inst.loadRecord(buildMetaRecord(layers, { strict: true }));
+  assert.equal(inst.isMeta, true);
+  assert.equal(inst.metaStrict, true);
+  assert.equal(inst.metaLayers.length, 3);
+  for (let i = 0; i < layers.length; i++) {
+    for (const k of ["instIdx", "mixOctet", "detune", "pitchStart", "pitchEnd", "volStart", "volEnd"]) {
+      assert.equal(inst.metaLayers[i][k], layers[i][k], `layer ${i} ${k}`);
+    }
+  }
+  // Non-strict + percussion flags ride in the same byte without disturbing the
+  // 0xFFFF metainstrument sentinel.
+  const plain = new TaudInst(7);
+  plain.loadRecord(buildMetaRecord(layers, { percussion: true }));
+  assert.equal(plain.metaStrict, false);
+  assert.equal(plain.isMeta, true);
+});
+
+test("planCreateMeta copies picks to $100+ and layers them, originals intact", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 3);
+  const before = picks.map((s) => doc.instRecordBytes(s));
+  const censusBefore = doc.sampleList().map((e) => `${e.ptr}:${e.len}`);
+  const poolBefore = Uint8Array.from(doc.sampleBin);
+
+  const plan = planCreateMeta(doc, picks, "Stack");
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.samples.length, 0);          // no pool bytes spent
+  assert.equal(plan.writeSnam, false);           // census unchanged → SNam verbatim
+  assert.ok(plan.metaSlot >= 1 && plan.metaSlot <= 255);
+  assert.equal(plan.childSlots.length, picks.length);
+  for (const c of plan.childSlots) assert.ok(c >= 0x100 && c <= 0x3ff, `child $${c.toString(16)}`);
+
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(plan));
+
+  // The meta layers the copies, in pick order, at unity mix over the full grid.
+  const meta = doc.instruments[plan.metaSlot];
+  assert.equal(meta.isMeta, true);
+  assert.deepEqual(meta.metaLayers.map((l) => l.instIdx), plan.childSlots);
+  for (const l of meta.metaLayers) {
+    assert.equal(l.mixOctet, 159);
+    assert.equal(l.detune, 0);
+    assert.deepEqual([l.pitchStart, l.pitchEnd, l.volStart, l.volEnd], [0x0000, 0xffff, 0, 63]);
+  }
+  assert.equal(doc.instrumentName(plan.metaSlot), "Stack");
+
+  // Each copy is byte-identical to its source, which is untouched and still
+  // selectable; the sample pool and census never moved.
+  picks.forEach((src, i) => {
+    const child = plan.childSlots[i];
+    assert.deepEqual([...doc.instRecordBytes(child)], [...before[i]], `copy of $${src.toString(16)}`);
+    assert.deepEqual([...doc.instRecordBytes(src)], [...before[i]], `original $${src.toString(16)}`);
+    assert.equal(doc.instrumentName(child), doc.instrumentName(src));
+    assert.ok(doc.selectableInstrumentSlots().includes(src));
+  });
+  assert.ok(Buffer.from(doc.sampleBin).equals(Buffer.from(poolBefore)));
+  assert.deepEqual(doc.sampleList().map((e) => `${e.ptr}:${e.len}`), censusBefore);
+  // The copies are layer children — not selectable (item 59).
+  const sel = doc.selectableInstrumentSlots();
+  for (const c of plan.childSlots) assert.ok(!sel.includes(c));
+  assert.ok(sel.includes(plan.metaSlot));
+});
+
+test("planCreateMeta carries a pick's Ixmp patches onto its copy", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "M_E1M1.taud")));
+  // M_E1M1's patch carriers are meta children — reach one through its meta.
+  const metaSlot = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  const child = doc.instruments[metaSlot].metaLayers
+    .map((l) => l.instIdx & 0x3ff)
+    .find((c) => (doc.instruments[c].extraPatches?.length ?? 0) > 0);
+  const patches = doc.instruments[child].extraPatches.length;
+
+  const plan = planCreateMeta(doc, [child], "Copy");
+  assert.ok(!plan.error, plan.error);
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(plan));
+  const copy = plan.childSlots[0];
+  assert.equal(doc.instruments[copy].extraPatches.length, patches);
+  assert.equal(doc.instruments[child].extraPatches.length, patches); // source intact
+  assert.ok(doc.ixmp.some((e) => (e.instId & 0x3ff) === copy));
+});
+
+test("planCreateMeta refuses metas, empty picks and over-long layer stacks", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "M_E1M1.taud")));
+  const metaSlot = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  // Nesting is impossible: triggerMetaOrNote resolves layers via triggerNote.
+  assert.match(planCreateMeta(doc, [metaSlot], "x").error ?? "", /metainstrument/i);
+  assert.match(planCreateMeta(doc, [], "x").error ?? "", /No instruments selected/);
+  const many = new Array(META_MAX_LAYERS + 1).fill(0).map((_, i) => i + 1)
+    .filter((s) => doc.usedInstrumentSlots().includes(s));
+  if (many.length > META_MAX_LAYERS) {
+    assert.match(planCreateMeta(doc, many, "x").error ?? "", /at most/);
+  }
+});
+
+test("importBankOp undo of a created meta restores the file byte-exactly", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const baseline = doc.toBytes();
+  const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
+  const plan = planCreateMeta(doc, picks, "Layered");
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(plan));
+  assert.notEqual(Buffer.compare(Buffer.from(doc.toBytes()), Buffer.from(baseline)), 0);
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo is byte-exact");
+  undo.redo();
+  assert.equal(doc.instruments[plan.metaSlot].isMeta, true);
 });

@@ -45,8 +45,11 @@ Behaviour (per midi2taud.md):
     definition"): the note references the meta slot and the engine fans out one
     voice per matching layer, so SF2's simultaneous layering (and detune-stacks)
     now sound — overlapping zones are no longer dropped. Single-layer presets stay
-    plain instruments. Stereo SF2 samples are mixed to mono. Unused instruments,
-    patches, and samples are trimmed.
+    plain instruments. Stereo SF2 samples are mixed to mono. Unused instruments and
+    the samples nothing references are trimmed; each preset's full zone map is kept
+    as Ixmp patches so the imported instruments stay playable beyond the notes this
+    song happens to use (--trim-unused-patches restores the old trim-to-triggered
+    behaviour for the smallest file).
   * The SF2 volume-envelope ADSR is preserved on the (instrument-scope) Taud
     volume envelope: delay/attack/hold/decay nodes and a sustain region held
     while the key is on. There is NO release leg — the SF2 *release segment*
@@ -1640,10 +1643,15 @@ def _partition_layers(zones: list, registry: dict, max_layers: int):
     return layers, len(remaining)
 
 
-def _build_layer_instrument(name: str, items: list, trig: dict):
-    """One normal TaudInstrument from a layer's disjoint (rect, zone, ms) items,
-    trimmed to patches actually hit by a trigger. None when no patch is hit
-    (the layer is silent for the whole song → dropped)."""
+def _build_layer_instrument(name: str, items: list, trig: dict, trim: bool = False):
+    """One normal TaudInstrument from a layer's disjoint (rect, zone, ms) items.
+
+    Trigger hits are always counted — the most-hit patch becomes the canonical one
+    (the base record's sample + ADSR). With `trim` (--trim-unused-patches) the
+    patches this song never triggers are dropped, and a layer nothing hits returns
+    None (silent for the whole song → dropped). Trimming is OFF by default: the
+    bank then carries the preset's full zone map, and the editor's Housekeeping
+    ("Cleanup instrument patches") removes what the user doesn't want."""
     all_patches = [Patch(r, z, ms) for (r, z, ms) in items]
     for (nv, v6), cnt in trig.items():
         for p in all_patches:
@@ -1651,7 +1659,7 @@ def _build_layer_instrument(name: str, items: list, trig: dict):
             if r[0] <= nv <= r[1] and r[2] <= v6 <= r[3]:
                 p.hits += cnt
                 break
-    kept = [p for p in all_patches if p.hits > 0]
+    kept = [p for p in all_patches if p.hits > 0] if trim else all_patches
     if not kept:
         return None
     ti = TaudInstrument()
@@ -1719,9 +1727,10 @@ def _split_layer_velocity_filter(items: list, trig: dict) -> list:
 
 
 def build_presets(sf: SF2, slot_keys: list, triggers: dict, perc_force,
-                  registry: dict, max_layers: int) -> dict:
+                  registry: dict, max_layers: int, trim: bool = False) -> dict:
     """For each preset (inst_key), partition its SF2 zones into disjoint layers
-    and build one normal TaudInstrument per layer (trimmed to triggered patches).
+    and build one normal TaudInstrument per layer (`trim` keeps only the patches
+    this song triggers — see _build_layer_instrument).
     Returns dict[inst_key → (name, [layer TaudInstrument])]. Downstream, a preset
     with >1 layer becomes a Metainstrument; a single-layer preset stays a plain
     instrument. `registry` dedupes MonoSamples across all presets/layers."""
@@ -1744,7 +1753,7 @@ def build_presets(sf: SF2, slot_keys: list, triggers: dict, perc_force,
         # _split_layer_velocity_filter.
         layer_items = [_split_layer_velocity_filter(items, trig) for items in layer_items]
         layers = [ti for items in layer_items
-                  if (ti := _build_layer_instrument(name, items, trig)) is not None]
+                  if (ti := _build_layer_instrument(name, items, trig, trim)) is not None]
         if not layers and layer_items:
             # Nothing triggered (out-of-range): keep the single patch nearest the
             # mean trigger pitch so the preset still sounds (matches the old path).
@@ -3533,6 +3542,16 @@ def main():
                          'needing >1 layer become a Metainstrument. 1 disables '
                          'layering (first-zone-wins, like the old behaviour). '
                          'Covers ~93%% of big-bank presets at 4, ~98%% at 5')
+    ap.add_argument('--trim-unused-patches', action='store_true',
+                    help='Keep only the Ixmp patches this song actually triggers, '
+                         'dropping the rest of each preset\'s zone map (and the '
+                         'samples only they used). OFF by default: the bank carries '
+                         'the full zone map, so the instruments stay playable across '
+                         'the whole keyboard after import and the editor decides what '
+                         'to remove (Housekeeping > Cleanup instrument patches). Turn '
+                         'it on for the smallest possible file, or when the untrimmed '
+                         'pool overflows the 8 MB budget (which resamples EVERY sample '
+                         'down, costing quality song-wide)')
     ap.add_argument('--bend-epsilon', type=float, default=4.0,
                     help='Pitch-bend simplification threshold in cents '
                          '(default 4.0); smaller = more faithful')
@@ -3752,7 +3771,7 @@ def run_single(args) -> None:
 
     registry = {}
     presets = build_presets(sf, slot_keys, triggers, args.perc_force_mapping,
-                            registry, args.max_layers)
+                            registry, args.max_layers, args.trim_unused_patches)
     layer_insts, meta_records, slot_name, note_slot = allocate_slots(
         presets, slot_keys)
 
@@ -3799,7 +3818,7 @@ def run_directory(args) -> None:
     # Phase 2: build the one shared instrument set for the whole union.
     registry = {}
     presets = build_presets(sf, slot_keys, triggers, args.perc_force_mapping,
-                            registry, args.max_layers)
+                            registry, args.max_layers, args.trim_unused_patches)
     layer_insts, meta_records, slot_name, note_slot = allocate_slots(
         presets, slot_keys)
 

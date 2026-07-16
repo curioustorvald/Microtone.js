@@ -31,6 +31,10 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
           input.appendChild(o);
         }
         if (f.value !== undefined) input.value = f.value;
+      } else if (f.type === "checkbox") {
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = !!f.value; // resolves as a boolean, not a string
       } else {
         input = document.createElement("input");
         input.type = f.type ?? "text";
@@ -62,7 +66,9 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
     ok.addEventListener("click", (e) => {
       e.preventDefault();
       const values = {};
-      for (const [name, input] of Object.entries(inputs)) values[name] = input.value;
+      for (const [name, input] of Object.entries(inputs)) {
+        values[name] = input.type === "checkbox" ? input.checked : input.value;
+      }
       finish(values);
     });
     cancel.addEventListener("click", (e) => { e.preventDefault(); finish(null); });

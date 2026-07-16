@@ -1,0 +1,181 @@
+<!doctype html><meta charset="utf-8"><title>instrument management smoke (items 72-74)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:760px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !(M.store.doc && M.store.undo); i++) await sleep(50);
+  const { store, instrumentsView: iv, projectView: pv, jam } = M;
+  const doc = store.doc;
+  // A real alert()/confirm() blocks the headless page — stub and record them.
+  let lastAlert = null, confirmAnswer = true;
+  win.alert = (m) => { lastAlert = m; log("  alert: " + m); };
+  win.confirm = (m) => { log("  confirm: " + m); return confirmAnswer; };
+  const dialogs = () => [...win.document.querySelectorAll("dialog")];
+  const lastDialog = () => dialogs()[dialogs().length - 1];
+  const btnIn = (dlg, label) => [...dlg.querySelectorAll("button")].find((b) => b.textContent === label);
+
+  const baseline = doc.toBytes();
+  const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  iv.visible = true;
+  iv.refresh();
+
+  // ── item 72: build a metainstrument out of existing instruments ──
+  const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
+  const selBefore = doc.selectableInstrumentSlots().length;
+  [...iv.listEl.querySelectorAll(".side-toolbar-inst button")]
+    .find((b) => b.textContent === "New metainstrument…").click();
+  for (let i = 0; i < 100 && !dialogs().some((d) => /New metainstrument/.test(d.textContent)); i++) await sleep(20);
+  const metaDlg = lastDialog();
+  const t1 = !!metaDlg && metaDlg.open;
+  log(`New metainstrument… opens the picker: ${t1 ? "ok" : "FAIL"}`);
+
+  const boxes = [...metaDlg.querySelectorAll(".import-row input[type=checkbox]")];
+  // Metainstruments must not be offered — layers resolve through triggerNote.
+  const t2 = boxes.length === doc.selectableInstrumentSlots()
+    .filter((s) => !doc.instruments[s].isMeta).length;
+  log(`picker lists only non-meta instruments (${boxes.length}): ${t2 ? "ok" : "FAIL"}`);
+  const okBtn = btnIn(metaDlg, "Create");
+  const t3 = okBtn.disabled === true; // nothing picked yet
+  log(`Create disabled with an empty selection: ${t3 ? "ok" : "FAIL"}`);
+
+  for (const s of picks) {
+    const box = boxes.find((b) => Number(b.dataset.slot) === s);
+    box.checked = true; fire(box, "change");
+  }
+  const nameIn = metaDlg.querySelector(".import-filter");
+  nameIn.value = "Stack";
+  okBtn.click();
+  await sleep(60);
+
+  const metaSlot = iv.selected;
+  const meta = doc.instruments[metaSlot];
+  const t4 = meta.isMeta && meta.metaLayers.length === picks.length &&
+    meta.metaLayers.every((l) => l.instIdx >= 0x100 && l.mixOctet === 159);
+  log(`created meta $${metaSlot.toString(16)} layers ${meta.metaLayers?.length} copies at $100+: ${t4 ? "ok" : "FAIL"}`);
+  const t5 = doc.instrumentName(metaSlot) === "Stack" && jam.currentInst === metaSlot;
+  log(`meta named + adopted as the current instrument: ${t5 ? "ok" : "FAIL"}`);
+  // The originals stay selectable and playable; the copies are hidden children.
+  const sel = doc.selectableInstrumentSlots();
+  const t6 = picks.every((s) => sel.includes(s)) && sel.length === selBefore + 1 &&
+    meta.metaLayers.every((l) => !sel.includes(l.instIdx));
+  log(`originals intact (${selBefore}→${sel.length}), copies hidden: ${t6 ? "ok" : "FAIL"}`);
+
+  // ── item 71 inside the new meta: Edit… reaches a copy's base editor ──
+  iv.refresh();
+  const layerEdit = [...iv.panel.querySelectorAll(".advCell button")];
+  const t7 = iv.tab === "meta" && layerEdit.length === picks.length &&
+    layerEdit[0].textContent === "Edit…";
+  log(`Layers tab offers Edit… per layer: ${t7 ? "ok" : "FAIL"}`);
+  layerEdit[0].click();
+  const t8 = iv.selected === meta.metaLayers[0].instIdx && iv.advanced === false &&
+    !!iv.panel.querySelector(".inst-parent-chip") && !!iv.panel.querySelector(".inst-name-input");
+  log(`Edit… opens copy $${iv.selected.toString(16)} in its base editor: ${t8 ? "ok" : "FAIL"}`);
+  iv.panel.querySelector(".inst-parent-chip").click();
+
+  store.undo.undo();
+  iv.refresh();
+  const t9 = same(doc.toBytes(), baseline);
+  log(`undo of the created meta is byte-exact: ${t9 ? "ok" : "FAIL"}`);
+
+  // ── item 73: renumber an instrument ──
+  const from = doc.selectableInstrumentSlots()[0];
+  const free = [...Array(255).keys()].map((i) => i + 1)
+    .find((s) => !doc.usedInstrumentSlots().includes(s));
+  iv.selected = from;
+  iv.refresh();
+  const renumBtn = iv.panel.querySelector(".inst-renum-btn");
+  const t10 = !!renumBtn;
+  log(`name row has a Renumber… button: ${t10 ? "ok" : "FAIL"}`);
+
+  // Occupied target → refused, nothing changes.
+  const occupied = doc.selectableInstrumentSlots()[1];
+  renumBtn.click();
+  await sleep(40);
+  let dlg = lastDialog();
+  dlg.querySelector("input[name=to]").value = occupied.toString(16);
+  btnIn(dlg, "Renumber").click();
+  await sleep(40);
+  const t11 = /already taken/.test(lastAlert ?? "") && same(doc.toBytes(), baseline);
+  log(`occupied target refused, document untouched: ${t11 ? "ok" : "FAIL"}`);
+
+  // Free target, patterns left pointing at the old number (the default).
+  const refsBefore = [];
+  doc.songs.forEach((song, si) => song.patterns.forEach((p, pi) => p && p.forEach((c, r) => {
+    if ((c.instrment & 0xff) === from) refsBefore.push(`${si}:${pi}:${r}`);
+  })));
+  renumBtn.click();
+  await sleep(40);
+  dlg = lastDialog();
+  const hasCheckbox = !!dlg.querySelector("input[name=cells][type=checkbox]");
+  dlg.querySelector("input[name=to]").value = free.toString(16);
+  btnIn(dlg, "Renumber").click();
+  await sleep(40);
+  const movedRefs = [];
+  doc.songs.forEach((song, si) => song.patterns.forEach((p, pi) => p && p.forEach((c, r) => {
+    if ((c.instrment & 0xff) === free) movedRefs.push(`${si}:${pi}:${r}`);
+  })));
+  const t12 = hasCheckbox && doc.usedInstrumentSlots().includes(free) &&
+    !doc.usedInstrumentSlots().includes(from) && movedRefs.length === 0 &&
+    iv.selected === free && jam.currentInst === free;
+  log(`renumber $${from.toString(16)}→$${free.toString(16)}, patterns left alone (${refsBefore.length} refs): ${t12 ? "ok" : "FAIL"}`);
+  store.undo.undo();
+  const t13 = same(doc.toBytes(), baseline);
+  log(`undo of the renumber is byte-exact: ${t13 ? "ok" : "FAIL"}`);
+
+  // Same move with the "point the cells at the new number" box ticked.
+  iv.selected = from;
+  iv.refresh();
+  iv.panel.querySelector(".inst-renum-btn").click();
+  await sleep(40);
+  dlg = lastDialog();
+  dlg.querySelector("input[name=to]").value = free.toString(16);
+  const cellsBox = dlg.querySelector("input[name=cells]");
+  cellsBox.checked = true;
+  btnIn(dlg, "Renumber").click();
+  await sleep(40);
+  const moved = [];
+  doc.songs.forEach((song, si) => song.patterns.forEach((p, pi) => p && p.forEach((c, r) => {
+    if ((c.instrment & 0xff) === free) moved.push(`${si}:${pi}:${r}`);
+  })));
+  const t14 = moved.length === refsBefore.length && moved.every((k, i) => k === refsBefore[i]);
+  log(`with the box ticked the ${refsBefore.length} cells follow: ${t14 ? "ok" : "FAIL"}`);
+  store.undo.undo();
+  const t15 = same(doc.toBytes(), baseline);
+  log(`undo of the pattern-remapping renumber is byte-exact: ${t15 ? "ok" : "FAIL"}`);
+
+  // ── item 74: cleanup unreachable instrument patches ──
+  pv.visible = true;
+  pv.refresh();
+  const cleanBtn = [...pv.root.querySelectorAll("button")]
+    .find((b) => b.textContent === "Cleanup instrument patches");
+  const t16 = !!cleanBtn;
+  log(`Housekeeping offers Cleanup instrument patches: ${t16 ? "ok" : "FAIL"}`);
+  lastAlert = null;
+  cleanBtn.click();
+  await sleep(40);
+  // WHEN is converter output: every patch is reachable, so this is a no-op.
+  const t17 = /Nothing to clean up/.test(lastAlert ?? "") && same(doc.toBytes(), baseline);
+  log(`clean corpus → nothing to clean, document untouched: ${t17 ? "ok" : "FAIL"}`);
+
+  const results = out.textContent.match(/: (ok|FAIL)$/gm) ?? [];
+  const fails = results.filter((r) => r.endsWith("FAIL")).length;
+  log(`\nRESULT: ${fails === 0 ? "PASS" : "FAIL"} (${results.length - fails}/${results.length})`);
+ } catch (err) {
+  log("EXCEPTION: " + (err && err.stack || err));
+  log("\nRESULT: FAIL");
+ }
+})();
+</script>

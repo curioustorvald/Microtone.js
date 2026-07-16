@@ -644,9 +644,67 @@ export function remapPatternsOp(song, newPatterns, newCues, newPNam, gestureId =
   };
 }
 
-/** Bank cleanup (item 60): swap in the cleaned image + INam/SNam + Ixmp (unused
- *  instruments removed, orphaned samples freed) in one invertible step. `plan`
- *  is planBankCleanup()'s result; the inverse restores the pre-cleanup bank. */
+/**
+ * Renumber one instrument (item 73): swap in the image with the record moved +
+ * the INam entry moved + the Ixmp slot id remapped, and rewrite the pattern
+ * cells the plan lists (empty when the user kept patterns pointing at the old
+ * number). `plan` is planRenumberInstrument()'s result; the inverse has the same
+ * shape (previous image/INam/Ixmp + the cells' previous instrument bytes), so
+ * this op is its own undo/redo. Dirty: the bank plus every touched pattern.
+ */
+export function renumberInstrumentOp(plan, gestureId = null) {
+  return {
+    type: "renumberInstrument",
+    plan, gestureId,
+    apply(doc) {
+      const secOf = (fourcc) => {
+        const s = doc.projSections.find((x) => x.fourcc === fourcc);
+        return s ? s.payload : null;
+      };
+      const old = {
+        image: doc.sampleInstImage,
+        inam: secOf("INam"),
+        ixmp: doc.ixmp,
+        ixmpSection: secOf("Ixmp"),
+        cells: [],
+      };
+      doc.sampleInstImage = plan.image;
+      doc.setSection("INam", plan.inam);
+      doc.ixmp = plan.ixmp;
+      // The file carries the SECTION, not doc.ixmp — without this the saved file
+      // would still bind the patches to the OLD slot number (an orphan blob on
+      // reload). The inverse restores the captured payload verbatim.
+      doc.setSection("Ixmp", "ixmpSection" in plan
+        ? plan.ixmpSection
+        : (plan.ixmp.length > 0 ? buildIxmpSection(plan.ixmp) : null));
+      doc._resetInstrumentCache();
+      for (const w of plan.cells) {
+        const cell = doc.songs[w.song].patterns[w.pat]?.[w.row];
+        if (!cell) continue;
+        old.cells.push({ song: w.song, pat: w.pat, row: w.row, inst: cell.instrment });
+        cell.instrment = w.inst;
+      }
+      doc.dirty = true;
+      return renumberInstrumentOp(old, gestureId);
+    },
+    dirty: () => {
+      const tags = [{ kind: "bank" }];
+      const seen = new Set();
+      for (const w of plan.cells) {
+        const key = `${w.song}:${w.pat}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push({ kind: "pattern", song: w.song, pat: w.pat });
+      }
+      return tags;
+    },
+  };
+}
+
+/** Bank cleanup (items 60, 74): swap in the cleaned image + INam/SNam + Ixmp
+ *  (unused instruments removed, orphaned samples freed, unreachable patches
+ *  dropped) in one invertible step. `plan` is planBankCleanup()'s or
+ *  planIxmpCleanup()'s result; the inverse restores the pre-cleanup bank. */
 export function cleanupBankOp(plan, gestureId = null) {
   return {
     type: "cleanupBank",
@@ -656,11 +714,21 @@ export function cleanupBankOp(plan, gestureId = null) {
         const s = doc.projSections.find((x) => x.fourcc === fourcc);
         return s ? s.payload : null;
       };
-      const old = { image: doc.sampleInstImage, inam: secOf("INam"), snam: secOf("SNam"), ixmp: doc.ixmp };
+      const old = {
+        image: doc.sampleInstImage, inam: secOf("INam"), snam: secOf("SNam"),
+        ixmp: doc.ixmp, ixmpSection: secOf("Ixmp"),
+      };
       doc.sampleInstImage = plan.image;
       doc.setSection("INam", plan.inam);
       doc.setSection("SNam", plan.snam);
       doc.ixmp = plan.ixmp;
+      // toBytes() writes the SECTION list, not doc.ixmp — without this the
+      // dropped patches would survive in the saved file and come back on reload.
+      // The inverse carries the exact previous payload; a forward plan rebuilds
+      // (buildIxmpSection is parseIxmpSection's proven byte-exact inverse).
+      doc.setSection("Ixmp", "ixmpSection" in plan
+        ? plan.ixmpSection
+        : (plan.ixmp.length > 0 ? buildIxmpSection(plan.ixmp) : null));
       doc._resetInstrumentCache();
       doc.dirty = true;
       return cleanupBankOp(old, gestureId);

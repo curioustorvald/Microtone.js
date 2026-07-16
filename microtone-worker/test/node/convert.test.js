@@ -24,6 +24,9 @@ import { Document, combineTpif } from "../../src/doc/document.js";
 import { planImport } from "../../src/doc/bankmerge.js";
 import { importBankOp } from "../../src/doc/ops.js";
 import { UndoStack } from "../../src/doc/undo.js";
+import { loadIntoEngine } from "../../src/audio/offline-render.js";
+import { TRACKER_CHUNK } from "../../src/engine/constants.js";
+import { TaudEngine } from "../../src/engine/engine.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const importDir = root + "test/corpus/import/";
@@ -47,7 +50,10 @@ function convert(fileName, opts = {}) {
   if (conv.isMidi) inputs.push({ path: "/sf.sf2", bytes: readFileSync(sf2Path) });
   return runConverter(py, {
     script: conv.script,
-    argv: buildArgv({ isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud", rpb: opts.rpb ?? null }),
+    argv: buildArgv({
+      isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
+      rpb: opts.rpb ?? null, trimPatches: opts.trimPatches === true,
+    }),
     inputs,
     output: "/out.taud",
     onLog: () => {},
@@ -74,6 +80,22 @@ test("buildArgv pins MIDI rows-per-beat only when requested (item 62)", () => {
   assert.deepEqual(midi("16"), ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "16"]);
   // rpb is MIDI-only — tracker argv never carries it
   assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", rpb: 8 }),
+    ["/in.xm", "/out.taud", "-v"]);
+});
+
+test("buildArgv opts IN to patch trimming only when asked (item 75)", () => {
+  const base = { isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" };
+  // Default: NO flag — the converter keeps each preset's full zone map and the
+  // editor's Housekeeping decides what to drop.
+  assert.deepEqual(buildArgv(base), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, trimPatches: false }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, trimPatches: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--trim-unused-patches"]);
+  // Composes with --rpb, and stays MIDI-only.
+  assert.deepEqual(buildArgv({ ...base, rpb: 8, trimPatches: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches"]);
+  assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", trimPatches: true }),
     ["/in.xm", "/out.taud", "-v"]);
 });
 
@@ -231,4 +253,38 @@ test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; 
     assert.ok(rows2 > 0 && rows16 > 0, "both conversions produced rows");
     assert.ok(rows16 > rows2 * 2,
       `expected 16-rpb (${rows16}) to far exceed 2-rpb (${rows2})`);
+  });
+
+test("midi2taud keeps every zone by default; --trim-unused-patches drops the untriggered ones (item 75; skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const patchCount = (bytes) => {
+      const doc = new Document(parseTaud(bytes));
+      return doc.usedInstrumentSlots()
+        .reduce((n, s) => n + (doc.instruments[s].extraPatches?.length ?? 0), 0);
+    };
+    const full = convert("M_E1M1.mid");                          // default: no flag
+    const trimmed = convert("M_E1M1.mid", { trimPatches: true });
+    const nFull = patchCount(full), nTrim = patchCount(trimmed);
+    // The default now carries each preset's whole zone map, so it must hold
+    // strictly more patches than the trim-to-triggered build.
+    assert.ok(nTrim > 0, "the trimmed build still has patches");
+    assert.ok(nFull > nTrim, `default (${nFull}) should keep more patches than trimmed (${nTrim})`);
+    // The extra patches are INERT for this song: the notes it actually plays are
+    // untriggered-patch-free either way, so both banks must render identically.
+    const render = (bytes) => {
+      const doc = new Document(parseTaud(bytes));
+      const eng = new TaudEngine();
+      loadIntoEngine(eng, doc.toRenderable(0), 0);
+      eng.setMasterVolume(0, 255);
+      eng.setCuePosition(0, 0);
+      eng.play(0);
+      const out = new Uint8Array(TRACKER_CHUNK * 2);
+      const acc = [];
+      // ~2 s of audio: enough for every voice to speak, cheap to compare.
+      for (let i = 0; i < 500; i++) { eng.renderChunk(0, out); acc.push(...out); }
+      return acc;
+    };
+    assert.deepEqual(render(full), render(trimmed),
+      "untriggered patches must not change what the song sounds like");
   });

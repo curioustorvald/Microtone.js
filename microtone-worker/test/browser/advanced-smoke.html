@@ -24,15 +24,15 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const baseline = doc.toBytes();
 
   // M_E1M1 is a GM MIDI import: every top-level instrument is a META whose
-  // patch-carrying children are NOT list-selectable (item 59) — the entry
-  // point is the Layers table's per-row "Patches…" button.
+  // children are NOT list-selectable (item 59) — the entry point is the Layers
+  // table's per-row "Edit…" button.
   iv.visible = true;
   iv.refresh(); // selects the first meta
   const metaSlot = iv.selected;
   const isMeta = doc.instruments[metaSlot].isMeta;
   const layerBtns = [...iv.panel.querySelectorAll(".advCell button")];
   const t1 = isMeta && layerBtns.length > 0;
-  log(`meta $${metaSlot.toString(16)} layer table has Patches… buttons (${layerBtns.length}): ${t1 ? "ok" : "FAIL"}`);
+  log(`meta $${metaSlot.toString(16)} layer table has Edit… buttons (${layerBtns.length}): ${t1 ? "ok" : "FAIL"}`);
 
   // Open a child with several patches so list/reorder legs are meaningful.
   const children = doc.instruments[metaSlot].metaLayers.map((l) => l.instIdx & 0x3ff);
@@ -43,9 +43,26 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const slot = iv.selected;
   const patchCount = () => doc.instruments[slot].extraPatches?.length ?? 0;
   const n0 = patchCount();
-  const t2 = slot === richChild && iv.advanced === true && iv.tabBar.hidden === true &&
+
+  // Item 71: Edit… lands in the child's own BASE editor (tabs, name row and a
+  // breadcrumb back to the parent meta) — NOT straight into Advanced Edit.
+  const t2a = slot === richChild && iv.advanced === false && iv.tabBar.hidden === false &&
+    !!iv.panel.querySelector(".inst-parent-chip");
+  log(`Edit… opens child $${slot.toString(16)} (${n0} patches) in its base editor: ${t2a ? "ok" : "FAIL"}`);
+
+  // The breadcrumb walks back to the owning metainstrument.
+  iv.panel.querySelector(".inst-parent-chip").click();
+  const t2b = iv.selected === metaSlot && iv.tab === "meta";
+  log(`breadcrumb returns to meta $${metaSlot.toString(16)}: ${t2b ? "ok" : "FAIL"}`);
+  [...iv.panel.querySelectorAll(".advCell button")][btnIdx].click();
+
+  // Advanced Edit is reached exactly like a regular instrument: Zones → button.
+  const tabBtn = (label) => [...iv.tabBar.querySelectorAll("button")].find((b) => b.textContent === label);
+  tabBtn("Zones").click();
+  iv.panel.querySelector(".adv-openbar button").click();
+  const t2 = iv.selected === richChild && iv.advanced === true && iv.tabBar.hidden === true &&
     !!iv.panel.querySelector(".adv-head") && !!iv.panel.querySelector(".adv-map");
-  log(`Patches… opens child $${slot.toString(16)} (${n0} patches) in Advanced Edit: ${t2 ? "ok" : "FAIL"}`);
+  log(`child's Zones → Advanced Edit… opens the patch editor: ${t2 ? "ok" : "FAIL"}`);
 
   // Patch list: one row per patch + the base fallback row.
   const rows = () => [...iv.panel.querySelectorAll(".adv-row")];

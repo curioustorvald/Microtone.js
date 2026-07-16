@@ -5,6 +5,7 @@
 import { setSongScalarOp, retuneOp, remapPatternsOp, cleanupBankOp } from "../../doc/ops.js";
 import {
   planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
+  planIxmpCleanup,
 } from "../../doc/cleanup.js";
 import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
 import { defToPreset } from "../../doc/notation.js";
@@ -225,6 +226,7 @@ export class ProjectView {
       hbtn(t("clean.patterns"), t("clean.patternsTitle"), () => this.cleanupPatterns()),
       hbtn(t("clean.renumber"), t("clean.renumberTitle"), () => this.renumberPatterns()),
       hbtn(t("clean.bank"), t("clean.bankTitle"), () => this.cleanupBank()),
+      hbtn(t("clean.ixmp"), t("clean.ixmpTitle"), () => this.cleanupIxmp()),
     );
     this.root.appendChild(houseBar);
   }
@@ -265,6 +267,20 @@ export class ProjectView {
     const plan = planBankCleanup(store.doc);
     if (plan.removedInstruments === 0 && plan.freedSampleBytes === 0) { alert(t("clean.nothing")); return; }
     if (!confirm(t("clean.bankConfirm", { insts: plan.removedInstruments, bytes: plan.freedSampleBytes }))) return;
+    store.undo.apply(cleanupBankOp(plan));
+    store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
+  }
+
+  /** Remove instrument patches that can never be triggered (item 74): orphan
+   *  blobs, degenerate rectangles, and patches shadowed by higher-priority ones. */
+  cleanupIxmp() {
+    const store = this.store;
+    const plan = planIxmpCleanup(store.doc);
+    if (plan.noop) { alert(t("clean.nothing")); return; }
+    if (!confirm(t("clean.ixmpConfirm", {
+      patches: plan.removedPatches, insts: plan.report.length, blobs: plan.removedBlobs,
+    }))) return;
     store.undo.apply(cleanupBankOp(plan));
     store.emit("edit", [{ kind: "bank" }]);
     this.refresh();

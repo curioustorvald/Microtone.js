@@ -562,6 +562,49 @@ function makeMetaLayer(instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart
   return { instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart, volEnd };
 }
 
+/** Layers a 256-byte metainstrument record can hold: byte 0 flags + byte 1
+ *  count + bytes 2..3 sentinel, then 10 bytes per layer. */
+const META_MAX_LAYERS = 25;
+
+/**
+ * Pack a 256-byte metainstrument record — the byte-inverse of loadRecord's meta
+ * branch. `layers` are makeMetaLayer shapes; layer 0 is the FOREGROUND layer and
+ * the rest spawn as background children (trigger.js triggerMetaOrNote). Layers
+ * beyond META_MAX_LAYERS are dropped.
+ *
+ * A layer child must NOT itself be a metainstrument: triggerMetaOrNote resolves
+ * layers through triggerNote, which never re-enters the meta branch, so a nested
+ * meta's record would be read as sample fields.
+ */
+function buildMetaRecord(layers, { strict = false, percussion = false } = {}) {
+  const use = layers.slice(0, META_MAX_LAYERS);
+  const b = new Uint8Array(256);
+  // samplePtr high 16 bits = 0xFFFF is the Metainstrument sentinel; the low
+  // bytes carry the flags (byte 0) and the layer count (byte 1) instead.
+  b[0] = (strict ? 0x01 : 0) | (percussion ? 0x02 : 0);
+  b[1] = use.length & 0xff;
+  b[2] = 0xff;
+  b[3] = 0xff;
+  let o = 4;
+  for (const l of use) {
+    const idx = l.instIdx & 0x3ff;
+    const det = l.detune & 0xffff; // two's complement round-trips
+    b[o] = idx & 0xff;
+    b[o + 1] = l.mixOctet & 0xff;
+    b[o + 2] = det & 0xff;
+    b[o + 3] = (det >>> 8) & 0xff;
+    b[o + 4] = l.pitchStart & 0xff;
+    b[o + 5] = (l.pitchStart >>> 8) & 0xff;
+    b[o + 6] = l.pitchEnd & 0xff;
+    b[o + 7] = (l.pitchEnd >>> 8) & 0xff;
+    // Layer inst index bits 8..9 ride in the vol-start byte's top two bits.
+    b[o + 8] = (l.volStart & 0x3f) | (((idx >>> 8) & 0x3) << 6);
+    b[o + 9] = l.volEnd & 0x3f;
+    o += 10;
+  }
+  return b;
+}
+
 /**
  * 256-byte instrument record (terranmon.txt:2001+). See AudioAdapter.kt:5322-5376
  * for the full byte layout. Envelopes have LOOP (always-active wrap) and SUSTAIN
