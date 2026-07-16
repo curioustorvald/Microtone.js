@@ -152,6 +152,7 @@ export default {
   "smp.fadeOut": "Fade out",
   "smp.reverse": "Reverse",
   "smp.invert": "Invert",
+  "smp.removeDC": "Remove DC",
   "smp.name": "Name",
   "smp.namePlaceholder": "(unnamed)",
   "smp.edit": "Edit…",
@@ -647,7 +648,7 @@ export default {
 
   // ── cue command popup (cues view) ──
   "cue.cmdTitle": "Cue {cue} — command word {word}",
-  "cue.cmdBody": "LEN/HALT@ take rows (1-64); BAK/FWD/JMP take a cue count/index.",
+  "cue.cmdBody": "Arguments are HEX. LEN/HALT@ take rows ($0-$3F); BAK/FWD/JMP take a cue count/index ($0-$FFF).",
   "cue.command": "Command",
   "cue.none": "(none)",
   "cue.len": "LEN — pattern length",
@@ -656,7 +657,7 @@ export default {
   "cue.bak": "BAK — go back N cues",
   "cue.fwd": "FWD — skip N cues",
   "cue.jmp": "JMP — jump to cue",
-  "cue.argument": "Argument",
+  "cue.argument": "Argument ($ hex)",
 
   // ── import alerts ──
   "import.cantDecode": "Can't decode {name}: {err}",

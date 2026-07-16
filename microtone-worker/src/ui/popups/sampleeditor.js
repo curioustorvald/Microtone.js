@@ -10,7 +10,7 @@
 // Apply keeps them, Cancel (or Esc) rolls the stack back to the open depth.
 
 import { setInstBytesOp, setSampleBytesOp, setSectionOp } from "../../doc/ops.js";
-import { normalise, fadeIn, fadeOut, reverse, invert } from "../../doc/sampledsp.js";
+import { normalise, fadeIn, fadeOut, reverse, invert, removeDC } from "../../doc/sampledsp.js";
 import { themeColors } from "../theme.js";
 import { hex2 } from "../notenames.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -75,6 +75,7 @@ export function openSampleDspEditor(store, sample) {
       [t("smp.fadeOut"), fadeOut],
       [t("smp.reverse"), reverse],
       [t("smp.invert"), invert],
+      [t("smp.removeDC"), removeDC],
     ];
     for (const [name, fn] of DSP) {
       const b = document.createElement("button");

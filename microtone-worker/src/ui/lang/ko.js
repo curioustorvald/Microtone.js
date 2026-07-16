@@ -149,6 +149,7 @@ export default {
   "smp.fadeOut": "페이드 아웃",
   "smp.reverse": "역재생",
   "smp.invert": "위상 반전",
+  "smp.removeDC": "DC 제거",
   "smp.name": "이름",
   "smp.namePlaceholder": "(이름 없음)",
   "smp.edit": "편집…",
@@ -643,7 +644,7 @@ export default {
 
   // ── cue command popup (cues view) ──
   "cue.cmdTitle": "큐 {cue} — 명령 워드 {word}",
-  "cue.cmdBody": "LEN/HALT@는 행 수(1-64), BAK/FWD/JMP는 큐 개수/색인을 받습니다.",
+  "cue.cmdBody": "인자는 16진수입니다. LEN/HALT@는 행 수($0-$3F), BAK/FWD/JMP는 큐 개수/색인($0-$FFF)을 받습니다.",
   "cue.command": "명령",
   "cue.none": "(없음)",
   "cue.len": "LEN — 패턴 길이",
@@ -652,7 +653,7 @@ export default {
   "cue.bak": "BAK — N큐 뒤로",
   "cue.fwd": "FWD — N큐 건너뛰기",
   "cue.jmp": "JMP — 큐로 이동",
-  "cue.argument": "인자",
+  "cue.argument": "인자($ 16진수)",
 
   // ── import alerts ──
   "import.cantDecode": "{name}을(를) 디코딩할 수 없습니다: {err}",

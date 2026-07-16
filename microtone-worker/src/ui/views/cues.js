@@ -363,11 +363,14 @@ export class CuesView {
           { value: "fwd", label: t("cue.fwd") },
           { value: "jmp", label: t("cue.jmp") },
         ]},
-        { name: "arg", label: t("cue.argument"), type: "number", value: current.arg || 0, min: 0, max: 4095 },
+        // Hex like every other cue/row number (the grid shows args in hex too).
+        { name: "arg", label: t("cue.argument"),
+          value: (current.arg || 0).toString(16).toUpperCase() },
       ],
     });
     if (!result) return;
-    const newWord = encodeInstWord(result.kind, parseInt(result.arg || "0", 10));
+    const arg = Math.min(0xfff, Math.max(0, parseInt(result.arg || "0", 16) || 0));
+    const newWord = encodeInstWord(result.kind, arg);
     // Repack: sign bits of ch 0-15 = word0, ch 16-31 = word1.
     const words = existing ? Uint16Array.from(existing)
       : new Uint16Array(MAX_VOICES).fill(CUE_EMPTY);

@@ -59,10 +59,27 @@ export function invert(bytes) {
   return out;
 }
 
+/** Remove DC offset (item 68): shift the whole span so its mean sits at the
+ *  0x80 centre. A pure bias shift — the waveform shape is untouched except
+ *  where clamping bites on an extreme offset (a wave already riding near the
+ *  rail). Applying it twice is a no-op unless clamping occurred. */
+export function removeDC(bytes) {
+  const out = new Uint8Array(bytes.length);
+  if (bytes.length === 0) return out;
+  let sum = 0;
+  for (let i = 0; i < bytes.length; i++) sum += bytes[i];
+  const bias = Math.round(sum / bytes.length) - 128;
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = Math.max(0, Math.min(255, bytes[i] - bias));
+  }
+  return out;
+}
+
 export const SAMPLE_DSP = [
   ["Normalise", normalise],
   ["Fade in", fadeIn],
   ["Fade out", fadeOut],
   ["Reverse", reverse],
   ["Invert", invert],
+  ["Remove DC", removeDC],
 ];

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { normalise, fadeIn, fadeOut, reverse, invert } from "../../src/doc/sampledsp.js";
+import { normalise, fadeIn, fadeOut, reverse, invert, removeDC } from "../../src/doc/sampledsp.js";
 import { setSampleBytesOp, multiInstBytesOp, setSectionOp } from "../../src/doc/ops.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
@@ -50,6 +50,25 @@ test("DSP ops: length-preserving, input untouched, correct shapes", () => {
   assert.equal(inv[2], 160, "96 → 160");
   assert.deepEqual([...invert(inv)], [...src], "invert is an involution (no 0x00 in src)");
   assert.equal(invert(Uint8Array.from([0]))[0], 255, "0x00 clamps to 0xFF");
+
+  // removeDC (item 68): mean shifts to the 0x80 centre, shape preserved,
+  // idempotent when no clamping, input untouched.
+  const biased = Uint8Array.from([148, 180, 116, 148, 212, 84, 148]); // src + 20
+  const biasedSnap = Uint8Array.from(biased);
+  const dc = removeDC(biased);
+  assert.equal(dc.length, biased.length);
+  assert.deepEqual([...biased], [...biasedSnap], "input untouched");
+  assert.deepEqual([...dc], [...src], "bias of +20 removed exactly");
+  const mean = dc.reduce((a, b) => a + b, 0) / dc.length;
+  assert.ok(Math.abs(mean - 128) < 1, "mean sits at the centre");
+  assert.deepEqual([...removeDC(dc)], [...dc], "idempotent once centred");
+  assert.deepEqual([...removeDC(src)], [...src], "already-centred span is a no-op");
+  assert.equal(removeDC(new Uint8Array(0)).length, 0, "empty span tolerated");
+  // extreme offset: clamping bites but output stays in range
+  const railed = removeDC(Uint8Array.from([250, 255, 245, 250]));
+  assert.ok(railed.every((v) => v >= 0 && v <= 255));
+  const railedMean = railed.reduce((a, b) => a + b, 0) / railed.length;
+  assert.ok(Math.abs(railedMean - 128) < 4, "railed span pulled to the centre");
 });
 
 test("rename: buildSampleNames splices SNam by census index; setSectionOp undoes", () => {
