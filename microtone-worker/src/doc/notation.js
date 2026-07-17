@@ -312,26 +312,71 @@ export function sclToDef(parsed, slot) {
 // "nearest" mode (kept local: doc/ must not import from ui/).
 const NEAREST_24 = [" C-", " Ct", " C#", " Dp", " D-", " Dt", " D#", " Ep", " E-", " Et", " F-", " Ft",
                     " F#", " Gp", " G-", " Gt", " G#", " Ap", " A-", " At", " A#", " Bp", " B-", " Bt"];
-const SEQ_TICKS = [" ", ".", "u", "d", "U", "D"];
+const SEQ_LETTERS = 26; // A..Z
+
+// Sequence-mode variant ladders (item 72.1), as [tick, accidental] pairs of the
+// 3-char DSL. A scale with more than 26 degrees can't get a letter each, so the
+// letters are spread evenly and the degrees sharing one are told apart by a
+// variant from the ladder that fits — ladders ascend, and are the sets the
+// notation spec fixes: 2 → [♮ ♯], 3 → [v · ^], 4 → [v · ^ ^^], 5 → [vv v · ^ ^^].
+// (The old scheme instead ran A..Z then restarted at A with a tick, so degree 27
+// read ·A — a step DOWN from Z, which is why this exists.)
+//
+// In a TICK-BEARING ladder the middle (·) is the Kite big-dot '.', NOT ' ':
+// ' ' means the preset has no tick column at all (12-TET " C-"), while every
+// shipped Kite table spells its unmarked degree with the dot (41-TET (Kite)
+// ".C-", SYM_96 "." + name). Dropping the dot would render those degrees with a
+// blank tick slot — inconsistent with the presets the user already reads.
+const SEQ_LADDERS = [
+  null,
+  [" -"],                               // 1: plain letters, no tick column
+  [" -", " #"],                         // 2: ♮ ♯ — still no ticks
+  ["d-", ".-", "u-"],                   // 3: v · ^
+  ["d-", ".-", "u-", "U-"],             // 4: v · ^ ^^
+  ["D-", "d-", ".-", "u-", "U-"],       // 5: vv v · ^ ^^
+];
+// Past 5 per letter (> 130 degrees) the spec stops: cross the tick ladder with
+// ♮/♯ for 10, then cycle. Such a scale is beyond readable naming either way.
+const SEQ_LADDER_WIDE =
+  ["D-", "D#", "d-", "d#", ".-", ".#", "u-", "u#", "U-", "U#"];
+
+/** Sequence mode: plain ascending letters, extended by variant when a scale has
+ *  more degrees than letters. Degrees spread evenly over all 26 letters. */
+function sequenceSyms(n) {
+  const out = [];
+  if (n <= SEQ_LETTERS) { // a letter each: A, B, C…
+    for (let i = 0; i < n; i++) out.push(" " + String.fromCharCode(0x41 + i) + "-");
+    return out;
+  }
+  const per = Math.ceil(n / SEQ_LETTERS);
+  const ladder = SEQ_LADDERS[per] ?? SEQ_LADDER_WIDE;
+  // Even spread → each letter's run is `per` or `per - 1` long, so a run never
+  // outgrows its ladder; a degree's variant is its position within that run.
+  let runStart = 0, runLetter = 0;
+  for (let i = 0; i < n; i++) {
+    const letter = Math.floor((i * SEQ_LETTERS) / n);
+    if (letter !== runLetter) { runStart = i; runLetter = letter; }
+    const v = ladder[(i - runStart) % ladder.length];
+    out.push(v[0] + String.fromCharCode(0x41 + letter) + v[1]);
+  }
+  return out;
+}
 
 /**
  * Generate a full sym list for a definition:
  *   'nearest'  nearest quarter-tone name (12-TET letters + demi accidentals),
  *              wrapped into the octave — a musical starting point;
- *   'sequence' plain letters A, B, C… cycling with a tick mark per 26 degrees —
- *              a neutral scheme for scales that fight diatonic names.
+ *   'sequence' ascending letters A, B, C…, sharing letters by variant once a
+ *              scale outruns the alphabet — a neutral scheme for scales that
+ *              fight diatonic names.
  */
 export function autoAssignSyms(def, mode = "nearest") {
   const n = def.table.length;
+  if (mode === "sequence") return sequenceSyms(n);
   const out = [];
   for (let i = 0; i < n; i++) {
-    if (mode === "sequence") {
-      const tick = SEQ_TICKS[Math.floor(i / 26) % SEQ_TICKS.length];
-      out.push(tick + String.fromCharCode(0x41 + (i % 26)) + "-");
-    } else {
-      const deg = ((Math.round((def.table[i] * 24) / 0x1000) % 24) + 24) % 24;
-      out.push(NEAREST_24[deg]);
-    }
+    const deg = ((Math.round((def.table[i] * 24) / 0x1000) % 24) + 24) % 24;
+    out.push(NEAREST_24[deg]);
   }
   return out;
 }

@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { presetForNotation, retuneAllPatterns, retuneNearest } from "../../src/ui/pitchtables.js";
+import { presetForNotation, retuneAllPatterns, retuneNearest, surveyTuning, OFF_GRID_TOL }
+  from "../../src/ui/pitchtables.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
 import { retuneOp } from "../../src/doc/ops.js";
@@ -107,6 +108,80 @@ test("sentinels, interrupts, and percussion notes are untouched", () => {
   assert.equal(rows[4].note, 0x5700, "running-instrument percussion note untouched");
   assert.equal(rows[5].note, 0x5436, "melodic note remapped");
   assert.equal(changes.length, 1);
+});
+
+// ── item 73: out-of-tune detection ──
+
+test("surveyTuning: an on-grid song has nothing to retune", () => {
+  const s = surveyTuning(diatonicMelody(), p12, null);
+  assert.equal(s.total, 6);
+  assert.equal(s.offGrid, 0);
+  assert.equal(s.wouldChange, 0, "a same-table nearest-pitch pass would rewrite nothing");
+});
+
+test("surveyTuning: an out-of-tune song reports the notes a cleanup would snap", () => {
+  const s = surveyTuning(offGridMelody(), p12, null);
+  assert.equal(s.total, 6);
+  assert.ok(s.offGrid > 0, "off-grid notes are seen");
+  // wouldChange is what the same-table cleanup actually rewrites — the number
+  // the old same-index guard silently threw away.
+  const song = offGridMelody();
+  const changes = retuneAllPatterns(song, p12, p12, null, "pitch");
+  assert.equal(s.wouldChange, changes.length, "wouldChange predicts the cleanup exactly");
+  assert.ok(s.wouldChange > 0, "the cleanup is NOT a no-op on an out-of-tune song");
+});
+
+test("surveyTuning: offGrid follows the display tolerance, wouldChange is exact", () => {
+  // A note OFF_GRID_TOL units sharp still reads as in tune (no yellow), but is
+  // not exactly on a degree — so it is not off-grid, yet a cleanup would move it.
+  const near = { patterns: [[cell(0x5000 + OFF_GRID_TOL, 1)]] };
+  const sNear = surveyTuning(near, p12, null);
+  assert.equal(sNear.offGrid, 0, "within tolerance: reads as in tune");
+  assert.equal(sNear.wouldChange, 1, "…but a cleanup still snaps it exactly onto the degree");
+  const far = { patterns: [[cell(0x5000 + OFF_GRID_TOL + 1, 1)]] };
+  assert.equal(surveyTuning(far, p12, null).offGrid, 1, "past tolerance: out of tune");
+});
+
+test("surveyTuning: skips sentinels and percussion like the retune does", () => {
+  const perc = new Uint8Array(1024);
+  perc[9] = 1;
+  const song = { patterns: [[cell(0x0001), cell(0x0004), cell(0x5011, 9), cell(0x5011, 1)]] };
+  const s = surveyTuning(song, p12, perc);
+  assert.equal(s.total, 1, "only the one pitched non-percussion note counts");
+  assert.equal(s.offGrid, 1);
+});
+
+test("surveyTuning: Raw preset has no grid to be off", () => {
+  const raw = { index: 0, name: "Raw", table: [], interval: 0x1000 };
+  assert.deepEqual(surveyTuning(offGridMelody(), raw, null), { total: 0, offGrid: 0, wouldChange: 0 });
+});
+
+test("retune and survey tolerate null pattern gaps (item 48 sparsity)", () => {
+  // Editing an arbitrary high pattern number pads song.patterns with nulls;
+  // retuneAllPatterns used to throw a TypeError on the first gap.
+  const song = offGridMelody();
+  song.patterns = [null, song.patterns[0], null];
+  assert.doesNotThrow(() => retuneAllPatterns(song, p19, p12, null, "pitch"));
+  const s = surveyTuning(offGridMelody(), p12, null);
+  const gapped = offGridMelody();
+  gapped.patterns = [null, gapped.patterns[0], null];
+  assert.deepEqual(surveyTuning(gapped, p12, null), s, "gaps contribute nothing");
+});
+
+test("surveyTuning on a real document: a converted .mod-style detune is flagged", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const clean = surveyTuning(doc.songs[0], p12, null);
+  assert.equal(clean.offGrid, 0, "WHEN is written exactly on the 12-TET grid");
+  assert.equal(clean.wouldChange, 0);
+  // Detune every note a few units, as an Amiga period table would.
+  for (const ptn of doc.songs[0].patterns) {
+    if (!ptn) continue;
+    for (const c of ptn) if (c.note >= 0x20) c.note += 11;
+  }
+  const dirty = surveyTuning(doc.songs[0], p12, null);
+  assert.equal(dirty.total, clean.total);
+  assert.equal(dirty.offGrid, dirty.total, "every note now reads out of tune");
+  assert.equal(dirty.wouldChange, dirty.total);
 });
 
 test("retuneNearest wrapper matches method 'pitch'", () => {

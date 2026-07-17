@@ -164,11 +164,61 @@ test("defToPreset bridges into the pitch-table machinery (glyphs + stepping)", (
 test("autoAssignSyms: nearest quarter-tone and letter-sequence modes", () => {
   const eq24 = { table: Array.from({ length: 24 }, (_, i) => Math.round((i * 0x1000) / 24)), interval: 0x1000 };
   assert.deepEqual(autoAssignSyms(eq24, "nearest").slice(0, 4), [" C-", " Ct", " C#", " Dp"]);
-  const big = { table: Array.from({ length: 30 }, (_, i) => i * 100), interval: 0x1000 };
-  const seq = autoAssignSyms(big, "sequence");
-  assert.equal(seq[0], " A-");
-  assert.equal(seq[25], " Z-");
-  assert.equal(seq[26], ".A-", "27th degree cycles with a tick mark");
+  // ≤ 26 degrees: a plain letter each.
+  const eq12 = { table: Array.from({ length: 12 }, (_, i) => i * 100), interval: 0x1000 };
+  assert.deepEqual(autoAssignSyms(eq12, "sequence").slice(0, 3), [" A-", " B-", " C-"]);
+  const eq26 = { table: Array.from({ length: 26 }, (_, i) => i * 100), interval: 0x1000 };
+  assert.equal(autoAssignSyms(eq26, "sequence")[25], " Z-");
+});
+
+// Item 72.1: past 26 degrees the old scheme ran A..Z then restarted at A with a
+// tick, so degree 27 read "·A" — a step DOWN from the Z before it. Degrees now
+// spread evenly over all 26 letters, told apart by a variant ladder sized to fit.
+test("autoAssignSyms: sequence mode spreads > 26 degrees over the alphabet (item 72.1)", () => {
+  const mk = (n) => autoAssignSyms(
+    { table: Array.from({ length: n }, (_, i) => Math.round((i * 0x1000) / n)), interval: 0x1000 },
+    "sequence");
+
+  const seq30 = mk(30);
+  assert.equal(seq30[26], " W-", "no restart at A: degree 26 keeps climbing");
+  assert.notEqual(seq30[26], ".A-", "the reported bug is gone");
+  assert.equal(seq30[29], " Z-", "the last degree lands on the last letter");
+  assert.deepEqual(seq30.slice(0, 3), [" A-", " A#", " B-"], "ladder of 2 = [♮ ♯]");
+
+  // The exact complaint: 27 degrees, one more than the alphabet.
+  const seq27 = mk(27);
+  assert.deepEqual(seq27.slice(24).map((s) => s[1]), ["X", "Y", "Z"], "tail ascends X → Y → Z");
+
+  // A tick-bearing ladder spells its middle degree with the Kite big-dot '.',
+  // like every shipped Kite preset — never a blank tick slot.
+  for (const [n, head] of [[52, [" A-", " A#"]],                    // 2: ♮ ♯ (no ticks)
+                           [78, ["dA-", ".A-", "uA-"]],             // 3: v · ^
+                           [104, ["dA-", ".A-", "uA-", "UA-"]],     // 4: v · ^ ^^
+                           [130, ["DA-", "dA-", ".A-", "uA-", "UA-"]]]) { // 5: vv v · ^ ^^
+    const s = mk(n);
+    assert.deepEqual(s.slice(0, head.length), head, `n=${n} uses the ${head.length}-variant ladder`);
+  }
+
+  // The null tick of a tick ladder must match the shipped Kite convention.
+  for (const n of [78, 104, 130, 200]) {
+    assert.ok(mk(n).every((s) => s[0] !== " "),
+      `n=${n}: a tick-bearing table never leaves the tick slot blank`);
+  }
+  assert.ok(mk(52).every((s) => s[0] === " "), "a tickless ladder keeps the blank tick slot");
+
+  // Invariants across every size: symbols stay unique and letters never step back.
+  for (let n = 1; n <= 260; n++) {
+    const s = mk(n);
+    assert.equal(s.length, n);
+    assert.equal(new Set(s).size, n, `n=${n}: every degree has a distinct symbol`);
+    for (let i = 1; i < n; i++) {
+      assert.ok(s[i][1] >= s[i - 1][1], `n=${n}: letter steps backwards at degree ${i}`);
+    }
+    if (n > 26) assert.equal(new Set(s.map((x) => x[1])).size, 26, `n=${n}: all 26 letters used`);
+  }
+
+  // Degenerate scales (> 260 degrees) still produce a symbol per degree.
+  assert.equal(mk(400).length, 400);
 });
 
 test("validateDef issue codes", () => {

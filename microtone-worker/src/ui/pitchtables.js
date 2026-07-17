@@ -91,10 +91,15 @@ export function noteDegreeLabel(note, preset) {
   return best.toString(36).toUpperCase().padStart(2, "0") + octave;
 }
 
+/** How far off a degree (in 4096-TET units) a note may sit and still read as in
+ *  tune. Beyond this it paints yellow, and surveyTuning counts it out of tune —
+ *  one constant so the warning can never disagree with what the user sees. */
+export const OFF_GRID_TOL = 2;
+
 /**
  * Resolve a playable note against a preset's symbol table. Always snaps to
- * the NEAREST degree (wrap-aware); notes farther than ±2 units off the grid
- * carry offGrid: true — "out of tune", painted yellow by the glyph painter.
+ * the NEAREST degree (wrap-aware); notes farther than ±OFF_GRID_TOL units off
+ * the grid carry offGrid: true — "out of tune", painted yellow by the painter.
  * Returns null only when the preset has no syms (Raw) or the period is out
  * of display range; else
  *   {cjk, octave, offGrid}              for Shi'er lü tokens, or
@@ -118,7 +123,7 @@ export function resolveNoteSymbol(note, preset) {
   }
   const octave = 4 + k;
   if (octave < 0 || octave > 9) return null;
-  const offGrid = bestD > 2;
+  const offGrid = bestD > OFF_GRID_TOL;
   const token = preset.sym[best];
   if (token.length === 1) return { cjk: token, octave, offGrid };
   return { tick: token[0], letter: token[1], acc: token[2], octave, offGrid };
@@ -148,6 +153,69 @@ export function stepNoteInTable(note, preset, dir) {
   else if (i >= table.length) { k++; i = 0; }
   const out = ANCHOR_NOTE + k * preset.interval + table[i];
   return Math.min(Math.max(out, 0x20), 0xffff);
+}
+
+/**
+ * Every note of `preset` that could plausibly be the nearest to `absRef`: the
+ * table over the surrounding three periods, plus each period's root. Shared by
+ * the retune snap and the tuning survey so they can't disagree about what
+ * "nearest" means.
+ */
+function eachCandidate(preset, absRef, fn) {
+  const { table, interval } = preset;
+  const baseK = Math.floor((absRef - ANCHOR_NOTE) / interval);
+  for (let dK = -1; dK <= 1; dK++) {
+    const root = ANCHOR_NOTE + (baseK + dK) * interval;
+    for (let i = 0; i < table.length; i++) {
+      const cand = root + table[i];
+      if (cand >= 0 && cand <= 0xffff) fn(cand);
+    }
+    const nextRoot = root + interval;
+    if (nextRoot >= 0 && nextRoot <= 0xffff) fn(nextRoot);
+  }
+}
+
+/** Distance from `note` to the nearest degree of `preset`; 0 = exactly on it. */
+function gridDistance(note, preset) {
+  let best = Infinity;
+  eachCandidate(preset, note, (cand) => {
+    const d = Math.abs(cand - note);
+    if (d < best) best = d;
+  });
+  return best;
+}
+
+/**
+ * Survey how a song's notes sit on `preset`'s grid (item 73). Uses exactly the
+ * skip rules of retuneAllPatterns (sentinels < 0x20, percussion by running
+ * instrument), so the counts describe the same notes a retune would touch:
+ *   total       notes a retune would consider;
+ *   offGrid     notes the Timeline paints yellow as out of tune (> OFF_GRID_TOL
+ *               from any degree) — the ones a .mod's period table produces;
+ *   wouldChange notes a nearest-pitch retune onto this same table would rewrite.
+ * A song with wouldChange > 0 has a real snap-to-grid cleanup available; the
+ * two differ because a note ≤ OFF_GRID_TOL off still reads as in tune but is
+ * not exactly on a degree.
+ */
+export function surveyTuning(song, preset, percSlots) {
+  const out = { total: 0, offGrid: 0, wouldChange: 0 };
+  if (!preset || preset.table.length === 0) return out; // Raw: no grid to be off
+  for (const ptn of song.patterns) {
+    if (!ptn) continue; // null gap (item 48)
+    let runningInst = 0;
+    for (const cell of ptn) {
+      if (cell.instrment !== 0) runningInst = cell.instrment;
+      const note = cell.note;
+      if (note >= 0x0000 && note <= 0x001f) continue; // sentinels/interrupts
+      const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
+      if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
+      out.total++;
+      const d = gridDistance(note, preset);
+      if (d > OFF_GRID_TOL) out.offGrid++;
+      if (d !== 0) out.wouldChange++;
+    }
+  }
+  return out;
 }
 
 // ── retune tension / harmonic fields (taut.js:340-489) ──
@@ -206,28 +274,17 @@ function harmonicCost(p, tonic, interval) {
 export function retuneAllPatterns(song, newPreset, srcPreset, percSlots, method = "pitch") {
   if (method !== "delta" && method !== "cadence" && method !== "harmonic") method = "pitch";
   const newTable = newPreset.table;
-  const newInterval = newPreset.interval;
   if (newTable.length === 0) return [];
   // Tension/harmonic shapes are read from the SOURCE tuning's modular space —
   // they describe the composition the user wrote, not the snap grid.
   const srcInterval = srcPreset?.interval || 0x1000;
 
-  const forEachCandidate = (absRef, fn) => {
-    const baseK = Math.floor((absRef - ANCHOR_NOTE) / newInterval);
-    for (let dK = -1; dK <= 1; dK++) {
-      const root = ANCHOR_NOTE + (baseK + dK) * newInterval;
-      for (let i = 0; i < newTable.length; i++) {
-        const cand = root + newTable[i];
-        if (cand >= 0 && cand <= 0xffff) fn(cand);
-      }
-      const nextRoot = root + newInterval;
-      if (nextRoot >= 0 && nextRoot <= 0xffff) fn(nextRoot);
-    }
-  };
+  const forEachCandidate = (absRef, fn) => eachCandidate(newPreset, absRef, fn);
 
   const changes = [];
   for (let p = 0; p < song.patterns.length; p++) {
     const ptn = song.patterns[p];
+    if (!ptn) continue; // null gap: an arbitrary-numbered pattern (item 48)
     let prevOrigAbs = -1, prevMappedAbs = 0, tonic = 0;
 
     // Tonic = the first non-percussion, non-sentinel note in the pattern.

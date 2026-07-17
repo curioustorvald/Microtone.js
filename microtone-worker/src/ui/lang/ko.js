@@ -625,6 +625,10 @@ export default {
   "retune.methodCadence": "가장 가까운 종지(음악적 긴장)",
   "retune.methodHarmonic": "종지 인식 배음",
   "retune.ok": "리튜닝",
+  "retune.nothingToDo": "리튜닝할 것이 없습니다: 모든 음표가 이미 {name} 격자에 정확히 놓여 있습니다. 다른 음률로 옮기려면 다른 음정 표를 선택하세요.",
+  "retune.outOfTuneTitle": "이 곡은 음정이 맞지 않습니다",
+  "retune.outOfTuneBody": "{total}개 음표 중 {off}개가 {name} 격자에서 벗어나 있습니다. .mod 같은 트래커 형식은 주파수 분주기로 음을 정하기 때문에 음표가 몇 센트씩 어긋납니다. 지금 리튜닝하면 어긋난 위치를 기준으로 스냅하므로 음이 엉뚱한 곳에 놓일 수 있습니다. 권장: 취소하고 먼저 “가장 가까운 음정”으로 {name}에 리튜닝하여 격자에 맞춘 다음, 원하는 음률로 다시 리튜닝하세요.",
+  "retune.retuneAnyway": "그래도 리튜닝",
 
   // ── 기보법 편집기 (item 61) ──
   "nota.customGroup": "사용자 기보법",
@@ -658,7 +662,7 @@ export default {
   "nota.autoNearest": "자동 이름 (근접)",
   "nota.autoNearestTitle": "각 음도를 가장 가까운 사분음 이름(12-TET 문자 + 데미 변화표)으로 지정합니다",
   "nota.autoSeq": "자동 이름 (A, B, C…)",
-  "nota.autoSeqTitle": "음도에 단순 문자 순서로 이름을 붙입니다",
+  "nota.autoSeqTitle": "음도에 문자 순서로 이름을 붙입니다. 음도가 26개를 넘으면 26개 문자에 고르게 나누고 ♯이나 틱 기호로 구분합니다",
   "nota.duplicate": "복제",
   "nota.delete": "삭제",
   "nota.deleteRefWarn": "곡 {songs}이(가) 이 기보법을 사용 중입니다. 삭제하면 12-TET 표시로 대체됩니다. 삭제할까요?",
@@ -700,7 +704,7 @@ export default {
   // ── 부팅 스플래시 (item 67) ──
   "splash.msg.1": "파형 망상 조직 중…",
   "splash.msg.2": "일부러 8비트로 디더링하는 중…",
-  "splash.msg.3": "옥타브를 24등분하는 중…",
+  "splash.msg.3": "옥타브를 4096등분하는 중…",
   "splash.msg.4": "C♯과 D♭을 화해시키는 중…",
   "splash.msg.5": "오디오 워클릿 예열 중…",
   "splash.msg.6": "$FF부터 거꾸로 세는 중…",
@@ -713,7 +717,7 @@ export default {
   "splash.msg.13": "트라이타브 조율 중…",
   "splash.msg.14": "테이프 되감는 중… 아, 그 트래커가 아니었지…",
   "splash.msg.15": "샘플을 느낌순으로 정렬하는 중…",
-  "splash.msg.16": "무음을 압축하는 중… 아주 잘 눌립니다…",
+  "splash.msg.16": "무음을 압축하는 중…",
   "splash.msg.17": "피아노 건반 사이를 보간하는 중…",
   "splash.msg.18": "사인파에게 새 재주를 가르치는 중…",
 };

@@ -628,6 +628,10 @@ export default {
   "retune.methodCadence": "Nearest cadence (tonal tension)",
   "retune.methodHarmonic": "Cadence-aware harmonic",
   "retune.ok": "Retune",
+  "retune.nothingToDo": "Nothing to retune: every note already sits exactly on the {name} grid. To move the song to a different tuning, pick another pitch table.",
+  "retune.outOfTuneTitle": "This song is out of tune",
+  "retune.outOfTuneBody": "{off} of {total} notes do not sit on the {name} grid — tracker formats like .mod tune by frequency divider, so their notes land a few cents off. Retuning now snaps each note from where it actually is, which can misplace it. Suggestion: cancel, retune to {name} with “Nearest pitch” first to snap everything onto the grid, then retune again to the tuning you want.",
+  "retune.retuneAnyway": "Retune anyway",
 
   // ── Notation Maker (item 61) ──
   "nota.customGroup": "Custom notations",
@@ -661,7 +665,7 @@ export default {
   "nota.autoNearest": "Auto-name (nearest)",
   "nota.autoNearestTitle": "Name every degree by its nearest quarter-tone (12-TET letters + demi accidentals)",
   "nota.autoSeq": "Auto-name (A, B, C…)",
-  "nota.autoSeqTitle": "Name degrees with a plain letter sequence",
+  "nota.autoSeqTitle": "Name degrees with a letter sequence; a scale with more than 26 degrees spreads over all 26 letters, sharing each by ♯ or tick marks",
   "nota.duplicate": "Duplicate",
   "nota.delete": "Delete",
   "nota.deleteRefWarn": "Song(s) {songs} use this notation; they will fall back to 12-TET display. Delete anyway?",
@@ -706,7 +710,7 @@ export default {
   // added or removed freely — only the key prefix matters.
   "splash.msg.1": "Reticulating waveforms…",
   "splash.msg.2": "Dithering down to 8 bits… on purpose…",
-  "splash.msg.3": "Dividing the octave by 24…",
+  "splash.msg.3": "Dividing the octave by 4096…",
   "splash.msg.4": "Convincing C♯ and D♭ to get along…",
   "splash.msg.5": "Warming up the AudioWorklet…",
   "splash.msg.6": "Counting backwards from $FF…",
@@ -719,7 +723,7 @@ export default {
   "splash.msg.13": "Tuning the tritave…",
   "splash.msg.14": "Rewinding the tape… wrong tracker, sorry…",
   "splash.msg.15": "Sorting samples by vibe…",
-  "splash.msg.16": "Compressing silence… it compresses beautifully…",
+  "splash.msg.16": "Compressing silence…",
   "splash.msg.17": "Interpolating between the piano keys…",
   "splash.msg.18": "Teaching a sine wave new tricks…",
 };

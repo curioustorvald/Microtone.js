@@ -464,6 +464,15 @@ export class TimelineView {
     this.scrollCh = lookahead(c.ch, this.scrollCh, this.visibleChans(), this.maxScrollCh());
   }
 
+  /** Read view of pattern `patNum`: the materialised one, else the shared empty
+   *  pattern — a cue may address any number (item 48), and an unmaterialised one
+   *  displays and edits as empty (the first edit materialises it via the op).
+   *  Same contract as PatternPane.pattern(). */
+  patternFor(patNum) {
+    const { store } = this;
+    return store.doc.patternAt(store.songIndex, patNum) ?? store.doc.emptyPattern();
+  }
+
   /** The pattern cell at (row, ch), or null (empty cue slot / off-map). */
   cellAt(row, ch) {
     const { store } = this;
@@ -472,9 +481,7 @@ export class TimelineView {
     if (!loc) return null;
     const patNum = store.song.cues[loc.entry.cue][ch] & 0x7fff;
     if (patNum === PATTERN_EMPTY) return null;
-    const pattern = store.song.patterns[patNum];
-    if (!pattern) return null;
-    return { pat: patNum, rowInCue: loc.rowInCue, cell: pattern[loc.rowInCue] };
+    return { pat: patNum, rowInCue: loc.rowInCue, cell: this.patternFor(patNum)[loc.rowInCue] };
   }
 
   /** The pattern cell under the cursor, or null (empty cue slot / off-map). */
@@ -738,9 +745,7 @@ export class TimelineView {
         if (patNum === PATTERN_EMPTY) {
           continue;
         }
-        const pattern = song.patterns[patNum];
-        if (!pattern) continue;
-        const cell = pattern[rowInCue];
+        const cell = this.patternFor(patNum)[rowInCue];
         // Note glyphs: taut-style vector accidentals/ticks/sentinels, CJK
         // Shi'er lü via a conventional font, hex4 for raw/off-grid notes.
         paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,

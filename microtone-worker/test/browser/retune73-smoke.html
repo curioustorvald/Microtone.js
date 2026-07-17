@@ -1,0 +1,132 @@
+<!doctype html><meta charset="utf-8"><title>out-of-tune retune (item 73)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:760px"></iframe>
+<script type="module">
+// Item 73: an out-of-tune song (a .mod tunes by frequency divider, so its notes
+// land a few cents off every degree) must not fail silently.
+//   * same table + nearest pitch IS the snap-to-grid cleanup → it must RUN
+//     (the old `newPreset.index === currentPreset.index && method === "pitch"`
+//     guard returned silently, making the suggested workaround a no-op);
+//   * on an already-on-grid song it explains there is nothing to do;
+//   * retuning to a DIFFERENT table from an out-of-tune source warns first and
+//     points at the cleanup, and Cancel leaves the song untouched.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let ok = true;
+const check = (name, cond, extra = "") => { if (!cond) ok = false; log(`${cond ? "ok  " : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+
+const openRetune = async (doc, M) => { M.projectView.openRetune(); await sleep(120); return topModal(doc); };
+const topModal = (doc) => [...doc.querySelectorAll("dialog.modal")].filter((d) => d.open).pop();
+const setField = (dlg, name, value) => {
+  const el = dlg.querySelector(`[name="${name}"]`);
+  el.value = value;
+  return el;
+};
+const clickOk = (dlg) => dlg.querySelector(".modal-buttons button").click();
+const clickCancel = (dlg) => dlg.querySelectorAll(".modal-buttons button")[1].click();
+
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone?.store?.doc; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); log("RESULT: FAIL"); return; }
+  const { store } = M;
+  const doc = win.document;
+  win.alert = () => {};
+  const { surveyTuning, presetForNotation } = await import("../../src/ui/pitchtables.js");
+  const p12 = presetForNotation(120);
+
+  // ── 1. WHEN is on-grid: the same-table cleanup has nothing to do, and says so ──
+  const clean = surveyTuning(store.song, p12, null);
+  check("WHEN loads on the 12-TET grid", clean.offGrid === 0 && clean.wouldChange === 0,
+        `offGrid=${clean.offGrid} wouldChange=${clean.wouldChange}`);
+  let dlg = await openRetune(doc, M);
+  check("retune dialog opens", !!dlg);
+  setField(dlg, "preset", "120");   // same table
+  setField(dlg, "method", "pitch");
+  clickOk(dlg);
+  await sleep(150);
+  const info = topModal(doc);
+  check("on-grid same-table retune explains there is nothing to do", !!info,
+        info ? "" : "no dialog — silently returned, the old bug");
+  check("…and names the current table", !!info && /12-TET/.test(info.textContent),
+        info?.querySelector("p")?.textContent?.slice(0, 60));
+  if (info) clickOk(info);
+  await sleep(80);
+
+  // ── 2. Detune the song like an Amiga period table, then retune to its OWN
+  //       table: this is the cleanup, and it must actually run ──
+  const before = [];
+  for (const ptn of store.song.patterns) {
+    if (!ptn) continue;
+    for (const c of ptn) if (c.note >= 0x20) { c.note += 11; before.push(c.note); }
+  }
+  store.emit("doc");
+  const dirty = surveyTuning(store.song, p12, null);
+  check("the detuned song reads as out of tune", dirty.offGrid > 0,
+        `offGrid=${dirty.offGrid}/${dirty.total}`);
+
+  const depth0 = store.undo.undoStack?.length ?? 0;
+  dlg = await openRetune(doc, M);
+  setField(dlg, "preset", "120");   // same table again
+  setField(dlg, "method", "pitch");
+  clickOk(dlg);
+  await sleep(400);
+  const stray = topModal(doc);
+  check("the cleanup runs without a nothing-to-do dialog", !stray,
+        stray ? stray.textContent.slice(0, 60) : "");
+  const after = surveyTuning(store.song, p12, null);
+  check("the cleanup snapped the song back onto the grid",
+        after.offGrid === 0 && after.wouldChange === 0,
+        `offGrid=${after.offGrid} wouldChange=${after.wouldChange}`);
+  check("the cleanup is one undo step",
+        (store.undo.undoStack?.length ?? 0) === depth0 + 1);
+  store.undo.undo();
+  await sleep(80);
+  check("undo restores the out-of-tune notes",
+        surveyTuning(store.song, p12, null).offGrid === dirty.offGrid);
+
+  // ── 3. Cross-table retune from an out-of-tune source warns, and Cancel is safe ──
+  const snapshot = store.doc.toBytes();
+  dlg = await openRetune(doc, M);
+  setField(dlg, "preset", "190");   // 19-TET — a different table
+  setField(dlg, "method", "pitch");
+  clickOk(dlg);
+  await sleep(200);
+  const warn = topModal(doc);
+  check("out-of-tune source warns before a cross-table retune", !!warn,
+        warn ? "" : "no warning — retuned silently");
+  const wtext = warn ? warn.textContent : "";
+  check("…the warning counts the off-grid notes", new RegExp(`${dirty.offGrid}\\b`).test(wtext),
+        wtext.slice(0, 90));
+  check("…and suggests the cleanup first", /Nearest pitch|Suggestion/i.test(wtext));
+  if (warn) clickCancel(warn);
+  await sleep(150);
+  const same = store.doc.toBytes();
+  check("Cancel leaves the song byte-identical",
+        same.length === snapshot.length && same.every((b, i) => b === snapshot[i]));
+
+  // ── 4. …and "Retune anyway" goes through ──
+  dlg = await openRetune(doc, M);
+  setField(dlg, "preset", "190");
+  setField(dlg, "method", "pitch");
+  clickOk(dlg);
+  await sleep(200);
+  const warn2 = topModal(doc);
+  check("the warning reappears", !!warn2);
+  if (warn2) clickOk(warn2);   // Retune anyway
+  await sleep(400);
+  check("Retune anyway applies the retune",
+        store.doc.meta.songMeta[store.songIndex].notation === 190,
+        `notation=${store.doc.meta.songMeta[store.songIndex]?.notation}`);
+
+  log(ok ? "\nRESULT: ALL PASS" : "\nRESULT: FAIL");
+ } catch (e) { log("THREW: " + e.message + "\n" + e.stack); log("RESULT: FAIL"); }
+})();
+</script>

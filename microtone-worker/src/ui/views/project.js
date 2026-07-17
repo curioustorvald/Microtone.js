@@ -7,7 +7,7 @@ import {
   planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
   planIxmpCleanup,
 } from "../../doc/cleanup.js";
-import { pitchTablePresets, presetForNotation, retuneAllPatterns } from "../pitchtables.js";
+import { pitchTablePresets, presetForNotation, retuneAllPatterns, surveyTuning } from "../pitchtables.js";
 import { defToPreset } from "../../doc/notation.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
@@ -422,15 +422,40 @@ export class ProjectView {
     const newPreset = presetPool.find((p) => p.index === parseInt(result.preset, 10));
     if (!newPreset) return;
     const method = result.method || "pitch";
-    // A same-table retune is a no-op only for the plain 'pitch' method; the
-    // delta/cadence/harmonic methods can still re-voice within the same tuning.
-    if (newPreset.index === currentPreset.index && method === "pitch") return;
 
     // Percussion slots: inst byte14 bit4 / meta byte0 bit1 (isPercussion getter).
     const percSlots = new Uint8Array(1024);
     for (const s of store.doc.usedInstrumentSlots()) {
       if (store.doc.instruments[s].isPercussion) percSlots[s] = 1;
     }
+
+    // Item 73 — an out-of-tune song (a .mod's period table lands notes a few
+    // cents off every degree) needs a snap-to-grid pass before it can retune
+    // sensibly. A same-table nearest-pitch retune IS that pass, so it only
+    // no-ops when the notes really are all on the grid; anything else warns
+    // first and points at the cleanup, rather than silently misplacing notes.
+    const survey = surveyTuning(store.song, currentPreset, percSlots);
+    const isCleanup = newPreset.index === currentPreset.index && method === "pitch";
+    if (isCleanup) {
+      if (survey.wouldChange === 0) {
+        await showModal({
+          title: t("retune.title"),
+          body: t("retune.nothingToDo", { name: currentPreset.name }),
+          okLabel: t("common.ok"),
+        });
+        return;
+      }
+    } else if (survey.offGrid > 0) {
+      const go = await showModal({
+        title: t("retune.outOfTuneTitle"),
+        body: t("retune.outOfTuneBody", {
+          off: survey.offGrid, total: survey.total, name: currentPreset.name,
+        }),
+        okLabel: t("retune.retuneAnyway"),
+      });
+      if (!go) return;
+    }
+
     store.undo.apply(retuneOp(store.songIndex, newPreset, percSlots,
       (song, np, ps) => retuneAllPatterns(song, np, currentPreset, ps, method)));
     // Record the new tuning in the song metadata (drives display + next retune).

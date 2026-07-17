@@ -1,0 +1,77 @@
+<!doctype html><meta charset="utf-8"><title>arbitrary pattern on Timeline (item 71)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1000px;height:600px"></iframe>
+<script type="module">
+// Item 71: a cue may address ANY pattern number 0x0000..0x7FFE (item 48). The
+// Timeline used to index song.patterns[n] directly, so a cue pointing at a
+// not-yet-materialised pattern painted blank AND swallowed every edit (cellAt
+// returned null). It must now show the shared empty pattern and materialise it
+// on the first edit — the contract PatternPane.pattern() already had.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const frames = async (win, n) => { for (let i = 0; i < n; i++) await new Promise((r) => win.requestAnimationFrame(r)); };
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+const ARB = 0x0500; // far beyond WHEN's materialised patterns
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  await frames(win, 3);
+
+  const { store, timeline } = M;
+  const ops = await import("../../src/doc/ops.js");
+
+  log(`WHEN materialised patterns: ${store.song.patterns.length} (target $${ARB.toString(16)} is unmaterialised)`);
+  check(store.doc.patternAt(0, ARB) === null, "precondition: target pattern is not materialised");
+
+  // Point cue 0 / channel 0 at the arbitrary pattern, through the real op.
+  store.undo.apply(ops.setCueWordOp(0, 0, 0, ARB));
+  store.emit("edit");
+  await frames(win, 3);
+
+  // 1. It must be addressable (was null → blank + non-editable).
+  const t = timeline.cellAt(0, 0);
+  check(t !== null, "cellAt returns a cell for an unmaterialised pattern");
+  check(t && t.pat === ARB, "cell reports the arbitrary pattern number", t ? `pat=$${t.pat.toString(16)}` : "null");
+  check(t && t.cell && t.cell.note === 0, "the unmaterialised pattern reads as empty", t?.cell && `note=${t.cell.note}`);
+  check(store.doc.patternAt(0, ARB) === null, "merely LOOKING does not materialise it");
+
+  // 2. Painting it must not throw.
+  let drew = true;
+  try { timeline.draw(-1); } catch (e) { drew = false; log("draw threw: " + e.message); }
+  check(drew, "Timeline paints a cue pointing at an unmaterialised pattern");
+
+  // 3. Editing it must materialise + stick ('z' = key-off sentinel, note 0x0001).
+  store.cursor.row = 0; store.cursor.ch = 0; store.cursor.sub = 0; store.cursor.nib = 0;
+  store.record = true;
+  const consumed = timeline.processEditKey({ code: "KeyZ", key: "z" }, M.jam);
+  check(consumed, "record-mode key is consumed on an unmaterialised pattern");
+  const mat = store.doc.patternAt(0, ARB);
+  check(mat !== null, "the edit materialised the pattern");
+  check(mat && mat[0].note === 0x0001, "the edited note stuck", mat && `note=${mat[0].note}`);
+  check(timeline.cellAt(0, 0)?.cell.note === 0x0001, "the Timeline reads the edit back");
+
+  // 4. The shared empty view must not have been polluted by the edit.
+  check(store.doc.emptyPattern()[0].note === 0, "the shared empty pattern is uncorrupted");
+
+  // 5. It must survive a save/reload round-trip.
+  const bytes = store.doc.toBytes();
+  const { parseTaud } = await import("../../src/format/taud-parse.js");
+  const { Document } = await import("../../src/doc/document.js");
+  const re = new Document(parseTaud(bytes));
+  check((re.songs[0].cues[0][0] & 0x7fff) === ARB, "cue word round-trips");
+  check(re.patternAt(0, ARB)?.[0].note === 0x0001, "the arbitrary pattern round-trips through toBytes");
+
+  store.record = false;
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAIL`);
+})();
+</script>

@@ -156,6 +156,20 @@ export function showNotationMaker(store) {
     // ── editor pane ──
     function renderEditor() {
       const ed = $("editor");
+      // Every edit re-renders this pane, which used to throw the degrees table
+      // back to degree 0 and drop focus mid-work (item 72.2). Capture both and
+      // restore after the rebuild — the same trick the Advanced Edit panel uses
+      // (item 64). `data-k` gives each control a rebuild-stable identity; only
+      // a control still focused INSIDE the pane is restored, so tabbing away or
+      // clicking elsewhere is never fought.
+      const prevScroll = ed.querySelector(".nota-degrees")?.scrollTop ?? 0;
+      const prevFocus = ed.contains(document.activeElement)
+        ? document.activeElement.dataset.k ?? null : null;
+      // preventScroll: focus() would otherwise scroll the control into view and
+      // undo the scroll restore below — the very thing 72.2 is about.
+      const restoreFocus = () => {
+        if (prevFocus) ed.querySelector(`[data-k="${prevFocus}"]`)?.focus({ preventScroll: true });
+      };
       ed.textContent = "";
       if (sel < 0 || !defs[sel]) {
         ed.innerHTML = `<p class="dim nota-empty-hint">${esc(t("nota.pickSlot"))}</p>`;
@@ -171,6 +185,7 @@ export function showNotationMaker(store) {
       nameLb.append(t("nota.name") + " ");
       const nameIn = document.createElement("input");
       nameIn.type = "text";
+      nameIn.dataset.k = "name";
       nameIn.value = def.name;
       nameIn.addEventListener("change", () => { def.name = nameIn.value; renderSlots(); });
       nameLb.appendChild(nameIn);
@@ -182,6 +197,7 @@ export function showNotationMaker(store) {
       const intIn = document.createElement("input");
       intIn.type = "number";
       intIn.step = "0.01";
+      intIn.dataset.k = "interval";
       intIn.value = unitsToCents(def.interval).toFixed(2);
       intIn.addEventListener("change", () => {
         const c = parseFloat(intIn.value);
@@ -197,6 +213,7 @@ export function showNotationMaker(store) {
       for (const [label, units] of INTERVAL_OPTIONS) {
         const b = document.createElement("button");
         b.textContent = label;
+        b.dataset.k = "chip" + units;
         b.className = "nota-chip" + (def.interval === units ? " sel" : "");
         b.addEventListener("click", () => { def.interval = units; renderAll(); });
         intLb.appendChild(b);
@@ -205,9 +222,10 @@ export function showNotationMaker(store) {
       // tool row
       const tools = document.createElement("div");
       tools.className = "nota-tools";
-      const mkBtn = (label, title, fn) => {
+      const mkBtn = (label, title, fn, key) => {
         const b = document.createElement("button");
         b.textContent = label;
+        b.dataset.k = key;
         if (title) b.title = title;
         b.addEventListener("click", fn);
         tools.appendChild(b);
@@ -224,15 +242,15 @@ export function showNotationMaker(store) {
         for (let i = 0; i < n; i++) def.table.push(Math.round((i * def.interval) / n));
         def.syms = autoAssignSyms(def, "nearest");
         renderAll();
-      });
+      }, "equalDiv");
       mkBtn(t("nota.autoNearest"), t("nota.autoNearestTitle"), () => {
         def.syms = autoAssignSyms(def, "nearest");
         renderAll();
-      });
+      }, "autoNearest");
       mkBtn(t("nota.autoSeq"), t("nota.autoSeqTitle"), () => {
         def.syms = autoAssignSyms(def, "sequence");
         renderAll();
-      });
+      }, "autoSeq");
       mkBtn(t("nota.duplicate"), null, () => {
         const s = firstFreeSlot();
         if (s < 0) { alert(t("nota.noFreeSlot")); return; }
@@ -241,17 +259,17 @@ export function showNotationMaker(store) {
         defs.push(copy);
         sel = defs.length - 1;
         renderAll();
-      });
+      }, "duplicate");
       mkBtn(t("nota.exportTaudnot"), null, () => {
         download(buildTaudnot([def]), (def.name.trim() || `custom-${def.slot}`) + ".taudnot");
-      });
+      }, "exportTaudnot");
       mkBtn(t("nota.delete"), null, () => {
         const refs = referencedBy(def.slot);
         if (refs.length > 0 && !confirm(t("nota.deleteRefWarn", { songs: refs.join(", ") }))) return;
         defs.splice(sel, 1);
         sel = defs.length > 0 ? 0 : -1;
         renderAll();
-      });
+      }, "delete");
       head.appendChild(tools);
       ed.appendChild(head);
 
@@ -267,16 +285,18 @@ export function showNotationMaker(store) {
       def.table.forEach((units, i) => {
         const tr = document.createElement("tr");
         const tok = def.syms[i] ?? FALLBACK_SYM;
-        // degree number (base-36, as the timeline's degree labels)
+        // degree number — plain decimal (item 72.3): this is a table index the
+        // user counts with, not a timeline degree label (those stay base-36).
         const tdN = document.createElement("td");
         tdN.className = "dim";
-        tdN.textContent = i.toString(36).toUpperCase();
+        tdN.textContent = String(i);
         tr.appendChild(tdN);
         // cents
         const tdC = document.createElement("td");
         const cIn = document.createElement("input");
         cIn.type = "number";
         cIn.step = "0.01";
+        cIn.dataset.k = "cents" + i;
         cIn.value = unitsToCents(units).toFixed(2);
         cIn.disabled = i === 0; // spec: index 0 is always 0
         cIn.addEventListener("change", () => {
@@ -294,9 +314,10 @@ export function showNotationMaker(store) {
         // symbol pickers — a decoded 3-char DSL token, or a raw single char
         // (imported CJK / escape) shown read-only until a picker replaces it.
         const isDsl = tok.length === 3;
-        const mkSel = (opts, labels, cur, apply) => {
+        const mkSel = (opts, labels, cur, apply, key) => {
           const td = document.createElement("td");
           const s = document.createElement("select");
+          s.dataset.k = key + i;
           for (const o of opts) {
             const el = document.createElement("option");
             el.value = o;
@@ -321,9 +342,9 @@ export function showNotationMaker(store) {
           p[idx] = v;
           def.syms[i] = p.join("");
         };
-        tr.appendChild(mkSel(TICKS, TICK_LABELS, parts[0], setPart(0)));
-        tr.appendChild(mkSel([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"], null, parts[1], setPart(1)));
-        tr.appendChild(mkSel(ACCS, ACC_LABELS, parts[2], setPart(2)));
+        tr.appendChild(mkSel(TICKS, TICK_LABELS, parts[0], setPart(0), "tick"));
+        tr.appendChild(mkSel([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"], null, parts[1], setPart(1), "letter"));
+        tr.appendChild(mkSel(ACCS, ACC_LABELS, parts[2], setPart(2), "acc"));
         // live glyph preview
         const tdP = document.createElement("td");
         tdP.appendChild(previewCanvas(def, i));
@@ -333,6 +354,7 @@ export function showNotationMaker(store) {
         if (i > 0) {
           const x = document.createElement("button");
           x.textContent = "×";
+          x.dataset.k = "del" + i;
           x.title = t("nota.removeDegree");
           x.addEventListener("click", () => {
             def.table.splice(i, 1);
@@ -350,6 +372,7 @@ export function showNotationMaker(store) {
 
       const add = document.createElement("button");
       add.textContent = t("nota.addDegree");
+      add.dataset.k = "add";
       add.className = "nota-add";
       add.addEventListener("click", () => {
         const last = def.table[def.table.length - 1] ?? 0;
@@ -360,6 +383,11 @@ export function showNotationMaker(store) {
         renderAll();
       });
       ed.appendChild(add);
+
+      // item 72.2 — put the user back where they were (scrollTop self-clamps if
+      // the table shrank, so a removed degree can't strand the view).
+      wrap.scrollTop = prevScroll;
+      restoreFocus();
     }
 
     function renderIssues() {

@@ -1,0 +1,162 @@
+<!doctype html><meta charset="utf-8"><title>notation maker fixes (item 72)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:760px"></iframe>
+<script type="module">
+// Item 72 Notation Maker fixes:
+//   72.1 ABC auto-name spreads degrees over all 26 letters with a variant
+//        ladder once a scale outruns the alphabet (was: A..Z then ·A again).
+//   72.2 the degrees table keeps its scroll (and focus) across the rebuild
+//        that every edit triggers.
+//   72.3 the # column counts in decimal, not base-36.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let ok = true;
+const check = (name, cond, extra = "") => { if (!cond) ok = false; log(`${cond ? "ok  " : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+
+const setEqualDivisions = async (doc, dlg, n) => {
+  dlg.querySelector('[data-k="equalDiv"]').click();
+  await sleep(60);
+  const eq = [...doc.querySelectorAll("dialog.modal")].find((d) => d !== dlg && d.open);
+  eq.querySelector("input").value = String(n);
+  eq.querySelector(".modal-buttons button").click();
+  await sleep(80);
+};
+const symOf = (tr) => [...tr.querySelectorAll("select")].map((s) => s.value).join("");
+const numsOf = (dlg) => [...dlg.querySelectorAll(".nota-degrees tbody tr")].map((tr) => tr.querySelector("td").textContent);
+
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone?.store?.doc; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); log("RESULT: FAIL"); return; }
+  const doc = win.document;
+  win.alert = () => {};   // a real alert blocks the headless page
+  win.confirm = () => true;
+
+  doc.querySelector('#tabs button[data-view="project"]').click();
+  await sleep(100);
+  [...doc.querySelectorAll("button")].find((b) => b.textContent.includes("Notation Maker")).click();
+  await sleep(300);
+  const dlg = doc.querySelector("dialog.nota-modal");
+  if (!dlg) { log("no maker dialog"); log("RESULT: FAIL"); return; }
+  dlg.querySelectorAll(".nota-slot")[0].click(); // seed 12-EDO
+  await sleep(40);
+
+  // ── 72.3: the # column is decimal ──
+  const nums12 = numsOf(dlg);
+  check("72.3 seed # column counts in decimal", nums12.join(",") === "0,1,2,3,4,5,6,7,8,9,10,11",
+        nums12.slice(9).join(","));
+
+  // ── 72.1: 27 degrees — one more than the alphabet ──
+  await setEqualDivisions(doc, dlg, 27);
+  const rows27 = [...dlg.querySelectorAll(".nota-degrees tbody tr")];
+  check("27 degrees created", rows27.length === 27);
+  dlg.querySelector('[data-k="autoSeq"]').click();
+  await sleep(80);
+  const r27 = [...dlg.querySelectorAll(".nota-degrees tbody tr")];
+  const syms27 = r27.map(symOf);
+  // The exact complaint: degree 26 used to be ".A-" (a dotted A, reading BELOW
+  // the Z before it). It must now be a letter at or after the previous one.
+  check("72.1 degree 26 is no longer a restarted ·A", syms27[26] !== ".A-", `got "${syms27[26]}"`);
+  check("72.1 the tail ascends X → Y → Z",
+        syms27.slice(24).map((s) => s[1]).join("") === "XYZ", syms27.slice(24).join(" "));
+  check("72.1 letters never step backwards",
+        syms27.every((s, i) => i === 0 || s[1] >= syms27[i - 1][1]));
+  check("72.1 every degree has a distinct symbol", new Set(syms27).size === 27);
+  check("72.1 all 26 letters are used", new Set(syms27.map((s) => s[1])).size === 26);
+  check("72.1 the shared letter is told apart by ♯ (ladder of 2)",
+        syms27[0] === " A-" && syms27[1] === " A#", `${syms27[0]} / ${syms27[1]}`);
+  check("72.3 # column stays decimal past 9", numsOf(dlg)[26] === "26", numsOf(dlg)[26]);
+
+  // ── 72.1: 78 degrees → the 3-ladder [v · ^] ──
+  await setEqualDivisions(doc, dlg, 78);
+  dlg.querySelector('[data-k="autoSeq"]').click();
+  await sleep(120);
+  const syms78 = [...dlg.querySelectorAll(".nota-degrees tbody tr")].map(symOf);
+  // The middle of a tick ladder is the Kite big-dot, as in the shipped presets.
+  check("72.1 78 degrees use the 3-variant tick ladder",
+        syms78.slice(0, 3).join("|") === "dA-|.A-|uA-", syms78.slice(0, 3).join("|"));
+  check("72.1 a tick-bearing table never leaves the tick slot blank",
+        syms78.every((s) => s[0] !== " "));
+  check("72.1 78 degrees all distinct", new Set(syms78).size === 78);
+
+  // ── 72.2: the degrees table keeps its scroll across an edit ──
+  // NB: focusing an off-screen control legitimately scrolls it into view, so
+  // each leg parks the view, focuses the control the user is "on", and only
+  // THEN records the position the rebuild must preserve.
+  const box = dlg.querySelector(".nota-degrees");
+  check("72.2 degrees table is scrollable", box.scrollHeight > box.clientHeight,
+        `scrollH=${box.scrollHeight} clientH=${box.clientHeight}`);
+  box.scrollTop = 400;
+  check("72.2 scrolled down to work on a later degree", box.scrollTop > 0, `scrollTop=${box.scrollTop}`);
+
+  // (a) a dropdown inside the table
+  const rowsNow = [...dlg.querySelectorAll(".nota-degrees tbody tr")];
+  const accSel = rowsNow[40].querySelectorAll("select")[2];
+  accSel.focus();
+  const parked = box.scrollTop; // where the user actually is, mid-edit
+  accSel.value = "b";
+  accSel.dispatchEvent(new Event("change"));
+  await sleep(60);
+  const box2 = dlg.querySelector(".nota-degrees");
+  check("72.2 scroll survives a table dropdown edit", box2.scrollTop === parked,
+        `scrollTop=${box2.scrollTop} (was ${parked})`);
+  check("72.2 focus returns to the same dropdown",
+        doc.activeElement && doc.activeElement.dataset.k === "acc40",
+        `activeElement k=${doc.activeElement?.dataset?.k}`);
+  check("72.2 the edit still applied",
+        [...dlg.querySelectorAll(".nota-degrees tbody tr")][40].querySelectorAll("select")[2].value === "b");
+
+  // (b) a cents spinner inside the table
+  const cIn = [...dlg.querySelectorAll(".nota-degrees tbody tr")][40].querySelector("input");
+  cIn.focus();
+  const parkedC = dlg.querySelector(".nota-degrees").scrollTop;
+  cIn.value = "615.5";
+  cIn.dispatchEvent(new Event("change"));
+  await sleep(60);
+  check("72.2 scroll survives a cents edit", dlg.querySelector(".nota-degrees").scrollTop === parkedC,
+        `scrollTop=${dlg.querySelector(".nota-degrees").scrollTop} (was ${parkedC})`);
+
+  // (c) the interval spinner in the header (outside the table)
+  const box3 = dlg.querySelector(".nota-degrees");
+  box3.scrollTop = 400;
+  const intIn = dlg.querySelector('[data-k="interval"]');
+  intIn.focus();
+  intIn.value = "1210";
+  intIn.dispatchEvent(new Event("change"));
+  await sleep(60);
+  check("72.2 scroll survives an interval-spinner edit",
+        dlg.querySelector(".nota-degrees").scrollTop === 400,
+        `scrollTop=${dlg.querySelector(".nota-degrees").scrollTop}`);
+
+  // (d) a toolbar button
+  const box4 = dlg.querySelector(".nota-degrees");
+  box4.scrollTop = 300;
+  dlg.querySelector('[data-k="autoSeq"]').click();
+  await sleep(80);
+  check("72.2 scroll survives a toolbar auto-name",
+        dlg.querySelector(".nota-degrees").scrollTop === 300,
+        `scrollTop=${dlg.querySelector(".nota-degrees").scrollTop}`);
+
+  // removing a degree must not strand the view past the new end
+  const box5 = dlg.querySelector(".nota-degrees");
+  box5.scrollTop = box5.scrollHeight;
+  const atEnd = box5.scrollTop;
+  [...dlg.querySelectorAll(".nota-degrees tbody tr")][77].querySelector("button").click();
+  await sleep(60);
+  const box6 = dlg.querySelector(".nota-degrees");
+  check("72.2 scroll clamps sanely when a degree is removed",
+        box6.scrollTop <= atEnd && box6.scrollTop >= 0, `scrollTop=${box6.scrollTop}`);
+
+  dlg.querySelector('[data-f="cancel"]').click();
+  await sleep(60);
+  log(ok ? "\nRESULT: ALL PASS" : "\nRESULT: FAIL");
+ } catch (e) { log("THREW: " + e.message + "\n" + e.stack); log("RESULT: FAIL"); }
+})();
+</script>
