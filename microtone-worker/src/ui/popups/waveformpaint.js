@@ -67,6 +67,10 @@ function openPaintModal(opts) {
     let length = opts.length;
     let buf = opts.initial ? Uint8Array.from(opts.initial) : new Uint8Array(length).fill(128);
 
+    let cssMaxW1 = ((window.innerWidth * 94) / 100)|0 // 94 vw
+    let cssMaxW2 = 1280 // 1280 px
+    let cssMaxW = Math.min(cssMaxW1, cssMaxW2)
+
     const dlg = document.createElement("dialog");
     dlg.className = "modal wavepaint-modal";
     const lenRow = opts.fixedLength
@@ -85,7 +89,7 @@ function openPaintModal(opts) {
           <button data-shape="flat">${esc(t("wave.clear"))}</button>
         </span>
       </div>
-      <canvas class="wave-paint" width="560" height="200"></canvas>
+      <canvas class="wave-paint" width="${cssMaxW - 48}" height="200"></canvas>
       <p class="wave-hint">${esc(t("wave.hint"))}</p>
       ${opts.showName ? `<div class="wave-row"><label>${esc(t("wave.name"))} <input type="text" class="wave-name" value="${esc(t("wave.defaultName"))}"></label></div>` : ""}
       <div class="modal-buttons">

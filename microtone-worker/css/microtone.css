@@ -612,7 +612,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 
 /* Paint-a-waveform modal (item 53) */
-.wavepaint-modal { max-width: min(640px, 94vw); }
+.wavepaint-modal { max-width: min(1280px, 94vw); }
 .wavepaint-modal .wave-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin: 0.5rem 0; color: var(--dim); }
 .wavepaint-modal .wave-len { width: 6rem; }
 .wavepaint-modal .wave-name { width: 14rem; }
