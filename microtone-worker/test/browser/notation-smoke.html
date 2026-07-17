@@ -9,6 +9,10 @@
 // the custom table; undo removes the section byte-exact; reopen sees the def;
 // Cancel leaves the doc alone. (.scl/.taudnot file paths are Node-covered —
 // file pickers can't be driven headless.)
+// Interval-0 legs (item 76): the "No interval" chip disables the period field
+// and reveals the base-note control; absolute Equal divisions (steps/octave ×
+// span), Add-degree extends upward, chip toggling stashes/restores the base,
+// and Save yields an absolute preset with the declared base.
 const out = document.getElementById("out");
 const log = (s) => { out.textContent += "\n" + s; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -142,6 +146,82 @@ window.addEventListener("error", (e) => log("ERROR: " + e.message));
   await sleep(50);
   check("cancel leaves the saved section untouched",
     store.doc.projSections.some((s) => s.fourcc === "nota"));
+
+  // ── interval-0 (absolute) mode: "No interval" chip + base note ──
+  [...doc.querySelectorAll("button")]
+    .find((b) => b.textContent.includes("Notation Maker")).click();
+  await sleep(200);
+  dlg = doc.querySelector("dialog.nota-modal");
+  dlg.querySelectorAll(".nota-slot")[1].click();   // seed slot 1
+  await sleep(30);
+  const absChip = dlg.querySelector('[data-k="chip0"]');
+  check("No interval chip present", !!absChip);
+  absChip.click();
+  await sleep(30);
+  check("absolute chip selected", dlg.querySelector('[data-k="chip0"]').classList.contains("sel"));
+  check("interval input disabled in absolute mode",
+    dlg.querySelector('[data-k="interval"]').disabled);
+  let baseIn = dlg.querySelector('[data-k="base"]');
+  check("base field appears, default C4", !!baseIn && baseIn.value === "$5000");
+  baseIn.value = "$3000";
+  baseIn.dispatchEvent(new Event("change"));
+  await sleep(30);
+  baseIn = dlg.querySelector('[data-k="base"]');
+  check("base accepts $3000", baseIn.value === "$3000");
+  check("base annotation names C2", baseIn.parentElement.textContent.includes("C2"));
+  check("save still enabled (base valid on interval 0)",
+    !dlg.querySelector('[data-f="save"]').disabled);
+
+  // Equal divisions in absolute mode: steps/octave × octaves spanned
+  [...dlg.querySelectorAll(".nota-tools button")]
+    .find((b) => b.textContent.startsWith("Equal")).click();
+  await sleep(60);
+  const eqDlg2 = [...doc.querySelectorAll("dialog.modal")].find((d) => d !== dlg && d.open);
+  const eqIns = eqDlg2.querySelectorAll("input");
+  check("absolute equal-div modal has two fields", eqIns.length === 2);
+  eqIns[0].value = "12"; eqIns[1].value = "2";
+  eqDlg2.querySelector(".modal-buttons button").click();
+  await sleep(50);
+  const absRows = dlg.querySelectorAll(".nota-degrees tbody tr");
+  check("24 absolute degrees (12 × 2 octaves)", absRows.length === 24);
+  check("degrees run past one octave absolutely",
+    absRows[23].children[2].textContent === "$1EAB");
+
+  // Add degree in absolute mode extends upward by the last gap (the interval
+  // midpoint rule would have halved the top degree)
+  dlg.querySelector('[data-k="add"]').click();
+  await sleep(30);
+  const grown = dlg.querySelectorAll(".nota-degrees tbody tr");
+  // $1EAB + the last gap ($1EAB − $1D55 = 342) = $2001
+  check("add degree extends the absolute table upward",
+    grown.length === 25 && grown[24].children[2].textContent === "$2001");
+
+  // Chip toggling parks and restores the base (interval systems must have 0).
+  // The 25 degrees span past one octave, so Octave mode is legitimately
+  // invalid here — but the complaint must be the INTERVAL rule, never the
+  // base rule (the base is auto-zeroed by the switch).
+  dlg.querySelector('[data-k="chip4096"]').click();  // Octave
+  await sleep(30);
+  const issues = dlg.querySelector('[data-f="issues"]').textContent;
+  check("octave chip hides the base field",
+    !dlg.querySelector('[data-k="base"]'));
+  check("switch flags the span, not the (auto-zeroed) base",
+    issues.includes("interval") && !issues.includes("base note"));
+  dlg.querySelector('[data-k="chip0"]').click();
+  await sleep(30);
+  check("switching back restores the stashed base",
+    dlg.querySelector('[data-k="base"]')?.value === "$3000");
+  check("save re-enabled in absolute mode",
+    !dlg.querySelector('[data-f="save"]').disabled);
+
+  // Save with assign → sMet points at slot 1, live preset is absolute
+  dlg.querySelector('[data-f="save"]').click();
+  await sleep(100);
+  check("absolute def saved + assigned",
+    store.doc.meta.songMeta[store.songIndex].notation === 65534);
+  check("live preset is absolute with the declared base",
+    store.pitchPreset.interval === 0 && store.pitchPreset.base === 0x3000
+    && store.pitchPreset.table.length === 25);
 
   log(ok ? "RESULT: PASS" : "RESULT: FAIL");
  } catch (e) {

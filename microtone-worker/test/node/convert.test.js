@@ -20,6 +20,7 @@ import {
   runConverter, buildArgv,
 } from "../../src/convert/convert-core.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
+import { presetForNotation, surveyTuning } from "../../src/ui/pitchtables.js";
 import { Document, combineTpif } from "../../src/doc/document.js";
 import { planImport } from "../../src/doc/bankmerge.js";
 import { importBankOp } from "../../src/doc/ops.js";
@@ -97,6 +98,59 @@ test("buildArgv opts IN to patch trimming only when asked (item 75)", () => {
     ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches"]);
   assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", trimPatches: true }),
     ["/in.xm", "/out.taud", "-v"]);
+});
+
+/** A minimal 4-channel "M.K." module: one pattern, one note per row, each a
+ *  period straight out of ProTracker's table. Synthesised rather than shipped
+ *  as a corpus binary so the periods under test are visible right here. */
+function makeMod(periods) {
+  const N_SAMPLES = 31, CH = 4, SAMPLE_WORDS = 8;
+  const head = 20 + N_SAMPLES * 30 + 1 + 1 + 128 + 4;
+  const buf = new Uint8Array(head + 1024 + SAMPLE_WORDS * 2);
+  const put = (off, s) => { for (let i = 0; i < s.length; i++) buf[off + i] = s.charCodeAt(i); };
+  put(0, "pt-grid probe");
+  const s1 = 20;                       // sample 1's 30-byte header
+  put(s1, "probe");
+  buf[s1 + 23] = SAMPLE_WORDS;         // length in words (big-endian)
+  buf[s1 + 25] = 64;                   // volume; finetune 0, loop len 1 = none
+  buf[s1 + 29] = 1;
+  const o = 20 + N_SAMPLES * 30;
+  buf[o] = 1;                          // one order, and it plays pattern 0
+  buf[o + 1] = 127;                    // restart
+  put(o + 2 + 128, "M.K.");
+  periods.forEach((period, row) => {
+    const c = head + row * CH * 4;      // channel 0 of this row
+    buf[c] = (period >> 8) & 0x0f;      // sample hi nibble 0 | period hi
+    buf[c + 1] = period & 0xff;
+    buf[c + 2] = 1 << 4;                // sample 1 lo nibble, effect 0
+  });
+  return buf;
+}
+
+test("mod2taud stamps notation 1 and its notes land on the ProTracker grid", () => {
+  // A spread across PT's range, including all four entries whose octave is not
+  // a clean doubling (D-3 190, E-3 170, G-3 143, G#3 135) plus B-1 453 — the
+  // notes no octave-repeating table could place.
+  const periods = [428, 404, 381, 339, 170, 143, 135, 190, 453, 856, 214, 113];
+  const out = runConverter(py, {
+    script: "mod2taud.py",
+    argv: buildArgv({ isMidi: false, inPath: "/in.mod", outPath: "/out.taud" }),
+    inputs: [{ path: "/in.mod", bytes: makeMod(periods) }],
+    output: "/out.taud",
+    onLog: () => {},
+  });
+  const doc = new Document(parseTaud(out));
+  assert.equal(doc.meta.songMeta[0].notation, 1, "sMet notation must be ProTracker pitch");
+  const preset = presetForNotation(doc.meta.songMeta[0].notation, doc);
+  assert.equal(preset.name, "ProTracker pitch");
+
+  const onPt = surveyTuning(doc.songs[0], preset, null);
+  assert.equal(onPt.total, periods.length);
+  assert.equal(onPt.offGrid, 0, "a converted .mod must be fully in tune");
+  assert.equal(onPt.wouldChange, 0, "and exactly on the grid, not merely near it");
+
+  // The same notes under the old 12-TET default: the bug this fixes.
+  assert.ok(surveyTuning(doc.songs[0], presetForNotation(120), null).offGrid > 0);
 });
 
 test("xm2taud under Pyodide → parseable, loadable document", () => {

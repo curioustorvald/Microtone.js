@@ -74,6 +74,13 @@ SIGNATURE        = b"mod2taud/TSVM "    # 14 bytes
 # share a pitch reference.
 PT_REFERENCE_PERIOD = 428.0
 
+# sMet notation index 1 = "ProTracker pitch". PT tunes from a hand-made table
+# of integer Amiga periods, not from 12-TET, so its notes sit up to ~6 cents
+# off the 12-TET grid -- and the table is not even exactly octave-periodic
+# (E-3 is period 170, not 339/2 = 169.5). Stamping the notation lets the
+# editor name those notes correctly instead of flagging the song out of tune.
+PT_NOTATION = 1
+
 
 # ── MOD parser ───────────────────────────────────────────────────────────────
 
@@ -935,6 +942,8 @@ def assemble_taud(mod: dict, with_project_data: bool = True) -> bytes:
             project_name=mod['title'],
             instrument_names=inst_names,
             sample_names=smp_names,
+            song_metadata=[{'index': i, 'notation': PT_NOTATION}
+                           for i in range(n_songs)],
         )
         if proj_data:
             proj_off = cur_off

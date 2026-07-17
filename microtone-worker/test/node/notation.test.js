@@ -227,6 +227,88 @@ test("validateDef issue codes", () => {
   assert.deepEqual(validateDef({ interval: 0x1000, table: [0, 20, 10] }), ["ascending"]);
   assert.deepEqual(validateDef({ interval: 0x800, table: [0, 0x900] }), ["interval"]);
   assert.ok(validateDef({ interval: 0x1_0000, table: [0] }).includes("range"));
+  // interval 0 is the spec's "no interval system" mode, not an error — the
+  // degrees are absolute notes, so nothing has to fit inside a period.
+  assert.deepEqual(validateDef({ interval: 0, table: [0, 0x900, 0x4000] }), []);
+  // ...but the other invariants still apply to it.
+  assert.deepEqual(validateDef({ interval: 0, table: [5, 10] }), ["zeroFirst"]);
+  assert.ok(validateDef({ interval: -5, table: [0] }).includes("interval"));
+});
+
+test("interval-0 definitions become absolute presets, not Raw", () => {
+  // Two octaves of 12-TET spelled out note by note: no interval, every note
+  // listed. Previously this degraded to a Raw (hex) preset.
+  const table = [], syms = [];
+  for (let i = 0; i < 24; i++) {
+    table.push(Math.round((i * 0x1000) / 12));
+    syms.push(pitchTablePresets[120].sym[i % 12]);
+  }
+  const def = { slot: 3, flags: 0, interval: 0, name: "Absolute", table, syms };
+  assert.deepEqual(validateDef(def), []);
+
+  const p = defToPreset(def);
+  assert.equal(p.interval, 0);
+  assert.equal(p.table.length, 24, "the table survives (Raw would have emptied it)");
+  assert.equal(p.t, "d", "density = 12 degrees per octave across the span");
+
+  // It drives the real pitch machinery: notes resolve by name, and the octave
+  // digit follows the pitch even though there is no period index to count.
+  const at = (i) => ANCHOR_NOTE + p.table[i];
+  const r0 = resolveNoteSymbol(at(0), p), r13 = resolveNoteSymbol(at(13), p);
+  assert.deepEqual([r0.letter + r0.acc, r0.octave, r0.offGrid], ["C-", 4, false]);
+  assert.deepEqual([r13.letter + r13.acc, r13.octave, r13.offGrid], ["C#", 5, false]);
+  // Stepping walks the absolute list and clamps at its ends.
+  assert.equal(stepNoteInTable(at(0), p, 1), at(1));
+  assert.equal(stepNoteInTable(at(0), p, -1), at(0), "bottom of the table clamps");
+  assert.equal(stepNoteInTable(at(23), p, 1), at(23), "top of the table clamps");
+});
+
+test("nota codec round-trips interval 0 byte-exact", () => {
+  const def = { slot: 0, flags: 0, interval: 0, name: "Absolute",
+                table: [0, 0x155, 0x1000, 0x4321], syms: [" C-", " C#", " D-", " E-"] };
+  const back = parseNotaPayload(buildNotaPayload([def]))[0];
+  assert.equal(back.interval, 0);
+  assert.deepEqual(back.table, def.table);
+  assert.equal(back.name, "Absolute");
+  assert.equal(back.base, 0, "an undeclared base stays 0 (= default C4)");
+});
+
+test("nota base note: an absolute notation can reach below C4", () => {
+  // The frequency table's offsets are unsigned, so without a base note a
+  // notation could never name anything under C4. ProTracker's shape: base two
+  // octaves down, table rising from it.
+  const def = { slot: 2, flags: 0, interval: 0, base: 0x3000, name: "Low",
+                table: [0, 0x1000, 0x2000, 0x3000],
+                syms: [" C-", " C-", " C-", " C-"] };
+  assert.deepEqual(validateDef(def), []);
+
+  const back = parseNotaPayload(buildNotaPayload([def]))[0];
+  assert.equal(back.base, 0x3000, "base survives the round trip");
+  assert.deepEqual(back.table, def.table);
+
+  const p = defToPreset(back);
+  assert.equal(p.base, 0x3000);
+  // Degree 0 IS the note two octaves below C4 — unreachable before this field.
+  assert.equal(stepNoteInTable(0x3000, p, -1), 0x3000, "bottom clamps at the base");
+  assert.equal(stepNoteInTable(0x3000, p, 1), 0x4000);
+  assert.equal(resolveNoteSymbol(0x3000, p).octave, 2, "octave digit follows the pitch");
+  assert.equal(resolveNoteSymbol(0x5000, p).octave, 4);
+});
+
+test("nota base note: 0 means default C4, and interval systems must not set one", () => {
+  const abs = { slot: 0, flags: 0, interval: 0, base: 0, table: [0, 0x155],
+                syms: [" C-", " C#"] };
+  // base 0 = default: presetBase supplies C4, so the preset carries no base.
+  const p = defToPreset(abs);
+  assert.equal(p.base, undefined);
+  assert.equal(resolveNoteSymbol(ANCHOR_NOTE, p).octave, 4);
+
+  // The spec pins the base to 0 for an interval system — there the base note
+  // is the root interval's root, and the song table moves the whole tuning.
+  assert.deepEqual(validateDef({ interval: 0x1000, base: 0x3000, table: [0, 0x155] }),
+    ["base"]);
+  assert.deepEqual(validateDef({ interval: 0x1000, base: 0, table: [0, 0x155] }), []);
+  assert.ok(validateDef({ interval: 0, base: 0x1_0000, table: [0] }).includes("base"));
 });
 
 test("Document: nota section via setSectionOp — resolve, undo byte-exact, reload", () => {

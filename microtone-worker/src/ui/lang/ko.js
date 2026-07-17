@@ -656,8 +656,14 @@ export default {
   "nota.eightve": "8/1",
   "nota.nonave": "9/1",
   "nota.decave": "10/1",
+  "nota.noInterval": "주기 없음",
+  "nota.noIntervalTitle": "무주기 방식: 표현 가능한 모든 음을 절대값으로 표에 나열합니다 — 어떤 주기로도 반복되지 않는 격자(예: ProTracker pitch)에 사용합니다",
+  "nota.baseNote": "기준음",
+  "nota.baseNoteTitle": "0번 음도가 놓이는 절대 음 값 (16진수; C4 = $5000). 음도 오프셋은 여기서부터 위로 쌓이므로 낮은 음이 필요하면 C4 아래로 설정하세요",
   "nota.equalDiv": "평균율 분할…",
   "nota.equalDivTitle": "음도표를 주기의 N 등분으로 대체합니다",
+  "nota.equalDivPerOct": "옥타브당 단계 수",
+  "nota.equalDivSpan": "옥타브 범위",
   "nota.equalDivN": "분할 수",
   "nota.autoNearest": "자동 이름 (근접)",
   "nota.autoNearestTitle": "각 음도를 가장 가까운 사분음 이름(12-TET 문자 + 데미 변화표)으로 지정합니다",
@@ -682,6 +688,7 @@ export default {
   "nota.issue.ascending": "슬롯 {slot}: 음도는 오름차순이어야 합니다",
   "nota.issue.range": "슬롯 {slot}: 값이 $FFFF를 초과합니다",
   "nota.issue.interval": "슬롯 {slot}: 주기는 마지막 음도보다 커야 합니다",
+  "nota.issue.base": "슬롯 {slot}: 기준음은 “주기 없음” 방식에서만 쓸 수 있습니다 ($FFFF 이하)",
 
   // ── cue command popup (cues view) ──
   "cue.cmdTitle": "큐 {cue} — 명령 워드 {word}",

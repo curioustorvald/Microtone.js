@@ -3,6 +3,14 @@
 // Bohlen-Pierce uses a tritave). The preset index doubles as the sMet
 // `notation` field, so a song's active tuning comes from its metadata.
 //
+// `interval: 0` is the spec's second mode (terranmon.txt §nota): "If you are
+// not using an interval system (which means you are responsible for defining
+// every note expressible), this must be 0". Such a preset is ABSOLUTE — the
+// table is a finite ascending list of every note the notation can express,
+// offset from `base` (default ANCHOR_NOTE), with no repeating lattice. It
+// exists for grids that are not octave-periodic at all; ProTracker pitch is
+// the built-in example.
+//
 // `sym` carries one 3-char token per degree, transcribed from taut's custom-
 // font sym strings into a compact DSL rendered by src/ui/glyphs.js:
 //   [0] tick:   ' ' none · '.' Kite big-dot · 'u'/'d' up/down tick ·
@@ -29,8 +37,43 @@ const SYM_96 = (() => {
   return out;
 })();
 
+// ── ProTracker pitch (notation index 1) ──
+// The Amiga's grid is hardware-first: Paula divides a reference clock by an
+// integer period counter, so ProTracker ships a fixed TABLE of periods rather
+// than a tuning formula — period = round(3579545 / (32 × freq)), which
+// reproduces PT's middle octave exactly. Integer rounding then makes that
+// table only APPROXIMATELY octave-periodic: E-3 is 170, not 339/2 = 169.5, so
+// it sounds 5.3 cents flat against its own octave (likewise D-3, G-3, G#3 and
+// B-1). No single period of a repeating lattice can express that — hence
+// `interval: 0`, the table below listing every PT note outright.
+//
+// Octaves 1-3 are ProTracker's own table verbatim. Octaves 0 and 4 are the
+// de-facto extension used by FT2/OpenMPT and PT clones — NOT in ProTracker's
+// source (PT itself clamps periods to 113..856), included so .mods written in
+// modern trackers stay on-grid.
+const PT_PERIODS = [
+  1712, 1616, 1524, 1440, 1356, 1280, 1208, 1140, 1076, 1016, 960, 907, // oct 0 (ext)
+   856,  808,  762,  720,  678,  640,  604,  570,  538,  508, 480, 453, // oct 1
+   428,  404,  381,  360,  339,  320,  302,  285,  269,  254, 240, 226, // oct 2
+   214,  202,  190,  180,  170,  160,  151,  143,  135,  127, 120, 113, // oct 3
+   107,  101,   95,   90,   85,   80,   75,   71,   67,   63,  60,  56, // oct 4 (ext)
+];
+// mod2taud anchors PT period 428 (PT's own "C-2") to Taud C4, so a period's
+// pitch is 4096·log2(428/period) from C4. The base is the lowest note: period
+// 1712 = 4×428, i.e. EXACTLY two octaves below C4, which keeps every offset
+// unsigned with table[0] = 0 — the shape the nota spec's Uint16 table wants.
+const PT_REFERENCE_PERIOD = 428;
+const PT_BASE = ANCHOR_NOTE - 2 * 0x1000; // 0x3000 ≡ period 1712
+const ptNoteFor = (period) =>
+  Math.round(ANCHOR_NOTE + 4096 * Math.log2(PT_REFERENCE_PERIOD / period));
+
 export const pitchTablePresets = {
   0: { index: 0, name: "Raw format", table: [], interval: 0x1000, t: "" },
+  1: {
+    index: 1, name: "ProTracker pitch", interval: 0, base: PT_BASE, t: "d",
+    table: PT_PERIODS.map((p) => ptNoteFor(p) - PT_BASE),
+    sym: PT_PERIODS.map((_, i) => SYM_12[i % 12]),
+  },
   10: { index: 10, name: "Octave only", table: [0x0], interval: 0x1000, t: "M", sym: [" C-"] },
   20: { index: 20, name: "2-TET", table: [0x0, 0x800], interval: 0x1000, t: "M", sym: [" C-", " F#"] },
   30: { index: 30, name: "3-TET", table: [0x0, 0x555, 0xaab], interval: 0x1000, t: "M", sym: [" C-", " E-", " G#"] },
@@ -59,6 +102,37 @@ export const pitchTablePresets = {
   35130: { index: 35130, name: "Equal-Tempered Bohlen-Pierce", table: [0x0, 0x1f3, 0x3e7, 0x5da, 0x7ce, 0x9c1, 0xbb4, 0xda8, 0xf9b, 0x118e, 0x1382, 0x1575, 0x1769], interval: 0x195c, t: "M", sym: [" C-", " C#", " D-", " E-", " F-", " F#", " G-", " H-", " H#", " J-", " A-", " A#", " B-"] },
 };
 
+/** True for an `interval: 0` preset: `table` is the complete, absolute note
+ *  list rather than one period of a lattice (terranmon.txt §nota). */
+function isAbsolute(preset) {
+  return preset?.interval === 0 && preset.table.length > 0;
+}
+
+/** Note that an absolute preset's degree `i` names. Interval presets are
+ *  implicitly based at ANCHOR_NOTE; an absolute one may sit lower (ProTracker
+ *  starts two octaves below C4) so it can keep its offsets unsigned. */
+function presetBase(preset) {
+  return preset?.base ?? ANCHOR_NOTE;
+}
+
+/** Index of the degree nearest `note` in an absolute preset. */
+function nearestAbsIndex(note, preset) {
+  const base = presetBase(preset), table = preset.table;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < table.length; i++) {
+    const d = Math.abs(base + table[i] - note);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+/** Octave digit for an absolute preset. There is no period index to count, so
+ *  the digit follows the 12-TET octave the pitch actually falls in — for
+ *  ProTracker that maps each PT octave onto exactly one digit (oct0..4 → 2..6). */
+function absOctave(note) {
+  return 4 + Math.floor((note - ANCHOR_NOTE) / 0x1000);
+}
+
 /** Preset for an sMet notation value; unknown/absent → 12-TET. Values in the
  *  custom range (65520..65535) resolve against `doc`'s "nota" section when a
  *  document is given (item 61 Notation Maker). */
@@ -77,6 +151,11 @@ export function presetForNotation(notation, doc = null) {
  */
 export function noteDegreeLabel(note, preset) {
   if (!preset || preset.index === 120 || preset.table.length === 0) return null;
+  if (isAbsolute(preset)) {
+    const octave = absOctave(note);
+    if (octave < 0 || octave > 9) return null;
+    return nearestAbsIndex(note, preset).toString(36).toUpperCase().padStart(2, "0") + octave;
+  }
   const rel = note - ANCHOR_NOTE;
   const k = Math.floor(rel / preset.interval);
   const inPeriod = rel - k * preset.interval;
@@ -107,21 +186,28 @@ export const OFF_GRID_TOL = 2;
  */
 export function resolveNoteSymbol(note, preset) {
   if (!preset || !preset.sym || preset.table.length === 0) return null;
-  const rel = note - ANCHOR_NOTE;
-  let k = Math.floor(rel / preset.interval);
-  const inPeriod = rel - k * preset.interval;
-  let best = 0, bestD = Infinity;
-  for (let i = 0; i < preset.table.length; i++) {
-    const d = Math.abs(preset.table[i] - inPeriod);
-    if (d < bestD) { bestD = d; best = i; }
+  let best, bestD, octave;
+  if (isAbsolute(preset)) {
+    best = nearestAbsIndex(note, preset);
+    bestD = Math.abs(presetBase(preset) + preset.table[best] - note);
+    octave = absOctave(note);
+  } else {
+    const rel = note - ANCHOR_NOTE;
+    let k = Math.floor(rel / preset.interval);
+    const inPeriod = rel - k * preset.interval;
+    best = 0; bestD = Infinity;
+    for (let i = 0; i < preset.table.length; i++) {
+      const d = Math.abs(preset.table[i] - inPeriod);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    // The next period's root may be closer than the top table entry.
+    if (preset.interval - inPeriod < bestD) {
+      bestD = preset.interval - inPeriod;
+      best = 0;
+      k += 1;
+    }
+    octave = 4 + k;
   }
-  // The next period's root may be closer than the top table entry.
-  if (preset.interval - inPeriod < bestD) {
-    bestD = preset.interval - inPeriod;
-    best = 0;
-    k += 1;
-  }
-  const octave = 4 + k;
   if (octave < 0 || octave > 9) return null;
   const offGrid = bestD > OFF_GRID_TOL;
   const token = preset.sym[best];
@@ -138,6 +224,13 @@ export function resolveNoteSymbol(note, preset) {
 export function stepNoteInTable(note, preset, dir) {
   if (!preset || preset.table.length === 0) {
     return Math.min(Math.max(note + dir, 0x20), 0xffff);
+  }
+  if (isAbsolute(preset)) {
+    // An absolute table is finite: its ends ARE the highest and lowest notes
+    // the notation can express, so stepping clamps rather than wrapping.
+    const i = Math.min(Math.max(nearestAbsIndex(note, preset) + dir, 0),
+                       preset.table.length - 1);
+    return Math.min(Math.max(presetBase(preset) + preset.table[i], 0x20), 0xffff);
   }
   const table = preset.table;
   const rel = note - ANCHOR_NOTE;
@@ -163,6 +256,15 @@ export function stepNoteInTable(note, preset, dir) {
  */
 function eachCandidate(preset, absRef, fn) {
   const { table, interval } = preset;
+  if (isAbsolute(preset)) {
+    // No lattice to walk: the whole table is the candidate set.
+    const base = presetBase(preset);
+    for (let i = 0; i < table.length; i++) {
+      const cand = base + table[i];
+      if (cand >= 0 && cand <= 0xffff) fn(cand);
+    }
+    return;
+  }
   const baseK = Math.floor((absRef - ANCHOR_NOTE) / interval);
   for (let dK = -1; dK <= 1; dK++) {
     const root = ANCHOR_NOTE + (baseK + dK) * interval;
@@ -396,6 +498,17 @@ export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coa
     let out;
     if (!useTable) {
       out = note + fine + coarse * interval;
+    } else if (isAbsolute(preset)) {
+      const table = preset.table;
+      const base = presetBase(preset);
+      // Fine steps degrees and clamps: an absolute table's ends are the limit
+      // of what the notation can say.
+      const idx = Math.min(Math.max(nearestAbsIndex(note, preset) + fine, 0),
+                           table.length - 1);
+      out = base + table[idx];
+      // There is no period to count, so coarse moves a whole octave in PITCH
+      // and re-snaps — exact for ProTracker, which is 12 degrees per octave.
+      if (coarse !== 0) out = base + table[nearestAbsIndex(out + coarse * 0x1000, preset)];
     } else {
       const table = preset.table;
       const rel = note - ANCHOR_NOTE;

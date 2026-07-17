@@ -408,9 +408,14 @@ class PatternPane {
     if (!store.doc || !this.pattern()) return;
     const preset = store.pitchPreset;
     const raw = !preset || preset.table.length === 0;
+    // `t: "d"` is the 12-notes-per-octave family (12-TET, Pythagorean, Shi'er
+    // lü, ProTracker) — there a table step IS a semitone.
     const fineLabel = raw ? t("pat.unitNoteUnits")
-      : preset.index === 120 ? t("pat.unitSemitones") : t("pat.unitSteps");
-    const coarseLabel = (preset?.interval ?? 0x1000) === 0x1000
+      : preset.t === "d" ? t("pat.unitSemitones") : t("pat.unitSteps");
+    // interval 0 = an absolute table (ProTracker): coarse moves an octave in
+    // pitch and re-snaps, so it is octaves here too.
+    const iv = preset?.interval ?? 0x1000;
+    const coarseLabel = (iv === 0x1000 || iv === 0)
       ? t("pat.unitOctaves") : t("pat.unitPeriods");
     const result = await showModal({
       title: t("pat.transposeModalTitle", { pat: this._titlePat() }),

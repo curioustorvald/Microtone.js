@@ -444,6 +444,7 @@ grid):
 | Preset | Notes per period | Period |
 |---|---|---|
 | Raw format | — (raw hex words) | octave |
+| ProTracker pitch | 12 | **none** — every note listed (see below) |
 | Octave only | 1 | octave |
 | 2- to 10-TET | 2–10 | octave |
 | 12-TET | 12 | octave |
@@ -454,6 +455,22 @@ grid):
 | Pythagorean dim. 5th / aug. 4th | 12, just fifths | octave |
 | Shi'er lü | 12, 十二律 CJK names | octave |
 | Equal-Tempered Bohlen-Pierce | 13 | **tritave** (3:1) |
+
+**ProTracker pitch** is the tuning of Amiga `.mod` files, and imported `.mod`s
+select it automatically. ProTracker does not tune by 12-TET: it plays a
+hand-made table of whole-number Amiga *periods*, so its notes sit up to about 6
+cents off the 12-TET grid — which is why a `.mod` read as 12-TET shows most of
+its notes yellow. The table is not even exactly octave-repeating (ProTracker's
+E-3 is period 170, where a strict octave below E-2 would be 169.5, leaving it
+5 cents flat), so this preset has **no period at all**: it simply lists every
+note ProTracker can play — its own three octaves plus the two extra octaves
+later trackers added. Notes therefore step by semitones as usual, but stepping
+stops at the ends of the table, because that is the whole range the tuning can
+express.
+
+`.mod` files imported before this notation existed still carry 12-TET and will
+look out of tune. To fix one, open the Project view and **Retune…** it to
+ProTracker pitch with the *Nearest pitch* method.
 
 Note display uses proper microtonal accidentals — sharps, flats, demisharps,
 demiflats, double/triple/quadruple accidentals, Kite tick marks — and degree
@@ -499,8 +516,20 @@ dot/arrows), a **letter** A–Z and an **accidental** (♮ ♯ ♭ demi, double,
 triple, quadruple) — with a live preview drawn by the same glyph engine as the
 grids. **Equal divisions…** refills the table with N equal steps of the
 period; the two **Auto-name** tools assign symbols by nearest quarter-tone or
-as a plain letter sequence. Degree 0 is always the base note: **Middle C
-($5000)** — this anchor is what keeps non-octave systems well-defined.
+as a plain letter sequence. Degree 0 is always the base note — **Middle C
+($5000)** unless the notation declares its own (below) — and this anchor is
+what keeps non-octave systems well-defined.
+
+**Notations without a period.** Most tunings repeat at some interval, but a
+few don't — ProTracker pitch, for instance, is a hardware table that is only
+*approximately* octave-periodic. For these, pick the **No interval** chip: the
+table then lists **every note the notation can express**, absolutely, and two
+things change. A **Base note** field appears — the absolute pitch degree 0
+sits on (hex, C4 = `$5000`; set it lower to reach notes below Middle C, e.g.
+ProTracker's shape would use `$3000`). And **Equal divisions…** asks for
+*steps per octave* × *octaves spanned*, since there is no period to divide.
+Stepping and transposing in such a notation clamps at the ends of the table —
+the table **is** the tuning's whole range.
 
 **Save** stores the definitions as one undo step; with **Use for this song**
 ticked the current song's notation switches to the edited slot immediately.

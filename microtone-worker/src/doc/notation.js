@@ -12,16 +12,20 @@
 //   Uint32  size of the record following this field
 //   Uint16  flags (reserved, 0)
 //   Uint16  interval in 4096-TET units (octave 0x1000, tritave 0x195C);
-//           0 = "no interval system" (every note defined explicitly) — parsed
-//           but rendered as raw hex, the preset machinery needs a period
+//           0 = "no interval system": the table then lists every note the
+//           notation can express, absolutely, rather than one period's worth
 //   Uint16  reserved (float32 interval, undecided upstream — write 0)
 //   Uint16  note count MINUS ONE (12-TET stores 11)
-//   Byte[8] reserved
+//   Uint16  base note the frequency table is offset against (C4 = 0x5000);
+//           0 = default C4. Offsets are unsigned, so an interval-0 notation
+//           that reaches below C4 declares its lowest note here. Must be 0
+//           for an interval system (the base note IS the root interval's root)
+//   Byte[6] reserved
 //   Byte[*] name, NUL-terminated UTF-8
 //   Byte[*] notation table: one display string per degree in the TAUD CHARSET
 //           (the tautfont code page), 0xFF-separated, NUL-terminated
-//   Uint16[count] frequency table: 4096-TET offsets from the period root;
-//           index 0 must be 0
+//   Uint16[count] frequency table: 4096-TET offsets from the base note (the
+//           period root for an interval system); index 0 must be 0
 //
 // The suggested standalone serialisation (".taudnot", for sharing definitions
 // between projects) is the same repetition behind an 9-byte header:
@@ -164,7 +168,11 @@ function encodeDef(def) {
   out[o++] = 0; out[o++] = 0; // reserved float32-interval field
   const nm1 = def.table.length - 1;
   out[o++] = nm1 & 0xff; out[o++] = (nm1 >>> 8) & 0xff;
-  o += 8; // reserved
+  // Base note: 0 means "the default C4", so an unset base stays byte-for-byte
+  // what this field held while it was reserved.
+  const base = (def.base ?? 0) & 0xffff;
+  out[o++] = base & 0xff; out[o++] = (base >>> 8) & 0xff;
+  o += 6; // reserved
   out.set(name, o); o += name.length;
   out[o++] = 0;
   out.set(Uint8Array.from(symBytes), o); o += symBytes.length;
@@ -183,7 +191,7 @@ export function buildNotaPayload(defs) {
 }
 
 /**
- * Parse a nota section payload → [{slot, flags, interval, name, table, syms}].
+ * Parse a nota section payload → [{slot, flags, interval, base, name, table, syms}].
  * Unknown/undecodable symbol strings become null entries in `syms` (the preset
  * builder substitutes FALLBACK_SYM); malformed trailing records are dropped.
  */
@@ -199,6 +207,7 @@ export function parseNotaPayload(u8) {
     const flags = body[0] | (body[1] << 8);
     const interval = body[2] | (body[3] << 8);
     const count = (body[6] | (body[7] << 8)) + 1;
+    const base = body[8] | (body[9] << 8); // 0 = default C4
     let p = 16;
     const nameEnd = body.indexOf(0, p);
     if (nameEnd < 0) break;
@@ -220,7 +229,7 @@ export function parseNotaPayload(u8) {
       table.push(body[p] | (body[p + 1] << 8));
     }
     while (table.length < count) table.push(0);
-    defs.push({ slot, flags, interval, name, table, syms });
+    defs.push({ slot, flags, interval, base, name, table, syms });
   }
   return defs;
 }
@@ -386,24 +395,35 @@ export function autoAssignSyms(def, mode = "nearest") {
 /**
  * Definition → a pitch-table preset consumable by everything in
  * src/ui/pitchtables.js / glyphs.js (index = the internal notation value).
- * An interval-less definition (interval 0) degrades to a Raw-style preset —
- * notes render as hex until the spec grows a full per-note mode.
+ * An interval-less definition (interval 0) becomes an ABSOLUTE preset: the
+ * table is every note the notation can express, offset from the definition's
+ * base note — or C4 when it declares none, which `presetBase` supplies.
+ * ProTracker pitch is the built-in example of the same mode.
  */
 export function defToPreset(def) {
   const index = notationValueForSlot(def.slot);
   const name = def.name || `Custom ${def.slot}`;
-  if (!def.interval) {
-    return { index, name, table: [], interval: 0x1000, t: "", custom: true, slot: def.slot };
-  }
-  return {
+  const absolute = def.interval === 0;
+  // Degrees per OCTAVE drives the type badge. For an interval preset that is
+  // the table length (when the interval is the octave); an absolute table has
+  // no interval, so measure across the span it actually covers.
+  const last = def.table[def.table.length - 1] || 0;
+  const density = absolute && def.table.length > 1 && last > 0
+    ? Math.round((def.table.length - 1) / (last / 0x1000))
+    : def.table.length;
+  const p = {
     index, name,
     table: def.table.slice(),
     interval: def.interval,
-    t: def.table.length === 12 && def.interval === 0x1000 ? "d"
-      : def.table.length <= 10 ? "M" : "m",
+    t: density === 12 && (absolute || def.interval === 0x1000) ? "d"
+      : density <= 10 ? "M" : "m",
     sym: def.syms.map((s) => s ?? FALLBACK_SYM),
     custom: true, slot: def.slot,
   };
+  // Only carry a base when the definition declares one — 0 means "default C4",
+  // which presetBase already supplies, and interval presets never use it.
+  if (absolute && def.base) p.base = def.base;
+  return p;
 }
 
 /**
@@ -412,7 +432,15 @@ export function defToPreset(def) {
  *   'zeroFirst' table[0] is not 0 (spec requirement)
  *   'ascending' offsets not strictly ascending
  *   'range'     an offset or the interval exceeds Uint16
- *   'interval'  interval is 0 or not above the last degree
+ *   'interval'  interval is negative, or not above the last degree
+ *   'base'      base note exceeds Uint16, or is declared on an interval system
+ *               (there the base note IS the root interval's root, so the field
+ *               must stay 0 — move the tuning with the song table instead)
+ *
+ * interval 0 is legal: it is the spec's "not using an interval system (which
+ * means you are responsible for defining every note expressible)" mode, where
+ * the degrees are absolute notes rather than one period's worth, so there is
+ * no period for them to fit inside.
  */
 export function validateDef(def) {
   const issues = [];
@@ -425,8 +453,13 @@ export function validateDef(def) {
   if (t.some((v) => v < 0 || v > 0xffff) || def.interval > 0xffff || def.interval < 0) {
     issues.push("range");
   }
-  if (def.interval <= 0 || (t.length > 0 && def.interval <= t[t.length - 1])) {
+  if (def.interval !== 0
+      && (def.interval < 0 || (t.length > 0 && def.interval <= t[t.length - 1]))) {
     issues.push("interval");
+  }
+  const base = def.base ?? 0;
+  if (base < 0 || base > 0xffff || (base !== 0 && def.interval !== 0)) {
+    issues.push("base");
   }
   return issues;
 }

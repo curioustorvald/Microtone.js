@@ -13,8 +13,15 @@
 // setSectionOp("nota") — display-only, so no device upload happens. The
 // "use for this song" checkbox additionally points the song's sMet notation
 // at the saved slot (same non-undoable metadata write as changeNotation).
-// The base note is always 0x5000 (Middle C) — ANCHOR_NOTE — which is what
-// anchors non-octave systems.
+//
+// Two kinds of definition (terranmon.txt §nota):
+//   interval > 0 — a repeating lattice; degrees are offsets within one period
+//     rooted at C4 (ANCHOR_NOTE), and the base-note field must stay 0.
+//   interval = 0 — "no interval system": the table lists EVERY note the
+//     notation can express, absolutely, offset from the base-note field
+//     (0 = default C4). This is how a hardware grid like ProTracker pitch is
+//     expressed — its base is 0x3000, two octaves below C4, because the
+//     offsets are unsigned. The "No interval" chip switches modes.
 
 import { t } from "../i18n.js";
 import { showModal } from "../widgets/modal.js";
@@ -23,7 +30,7 @@ import { setSectionOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { paintNoteCell } from "../glyphs.js";
-import { ANCHOR_NOTE, presetForNotation } from "../pitchtables.js";
+import { ANCHOR_NOTE, presetForNotation, resolveNoteSymbol } from "../pitchtables.js";
 import {
   NOTA_SLOTS, notationValueForSlot, buildNotaPayload, parseTaudnot, buildTaudnot,
   parseScl, sclToDef, centsToUnits, unitsToCents, autoAssignSyms, defToPreset,
@@ -59,15 +66,22 @@ const INTERVAL_OPTIONS = [
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
 function deepCopyDef(d) {
-  return { slot: d.slot, flags: d.flags ?? 0, interval: d.interval, name: d.name,
+  return { slot: d.slot, flags: d.flags ?? 0, interval: d.interval,
+           base: d.base ?? 0, name: d.name,
            table: d.table.slice(), syms: d.syms.slice() };
+}
+
+/** Note that degree 0 sits on — the declared base for an absolute def, C4
+ *  otherwise (mirrors presetBase on the preset side). */
+function defBase(def) {
+  return (def.interval === 0 && def.base) ? def.base : ANCHOR_NOTE;
 }
 
 /** A fresh definition seed: 12 equal divisions of the octave, nearest-named. */
 function seedDef(slot) {
   const table = [];
   for (let i = 0; i < 12; i++) table.push(Math.round((i * OCTAVE) / 12));
-  const def = { slot, flags: 0, interval: OCTAVE, name: "", table, syms: [] };
+  const def = { slot, flags: 0, interval: OCTAVE, base: 0, name: "", table, syms: [] };
   def.syms = autoAssignSyms(def, "nearest");
   return def;
 }
@@ -147,7 +161,7 @@ export function showNotationMaker(store) {
       ctx.fillRect(0, 0, cv.width, cv.height);
       ctx.font = canvasFont(13);
       ctx.textBaseline = "middle";
-      const note = Math.min(Math.max(ANCHOR_NOTE + def.table[idx], 0x20), 0xffff);
+      const note = Math.min(Math.max(defBase(def) + def.table[idx], 0x20), 0xffff);
       paintNoteCell(ctx, note, defToPreset(def), 2, 0, charW, rowH,
         { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent });
       return cv;
@@ -191,6 +205,7 @@ export function showNotationMaker(store) {
       nameLb.appendChild(nameIn);
       head.appendChild(nameLb);
       // interval
+      const absolute = def.interval === 0;
       const intLb = document.createElement("label");
       intLb.className = "nota-field";
       intLb.append(t("nota.interval") + " ");
@@ -198,7 +213,14 @@ export function showNotationMaker(store) {
       intIn.type = "number";
       intIn.step = "0.01";
       intIn.dataset.k = "interval";
-      intIn.value = unitsToCents(def.interval).toFixed(2);
+      if (absolute) {
+        // No period exists in absolute mode; the field only reads "—".
+        intIn.value = "";
+        intIn.placeholder = "—";
+        intIn.disabled = true;
+      } else {
+        intIn.value = unitsToCents(def.interval).toFixed(2);
+      }
       intIn.addEventListener("change", () => {
         const c = parseFloat(intIn.value);
         if (Number.isFinite(c) && c > 0) def.interval = centsToUnits(c);
@@ -210,15 +232,61 @@ export function showNotationMaker(store) {
       intHex.className = "dim";
       intHex.textContent = `($${def.interval.toString(16).toUpperCase()})`;
       intLb.appendChild(intHex);
-      for (const [label, units] of INTERVAL_OPTIONS) {
+      // The 0 chip is absolute mode. Switching away parks the base note in a
+      // dialog-local stash (the field must be 0 for an interval system) and
+      // switching back restores it, so exploring the chips never loses work.
+      for (const [label, units] of [...INTERVAL_OPTIONS, [t("nota.noInterval"), 0]]) {
         const b = document.createElement("button");
         b.textContent = label;
         b.dataset.k = "chip" + units;
+        if (units === 0) b.title = t("nota.noIntervalTitle");
         b.className = "nota-chip" + (def.interval === units ? " sel" : "");
-        b.addEventListener("click", () => { def.interval = units; renderAll(); });
+        b.addEventListener("click", () => {
+          if (units === 0) {
+            def.base = def._stashBase ?? def.base ?? 0;
+          } else if (def.interval === 0) {
+            def._stashBase = def.base;
+            def.base = 0;
+          }
+          def.interval = units;
+          renderAll();
+        });
         intLb.appendChild(b);
       }
       head.appendChild(intLb);
+
+      // base note — absolute mode only (interval systems root at C4 and the
+      // field must stay 0; validateDef enforces it)
+      if (absolute) {
+        const baseLb = document.createElement("label");
+        baseLb.className = "nota-field";
+        baseLb.title = t("nota.baseNoteTitle");
+        baseLb.append(t("nota.baseNote") + " ");
+        const baseIn = document.createElement("input");
+        baseIn.type = "text";
+        baseIn.size = 6;
+        baseIn.dataset.k = "base";
+        const eff = defBase(def);
+        baseIn.value = "$" + eff.toString(16).toUpperCase().padStart(4, "0");
+        baseIn.addEventListener("change", () => {
+          const v = parseInt(baseIn.value.replace(/^\$/, ""), 16);
+          if (Number.isFinite(v) && v >= 0 && v <= 0xffff) {
+            // C4 is what an empty field means — store the canonical 0 so an
+            // untouched def stays byte-identical on disk.
+            def.base = v === ANCHOR_NOTE ? 0 : v;
+          }
+          renderAll();
+        });
+        baseLb.appendChild(baseIn);
+        const baseAnn = document.createElement("span");
+        baseAnn.className = "dim";
+        const r = resolveNoteSymbol(eff, presetForNotation(120));
+        baseAnn.textContent = r
+          ? ` ${r.offGrid ? "≈ " : ""}${r.letter}${r.acc === "-" ? "" : r.acc}${r.octave}`
+          : "";
+        baseLb.appendChild(baseAnn);
+        head.appendChild(baseLb);
+      }
       // tool row
       const tools = document.createElement("div");
       tools.className = "nota-tools";
@@ -231,6 +299,30 @@ export function showNotationMaker(store) {
         tools.appendChild(b);
       };
       mkBtn(t("nota.equalDiv"), t("nota.equalDivTitle"), async () => {
+        if (absolute) {
+          // No interval to divide — the generalisation is N equal steps per
+          // OCTAVE listed across M octaves (count = N·M absolute degrees).
+          const spanNow = Math.max(1,
+            Math.round((def.table[def.table.length - 1] || OCTAVE) / OCTAVE));
+          const r = await showModal({
+            title: t("nota.equalDiv"),
+            fields: [
+              { name: "n", label: t("nota.equalDivPerOct"), type: "number",
+                value: "12", min: 1, max: 4096 },
+              { name: "m", label: t("nota.equalDivSpan"), type: "number",
+                value: String(Math.min(spanNow, 15)), min: 1, max: 15 },
+            ],
+          });
+          const n = parseInt(r?.n, 10), m = parseInt(r?.m, 10);
+          if (!Number.isFinite(n) || n < 1 || n > 4096) return;
+          if (!Number.isFinite(m) || m < 1 || m > 15) return;
+          const count = Math.min(n * m, 4096);
+          def.table = [];
+          for (let i = 0; i < count; i++) def.table.push(Math.round((i * OCTAVE) / n));
+          def.syms = autoAssignSyms(def, "nearest");
+          renderAll();
+          return;
+        }
         const r = await showModal({
           title: t("nota.equalDiv"),
           fields: [{ name: "n", label: t("nota.equalDivN"), type: "number",
@@ -376,7 +468,17 @@ export function showNotationMaker(store) {
       add.className = "nota-add";
       add.addEventListener("click", () => {
         const last = def.table[def.table.length - 1] ?? 0;
-        const units = Math.min(Math.round((last + def.interval) / 2), 0xffff);
+        let units;
+        if (absolute) {
+          // The interval-mode midpoint rule below would HALVE the last degree
+          // at interval 0 (non-ascending). Extend upward instead, repeating
+          // the last gap — a semitone when there's no gap to repeat yet.
+          const prev = def.table[def.table.length - 2];
+          units = Math.min(last + (prev != null ? last - prev : 0x155), 0xffff);
+        } else {
+          // Midpoint between the last degree and the period top.
+          units = Math.min(Math.round((last + def.interval) / 2), 0xffff);
+        }
         def.table.push(units);
         const named = autoAssignSyms({ table: [units], interval: def.interval }, "nearest");
         def.syms.push(named[0]);

@@ -659,8 +659,14 @@ export default {
   "nota.eightve": "8/1",
   "nota.nonave": "9/1",
   "nota.decave": "10/1",
+  "nota.noInterval": "No interval",
+  "nota.noIntervalTitle": "No interval system: the table lists every note the notation can express, absolutely — for grids that don't repeat at any interval (e.g. ProTracker pitch)",
+  "nota.baseNote": "Base note",
+  "nota.baseNoteTitle": "Absolute note value degree 0 sits on (hex; C4 = $5000). Degree offsets build upward from here — set it below C4 to reach low notes",
   "nota.equalDiv": "Equal divisions…",
   "nota.equalDivTitle": "Replace the degrees with N equal steps of the interval",
+  "nota.equalDivPerOct": "Steps per octave",
+  "nota.equalDivSpan": "Octaves spanned",
   "nota.equalDivN": "Number of steps",
   "nota.autoNearest": "Auto-name (nearest)",
   "nota.autoNearestTitle": "Name every degree by its nearest quarter-tone (12-TET letters + demi accidentals)",
@@ -685,6 +691,7 @@ export default {
   "nota.issue.ascending": "slot {slot}: degrees must ascend",
   "nota.issue.range": "slot {slot}: a value exceeds $FFFF",
   "nota.issue.interval": "slot {slot}: interval must exceed the last degree",
+  "nota.issue.base": "slot {slot}: a base note needs “No interval” mode (and must fit $FFFF)",
 
   // ── cue command popup (cues view) ──
   "cue.cmdTitle": "Cue {cue} — command word {word}",
