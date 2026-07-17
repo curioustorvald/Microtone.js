@@ -2,7 +2,13 @@
 // (eager-synced via ops), tuning display, project metadata. Reference:
 // taut.js VIEW_PROJECT. Pitch-table retune is an M8 item.
 
-import { setSongScalarOp, retuneOp, remapPatternsOp, cleanupBankOp } from "../../doc/ops.js";
+import {
+  setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
+} from "../../doc/ops.js";
+import { tuningRatioOf } from "../../engine/tables.js";
+import {
+  TUNING_REF_C4_HZ, TUNING_DEFAULT_BASE_NOTE, TUNING_DEFAULT_FREQ_HZ,
+} from "../../engine/constants.js";
 import {
   planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
   planIxmpCleanup,
@@ -13,6 +19,24 @@ import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
 import { t } from "../i18n.js";
+
+// Tuning references, transcribed from terranmon.txt:3316-3324 ("Known standard
+// tunings") with the tracker default at the head — that is what every converted
+// file declares, and it is NOT concert: it puts A4 at ~439.53 Hz.
+const TUNING_PRESETS = [
+  { key: "proj.tuneTracker", note: TUNING_DEFAULT_BASE_NOTE, freq: TUNING_DEFAULT_FREQ_HZ },
+  { key: "proj.tuneIso440", note: 0x5c00, freq: 440 },
+  { key: "proj.tuneFrench435", note: 0x5c00, freq: 435 },
+  { key: "proj.tunePhil452", note: 0x5c00, freq: 452 },
+  { key: "proj.tunePow2C256", note: 0x5000, freq: 256 },
+  { key: "proj.tuneAak262", note: 0x5000, freq: 262 },
+  { key: "proj.tuneHyangak311", note: 0x5000, freq: 311 },
+];
+
+// Base notes worth naming. The field is a full Uint16 note value (spec:
+// 1..65533), so a file may declare something else — that value is shown as a
+// hex entry rather than being silently rewritten.
+const BASE_NOTE_CHOICES = [[0x5000, "C4"], [0x5c00, "A4"], [0xa000, "C9"]];
 
 export class ProjectView {
   constructor(store, host, cb = {}) {
@@ -32,6 +56,83 @@ export class ProjectView {
   op(key, value) {
     this.store.undo.apply(setSongScalarOp(this.store.songIndex, key, value));
     this.refresh();
+  }
+
+  /**
+   * Tuning (item 77): the song's declared "note B sounds at F Hz", which the
+   * engine now applies to every note instead of ignoring it.
+   */
+  setTuning(baseNote, freq) {
+    this.store.undo.apply(setTuningOp(this.store.songIndex, baseNote, freq));
+    this.refresh();
+  }
+
+  buildTuning(song) {
+    const box = document.createElement("div");
+    const grid = document.createElement("div");
+    grid.className = "inst-grid";
+
+    const base = song.tuningBaseNote > 0 ? song.tuningBaseNote : TUNING_DEFAULT_BASE_NOTE;
+    const freq = song.tuningFreq > 0 ? song.tuningFreq : TUNING_DEFAULT_FREQ_HZ;
+
+    // The spec's own "Known standard tunings" list (terranmon.txt:3316-3324),
+    // plus the tracker default that every converted file declares.
+    const match = TUNING_PRESETS.findIndex(
+      (p) => p.note === base && Math.abs(p.freq - freq) < 1e-3);
+    const presetSel = sel(t("proj.tuningPreset"), match, [
+      ...TUNING_PRESETS.map((p, i) => [i, t(p.key)]),
+      [-1, t("proj.tuningCustom")],
+    ], (i) => {
+      if (i < 0) { this.refresh(); return; } // "Custom" is a readout, not a command
+      this.setTuning(TUNING_PRESETS[i].note, TUNING_PRESETS[i].freq);
+    });
+
+    const baseSel = sel(t("proj.tuningBaseNote"), BASE_NOTE_CHOICES
+      .some(([v]) => v === base) ? base : -1, [
+      ...BASE_NOTE_CHOICES,
+      ...(BASE_NOTE_CHOICES.some(([v]) => v === base)
+        ? [] : [[-1, `$${base.toString(16).toUpperCase()}`]]),
+    ], (v) => { if (v > 0) this.setTuning(v, freq); });
+
+    // Frequency is a Float32 in the file, so a fractional reference (261.6256)
+    // is legitimate — a plain number input, not the integer `num` helper.
+    const freqWrap = document.createElement("label");
+    freqWrap.className = "inst-field";
+    freqWrap.textContent = t("proj.tuningFreq");
+    const freqInput = document.createElement("input");
+    freqInput.type = "number";
+    freqInput.step = "any";
+    freqInput.min = "1";
+    freqInput.value = String(freq);
+    freqInput.addEventListener("change", () => {
+      const v = parseFloat(freqInput.value);
+      if (!(v > 0)) { freqInput.value = String(freq); return; }
+      this.setTuning(base, v);
+    });
+    freqWrap.appendChild(freqInput);
+
+    grid.append(presetSel, baseSel, freqWrap);
+    box.appendChild(grid);
+
+    // What the declaration actually SOUNDS like. The tracker default is ~1.87
+    // cents flat of concert, so this line is the difference between "cosmetic
+    // option" and a number the user can trust.
+    const ratio = tuningRatioOf(base, freq);
+    const a4 = ratio * TUNING_REF_C4_HZ * 2 ** 0.75;
+    const c = 1200 * Math.log2(ratio);
+    const ann = document.createElement("p");
+    ann.className = "dim";
+    ann.style.margin = "0.1rem 0 0.4rem";
+    ann.style.fontSize = "0.8rem";
+    ann.textContent = t("proj.tuningAnnotation", {
+      a4: a4.toFixed(2),
+      cents: (c >= 0 ? "+" : "") + c.toFixed(2),
+      rel: Math.abs(c) < 0.005
+        ? t("proj.tuningAtConcert")
+        : t(c < 0 ? "proj.tuningFlat" : "proj.tuningSharp"),
+    });
+    box.appendChild(ann);
+    return box;
   }
 
   refresh() {
@@ -143,14 +244,14 @@ export class ProjectView {
     );
     this.root.appendChild(grid);
 
+    this.root.appendChild(this.buildTuning(song));
+
     const tuning = document.createElement("p");
     tuning.className = "dim";
-    let tuningTxt = t("proj.tuningMain", {
-      base: song.tuningBaseNote.toString(16).toUpperCase(), freq: song.tuningFreq,
-    });
+    let tuningTxt = "";
     if (sm) tuningTxt += t("proj.tuningBeat", { pri: sm.beatPri, sec: sm.beatSec });
     tuningTxt += t("proj.tuningPatterns", { pat: song.patterns.length, cues: song.lastUsedCue() + 1 });
-    tuning.textContent = tuningTxt;
+    tuning.textContent = tuningTxt.replace(/^ · /, "");
     this.root.appendChild(tuning);
 
     const retuneP = document.createElement("p");

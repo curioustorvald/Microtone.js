@@ -620,6 +620,33 @@ export function setSongScalarOp(song, key, value, gestureId = null) {
   };
 }
 
+/**
+ * Song tuning pair (item 77) — "note `baseNote` sounds at `freq` Hz".
+ *
+ * Its own op rather than two setSongScalarOps because the two fields describe
+ * ONE quantity: picking a preset moves both, and coalescing can't merge them
+ * (it keys on coalesceKey, which differs per field), so scalars would leave a
+ * half-applied tuning one Ctrl+Z away. One op = one undo step.
+ */
+export function setTuningOp(song, baseNote, freq, gestureId = null) {
+  return {
+    type: "setTuning",
+    song, baseNote, freq, gestureId,
+    coalesceKey: `tuning:${song}`,
+    apply(doc) {
+      const s = doc.songs[song];
+      const prevNote = s.tuningBaseNote;
+      const prevFreq = s.tuningFreq;
+      s.tuningBaseNote = baseNote;
+      s.tuningFreq = freq;
+      doc.dirty = true;
+      return setTuningOp(song, prevNote, prevFreq, gestureId);
+    },
+    // Either key re-pushes the whole pair (sync.pushScalar), so one tag does.
+    dirty: () => [{ kind: "scalar", song, key: "tuningFreq" }],
+  };
+}
+
 /** Structural pattern remap (item 60 cleanup / renumber): swap in a new
  *  patterns array + rewritten cue words + reordered pNam, all in one invertible
  *  step (snapshot swap, like importBankOp). `newPNam` is a payload or null.

@@ -38,6 +38,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.UPLOAD_CUE: eng.uploadCue(m.idx, new Uint8Array(m.bytes)); return true;
     case CMD.SET_64CH: eng.set64ChannelMode(m.on); return true;
     case CMD.SET_BPM: eng.setBPM(m.ph, m.bpm); return true;
+    case CMD.SET_TUNING: eng.setTuning(m.ph, m.baseNote, m.freq); return true;
     case CMD.SET_TICK_RATE: eng.setTickRate(m.ph, m.rate); return true;
     case CMD.SET_SONG_GLOBAL_VOLUME: eng.setSongGlobalVolume(m.ph, m.volume); return true;
     case CMD.SET_SONG_MIXING_VOLUME: eng.setSongMixingVolume(m.ph, m.volume); return true;

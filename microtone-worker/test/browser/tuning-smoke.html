@@ -1,0 +1,107 @@
+<!doctype html><meta charset="utf-8"><title>tuning smoke (item 77)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1100px;height:640px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let pass = 0, fail = 0;
+const check = (name, ok) => { (ok ? pass++ : fail++); log((ok ? "PASS " : "FAIL ") + name); };
+window.addEventListener("error", (e) => log("ERROR: " + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const { store, projectView: pv } = M;
+  win.alert = (m) => log("alert: " + m); // a real alert() blocks the headless page
+
+  const { tuningRatioOf } = await win.eval('import("/src/engine/tables.js")');
+  const song = store.song;
+
+  // ── the corpus declares the tracker default ──
+  check("WHEN declares the tracker default C9 @ 8363",
+    song.tuningBaseNote === 0xa000 && song.tuningFreq === 8363);
+
+  pv.show();
+  await sleep(50);
+
+  // ── the fields are EDITABLE, not a dim readout (the point of item 77) ──
+  const selects = [...pv.root.querySelectorAll("select")];
+  const numbers = [...pv.root.querySelectorAll('input[type=number]')];
+  const presetSel = selects.find((s) =>
+    [...s.options].some((o) => o.textContent.includes("ISO standard")));
+  check("a Tuning preset dropdown exists with the spec's standard tunings", !!presetSel);
+  check("the spec's whole Known-standard-tunings list is offered", presetSel &&
+    ["440", "435", "452", "256", "262", "311"].every((hz) =>
+      [...presetSel.options].some((o) => o.textContent.includes(hz))));
+  const baseSel = selects.find((s) => [...s.options].some((o) => o.textContent === "C9"));
+  check("a base-note dropdown exists", !!baseSel);
+  check("the base-note dropdown reflects the song (C9)", baseSel && +baseSel.value === 0xa000);
+  const freqInput = numbers.find((i) => Math.abs(+i.value - 8363) < 1e-3);
+  check("a frequency input reflects the song (8363)", !!freqInput);
+
+  // ── the readout tells the truth about the default being flat ──
+  const annotation = [...pv.root.querySelectorAll("p")]
+    .map((p) => p.textContent).find((s) => s.includes("A4 ="));
+  check("the readout states the sounding A4 (439.53) and its flatness",
+    !!annotation && annotation.includes("439.53") && annotation.includes("flat"));
+
+  // ── picking a preset retunes the song, ONE undo step, and syncs ──
+  const depth0 = store.undo.undoStack.length;
+  const isoIdx = [...presetSel.options].findIndex((o) => o.textContent.includes("ISO standard"));
+  presetSel.value = String(isoIdx);
+  presetSel.dispatchEvent(new win.Event("change"));
+  await sleep(50);
+  check("picking A4 @ 440 writes both fields",
+    store.song.tuningBaseNote === 0x5c00 && store.song.tuningFreq === 440);
+  check("...as exactly ONE undo step", store.undo.undoStack.length === depth0 + 1);
+  check("...which is the exact-identity tuning",
+    Object.is(tuningRatioOf(store.song.tuningBaseNote, store.song.tuningFreq), 1.0));
+  const ann2 = [...pv.root.querySelectorAll("p")]
+    .map((p) => p.textContent).find((s) => s.includes("A4 ="));
+  check("the readout now says concert pitch",
+    !!ann2 && ann2.includes("440.00") && ann2.includes("concert"));
+
+  // ── a hand-typed frequency: the user's own motivating example ──
+  const freq2 = [...pv.root.querySelectorAll('input[type=number]')]
+    .find((i) => Math.abs(+i.value - 440) < 1e-3);
+  freq2.value = "412";
+  freq2.dispatchEvent(new win.Event("change"));
+  await sleep(50);
+  check("typing 412 retunes to A4 @ 412", store.song.tuningFreq === 412);
+  const ann3 = [...pv.root.querySelectorAll("p")]
+    .map((p) => p.textContent).find((s) => s.includes("A4 ="));
+  check("the readout reports 412.00 Hz, ~113.83 cents flat",
+    !!ann3 && ann3.includes("412.00") && ann3.includes("-113.83"));
+
+  // ── undo/redo ──
+  store.undo.undo();
+  await sleep(20);
+  check("undo restores A4 @ 440", store.song.tuningFreq === 440);
+  store.undo.undo();
+  await sleep(20);
+  check("undo again restores the tracker default",
+    store.song.tuningBaseNote === 0xa000 && store.song.tuningFreq === 8363);
+  store.undo.redo();
+  await sleep(20);
+  check("redo re-applies A4 @ 440",
+    store.song.tuningBaseNote === 0x5c00 && store.song.tuningFreq === 440);
+
+  // ── it survives a save/load round trip ──
+  const bytes = store.doc.toBytes();
+  const { parseTaud } = await win.eval('import("/src/format/taud-parse.js")');
+  const re = parseTaud(bytes);
+  check("the tuning round-trips through toBytes → parseTaud",
+    re.songs[store.songIndex].tuningBaseNote === 0x5c00 &&
+    Math.abs(re.songs[store.songIndex].tuningFreq - 440) < 1e-3);
+
+  log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);
+ } catch (e) { log("EXCEPTION: " + (e && e.stack || e)); }
+})();
+</script>

@@ -32,6 +32,25 @@ const AMIGA_BASE_PERIOD = 428.0;
 // Reference frequency for linear-freq tone mode (toneMode == 2): 12-TET A4 = 440 Hz.
 const LINEAR_FREQ_C4_HZ = 261.6255653005986;
 
+// ── Song tuning (terranmon.txt:3297-3324, §"Note Tuning"; web item 77) ──
+// The song table declares "note TUNING base note sounds at TUNING freq Hz";
+// tuningRatioOf() (tables.js) folds that pair into the playback-rate multiplier.
+//
+// Zero point: 12-TET concert C4, i.e. the same A4 = 440 the linear-freq mode
+// references — numerically LINEAR_FREQ_C4_HZ, kept as its own name because it
+// answers a different question (that one is the toneMode==2 slide reference,
+// this one is where "no retune" sits).
+const TUNING_REF_C4_HZ = LINEAR_FREQ_C4_HZ;
+
+// Field defaults for a zero/blank song table — spec: "If zero, assume the
+// tracker default value". C9 @ 8363 Hz is the Amiga/tracker convention, which
+// is NOT concert pitch: it puts A4 at 439.53 Hz, ~1.87 cents flat of 440. The
+// spec quotes 439.548 Hz for the reference tuning from the exact NTSC clock
+// ratio (3579545/428 = 8363.42 Hz); the format stores the rounded 8363.0, so
+// the honest reading of a default song table lands 0.09 cents below that quote.
+const TUNING_DEFAULT_BASE_NOTE = 0xa000; // C9
+const TUNING_DEFAULT_FREQ_HZ = 8363.0;
+
 // Anti-click ramp-out on sample end/cut: 8 ms at 32 kHz.
 const RAMP_OUT_SAMPLES = 256;
 
@@ -353,6 +372,35 @@ function noteValToFreqHz(noteVal) {
 
 function freqHzToNoteVal(freq) {
   return Math.round(MIDDLE_C + 4096.0 * Math.log2(freq / LINEAR_FREQ_C4_HZ));
+}
+
+/**
+ * Song tuning pair → playback-rate multiplier (item 77).
+ *
+ * Step 1 of terranmon.txt §"Note Tuning" folds the declared "note `baseNote`
+ * sounds at `freq` Hz" down to a C4 frequency (the spec's own worked example:
+ * A4/440 → C4/261.6255653). The engine's zero point is concert C4, so the
+ * multiplier is just how far the song's C4 sits from it. Every note the
+ * playhead sounds is scaled by this, so the song retunes as a whole.
+ *
+ * Deliberately a pure ratio with NO log/exp round trip. `2 **` with a rational
+ * exponent is the one transcendental the engine already trusts to agree with
+ * the JVM bit-for-bit (computePlaybackRate leans on it), whereas Math.log2 has
+ * no such guarantee — routing the tuning through a log would put the whole
+ * bit-exact gate at the mercy of a last-ulp difference between platforms.
+ *
+ * A concert declaration returns EXACTLY 1.0: 440 is f32-representable and
+ * `440 / 2**0.75 === TUNING_REF_C4_HZ` bit-for-bit, and `x * 1.0 === x`, so
+ * A4@440 songs render without a single bit disturbed. The tracker default
+ * (C9 @ 8363) returns 0.99892… — ~1.87 cents flat, which is what an Amiga
+ * actually does and what the spec means by "tracker default tuning at A4 is
+ * 439.548 Hz".
+ */
+function tuningRatioOf(baseNote, freq) {
+  // Spec: either field reading zero means "assume the tracker default".
+  const b = baseNote > 0 ? baseNote : TUNING_DEFAULT_BASE_NOTE;
+  const f = freq > 0 ? freq : TUNING_DEFAULT_FREQ_HZ; // also catches NaN
+  return (f / 2 ** ((b - MIDDLE_C) / 4096.0)) / TUNING_REF_C4_HZ;
 }
 
 /** One tick of Amiga-mode pitch slide; persists period state on the voice. */
@@ -1384,6 +1432,12 @@ class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
+    // the playhead by setTuning, like toneMode/interpolationMode are from the
+    // global-behaviour flags, so the per-sample path reads it off `ts` alone.
+    // 1.0 = concert; the tracker default (C9 @ 8363) is 0.99892 (~1.87c flat).
+    this.tuningRatio = 1.0;
+
     // Post-mix Amiga filter state (stereo bus).
     this.amigaLPStateL = 0.0;
     this.amigaLPStateR = 0.0;
@@ -1439,6 +1493,13 @@ class Playhead {
     this.patBank2 = 0;
     this.globalVolume = 0x80;
     this.mixingVolume = 0x80;
+    // Declared song tuning (item 77), kept for readback; the hot path uses the
+    // multiplier setTuning derives onto trackerState. Untuned until a song
+    // load pushes the file's pair — the engine has no song table of its own,
+    // so the spec's "if zero, assume the tracker default" rule lives in
+    // tuningRatioOf, on the values the host hands over.
+    this.tuningBaseNote = 0;
+    this.tuningFreq = 0.0;
 
     this.trackerState = new TrackerState();
     this.jamActive = false;
@@ -1485,8 +1546,11 @@ class Playhead {
     this.tickRate = 6;
     this.globalVolume = 0x80;
     this.mixingVolume = 0x80;
+    this.tuningBaseNote = 0;
+    this.tuningFreq = 0.0;
     const ts = this.trackerState;
     if (ts === null) return;
+    ts.tuningRatio = 1.0;
     ts.cuePos = 0; ts.rowIndex = 0; ts.tickInRow = 0;
     ts.samplesIntoTick = 0.0; ts.firstRow = true;
     ts.pendingOrderJump = -1; ts.pendingRowJump = -1;
@@ -1588,10 +1652,17 @@ class Playhead {
 
 
 
-/** Active-sample-aware playback rate (patch-aware via the voice snapshot). */
-function computePlaybackRate(voice, noteVal) {
+/**
+ * Active-sample-aware playback rate (patch-aware via the voice snapshot).
+ *
+ * `tuningRatio` is the song's tuning (item 77, ts.tuningRatio) — a whole-song
+ * frequency scale applied last. Concert-tuned songs pass exactly 1.0, which is
+ * an identity multiply, so they render bit-for-bit as if tuning did not exist.
+ */
+function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
   return (voice.activeSamplingRate / SAMPLING_RATE) *
-         2 ** ((noteVal - MIDDLE_C + voice.activeSampleDetune) / 4096.0);
+         2 ** ((noteVal - MIDDLE_C + voice.activeSampleDetune) / 4096.0) *
+         tuningRatio;
 }
 
 /**
@@ -2324,7 +2395,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   releaseLayerChildren(eng, ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {
-    triggerNote(eng, voice, noteVal, instId, rowVolOverride);
+    triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
     voice.isLayerChild = false;
@@ -2345,7 +2416,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     return;
   }
   const l0 = layers[0];
-  triggerNote(eng, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
+  triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
   voice.isLayerChild = false;
@@ -2353,7 +2424,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   for (let k = 1; k < layers.length; k++) {
     const lk = layers[k];
     const child = new Voice();
-    triggerNote(eng, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
+    triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.layerRelDetune = lk.detune - l0.detune;
@@ -2366,7 +2437,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   capBackgroundVoices(ts);
 }
 
-function triggerNote(eng, voice, noteVal, instId, volOverride) {
+function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
@@ -2449,7 +2520,7 @@ function triggerNote(eng, voice, noteVal, instId, volOverride) {
   voice.renderPitch = noteVal; // display tap: seed before the first tick runs
   voice.amigaPeriod = -1.0;
   voice.linearFreq = -1.0;
-  voice.playbackRate = computePlaybackRate(voice, noteVal);
+  voice.playbackRate = computePlaybackRate(voice, noteVal, ts.tuningRatio);
   // noteVolume seed (IT `chan->volume = psmp->volume` rule; channelVolume survives).
   if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, 0x3f);
   else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch);
@@ -2823,7 +2894,7 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.basePitch = voice.noteVal;
         voice.amigaPeriod = -1.0;
         voice.linearFreq = -1.0;
-        voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+        voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       } else {
         voice.slideMode = 1; voice.slideArg = -arg;
         voice.amigaPeriod = -1.0;
@@ -2844,7 +2915,7 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.basePitch = voice.noteVal;
         voice.amigaPeriod = -1.0;
         voice.linearFreq = -1.0;
-        voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+        voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       } else {
         voice.slideMode = 2; voice.slideArg = arg;
         voice.amigaPeriod = -1.0;
@@ -3052,7 +3123,7 @@ function applySEffect(eng, ts, voice, vi, arg) {
       voice.basePitch = voice.noteVal;
       voice.amigaPeriod = -1.0;
       voice.linearFreq = -1.0;
-      voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+      voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       break;
     case 0x3: voice.vibratoWave = x & 3; voice.vibratoRetrig = (x & 4) === 0; break;
     case 0x4: voice.tremoloWave = x & 3; voice.tremoloRetrig = (x & 4) === 0; break;
@@ -3702,7 +3773,7 @@ function applyTrackerTick(eng, ts, playhead) {
       : 0;
 
     const finalPitch = clamp(pitchToMixer + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
-    voice.playbackRate = computePlaybackRate(voice, finalPitch);
+    voice.playbackRate = computePlaybackRate(voice, finalPitch, ts.tuningRatio);
     voice.renderPitch = finalPitch; // display tap (Timeline header per-tick pitch)
 
     // Filter envelope: currentCutoff = baseCut × envFilterValue (0.5 = unity at IFC).
@@ -3823,7 +3894,7 @@ function applyTrackerTick(eng, ts, playhead) {
       ? Math.trunc(((bg.envPitchValue - 0.5) * 2.0 * 16.0 * 4096.0) / 12.0)
       : 0;
     const finalPitch = clamp(bg.noteVal + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
-    bg.playbackRate = computePlaybackRate(bg, finalPitch);
+    bg.playbackRate = computePlaybackRate(bg, finalPitch, ts.tuningRatio);
     bg.renderPitch = finalPitch; // display tap (per-tick pitch)
     // Filter envelope — MUST branch on SF mode too (cents vs IT byte range).
     if (bg.hasFilterEnv && bg.filterEnvOn) {
@@ -4115,6 +4186,7 @@ function generateTrackerAudio(eng, playhead, out) {
 
 
 
+
 // Scratch instrument slot for the raw-sample preview (jamSample). It sits just
 // past the 1024 addressable bank slots so an audition never borrows a real one;
 // every `instruments[voice.instrumentId]` lookup indexes it directly (no & mask).
@@ -4275,6 +4347,20 @@ class TaudEngine {
   setTickRate(ph, rate) { this.playheads[ph].tickRate = rate & 255; }
   getTickRate(ph) { return this.playheads[ph].tickRate; }
 
+  /**
+   * Song tuning (item 77): `baseNote` sounds at `freq` Hz. Either reading zero
+   * means the tracker default (spec) — tuningRatioOf applies that rule. Takes
+   * effect on the next tick for notes already sounding, so dialling a tuning
+   * while the song plays bends it in place rather than waiting for retriggers.
+   */
+  setTuning(ph, baseNote, freq) {
+    const p = this.playheads[ph];
+    p.tuningBaseNote = baseNote & 0xffff;
+    p.tuningFreq = freq;
+    p.trackerState.tuningRatio = tuningRatioOf(p.tuningBaseNote, p.tuningFreq);
+  }
+  getTuningRatio(ph) { return this.playheads[ph].trackerState.tuningRatio; }
+
   setCuePosition(ph, pos) {
     const p = this.playheads[ph];
     p.position = pos & (NUM_CUES - 1);
@@ -4392,7 +4478,7 @@ class TaudEngine {
     inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
     inst.sampleDetune = (spec.detune | 0) & 0xffff;
     inst.extraPatches = null;
-    triggerNote(this, ts.voices[v], note, AUDITION_SLOT, -1);
+    triggerNote(this, ts, ts.voices[v], note, AUDITION_SLOT, -1);
     p.jamActive = true;
   }
 
@@ -4558,6 +4644,7 @@ const CMD = Object.freeze({
   SET_64CH: "set64ChannelMode",                    // {on}
   SET_BPM: "setBPM",                               // {ph, bpm}
   SET_TICK_RATE: "setTickRate",                    // {ph, rate}
+  SET_TUNING: "setTuning",                         // {ph, baseNote, freq} — song tuning (item 77)
   SET_SONG_GLOBAL_VOLUME: "setSongGlobalVolume",   // {ph, volume}
   SET_SONG_MIXING_VOLUME: "setSongMixingVolume",   // {ph, volume}
   SET_MASTER_VOLUME: "setMasterVolume",            // {ph, volume}
@@ -4696,6 +4783,7 @@ function applyAudioCommand(eng, m) {
     case CMD.UPLOAD_CUE: eng.uploadCue(m.idx, new Uint8Array(m.bytes)); return true;
     case CMD.SET_64CH: eng.set64ChannelMode(m.on); return true;
     case CMD.SET_BPM: eng.setBPM(m.ph, m.bpm); return true;
+    case CMD.SET_TUNING: eng.setTuning(m.ph, m.baseNote, m.freq); return true;
     case CMD.SET_TICK_RATE: eng.setTickRate(m.ph, m.rate); return true;
     case CMD.SET_SONG_GLOBAL_VOLUME: eng.setSongGlobalVolume(m.ph, m.volume); return true;
     case CMD.SET_SONG_MIXING_VOLUME: eng.setSongMixingVolume(m.ph, m.volume); return true;

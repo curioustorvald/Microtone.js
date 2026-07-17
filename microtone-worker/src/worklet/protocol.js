@@ -16,6 +16,7 @@ export const CMD = Object.freeze({
   SET_64CH: "set64ChannelMode",                    // {on}
   SET_BPM: "setBPM",                               // {ph, bpm}
   SET_TICK_RATE: "setTickRate",                    // {ph, rate}
+  SET_TUNING: "setTuning",                         // {ph, baseNote, freq} — song tuning (item 77)
   SET_SONG_GLOBAL_VOLUME: "setSongGlobalVolume",   // {ph, volume}
   SET_SONG_MIXING_VOLUME: "setSongMixingVolume",   // {ph, volume}
   SET_MASTER_VOLUME: "setMasterVolume",            // {ph, volume}

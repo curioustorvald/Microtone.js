@@ -27,6 +27,25 @@ export const AMIGA_BASE_PERIOD = 428.0;
 // Reference frequency for linear-freq tone mode (toneMode == 2): 12-TET A4 = 440 Hz.
 export const LINEAR_FREQ_C4_HZ = 261.6255653005986;
 
+// ── Song tuning (terranmon.txt:3297-3324, §"Note Tuning"; web item 77) ──
+// The song table declares "note TUNING base note sounds at TUNING freq Hz";
+// tuningRatioOf() (tables.js) folds that pair into the playback-rate multiplier.
+//
+// Zero point: 12-TET concert C4, i.e. the same A4 = 440 the linear-freq mode
+// references — numerically LINEAR_FREQ_C4_HZ, kept as its own name because it
+// answers a different question (that one is the toneMode==2 slide reference,
+// this one is where "no retune" sits).
+export const TUNING_REF_C4_HZ = LINEAR_FREQ_C4_HZ;
+
+// Field defaults for a zero/blank song table — spec: "If zero, assume the
+// tracker default value". C9 @ 8363 Hz is the Amiga/tracker convention, which
+// is NOT concert pitch: it puts A4 at 439.53 Hz, ~1.87 cents flat of 440. The
+// spec quotes 439.548 Hz for the reference tuning from the exact NTSC clock
+// ratio (3579545/428 = 8363.42 Hz); the format stores the rounded 8363.0, so
+// the honest reading of a default song table lands 0.09 cents below that quote.
+export const TUNING_DEFAULT_BASE_NOTE = 0xa000; // C9
+export const TUNING_DEFAULT_FREQ_HZ = 8363.0;
+
 // Anti-click ramp-out on sample end/cut: 8 ms at 32 kHz.
 export const RAMP_OUT_SAMPLES = 256;
 

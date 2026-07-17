@@ -154,6 +154,12 @@ export class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
+    // the playhead by setTuning, like toneMode/interpolationMode are from the
+    // global-behaviour flags, so the per-sample path reads it off `ts` alone.
+    // 1.0 = concert; the tracker default (C9 @ 8363) is 0.99892 (~1.87c flat).
+    this.tuningRatio = 1.0;
+
     // Post-mix Amiga filter state (stereo bus).
     this.amigaLPStateL = 0.0;
     this.amigaLPStateR = 0.0;
@@ -209,6 +215,13 @@ export class Playhead {
     this.patBank2 = 0;
     this.globalVolume = 0x80;
     this.mixingVolume = 0x80;
+    // Declared song tuning (item 77), kept for readback; the hot path uses the
+    // multiplier setTuning derives onto trackerState. Untuned until a song
+    // load pushes the file's pair — the engine has no song table of its own,
+    // so the spec's "if zero, assume the tracker default" rule lives in
+    // tuningRatioOf, on the values the host hands over.
+    this.tuningBaseNote = 0;
+    this.tuningFreq = 0.0;
 
     this.trackerState = new TrackerState();
     this.jamActive = false;
@@ -255,8 +268,11 @@ export class Playhead {
     this.tickRate = 6;
     this.globalVolume = 0x80;
     this.mixingVolume = 0x80;
+    this.tuningBaseNote = 0;
+    this.tuningFreq = 0.0;
     const ts = this.trackerState;
     if (ts === null) return;
+    ts.tuningRatio = 1.0;
     ts.cuePos = 0; ts.rowIndex = 0; ts.tickInRow = 0;
     ts.samplesIntoTick = 0.0; ts.firstRow = true;
     ts.pendingOrderJump = -1; ts.pendingRowJump = -1;

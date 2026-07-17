@@ -8,3 +8,4 @@ microtone-worker/vendor/converters/__pycache__
 *.sf2
 *.taud.sf2
 microtone-worker/favicon/
+microtone-worker/index_kaputt.html

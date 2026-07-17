@@ -13,10 +13,17 @@ import {
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
 
-/** Active-sample-aware playback rate (patch-aware via the voice snapshot). */
-export function computePlaybackRate(voice, noteVal) {
+/**
+ * Active-sample-aware playback rate (patch-aware via the voice snapshot).
+ *
+ * `tuningRatio` is the song's tuning (item 77, ts.tuningRatio) — a whole-song
+ * frequency scale applied last. Concert-tuned songs pass exactly 1.0, which is
+ * an identity multiply, so they render bit-for-bit as if tuning did not exist.
+ */
+export function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
   return (voice.activeSamplingRate / SAMPLING_RATE) *
-         2 ** ((noteVal - MIDDLE_C + voice.activeSampleDetune) / 4096.0);
+         2 ** ((noteVal - MIDDLE_C + voice.activeSampleDetune) / 4096.0) *
+         tuningRatio;
 }
 
 /**

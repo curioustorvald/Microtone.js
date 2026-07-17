@@ -236,7 +236,7 @@ export function applyTrackerTick(eng, ts, playhead) {
       : 0;
 
     const finalPitch = clamp(pitchToMixer + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
-    voice.playbackRate = computePlaybackRate(voice, finalPitch);
+    voice.playbackRate = computePlaybackRate(voice, finalPitch, ts.tuningRatio);
     voice.renderPitch = finalPitch; // display tap (Timeline header per-tick pitch)
 
     // Filter envelope: currentCutoff = baseCut × envFilterValue (0.5 = unity at IFC).
@@ -357,7 +357,7 @@ export function applyTrackerTick(eng, ts, playhead) {
       ? Math.trunc(((bg.envPitchValue - 0.5) * 2.0 * 16.0 * 4096.0) / 12.0)
       : 0;
     const finalPitch = clamp(bg.noteVal + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
-    bg.playbackRate = computePlaybackRate(bg, finalPitch);
+    bg.playbackRate = computePlaybackRate(bg, finalPitch, ts.tuningRatio);
     bg.renderPitch = finalPitch; // display tap (per-tick pitch)
     // Filter envelope — MUST branch on SF mode too (cents vs IT byte range).
     if (bg.hasFilterEnv && bg.filterEnvOn) {

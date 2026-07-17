@@ -20,6 +20,7 @@ import {
   runConverter, buildArgv,
 } from "../../src/convert/convert-core.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
+import { tuningRatioOf } from "../../src/engine/tables.js";
 import { presetForNotation, surveyTuning } from "../../src/ui/pitchtables.js";
 import { Document, combineTpif } from "../../src/doc/document.js";
 import { planImport } from "../../src/doc/bankmerge.js";
@@ -292,6 +293,16 @@ test("midi2taud with GeneralUser-GS → parseable document (skips without the SF
     // E1M1 layers presets → expect at least one Metainstrument, like the
     // corpus M_E1M1.taud built by the same converter natively
     assert.ok(used.some((s) => doc.instruments[s].isMeta));
+
+    // Item 77: the converter pins MIDI key 60 to noteVal 0x5000, and key 60 is
+    // concert middle C — so it must DECLARE concert. Declaring the tracker
+    // default (C9 @ 8363) would now drag the whole song 1.87 cents flat, since
+    // the engine no longer ignores these fields. A4 @ 440 is also the
+    // exact-identity pair, so this render is unchanged by tuning existing.
+    assert.equal(doc.songs[0].tuningBaseNote, 0x5c00, "must declare A4");
+    assert.equal(doc.songs[0].tuningFreq, 440, "must declare 440 Hz");
+    assert.ok(Object.is(tuningRatioOf(doc.songs[0].tuningBaseNote, doc.songs[0].tuningFreq), 1.0),
+      "a concert declaration must be the exact-identity tuning");
   });
 
 test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; skips without the SF2)",

@@ -14,7 +14,11 @@ import { t } from "../i18n.js";
 import { pitchTablePresets } from "../pitchtables.js";
 
 // Base-note tuning references (note value in the 0x1000-per-octave space, C4 =
-// 0x5000). Written to the song's tuning fields; display-only in this engine.
+// 0x5000). Written to the song's tuning fields, which the engine APPLIES (item
+// 77): both references below are concert pitch, so a fresh project starts
+// unretuned. A4 @ 440 is the exact-identity pair; C4 @ 261.6256 is concert
+// rounded to 7 digits, 0.0003 cents off — inaudible, and the Project view can
+// dial in any tuning afterwards.
 const BASE_NOTES = [
   { label: "C4", note: 0x5000, freq: 261.6256 },
   { label: "A4", note: 0x5c00, freq: 440.0 },

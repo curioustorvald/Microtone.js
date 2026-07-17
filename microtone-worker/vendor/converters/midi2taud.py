@@ -3302,8 +3302,18 @@ def make_song_entry(section: dict, song_off: int, args) -> bytes:
         num_patterns=section['n_unique'],
         bpm_stored=section['bpm0'] - 25,   # 9-bit; encode_song_entry packs bit 8 into byte-8 bit 7
         tick_rate=section['speed'],
-        base_note=0xA000,
-        base_freq=8363.0,
+        # Declare CONCERT pitch, not the tracker default. This converter pins
+        # MIDI key 60 to noteVal 0x5000 (see _sample_from_zone: the rootkey
+        # shift goes into the detune), and key 60 is concert middle C — so the
+        # rendered song really is at A4 = 440. The tracker default (C9 @ 8363)
+        # would declare A4 = 439.53 Hz, ~1.87 cents flat, which was harmless
+        # only while players ignored the tuning fields. They no longer do, so a
+        # mis-declaration is now audible: it would drag the whole song flat.
+        # A4 @ 440 is also the exact-identity pair (440 is representable and
+        # 440/2**0.75 is the reference C4 bit-for-bit), so this renders
+        # byte-identically to the pre-tuning output.
+        base_note=0x5C00,
+        base_freq=440.0,
         flags_byte=0x00,                          # linear pitch mode
         pat_bin_comp_size=len(section['pat_comp']),
         cue_sheet_comp_size=len(section['cue_comp']),

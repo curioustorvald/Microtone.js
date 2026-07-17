@@ -208,6 +208,7 @@ export class AudioSystem {
 
     this.setBPM(0, song.bpm);
     this.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
+    this.setTuning(0, song.tuningBaseNote, song.tuningFreq);
     this.setTrackerMixerFlags(0, song.globalFlags);
     this.setSongGlobalVolume(0, song.globalVolume);
     this.setSongMixingVolume(0, song.mixingVolume);
@@ -227,6 +228,7 @@ export class AudioSystem {
   setTrackerRow(ph, row) { this._post({ t: CMD.SET_TRACKER_ROW, ph, row }); }
   setBPM(ph, bpm) { this._post({ t: CMD.SET_BPM, ph, bpm }); }
   setTickRate(ph, rate) { this._post({ t: CMD.SET_TICK_RATE, ph, rate }); }
+  setTuning(ph, baseNote, freq) { this._post({ t: CMD.SET_TUNING, ph, baseNote, freq }); }
   setSongGlobalVolume(ph, volume) { this._post({ t: CMD.SET_SONG_GLOBAL_VOLUME, ph, volume }); }
   setSongMixingVolume(ph, volume) { this._post({ t: CMD.SET_SONG_MIXING_VOLUME, ph, volume }); }
   setMasterVolume(ph, volume) { this._post({ t: CMD.SET_MASTER_VOLUME, ph, volume }); }

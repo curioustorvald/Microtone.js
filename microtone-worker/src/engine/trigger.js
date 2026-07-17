@@ -180,7 +180,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   releaseLayerChildren(eng, ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {
-    triggerNote(eng, voice, noteVal, instId, rowVolOverride);
+    triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
     voice.isLayerChild = false;
@@ -201,7 +201,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     return;
   }
   const l0 = layers[0];
-  triggerNote(eng, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
+  triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
   voice.isLayerChild = false;
@@ -209,7 +209,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   for (let k = 1; k < layers.length; k++) {
     const lk = layers[k];
     const child = new Voice();
-    triggerNote(eng, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
+    triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.layerRelDetune = lk.detune - l0.detune;
@@ -222,7 +222,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   capBackgroundVoices(ts);
 }
 
-export function triggerNote(eng, voice, noteVal, instId, volOverride) {
+export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
@@ -305,7 +305,7 @@ export function triggerNote(eng, voice, noteVal, instId, volOverride) {
   voice.renderPitch = noteVal; // display tap: seed before the first tick runs
   voice.amigaPeriod = -1.0;
   voice.linearFreq = -1.0;
-  voice.playbackRate = computePlaybackRate(voice, noteVal);
+  voice.playbackRate = computePlaybackRate(voice, noteVal, ts.tuningRatio);
   // noteVolume seed (IT `chan->volume = psmp->volume` rule; channelVolume survives).
   if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, 0x3f);
   else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch);

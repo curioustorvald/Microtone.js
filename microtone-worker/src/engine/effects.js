@@ -100,7 +100,7 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.basePitch = voice.noteVal;
         voice.amigaPeriod = -1.0;
         voice.linearFreq = -1.0;
-        voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+        voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       } else {
         voice.slideMode = 1; voice.slideArg = -arg;
         voice.amigaPeriod = -1.0;
@@ -121,7 +121,7 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.basePitch = voice.noteVal;
         voice.amigaPeriod = -1.0;
         voice.linearFreq = -1.0;
-        voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+        voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       } else {
         voice.slideMode = 2; voice.slideArg = arg;
         voice.amigaPeriod = -1.0;
@@ -329,7 +329,7 @@ export function applySEffect(eng, ts, voice, vi, arg) {
       voice.basePitch = voice.noteVal;
       voice.amigaPeriod = -1.0;
       voice.linearFreq = -1.0;
-      voice.playbackRate = computePlaybackRate(voice, voice.noteVal);
+      voice.playbackRate = computePlaybackRate(voice, voice.noteVal, ts.tuningRatio);
       break;
     case 0x3: voice.vibratoWave = x & 3; voice.vibratoRetrig = (x & 4) === 0; break;
     case 0x4: voice.tremoloWave = x & 3; voice.tremoloRetrig = (x & 4) === 0; break;

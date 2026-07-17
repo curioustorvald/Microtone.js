@@ -364,9 +364,43 @@ Per-song properties, applied live to playback:
 - **Tone-slide mode** — Linear (4096-TET), Amiga period, or Linear frequency.
 - **Interpolation** — Fast sinc, None (ZOH), Amiga 500, Amiga 1200, SNES gaussian, NES DPCM.
 - **Notation** — the display pitch table. Changing it only relabels notes; use **Retune…** to actually move them (see [Microtonality in depth](#microtonality-in-depth)).
+- **Tuning** — the concert pitch the whole song is played at (see below).
 
 Below, the songs table lets you rename, delete and add songs within the
 project; the top-bar selector switches between them.
+
+### Tuning
+
+Tuning declares **what frequency one named note actually sounds at**, and the
+engine plays the whole song at that reference. It is a property of the song, not
+of the notes: it slides every voice together, leaving the written music and the
+notation untouched. Two controls plus a preset list express it:
+
+- **Tuning** — the standard tunings: A4 @ 440 Hz (ISO), A4 @ 435 Hz (French, 1859), A4 @ 452 Hz (Old Philharmonic), C4 @ 256 Hz (power of two), C4 @ 262 Hz (Chinese *a-ak*), C4 @ 311 Hz (Korean *hyang-ak*), and the tracker default.
+- **Base note** and **Frequency (Hz)** — pick any reference yourself. The pair is redundant, so A4 @ 440 and C4 @ 261.6256 describe the same tuning; use whichever you think in.
+
+The line underneath always reports what the song *sounds* like — the resulting
+A4 in Hz, and how far that is from concert pitch in cents.
+
+**The tracker default is not concert pitch.** A file converted from a tracker
+module (`.mod`, `.s3m`, `.it`, `.xm`) declares the Amiga convention — C9 @
+8363 Hz — which puts A4 at about **439.53 Hz, roughly 1.87 cents flat of 440**.
+That is not an error: it is what the hardware those songs were written for
+actually did, so the module plays at its native pitch. MIDI imports declare
+A4 @ 440 and play at concert pitch.
+
+Tuning and **Retune…** solve different problems, and it is worth keeping them
+apart:
+
+| | Tuning | Retune… |
+|---|---|---|
+| Moves | the whole song, as one | each note, individually |
+| Changes the written notes | no | yes |
+| Use it for | "this piece is at A = 412" | "re-express this piece in another pitch table" |
+
+*Note:* tuning retunes playback; it does not re-tune the samples themselves. If
+a sample was recorded off-pitch, correct it with the instrument's detune rather
+than by bending the whole song around it.
 
 ### Housekeeping
 

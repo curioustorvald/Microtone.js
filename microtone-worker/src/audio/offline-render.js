@@ -29,6 +29,7 @@ export function loadIntoEngine(eng, doc, songIndex = 0) {
   eng.setTrackerMode(0);
   eng.setBPM(0, song.bpm);
   eng.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
+  eng.setTuning(0, song.tuningBaseNote, song.tuningFreq);
   eng.setTrackerMixerFlags(0, song.globalFlags);
   eng.setSongGlobalVolume(0, song.globalVolume);
   eng.setSongMixingVolume(0, song.mixingVolume);

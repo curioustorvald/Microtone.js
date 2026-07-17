@@ -4,6 +4,7 @@
 
 import {
   SAMPLING_RATE, MIDDLE_C, AMIGA_BASE_PERIOD, LINEAR_FREQ_C4_HZ,
+  TUNING_REF_C4_HZ, TUNING_DEFAULT_BASE_NOTE, TUNING_DEFAULT_FREQ_HZ,
   SINC_WIDTH, SINC_PRECISION,
 } from "./constants.js";
 import { random } from "./rng.js";
@@ -183,6 +184,35 @@ export function noteValToFreqHz(noteVal) {
 
 export function freqHzToNoteVal(freq) {
   return Math.round(MIDDLE_C + 4096.0 * Math.log2(freq / LINEAR_FREQ_C4_HZ));
+}
+
+/**
+ * Song tuning pair → playback-rate multiplier (item 77).
+ *
+ * Step 1 of terranmon.txt §"Note Tuning" folds the declared "note `baseNote`
+ * sounds at `freq` Hz" down to a C4 frequency (the spec's own worked example:
+ * A4/440 → C4/261.6255653). The engine's zero point is concert C4, so the
+ * multiplier is just how far the song's C4 sits from it. Every note the
+ * playhead sounds is scaled by this, so the song retunes as a whole.
+ *
+ * Deliberately a pure ratio with NO log/exp round trip. `2 **` with a rational
+ * exponent is the one transcendental the engine already trusts to agree with
+ * the JVM bit-for-bit (computePlaybackRate leans on it), whereas Math.log2 has
+ * no such guarantee — routing the tuning through a log would put the whole
+ * bit-exact gate at the mercy of a last-ulp difference between platforms.
+ *
+ * A concert declaration returns EXACTLY 1.0: 440 is f32-representable and
+ * `440 / 2**0.75 === TUNING_REF_C4_HZ` bit-for-bit, and `x * 1.0 === x`, so
+ * A4@440 songs render without a single bit disturbed. The tracker default
+ * (C9 @ 8363) returns 0.99892… — ~1.87 cents flat, which is what an Amiga
+ * actually does and what the spec means by "tracker default tuning at A4 is
+ * 439.548 Hz".
+ */
+export function tuningRatioOf(baseNote, freq) {
+  // Spec: either field reading zero means "assume the tracker default".
+  const b = baseNote > 0 ? baseNote : TUNING_DEFAULT_BASE_NOTE;
+  const f = freq > 0 ? freq : TUNING_DEFAULT_FREQ_HZ; // also catches NaN
+  return (f / 2 ** ((b - MIDDLE_C) / 4096.0)) / TUNING_REF_C4_HZ;
 }
 
 /** One tick of Amiga-mode pitch slide; persists period state on the voice. */

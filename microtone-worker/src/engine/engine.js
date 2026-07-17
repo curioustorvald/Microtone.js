@@ -14,6 +14,7 @@ import {
   SAMPLE_BIN_TOTAL, NUM_PATTERNS, NUM_CUES, NUM_VOICES, MAX_VOICES,
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
 } from "./constants.js";
+import { tuningRatioOf } from "./tables.js";
 import { TaudInst, parsePatchesBlob, writePatchesBlob } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
@@ -180,6 +181,20 @@ export class TaudEngine {
   setTickRate(ph, rate) { this.playheads[ph].tickRate = rate & 255; }
   getTickRate(ph) { return this.playheads[ph].tickRate; }
 
+  /**
+   * Song tuning (item 77): `baseNote` sounds at `freq` Hz. Either reading zero
+   * means the tracker default (spec) — tuningRatioOf applies that rule. Takes
+   * effect on the next tick for notes already sounding, so dialling a tuning
+   * while the song plays bends it in place rather than waiting for retriggers.
+   */
+  setTuning(ph, baseNote, freq) {
+    const p = this.playheads[ph];
+    p.tuningBaseNote = baseNote & 0xffff;
+    p.tuningFreq = freq;
+    p.trackerState.tuningRatio = tuningRatioOf(p.tuningBaseNote, p.tuningFreq);
+  }
+  getTuningRatio(ph) { return this.playheads[ph].trackerState.tuningRatio; }
+
   setCuePosition(ph, pos) {
     const p = this.playheads[ph];
     p.position = pos & (NUM_CUES - 1);
@@ -297,7 +312,7 @@ export class TaudEngine {
     inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
     inst.sampleDetune = (spec.detune | 0) & 0xffff;
     inst.extraPatches = null;
-    triggerNote(this, ts.voices[v], note, AUDITION_SLOT, -1);
+    triggerNote(this, ts, ts.voices[v], note, AUDITION_SLOT, -1);
     p.jamActive = true;
   }
 
