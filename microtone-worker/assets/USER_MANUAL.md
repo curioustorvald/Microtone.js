@@ -491,16 +491,16 @@ grid):
 | Equal-Tempered Bohlen-Pierce | 13 | **tritave** (3:1) |
 
 **ProTracker Temperament** is the tuning of Amiga `.mod` files, and imported `.mod`s
-select it automatically. ProTracker does not tune by 12-TET: it plays a
-hand-made table of whole-number Amiga *periods*, so its notes sit up to about 6
-cents off the 12-TET grid — which is why a `.mod` read as 12-TET shows most of
+select it automatically. ProTracker does not tune by 12-TET: it plays from a
+table of integer Amiga timer periods, leaving most notes up to about 6 cents
+away from the 12-TET grid — which is why a `.mod` read as 12-TET shows most of
 its notes yellow. The table is not even exactly octave-repeating (ProTracker's
 E-3 is period 170, where a strict octave below E-2 would be 169.5, leaving it
 5 cents flat), so this preset has **no period at all**: it simply lists every
-note ProTracker can play — its own three octaves plus the two extra octaves
-later trackers added. Notes therefore step by semitones as usual, but stepping
-stops at the ends of the table, because that is the whole range the tuning can
-express.
+note ProTracker can play — the original three-octave ProTracker table together
+with the two extra octaves adopted by later trackers. Notes therefore step by
+semitones as usual, but stepping stops at the ends of the table, because that
+is the whole range the tuning can express.
 
 `.mod` files imported before this notation existed still carry 12-TET and will
 look out of tune. To fix one, open the Project view and **Retune…** it to
