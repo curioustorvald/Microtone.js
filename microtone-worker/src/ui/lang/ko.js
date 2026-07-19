@@ -516,7 +516,7 @@ export default {
   "proj.tuningSharp": "표준 음고보다 높음",
   "proj.tuneTracker": "트래커 기본값 — C9 @ 8363 Hz (Amiga)",
   "proj.tuneIso440": "A4 @ 440 Hz — ISO 표준",
-  "proj.tuneFrench435": "A4 @ 435 Hz — 프랑스 표준 (1859년)",
+  "proj.tuneFrench435": "A4 @ 435 Hz — 옛 프랑스 표준 (1859년)",
   "proj.tunePhil452": "A4 @ 452 Hz — 옛 필하모닉 피치 (19세기 영국)",
   "proj.tunePow2C256": "C4 @ 256 Hz — 2의 거듭제곱",
   "proj.tuneAak262": "C4 @ 262 Hz — 현대 중국 아악 조율",

@@ -519,7 +519,7 @@ export default {
   "proj.tuningSharp": "sharp of concert pitch",
   "proj.tuneTracker": "Tracker default — C9 @ 8363 Hz (Amiga)",
   "proj.tuneIso440": "A4 @ 440 Hz — ISO standard",
-  "proj.tuneFrench435": "A4 @ 435 Hz — French standard (1859)",
+  "proj.tuneFrench435": "A4 @ 435 Hz — Old French standard (1859)",
   "proj.tunePhil452": "A4 @ 452 Hz — Old Philharmonic (19th c. Britain)",
   "proj.tunePow2C256": "C4 @ 256 Hz — power of two",
   "proj.tuneAak262": "C4 @ 262 Hz — Chinese a-ak convention",
