@@ -131,6 +131,7 @@
   font-style: normal;
   font-variation-settings:
     "wdth" 86.6667;
+  font-variant-numeric: tabular-nums;
 }
 
 button {
@@ -149,6 +150,7 @@ body {
   font-optical-sizing: auto;
   font-variation-settings:
     "wdth" 96 !important;
+  font-variant-numeric: tabular-nums;
 }
 
 .player {
