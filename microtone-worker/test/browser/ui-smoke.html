@@ -482,6 +482,66 @@
           log(`record mode: shift+wheel over cursor cell scrolls, no edit: ${chScrolled && noEdit ? "ok" : "FAIL"}`);
         }
 
+        // ── horizontal wheel (touchpad/tilt, no shift) scrolls channels ──
+        {
+          const wheel = (cv, opts) => cv.dispatchEvent(
+            new win.WheelEvent("wheel", { deltaY: 0, deltaX: 0, bubbles: true, cancelable: true, ...opts }));
+          // Timeline: deltaX-dominant gesture scrolls channels, not rows
+          store.record = false;
+          timeline.scrollCh = 0;
+          const row0 = timeline.scrollRow;
+          wheel(timeline.canvas, { deltaX: 120, deltaY: 4 });
+          const tlH = timeline.scrollCh === 1 && timeline.scrollRow === row0;
+          // deltaY-dominant still scrolls rows, channels untouched
+          wheel(timeline.canvas, { deltaY: 120, deltaX: 4 });
+          const tlV = timeline.scrollCh === 1 && timeline.scrollRow > row0;
+          timeline.scrollRow = row0;
+          // record mode over the cursor cell: horizontal scrolls, never edits
+          store.record = true;
+          timeline.scrollCh = 0;
+          store.cursor = { row: 0, ch: 0, sub: 1, nib: 0 };
+          const r = timeline.canvas.getBoundingClientRect();
+          const depth = store.undo.undoStack.length;
+          wheel(timeline.canvas, { deltaX: 120, clientX: r.left + 76 + 8, clientY: r.top + 50 + 8 });
+          const tlRec = timeline.scrollCh === 1 && store.undo.undoStack.length === depth;
+          store.record = false;
+          store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
+          // Cues: deltaX-dominant scrolls channels, cue rows untouched
+          const { cuesView } = win.__microtone;
+          cuesView.scrollCh = 0;
+          const cue0 = cuesView.scrollCue;
+          wheel(cuesView.canvas, { deltaX: 120, deltaY: 4 });
+          const cuH = cuesView.scrollCh === 2 && cuesView.scrollCue === cue0;
+          cuesView.scrollCh = 0;
+          log(`horizontal wheel scrolls channels (timeline+cues): ${tlH && tlV && tlRec && cuH ? "ok" : `FAIL tl=${tlH} v=${tlV} rec=${tlRec} cues=${cuH}`}`);
+        }
+
+        // ── Space on a Cues Cmd column opens the command popup ──
+        {
+          const { cuesView } = win.__microtone;
+          const space = () => win.dispatchEvent(
+            new win.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+          win.document.querySelector('#tabs button[data-view="cues"]').click();
+          cuesView.cursor = { cue: 0, col: 0, nib: 0 };
+          const recWas = store.record;
+          space();
+          await new Promise((r2) => setTimeout(r2, 20));
+          const dlg = win.document.querySelector("dialog.modal");
+          const opened = !!dlg && store.record === recWas; // popup, no record toggle
+          if (dlg) {
+            const btns = [...dlg.querySelectorAll(".modal-buttons button")];
+            btns[btns.length - 1].click(); // Cancel
+            await new Promise((r2) => setTimeout(r2, 20));
+          }
+          // on a channel column Space keeps its record-toggle double action
+          cuesView.cursor = { cue: 0, col: 2, nib: 0 };
+          space();
+          const toggled = store.record !== recWas && !win.document.querySelector("dialog.modal");
+          store.record = recWas;
+          win.document.querySelector('#tabs button[data-view="timeline"]').click();
+          log(`Space on Cmd column opens cue command popup: ${opened && toggled ? "ok" : `FAIL open=${opened} toggle=${toggled}`}`);
+        }
+
         // ── raw-hex note entry (Raw on): hex types into the note word; jam off ──
         {
           const kd = (code, k, opts = {}) =>

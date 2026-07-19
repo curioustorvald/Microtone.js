@@ -62,7 +62,7 @@ export default {
   "meta.pitchRange": "pitch range",
   "meta.vel": "vel",
   "status.noFile": "no file",
-  "status.hint": "Space play/stop · arrows navigate · wheel scroll",
+  "status.hint": "Enter: play/stop · arrows: navigate · wheel: vertical scroll · shift+wheel: horizontal scroll",
   "status.fork": "Fork me on GitHub ↗",
   "status.docs": "Docs ↗",
   "status.docsTitle": "Open the documentation in a new tab",

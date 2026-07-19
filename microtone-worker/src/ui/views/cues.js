@@ -67,9 +67,12 @@ export class CuesView {
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      // Shift+wheel reports its delta in deltaX on most platforms.
-      const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      if (e.shiftKey) this.scrollCh = Math.max(0, this.scrollCh + Math.sign(d) * 2);
+      // Horizontal = Shift+wheel (which reports its delta in deltaX on most
+      // platforms) OR a genuinely horizontal gesture (touchpad swipe / tilt
+      // wheel: deltaX dominant). Read the delta off the axis that applies.
+      const horiz = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const d = horiz ? (e.deltaX !== 0 ? e.deltaX : e.deltaY) : e.deltaY;
+      if (horiz) this.scrollCh = Math.max(0, this.scrollCh + Math.sign(d) * 2);
       else this.scrollCue = clampInt(this.scrollCue + Math.sign(d) * 3, 0, this.maxScrollCue());
       this.invalidate();
     }, { passive: false });

@@ -45,15 +45,18 @@ export class TimelineView {
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      // Shift+wheel reports its delta in deltaX on most platforms.
-      const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      // Horizontal = Shift+wheel (which reports its delta in deltaX on most
+      // platforms) OR a genuinely horizontal gesture (touchpad swipe / tilt
+      // wheel: deltaX dominant). Read the delta off the axis that applies.
+      const horiz = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const d = horiz ? (e.deltaX !== 0 ? e.deltaX : e.deltaY) : e.deltaY;
       // Record mode: wheel over the CURSOR cell increments/decrements the
-      // hovered column (wheel up = +1); elsewhere the wheel scrolls. Shift
+      // hovered column (wheel up = +1); elsewhere the wheel scrolls. Horizontal
       // always means "scroll channels" — never a cell edit.
       // Never wheel-edit mid drag-selection — then the wheel only scrolls (item 57).
-      if (!e.shiftKey && this.store.record && this._drag === null &&
+      if (!horiz && this.store.record && this._drag === null &&
           this.wheelEdit(e, d < 0 ? 1 : -1)) return;
-      if (e.shiftKey) {
+      if (horiz) {
         this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
         this.invalidate();
       } else {

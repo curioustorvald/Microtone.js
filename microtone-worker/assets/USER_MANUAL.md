@@ -65,8 +65,8 @@ The app warns before discarding unsaved changes, and autosaves your work — see
 
 | Control | Action |
 |---|---|
-| **Space** | Play from the cursor row / stop |
-| **Shift+Space** | Play from the start |
+| **Enter** | Play from the cursor row / stop |
+| **Shift+Enter** | Play from the start |
 | **▶ Song** button | Play from the start |
 | **▶ Cue** button | Play from the cue under the cursor |
 | **follow** checkbox | Scroll the view with playback |
@@ -140,9 +140,9 @@ and cleared when a file loads.
 
 ### Picking up an instrument
 
-**Enter** on a cell adopts its instrument as the current jam/entry instrument.
-You can also turn on the **Instruments** lookup panel in the toolbox — a
+Turn on the **Instruments** lookup panel in the toolbox — a
 floating list of every top-level instrument; click one to select it.
+Scrolling on the **Inst** cell on the top bar also changes selection.
 
 ## Editing
 
@@ -229,7 +229,7 @@ that cue.
 
 - Type **hex digits** to enter a pattern number (`0000`–`7FFE`).
 - **Delete** / **.** empties the slot.
-- **Enter** opens the command popup for the cell. Commands occupy the slot instead of a pattern:
+- **Space** opens the command popup for the cell. Commands occupy the slot instead of a pattern:
 
 | Command | Meaning |
 |---|---|
@@ -612,12 +612,11 @@ sidebar (also at [Note Effects](#effects)).
 
 | Keys | Action |
 |---|---|
-| Space | Play from cursor / stop |
-| Shift+Space | Play from start |
+| Enter | Play from cursor / stop |
+| Shift+Enter | Play from start |
 | F1…F7 | Switch views |
-| Insert | Record mode on/off |
+| Space | Record mode on/off |
 | [ ] | Octave down / up |
-| Enter | Timeline: pick up the cell's instrument · Cues: command popup |
 | M / N | Mute / solo the cursor channel (navigate mode) |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+S | Save to browser storage |

@@ -59,7 +59,7 @@ export default {
   "meta.pitchRange": "음역",
   "meta.vel": "세기",
   "status.noFile": "파일 없음",
-  "status.hint": "Space 재생/정지 · 방향키 이동 · 휠 스크롤",
+  "status.hint": "엔터: 재생/정지 · 방향키: 이동 · 휠: 수직 스크롤 · 시프트+휠: 수평 스크롤",
   "status.fork": "GitHub에서 소스 보기 ↗",
   "status.docs": "문서 ↗",
   "status.docsTitle": "새 탭에서 문서 열기",
