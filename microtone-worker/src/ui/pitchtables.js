@@ -104,8 +104,16 @@ export const pitchTablePresets = {
 
 /** True for an `interval: 0` preset: `table` is the complete, absolute note
  *  list rather than one period of a lattice (terranmon.txt §nota). */
-function isAbsolute(preset) {
+export function isAbsolute(preset) {
   return preset?.interval === 0 && preset.table.length > 0;
+}
+
+/** Snap a note word to the nearest degree an absolute (`interval: 0`) preset
+ *  can express. The table IS the full expressible range, so this clamps to the
+ *  ends rather than wrapping — the same semantics as stepNoteInTable. */
+export function snapToAbsoluteDegree(note, preset) {
+  const i = nearestAbsIndex(note, preset);
+  return Math.min(Math.max(presetBase(preset) + preset.table[i], 0x20), 0xffff);
 }
 
 /** Note that an absolute preset's degree `i` names. Interval presets are

@@ -411,10 +411,13 @@ export class InstrumentsView {
 
   /** label · editable number spinner · annotation · range slider. `onChange`
    *  receives (value, gestureId); a range drag reuses one gestureId so it
-   *  collapses to a single undo step. `opts`: {ann, wide, log}. When `log` the
-   *  slider TRAVEL is logarithmic (fine control at the low end) while the
-   *  spinner/annotation still show the real value; slider bottom pins to `min`
-   *  (which may be 0 = "off"), the rest spans log(max(min,1))..log(max). */
+   *  collapses to a single undo step. `opts`: {ann, wide, log, signedLog}. When
+   *  `log` the slider TRAVEL is logarithmic (fine control at the low end) while
+   *  the spinner/annotation still show the real value; slider bottom pins to
+   *  `min` (which may be 0 = "off"), the rest spans log(max(min,1))..log(max).
+   *  `signedLog` is the two-sided variant: position 0 = value 0 at the centre,
+   *  ±1..±N log-spaced out to ±max|min| — fine control near zero in BOTH
+   *  directions (used by the full-range signed detune slider). */
   sliderRow(label, value, min, max, onChange, opts = {}) {
     const row = document.createElement("div");
     row.className = "slider-row" + (opts.wide ? " wide" : "");
@@ -432,20 +435,36 @@ export class InstrumentsView {
     // opts.log (position 0..LOG_STEPS, 0 → min, 1..N → exp-spaced [lo, max]).
     const LOG_STEPS = 1000;
     const lo = Math.max(min, 1);
+    const mag = Math.max(Math.abs(min), Math.abs(max), 2); // signedLog span
+    const symDenom = Math.log(1 + mag);                    // symlog normaliser
     const toPos = (v) => {
+      if (opts.signedLog) {
+        // Symmetric log (matplotlib symlog): log(1+|v|) is near-LINEAR through
+        // zero, so 0 sits exactly at the centre, ±1 land at distinct, visible
+        // positions, and the scale only compresses toward the extremes. (Pure
+        // log has no value at 0 and collapses every |v|<=1 onto the centre.)
+        const s = v < 0 ? -1 : 1;
+        const a = Math.min(Math.abs(v), mag);
+        return Math.round(s * (Math.log(1 + a) / symDenom) * LOG_STEPS);
+      }
       if (!opts.log) return v;
       if (v <= min) return 0;
       const t = (Math.log(Math.max(v, lo)) - Math.log(lo)) / (Math.log(max) - Math.log(lo));
       return Math.round(1 + t * (LOG_STEPS - 1));
     };
     const fromPos = (p) => {
+      if (opts.signedLog) {
+        const s = p < 0 ? -1 : 1;
+        const t = Math.abs(p) / LOG_STEPS;
+        return s * Math.round(Math.exp(t * symDenom) - 1);
+      }
       if (!opts.log) return p;
       if (p <= 0) return min;
       const t = (p - 1) / (LOG_STEPS - 1);
       return Math.round(Math.exp(Math.log(lo) + t * (Math.log(max) - Math.log(lo))));
     };
-    range.min = opts.log ? 0 : min;
-    range.max = opts.log ? LOG_STEPS : max;
+    range.min = opts.signedLog ? -LOG_STEPS : (opts.log ? 0 : min);
+    range.max = opts.signedLog ? LOG_STEPS : (opts.log ? LOG_STEPS : max);
     range.step = 1;
     range.value = toPos(clampN(value, min, max));
 
@@ -521,17 +540,19 @@ export class InstrumentsView {
     return row;
   }
 
-  /** WIDE detune slider (±1 octave interactive range) with an editable signed
-   *  spinner plus hex-word and cents readout (taut.js detuneRow). */
+  /** WIDE detune slider spanning the FULL signed 16-bit range (-32768..32767)
+   *  on a signed-logarithmic scale — fine control near zero in both directions,
+   *  the ±8-octave extremes still reachable — with an editable signed spinner
+   *  plus hex-word and cents readout (taut.js detuneRow). */
   detuneRow(inst) {
-    const min = -4096, max = 4096;
+    const min = -0x8000, max = 0x7fff;
     const value = inst.sampleDetuneSigned;
     const ann = (v) =>
       `$${(v & 0xffff).toString(16).toUpperCase().padStart(4, "0")} · ` +
       `${((v * 1200) / 4096).toFixed(1)} cents, 4096-TET`;
     return this.sliderRow(t("inst.detune"), value, min, max,
       (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, "sampleDetune", v & 0xffff, gid)),
-      { ann, wide: true });
+      { ann, wide: true, signedLog: true });
   }
 
   renderGeneral(inst) {

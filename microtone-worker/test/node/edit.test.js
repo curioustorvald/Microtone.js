@@ -35,6 +35,25 @@ test("semiToNoteInTable: non-12 tuning snaps keys onto the scale degrees", () =>
   assert.equal(semiToNoteInTable(4, 12, p24), MIDDLE_C + p24.interval);
 });
 
+test("semiToNoteInTable: absolute (ProTracker, interval 0) snaps without looping", () => {
+  const pt = pitchTablePresets[1]; // ProTracker pitch — interval 0, absolute table
+  assert.equal(pt.interval, 0, "ProTracker preset is absolute");
+  const base = pt.base;
+  // Every jam key must return a real table degree (regression: interval 0 used
+  // to spin `while (pos >= interval)` forever and lock the browser).
+  for (let oct = 0; oct <= 9; oct++) {
+    for (let semi = 0; semi <= 12; semi++) {
+      const note = semiToNoteInTable(oct, semi, pt);
+      assert.ok(pt.table.some((off) => base + off === note),
+        `oct ${oct} semi ${semi} → ${note.toString(16)} is a ProTracker degree`);
+    }
+  }
+  // Root key at C4 snaps to the nearest PT degree to concert C4.
+  const c4 = semiToNoteInTable(4, 0, pt);
+  const dist = Math.min(...pt.table.map((off) => Math.abs(base + off - MIDDLE_C)));
+  assert.equal(Math.abs(c4 - MIDDLE_C), dist, "C4 key picks the nearest degree");
+});
+
 test("note column: entry follows the active notation preset", () => {
   const cell = new TaudPlayData();
   const p24 = pitchTablePresets[240];

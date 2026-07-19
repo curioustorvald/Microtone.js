@@ -6,7 +6,7 @@
 // (KeyA..KeyK white, KeyW/E/T/Y/U black) — layout-independent via e.code.
 
 import { MIDDLE_C } from "../engine/constants.js";
-import { stepNoteInTable } from "./pitchtables.js";
+import { stepNoteInTable, isAbsolute, snapToAbsoluteDegree } from "./pitchtables.js";
 
 export const SUB_NOTE = 0;
 export const SUB_INST = 1;
@@ -145,6 +145,12 @@ export function semiToNote(octave, semi) {
 export function semiToNoteInTable(octave, semi, preset) {
   if (!preset || preset.table.length === 0 || preset.index === 120) {
     return semiToNote(octave, semi);
+  }
+  // An absolute (`interval: 0`) table — e.g. ProTracker pitch — has no period
+  // lattice, so the period-wrap loop below would spin forever (pos -= 0). Map
+  // the jam key to its 12-EDO pitch and snap to the nearest expressible degree.
+  if (isAbsolute(preset)) {
+    return snapToAbsoluteDegree(semiToNote(octave, semi), preset);
   }
   const interval = preset.interval;
   const table = preset.table;

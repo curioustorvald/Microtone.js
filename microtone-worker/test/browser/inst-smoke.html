@@ -113,15 +113,47 @@
         const nnaOk = nnaOptCount === 5 && kl;
         log(`NNA key-lift: options=${nnaOptCount} flag=0x${inst.instrumentFlag.toString(16)} (${nnaOk ? "ok" : "FAIL"})`);
 
-        // Wide detune slider.
+        // Wide detune slider — full signed 16-bit range on a signed-log axis.
         iv.refresh();
         const detRow = findRow("Detune");
         const detWide = detRow.classList.contains("wide");
         const detRange = detRow.querySelector(".sl-range");
-        detRange.value = 2048; fire(detRange, "input");
-        const detOk = detWide && inst.sampleDetuneSigned === 2048 &&
+        const detNum = detRow.querySelector(".sl-num");
+        // The slider position axis is symmetric about 0 (signed-log), not the
+        // raw value axis.
+        const axisOk = Number(detRange.min) === -Number(detRange.max) &&
+          Number(detRange.max) > 0;
+        // Extremes reach the full field range (±0x8000 clamped to ±0x7FFF).
+        detRange.value = detRange.max; fire(detRange, "input");
+        const maxV = inst.sampleDetuneSigned;
+        detRange.value = detRange.min; fire(detRange, "input");
+        const minV = inst.sampleDetuneSigned;
+        // Centre position is exactly zero.
+        detRange.value = 0; fire(detRange, "input");
+        const zeroV = inst.sampleDetuneSigned;
+        // Signed-log: a position a quarter of the way up from centre yields a
+        // magnitude far below a linear quarter-scale (fine control near zero).
+        detRange.value = Math.round(Number(detRange.max) / 4); fire(detRange, "input");
+        const quarterV = inst.sampleDetuneSigned;
+        const detLogOk = quarterV > 0 && quarterV < 0x7fff / 4;
+        // symlog fix: -1, 0, +1 must occupy DISTINCT, visibly-separated slider
+        // positions (a pure log collapsed |v|<=1 onto the centre), and 0 must be
+        // reachable at the exact centre position.
+        detNum.value = 0; fire(detNum, "change"); const posZero = Number(detRange.value);
+        detNum.value = 1; fire(detNum, "change"); const posP1 = Number(detRange.value);
+        detNum.value = -1; fire(detNum, "change"); const posN1 = Number(detRange.value);
+        const spreadOk = posZero === 0 && posP1 === -posN1 && posP1 >= 10;
+        detRange.value = 0; fire(detRange, "input");
+        const zeroReachOk = inst.sampleDetuneSigned === 0;
+        // The spinner still sets an exact signed value; the annotation shows cents.
+        detNum.value = -2048; fire(detNum, "change");
+        const spinnerOk = inst.sampleDetuneSigned === -2048 &&
           /cents/.test(detRow.querySelector(".sl-ann").textContent);
-        log(`detune: wide=${detWide} signed=${inst.sampleDetuneSigned} (${detOk ? "ok" : "FAIL"})`);
+        const detOk = detWide && axisOk && maxV === 0x7fff && minV === -0x8000 &&
+          zeroV === 0 && detLogOk && spreadOk && zeroReachOk && spinnerOk;
+        log(`detune: wide=${detWide} axis=${axisOk} max=${maxV} min=${minV} zero=${zeroV} ` +
+            `quarter=${quarterV} pos(-1/0/1)=${posN1}/${posZero}/${posP1} spread=${spreadOk} ` +
+            `zeroReach=${zeroReachOk} spinner=${spinnerOk} (${detOk ? "ok" : "FAIL"})`);
 
         // Envelope log-time toggle exists and flips the flag.
         iv.tab = "env0";
