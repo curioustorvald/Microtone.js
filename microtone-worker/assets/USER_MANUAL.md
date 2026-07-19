@@ -56,7 +56,7 @@ and the editor snaps entry, display and stepping to that table's degrees. See
   - **Layout** — 32 or 64 channels.
   - **Notation** — the display pitch table (12-TET, 24-TET, 31-TET, Bohlen-Pierce…), defaulting to **24-TET**. You can change it later in the Project view.
 
-  A new project has no samples — seed it by opening a `.tsii` bank first, or add instruments later from the Instruments view.
+A new project has no samples — seed it by opening a `.tsii` bank first, or add instruments later from the Instruments view.
 
 The app warns before discarding unsaved changes, and autosaves your work — see
 [Saving and autosave](#saving-and-autosave).
@@ -538,9 +538,7 @@ how anything sounds.
 
 Three ways to fill a slot:
 
-- **Import .scl…** — load a [Scala scale file](https://www.huygens-fokker.org/scala/scl_format.html).
-  The scale's last pitch becomes the period (octave, tritave, anything), the
-  other pitches become the degrees, and every degree gets an automatic name.
+- **Import .scl…** — load a [Scala scale file](https://www.huygens-fokker.org/scala/scl_format.html). The scale's last pitch becomes the period (octave, tritave, anything), the other pitches become the degrees, and every degree gets an automatic name.
 - **Click an empty slot** — start from a 12-equal seed and reshape it by hand.
 - **Import .taudnot…** — load a definition exported from another project.
 
