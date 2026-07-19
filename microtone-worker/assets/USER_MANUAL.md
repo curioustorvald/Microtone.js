@@ -478,7 +478,7 @@ grid):
 | Preset | Notes per period | Period |
 |---|---|---|
 | Raw format | — (raw hex words) | octave |
-| ProTracker pitch | 12 | **none** — every note listed (see below) |
+| ProTracker Temperament | 12 | **none** — every note listed (see below) |
 | Octave only | 1 | octave |
 | 2- to 10-TET | 2–10 | octave |
 | 12-TET | 12 | octave |
@@ -490,7 +490,7 @@ grid):
 | Shi'er lü | 12, 十二律 CJK names | octave |
 | Equal-Tempered Bohlen-Pierce | 13 | **tritave** (3:1) |
 
-**ProTracker pitch** is the tuning of Amiga `.mod` files, and imported `.mod`s
+**ProTracker Temperament** is the tuning of Amiga `.mod` files, and imported `.mod`s
 select it automatically. ProTracker does not tune by 12-TET: it plays a
 hand-made table of whole-number Amiga *periods*, so its notes sit up to about 6
 cents off the 12-TET grid — which is why a `.mod` read as 12-TET shows most of
@@ -504,7 +504,7 @@ express.
 
 `.mod` files imported before this notation existed still carry 12-TET and will
 look out of tune. To fix one, open the Project view and **Retune…** it to
-ProTracker pitch with the *Nearest pitch* method.
+ProTracker Temperament with the *Nearest pitch* method.
 
 Note display uses proper microtonal accidentals — sharps, flats, demisharps,
 demiflats, double/triple/quadruple accidentals, Kite tick marks — and degree
@@ -555,7 +555,7 @@ as a plain letter sequence. Degree 0 is always the base note — **Middle C
 what keeps non-octave systems well-defined.
 
 **Notations without a period.** Most tunings repeat at some interval, but a
-few don't — ProTracker pitch, for instance, is a hardware table that is only
+few don't — ProTracker Temperament, for instance, is a hardware table that is only
 *approximately* octave-periodic. For these, pick the **No interval** chip: the
 table then lists **every note the notation can express**, absolutely, and two
 things change. A **Base note** field appears — the absolute pitch degree 0
