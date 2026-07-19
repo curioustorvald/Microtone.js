@@ -10,7 +10,7 @@ import { paintNoteCell } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
-  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE,
+  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty,
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
@@ -386,33 +386,18 @@ export class TimelineView {
     const target = this.cursorCell();
     if (!target) return false;
     const cell = target.cell;
+    // An empty sub-column (shown as dots) is not wheel-editable — the wheel just
+    // scrolls the view instead of conjuring a value out of nothing.
+    if (subIsEmpty(hit.sub, cell)) return false;
 
     let fields = null;
     switch (hit.sub) {
-      case SUB_NOTE:
-        if (cell.note >= 0x20) {
-          fields = { note: stepNoteInTable(cell.note, store.pitchPreset, dir) };
-        }
-        break;
-      case SUB_INST:
-        fields = { instrment: clampInt(cell.instrment + dir, 0, 255) };
-        break;
-      case SUB_VOL:
-        fields = cell.volumeEff === 3 && cell.volume === 0
-          ? { volume: 0x20, volumeEff: 0 } // promote the no-op to a centre SET
-          : { volume: clampInt(cell.volume + dir, 0, 0x3f) };
-        break;
-      case SUB_PAN:
-        fields = cell.panEff === 3 && cell.pan === 0
-          ? { pan: 0x20, panEff: 0 }
-          : { pan: clampInt(cell.pan + dir, 0, 0x3f) };
-        break;
-      case SUB_FX_OP:
-        fields = { effect: clampInt(cell.effect + dir, 0, 35) };
-        break;
-      case SUB_FX_ARG:
-        fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) };
-        break;
+      case SUB_NOTE: fields = { note: stepNoteInTable(cell.note, store.pitchPreset, dir) }; break;
+      case SUB_INST: fields = { instrment: clampInt(cell.instrment + dir, 0, 255) }; break;
+      case SUB_VOL: fields = { volume: clampInt(cell.volume + dir, 0, 0x3f) }; break;
+      case SUB_PAN: fields = { pan: clampInt(cell.pan + dir, 0, 0x3f) }; break;
+      case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
+      case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
     }
     if (fields === null) return false;
     store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, fields,

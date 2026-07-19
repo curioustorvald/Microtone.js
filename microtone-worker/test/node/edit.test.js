@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
+import { interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable, subIsEmpty, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -90,6 +90,42 @@ test("vol column: hex entry promotes the no-op sentinel to SET", () => {
   const hi = interpretEditKey({ code: "Digit3", key: "3" }, SUB_VOL, 0, cell, ctx);
   assert.equal(hi.fields.volume, 0x30);
   assert.equal(hi.fields.volumeEff, 0); // SET
+});
+
+test("subIsEmpty: a wheel over a dotted sub-column only scrolls (no edit)", () => {
+  // A convention-blank pattern cell: vol/pan no-op sentinels, everything else 0.
+  const blank = new TaudPlayData();
+  blank.volumeEff = 3; blank.panEff = 3; // 0xC0/0xC0 -> "···"/"···"
+  for (const sub of [SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG]) {
+    assert.equal(subIsEmpty(sub, blank), true);
+  }
+
+  // note: only a pitched note (>= 0x20) is steppable; sentinels count as empty.
+  const note = new TaudPlayData(); note.note = MIDDLE_C;
+  assert.equal(subIsEmpty(SUB_NOTE, note), false);
+  note.note = 0x0001; // key-off sentinel
+  assert.equal(subIsEmpty(SUB_NOTE, note), true);
+
+  // Each filled sub-column is editable independently of the others.
+  const cell = new TaudPlayData();
+  cell.volumeEff = 3; cell.panEff = 3; // start fully blank
+  cell.instrment = 1;
+  assert.equal(subIsEmpty(SUB_INST, cell), false);
+  assert.equal(subIsEmpty(SUB_VOL, cell), true); // vol still a dot -> untouched
+
+  cell.volumeEff = 0; cell.volume = 0x20; // a real SET volume
+  assert.equal(subIsEmpty(SUB_VOL, cell), false);
+
+  cell.panEff = 2; cell.pan = 0x10; // pan slide
+  assert.equal(subIsEmpty(SUB_PAN, cell), false);
+
+  // fx opcode + arg share one visual column: empty only when both are 0.
+  const fx = new TaudPlayData();
+  assert.equal(subIsEmpty(SUB_FX_OP, fx), true);
+  assert.equal(subIsEmpty(SUB_FX_ARG, fx), true);
+  fx.effect = 1;
+  assert.equal(subIsEmpty(SUB_FX_OP, fx), false);
+  assert.equal(subIsEmpty(SUB_FX_ARG, fx), false);
 });
 
 test("fx column: base-36 opcode then 4 arg nibbles", () => {

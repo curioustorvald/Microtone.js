@@ -46,6 +46,27 @@ for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
   for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
 }
 
+/**
+ * Is the given sub-column of `cell` empty — i.e. rendered as dots? Wheel-edit
+ * skips empty sub-columns, so a wheel tick over a dot only scrolls the view and
+ * never conjures a value out of nothing. The dot conditions mirror the painters
+ * (timeline.js / pattern.js) and the *ToStr helpers in notenames.js.
+ *   note: only a pitched note (>= 0x20) is wheel-steppable — 0, sentinels,
+ *         reserved and interrupt words all count as "nothing to step" here.
+ *   fx  : the opcode + arg share one visual column, empty only when both are 0.
+ */
+export function subIsEmpty(sub, cell) {
+  switch (sub) {
+    case SUB_NOTE: return cell.note < 0x20;
+    case SUB_INST: return cell.instrment === 0;
+    case SUB_VOL: return cell.volumeEff === 3 && cell.volume === 0;
+    case SUB_PAN: return cell.panEff === 3 && cell.pan === 0;
+    case SUB_FX_OP:
+    case SUB_FX_ARG: return cell.effect === 0 && cell.effectArg === 0;
+    default: return true;
+  }
+}
+
 /** Character offset + width of a sub-position inside the cell. */
 export function subCharPos(sub, nib) {
   switch (sub) {
