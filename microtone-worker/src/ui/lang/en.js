@@ -674,7 +674,7 @@ export default {
   "nota.nonave": "9/1",
   "nota.decave": "10/1",
   "nota.noInterval": "No interval",
-  "nota.noIntervalTitle": "No interval system: the table lists every note the notation can express, absolutely — for grids that don't repeat at any interval (e.g. ProTracker pitch)",
+  "nota.noIntervalTitle": "No interval system: the table lists every note the notation can express, absolutely — for grids that don't repeat at any interval (e.g. ProTracker Temperament)",
   "nota.baseNote": "Base note",
   "nota.baseNoteTitle": "Absolute note value degree 0 sits on (hex; C4 = $5000). Degree offsets build upward from here — set it below C4 to reach low notes",
   "nota.equalDiv": "Equal divisions…",

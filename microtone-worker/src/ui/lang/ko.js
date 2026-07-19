@@ -671,7 +671,7 @@ export default {
   "nota.nonave": "9/1",
   "nota.decave": "10/1",
   "nota.noInterval": "주기 없음",
-  "nota.noIntervalTitle": "무주기 방식: 표현 가능한 모든 음을 절대값으로 표에 나열합니다 — 어떤 주기로도 반복되지 않는 격자(예: ProTracker pitch)에 사용합니다",
+  "nota.noIntervalTitle": "무주기 방식: 표현 가능한 모든 음을 절대값으로 표에 나열합니다 — 어떤 주기로도 반복되지 않는 격자(예: ProTracker Temperament)에 사용합니다",
   "nota.baseNote": "기준음",
   "nota.baseNoteTitle": "0번 음도가 놓이는 절대 음 값 (16진수; C4 = $5000). 음도 오프셋은 여기서부터 위로 쌓이므로 낮은 음이 필요하면 C4 아래로 설정하세요",
   "nota.equalDiv": "평균율 분할…",

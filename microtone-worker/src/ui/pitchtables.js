@@ -70,7 +70,7 @@ const ptNoteFor = (period) =>
 export const pitchTablePresets = {
   0: { index: 0, name: "Raw format", table: [], interval: 0x1000, t: "" },
   1: {
-    index: 1, name: "ProTracker pitch", interval: 0, base: PT_BASE, t: "d",
+    index: 1, name: "ProTracker Temperament", interval: 0, base: PT_BASE, t: "d",
     table: PT_PERIODS.map((p) => ptNoteFor(p) - PT_BASE),
     sym: PT_PERIODS.map((_, i) => SYM_12[i % 12]),
   },
