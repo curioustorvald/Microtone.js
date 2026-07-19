@@ -7,10 +7,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  referencedPatterns, planCleanupPatterns, planRenumberPatterns,
+  referencedPatterns, planCleanupPatterns, planMergeDuplicatePatterns, planRenumberPatterns,
   applyPatternOrder, encodeNameTable, usedInstrumentSlots,
   planRenumberInstrument, instrumentCellRefs, planIxmpCleanup,
 } from "../../src/doc/cleanup.js";
+import { TaudPlayData } from "../../src/engine/state.js";
 import { remapPatternsOp, cleanupBankOp, renumberInstrumentOp, importBankOp } from "../../src/doc/ops.js";
 import { writePatchesBlob } from "../../src/engine/inst.js";
 import { buildIxmpSection, planCreateMeta } from "../../src/doc/bankmerge.js";
@@ -61,6 +62,89 @@ test("applyPatternOrder: rewrites cue refs, keeps the instruction sign bit", () 
   assert.equal(cues[0][0] & 0x8000, 0x8000, "instruction sign bit preserved");
   assert.equal(cues[0][2] & 0x7fff, 0);
   assert.equal(cues[0][1], 0x7fff, "empty slot untouched");
+});
+
+// A song with real (getByte-capable) patterns: 0 and 2 are byte-identical, 1 differs.
+function dupSong() {
+  const mk = (note) => {
+    const rows = [];
+    for (let r = 0; r < 64; r++) { const c = new TaudPlayData(); c.volumeEff = 3; c.panEff = 3; rows.push(c); }
+    rows[0].note = note;
+    return rows;
+  };
+  const E = 0x7fff;
+  return {
+    patterns: [mk(0x5000), mk(0x6000), mk(0x5000)], // pattern 2 duplicates pattern 0
+    cues: [Uint16Array.from([0, 1, 2, E])],          // plays 0, 1, 2
+  };
+}
+
+test("planMergeDuplicatePatterns: identical content collapses onto the lowest copy", () => {
+  const song = dupSong();
+  const referenced = planCleanupPatterns(song); // [0, 1, 2]
+  const { order, canon } = planMergeDuplicatePatterns(song, referenced);
+  assert.deepEqual(order, [0, 1], "duplicate pattern 2 dropped from the keep-order");
+  assert.equal(canon.get(0), 0);
+  assert.equal(canon.get(1), 1);
+  assert.equal(canon.get(2), 0, "pattern 2 merges onto pattern 0");
+});
+
+test("applyPatternOrder with canon: cue words pointing at a duplicate follow the survivor", () => {
+  const song = dupSong();
+  const referenced = planCleanupPatterns(song);
+  const { order, canon } = planMergeDuplicatePatterns(song, referenced);
+  const { patterns, cues } = applyPatternOrder(song, order, [], canon);
+  assert.equal(patterns.length, 2);
+  assert.equal(cues[0][0] & 0x7fff, 0);
+  assert.equal(cues[0][1] & 0x7fff, 1);
+  assert.equal(cues[0][2] & 0x7fff, 0, "the duplicate re-targets the survivor");
+  assert.equal(cues[0][3], 0x7fff, "empty slot untouched");
+});
+
+test("planMergeDuplicatePatterns: no duplicates is an identity (order + canon)", () => {
+  const s = dupSong(); s.patterns[2][0].note = 0x7000; // now all three differ
+  const { order, canon } = planMergeDuplicatePatterns(s, [0, 1, 2]);
+  assert.deepEqual(order, [0, 1, 2]);
+  assert.equal(canon.get(2), 2);
+});
+
+test("cleanup merges byte-identical duplicates on WHEN: cues keep their content; undo byte-exact", () => {
+  const doc = loadWhen();
+  const song = doc.songs[0];
+  const referenced = planCleanupPatterns(song);
+  assert.ok(referenced.length >= 2, "WHEN references at least two patterns");
+  const [p, q] = referenced; // two distinct referenced patterns
+  // Overwrite q with a byte-identical copy of p so they de-dupe.
+  song.patterns[q] = song.patterns[p].map((cell) => {
+    const c = new TaudPlayData();
+    for (let b = 0; b < 8; b++) c.setByte(b, cell.getByte(b));
+    return c;
+  });
+
+  const before = Buffer.from(doc.toBytes());
+  const playBytes = () => {
+    const out = [];
+    for (const words of doc.songs[0].cues) for (const w of words) {
+      const pat = w & 0x7fff;
+      if (pat !== 0x7fff) out.push(Buffer.from(doc.patternBytes(0, pat)).toString("hex"));
+    }
+    return out;
+  };
+  const playedBefore = playBytes();
+
+  const { order, canon } = planMergeDuplicatePatterns(song, referenced);
+  assert.equal(canon.get(q), p, "duplicate q merges onto p");
+  assert.ok(!order.includes(q), "q dropped from the keep-order");
+  const plan = applyPatternOrder(song, order, doc._nameTable("pNam"), canon);
+
+  const undo = new UndoStack(doc);
+  undo.apply(remapPatternsOp(0, plan.patterns, plan.cues, encodeNameTable(plan.pNam)));
+
+  assert.deepEqual(playBytes(), playedBefore, "every cue plays the same content after the merge");
+  assert.equal(doc.songs[0].patterns.length, order.length, "pattern count dropped by the merge");
+
+  undo.undo();
+  assert.deepEqual([...doc.toBytes()], [...before], "undo byte-exact");
 });
 
 test("encodeNameTable round-trips through the 0x1E split", () => {

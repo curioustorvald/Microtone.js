@@ -620,7 +620,7 @@ export default {
   // ── housekeeping (project view, item 60) ──
   "clean.title": "Housekeeping",
   "clean.patterns": "Cleanup patterns",
-  "clean.patternsTitle": "Remove patterns that no cue references; renumber the survivors and rewrite the cues",
+  "clean.patternsTitle": "Remove patterns that no cue references, merge byte-identical duplicates, then renumber the survivors and rewrite the cues",
   "clean.renumber": "Renumber patterns",
   "clean.renumberTitle": "Compact every pattern into play order (drops gaps), rewriting the cues",
   "clean.bank": "Cleanup instruments & samples",
@@ -628,7 +628,7 @@ export default {
   "clean.ixmp": "Cleanup instrument patches",
   "clean.ixmpTitle": "Remove patches that can never be triggered: patches belonging to no instrument, empty ones, and patches fully covered by a higher-priority patch",
   "clean.nothing": "Nothing to clean up.",
-  "clean.patternsConfirm": "Remove {removed} unused pattern(s) and renumber the rest? Cues are rewritten. This can be undone.",
+  "clean.patternsConfirm": "Remove {removed} unused pattern(s) and merge {merged} duplicate(s), then renumber the rest? Cues are rewritten. This can be undone.",
   "clean.bankConfirm": "Remove {insts} unused instrument(s) and free {bytes} sample bytes? This can be undone.",
   "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely? This can be undone.",
 

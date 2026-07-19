@@ -10,8 +10,8 @@ import {
   TUNING_REF_C4_HZ, TUNING_DEFAULT_BASE_NOTE, TUNING_DEFAULT_FREQ_HZ,
 } from "../../engine/constants.js";
 import {
-  planCleanupPatterns, planRenumberPatterns, applyPatternOrder, encodeNameTable, planBankCleanup,
-  planIxmpCleanup,
+  planCleanupPatterns, planMergeDuplicatePatterns, planRenumberPatterns, applyPatternOrder,
+  encodeNameTable, planBankCleanup, planIxmpCleanup,
 } from "../../doc/cleanup.js";
 import { pitchTablePresets, presetForNotation, retuneAllPatterns, surveyTuning } from "../pitchtables.js";
 import { defToPreset } from "../../doc/notation.js";
@@ -332,14 +332,19 @@ export class ProjectView {
     this.root.appendChild(houseBar);
   }
 
-  /** Remove patterns no cue references (renumber survivors, rewrite cues + pNam). */
+  /** Remove patterns no cue references, merge byte-identical duplicates onto their
+   *  lowest copy, then renumber survivors and rewrite cues + pNam. */
   cleanupPatterns() {
     const store = this.store, song = store.song;
-    const order = planCleanupPatterns(song);
-    const removed = song.patterns.filter(Boolean).length - order.length;
-    if (removed <= 0 && this._isIdentityOrder(order, song)) { alert(t("clean.nothing")); return; }
-    if (!confirm(t("clean.patternsConfirm", { removed: Math.max(removed, 0) }))) return;
-    this._applyRemap(order);
+    const referenced = planCleanupPatterns(song);
+    const { order, canon } = planMergeDuplicatePatterns(song, referenced);
+    const materialised = (i) => !!song.patterns[i];
+    const total = song.patterns.filter(Boolean).length;
+    const removed = total - referenced.filter(materialised).length; // dropped: unreferenced
+    const merged = referenced.filter(materialised).length - order.filter(materialised).length;
+    if (removed <= 0 && merged <= 0 && this._isIdentityOrder(order, song)) { alert(t("clean.nothing")); return; }
+    if (!confirm(t("clean.patternsConfirm", { removed: Math.max(removed, 0), merged: Math.max(merged, 0) }))) return;
+    this._applyRemap(order, canon);
   }
 
   /** Compact + reorder ALL materialised patterns into play order (drops gaps). */
@@ -354,9 +359,9 @@ export class ProjectView {
     return order.length === song.patterns.length && order.every((v, i) => v === i);
   }
 
-  _applyRemap(order) {
+  _applyRemap(order, canon = null) {
     const store = this.store;
-    const plan = applyPatternOrder(store.song, order, store.doc._nameTable("pNam"));
+    const plan = applyPatternOrder(store.song, order, store.doc._nameTable("pNam"), canon);
     store.undo.apply(remapPatternsOp(store.songIndex, plan.patterns, plan.cues, encodeNameTable(plan.pNam)));
     store.emit("edit", [{ kind: "resync", song: store.songIndex }]);
     this.refresh();

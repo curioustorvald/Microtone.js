@@ -12,6 +12,7 @@
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { writePatchesBlob } from "../engine/inst.js";
+import { emptyPatternBytes } from "./patterntools.js";
 
 const PAT_MASK = 0x7fff;
 
@@ -42,6 +43,49 @@ export function planCleanupPatterns(song) {
   return [...new Set(referencedPatterns(song))].sort((a, b) => a - b);
 }
 
+/** Binary content key of a pattern (its 512 raw bytes as a string). A null/absent
+ *  slot uses the empty-pattern content, so it keys the same as a materialised-blank
+ *  pattern — the two merge. */
+function patternContentKey(pattern) {
+  if (!pattern) {
+    const bytes = emptyPatternBytes();
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  }
+  let s = "";
+  for (let r = 0; r < pattern.length; r++) {
+    const cell = pattern[r];
+    for (let b = 0; b < 8; b++) s += String.fromCharCode(cell.getByte(b));
+  }
+  return s;
+}
+
+/**
+ * De-dupe a keep-order: collapse byte-identical patterns onto their FIRST copy
+ * in `order` (so with an ascending `order` the survivor is the lowest index).
+ * Returns { order, canon }: `order` is the deduped keep-order (survivors only, in
+ * their original relative order); `canon` maps every input old index to the old
+ * index it merges onto (== itself for a survivor). Feed `canon` to
+ * applyPatternOrder so cue words pointing at a duplicate re-target the survivor.
+ */
+export function planMergeDuplicatePatterns(song, order) {
+  const firstByKey = new Map();
+  const canon = new Map();
+  const merged = [];
+  for (const idx of order) {
+    const key = patternContentKey(song.patterns[idx]);
+    if (firstByKey.has(key)) {
+      canon.set(idx, firstByKey.get(key));
+    } else {
+      firstByKey.set(key, idx);
+      canon.set(idx, idx);
+      merged.push(idx);
+    }
+  }
+  return { order: merged, canon };
+}
+
 /** New keep-order for "renumber": referenced patterns in play (first-appearance)
  *  order, then any materialised-but-unreferenced patterns (ascending) so nothing
  *  with content is lost — just compacted and reordered. */
@@ -58,8 +102,11 @@ export function planRenumberPatterns(song) {
  * to the new indices (empty slots and the instruction sign bit preserved; a
  * reference to a dropped pattern becomes empty), and a reordered pNam name list
  * (array of strings, aligned to the new indices). Pure — does not mutate `song`.
+ * `canon` (optional, from planMergeDuplicatePatterns) re-targets each old index to
+ * its merge survivor before the new-index lookup, so cues that played a duplicate
+ * follow it onto the survivor.
  */
-export function applyPatternOrder(song, order, patternNames) {
+export function applyPatternOrder(song, order, patternNames, canon = null) {
   const oldToNew = new Map();
   order.forEach((oldIdx, newIdx) => oldToNew.set(oldIdx, newIdx));
 
@@ -71,7 +118,8 @@ export function applyPatternOrder(song, order, patternNames) {
       const w = out[ch];
       const pat = w & PAT_MASK;
       if (pat === PAT_MASK) continue; // empty slot — leave as-is
-      const nn = oldToNew.has(pat) ? oldToNew.get(pat) : PAT_MASK; // dropped → empty
+      const canonPat = canon && canon.has(pat) ? canon.get(pat) : pat; // duplicate → survivor
+      const nn = oldToNew.has(canonPat) ? oldToNew.get(canonPat) : PAT_MASK; // dropped → empty
       out[ch] = (w & 0x8000) | (nn & PAT_MASK);
     }
     return out;
