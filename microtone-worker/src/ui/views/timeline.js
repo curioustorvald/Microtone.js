@@ -6,13 +6,14 @@
 import { PATTERN_EMPTY } from "../../engine/constants.js";
 import { hex2, hex4, volToStr, panToStr, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
-import { paintNoteCell } from "../glyphs.js";
+import { paintNoteCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty,
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
+import { dittoGhosts } from "../../doc/ditto.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
@@ -461,6 +462,21 @@ export class TimelineView {
     return store.doc.patternAt(store.songIndex, patNum) ?? store.doc.emptyPattern();
   }
 
+  /**
+   * Ditto ghost map for a pattern played under a cue of `rowLimit` rows
+   * (the endRow clamp is cue-dependent, so that's part of the cache key).
+   * Rebuilt per draw — patterns repeat across channels, hence the memo.
+   */
+  ghostsFor(patNum, rowLimit) {
+    const key = `${patNum}:${rowLimit}`;
+    let g = this._ghosts.get(key);
+    if (g === undefined) {
+      g = dittoGhosts(this.patternFor(patNum), rowLimit);
+      this._ghosts.set(key, g);
+    }
+    return g;
+  }
+
   /** The pattern cell at (row, ch), or null (empty cue slot / off-map). */
   cellAt(row, ch) {
     const { store } = this;
@@ -569,6 +585,7 @@ export class TimelineView {
   draw(playRow) {
     if (playRow === undefined) playRow = -1;
     this.lastPlayRow = playRow;
+    this._ghosts = new Map(); // ditto ghost maps, memoised for this frame only
     const C = themeColors();
     const { ctx, store } = this;
     const dpr = this.dpr;
@@ -670,6 +687,7 @@ export class TimelineView {
 
     // ── rows ──
     const cursor = store.cursor;
+    const dittoPal = monoPalette(C.ditto); // ghost cells (pattern ditto)
     const sb = this.selBounds(); // block selection bounds (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
@@ -734,29 +752,42 @@ export class TimelineView {
           continue;
         }
         const cell = this.patternFor(patNum)[rowInCue];
+        // Pattern-ditto (effect 7): the rows the engine repeats show the
+        // would-be-played source values in grey wherever the cell is blank.
+        const ghost = this.ghostsFor(patNum, entry.rowLimit)[rowInCue] ?? null;
         // Note glyphs: taut-style vector accidentals/ticks/sentinels, CJK
         // Shi'er lü via a conventional font, hex4 for raw/off-grid notes.
-        paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
-          { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent },
-          store.rawNoteView);
-        const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-        const volS = volToStr(cell.volume, cell.volumeEff);
-        const panS = panToStr(cell.pan, cell.panEff);
-        const fxS = fxToStr(cell.effect, cell.effectArg);
+        if (ghost && ghost.note !== null) {
+          paintNoteCell(ctx, ghost.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
+            dittoPal, store.rawNoteView);
+        } else {
+          paintNoteCell(ctx, cell.note, store.pitchPreset, x + 2, y, CHAR_W, ROW_H,
+            { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent },
+            store.rawNoteView);
+        }
+        const instS = ghost?.inst != null ? hex2(ghost.inst)
+          : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
+        const volS = ghost?.vol ? volToStr(ghost.vol[0], ghost.vol[1])
+          : volToStr(cell.volume, cell.volumeEff);
+        const panS = ghost?.pan ? panToStr(ghost.pan[0], ghost.pan[1])
+          : panToStr(cell.pan, cell.panEff);
+        const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
+          : fxToStr(cell.effect, cell.effectArg);
 
-        ctx.fillStyle = cell.instrment !== 0 ? C.accent2 : C.dim;
-        if (cell.instrment === 0) ctx.globalAlpha = 0.4;
+        ctx.fillStyle = ghost?.inst != null ? C.ditto
+          : cell.instrment !== 0 ? C.accent2 : C.dim;
+        if (cell.instrment === 0 && !(ghost?.inst != null)) ctx.globalAlpha = 0.4;
         ctx.fillText(instS, x + 2 + 5 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = volS === "···" ? C.dim : C.meter;
+        ctx.fillStyle = ghost?.vol ? C.ditto : volS === "···" ? C.dim : C.meter;
         if (volS === "···") ctx.globalAlpha = 0.4;
         ctx.fillText(volS, x + 2 + 8 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = panS === "···" ? C.dim : C.colPan;
+        ctx.fillStyle = ghost?.pan ? C.ditto : panS === "···" ? C.dim : C.colPan;
         if (panS === "···") ctx.globalAlpha = 0.4;
         ctx.fillText(panS, x + 2 + 12 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
+        ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
         if (fxS === "·····") ctx.globalAlpha = 0.4;
         ctx.fillText(fxS, x + 2 + 16 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;

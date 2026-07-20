@@ -13,7 +13,7 @@ const VAR_KEYS = {
   cvBg: "--cv-bg", rowBeat: "--cv-row-beat", rowBar: "--cv-row-bar",
   playhead: "--cv-playhead", cursor: "--cv-cursor", caret: "--cv-caret",
   caretNav: "--cv-caret-nav", cueLine: "--cv-cue-line", colPan: "--cv-col-pan",
-  sel: "--cv-sel",
+  sel: "--cv-sel", ditto: "--cv-ditto",
   // canvas: samples / instruments
   wave: "--cv-wave", waveLoop: "--cv-wave-loop", waveMid: "--cv-wave-mid",
   waveFunk: "--cv-wave-funk", playCursor: "--cv-play-cursor",

@@ -8,7 +8,7 @@
 // Reference: taut.js VIEW_PATTERN_DETAILS + PREVIEW_CUE_IDX.
 
 import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
-import { paintNoteCell } from "../glyphs.js";
+import { paintNoteCell, monoPalette } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
@@ -22,6 +22,7 @@ import {
   expandPatternBytes, shrinkPatternBytes,
   scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
 } from "../../doc/patterntools.js";
+import { dittoGhosts } from "../../doc/ditto.js";
 import { CUE_EMPTY } from "../../format/taud-const.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
@@ -698,6 +699,11 @@ class PatternPane {
 
     const vis = Math.floor(H / ROW_H) + 1;
     const x0 = GUTTER_W + 4;
+    // Pattern-ditto (effect 7) ghosts: the would-be-repeated values, painted
+    // grey in whatever sub-columns the repeated rows leave blank. The Patterns
+    // view has no cue context, so the full 64 rows are assumed.
+    const ghosts = dittoGhosts(pattern, pattern.length);
+    const dittoPal = monoPalette(C.ditto);
     const sb = this.selRowBounds(); // row-range selection (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < vis; r++) {
@@ -737,20 +743,31 @@ class PatternPane {
       ctx.fillText(row.toString(16).toUpperCase().padStart(2, "0"), 8, y + ROW_H / 2);
 
       const cell = pattern[row];
-      paintNoteCell(ctx, cell.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,
-        { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
-        store.rawNoteView);
-      const instS = cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-      const volS = volToStr(cell.volume, cell.volumeEff);
-      const panS = panToStr(cell.pan, cell.panEff);
-      const fxS = fxToStr(cell.effect, cell.effectArg);
-      ctx.fillStyle = cell.instrment !== 0 ? C.accent2 : C.dim;
+      const ghost = ghosts[row] ?? null;
+      if (ghost && ghost.note !== null) {
+        paintNoteCell(ctx, ghost.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,
+          dittoPal, store.rawNoteView);
+      } else {
+        paintNoteCell(ctx, cell.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,
+          { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
+          store.rawNoteView);
+      }
+      const instS = ghost?.inst != null ? hex2(ghost.inst)
+        : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
+      const volS = ghost?.vol ? volToStr(ghost.vol[0], ghost.vol[1])
+        : volToStr(cell.volume, cell.volumeEff);
+      const panS = ghost?.pan ? panToStr(ghost.pan[0], ghost.pan[1])
+        : panToStr(cell.pan, cell.panEff);
+      const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
+        : fxToStr(cell.effect, cell.effectArg);
+      ctx.fillStyle = ghost?.inst != null ? C.ditto
+        : cell.instrment !== 0 ? C.accent2 : C.dim;
       ctx.fillText(instS, x0 + 5 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = volS === "···" ? C.dim : C.meter;
+      ctx.fillStyle = ghost?.vol ? C.ditto : volS === "···" ? C.dim : C.meter;
       ctx.fillText(volS, x0 + 8 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = panS === "···" ? C.dim : C.colPan;
+      ctx.fillStyle = ghost?.pan ? C.ditto : panS === "···" ? C.dim : C.colPan;
       ctx.fillText(panS, x0 + 12 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = fxS === "·····" ? C.dim : C.accent;
+      ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
       ctx.fillText(fxS, x0 + 16 * CHAR_W, y + ROW_H / 2);
     }
 

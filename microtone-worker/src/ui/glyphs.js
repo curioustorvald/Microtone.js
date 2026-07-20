@@ -297,6 +297,14 @@ function drawTickCode(ctx, code, x, y, w, h) {
 }
 
 /**
+ * Flat single-ink palette — every glyph part in one colour. Used for the
+ * pattern-ditto ghost cells, which must read as "not really here".
+ */
+export function monoPalette(colour) {
+  return { note: colour, sentinel: colour, dim: colour, offGrid: colour };
+}
+
+/**
  * Paint the 4-char note cell at (x, y).
  * palette: {note, sentinel, dim, offGrid} — off-grid ("out of tune") notes
  * paint in palette.offGrid (taut's yellow). rawMode forces hex4 for playable

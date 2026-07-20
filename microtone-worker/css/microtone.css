@@ -41,6 +41,7 @@
   --cv-cue-line: #4a5364;   /* cue boundary rule */
   --cv-col-pan: #d08bff;    /* pan column ink */
   --cv-sel: #37506e;        /* block selection fill */
+  --cv-ditto: #5f6675;      /* pattern-ditto ghost cells (light grey on dark) */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -89,6 +90,7 @@
   --cv-cue-line: #9aa3b4;
   --cv-col-pan: #9c3fb4;
   --cv-sel: #b8d0ec;        /* block selection fill */
+  --cv-ditto: #a3a9b4;      /* pattern-ditto ghost cells (dark grey on light) */
 
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;

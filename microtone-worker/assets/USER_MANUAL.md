@@ -606,6 +606,19 @@ sidebar (also at [Note Effects](#effects)).
 | W | Global vol slide | `$xy00` |
 | Y | Panbrello | `$xy00` — speed, depth |
 
+### Ditto ghosts
+
+Effect 7 repeats earlier rows without copying them, so the repeated rows look
+empty even though they play. The Timeline and Patterns grids therefore paint
+the **would-be-repeated values in grey** on every row a ditto covers — the note,
+instrument, volume, pan or effect that will actually sound, taken from the row
+being repeated.
+
+Grey means "not really here": ghosts only ever fill sub-columns the row leaves
+blank, and anything you type wins immediately and returns to its own colour.
+The row carrying the `7$llrr` command keeps showing that command, even though
+the engine plays the repeated row's effect there instead.
+
 ## Keyboard reference
 
 ### Global and navigation
