@@ -20,6 +20,7 @@ import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { generateTrackerAudio } from "./mixer.js";
 import { triggerMetaOrNote, triggerNote } from "./trigger.js";
+import { reconstructDittoState } from "./row.js";
 
 // Scratch instrument slot for the raw-sample preview (jamSample). It sits just
 // past the 1024 addressable bank slots so an audition never borrows a real one;
@@ -236,6 +237,9 @@ export class TaudEngine {
       v.dittoActive = false; v.dittoSourceStart = 0; v.dittoLength = 0; v.dittoEndRow = 0;
     }
     ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
+    // Re-arm any Pattern-Ditto (effect 7) region that a mid-pattern start lands
+    // inside, so a ghosted (repeated) row sounds when you play from it (item 81).
+    reconstructDittoState(this, ts, ts.rowIndex);
   }
 
   setTrackerMixerFlags(ph, flags) {

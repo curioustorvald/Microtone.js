@@ -420,7 +420,9 @@ screen).
 
 Projects are saved into the browser's **origin-private file system** — private
 storage owned by the site, never uploaded anywhere. The table lists your saved
-projects with size and modification time; **Open** loads, **Delete** removes.
+projects with size and modification time; **Open** loads, **✎ Rename** changes
+the file name (renaming the currently-open project keeps it current, so a later
+Save targets the new name), **⬇** downloads a copy, and **✕** deletes.
 In private-browsing mode OPFS may be unavailable — a warning appears, and you
 should use **Export** to keep your work.
 
@@ -618,6 +620,10 @@ Grey means "not really here": ghosts only ever fill sub-columns the row leaves
 blank, and anything you type wins immediately and returns to its own colour.
 The row carrying the `7$llrr` command keeps showing that command, even though
 the engine plays the repeated row's effect there instead.
+
+Starting playback **from a ghost row** sounds it: seeking into the middle of a
+ditto region rebuilds the repeat so the note you see in grey is the note you
+hear, exactly as if you had played through the arming row.
 
 ## Keyboard reference
 

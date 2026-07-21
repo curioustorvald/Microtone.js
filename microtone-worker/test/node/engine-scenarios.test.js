@@ -429,3 +429,51 @@ test("item 72: a buildMetaRecord metainstrument sounds both layers", () => {
   eng.renderChunk(0, out);
   assert.ok(out.some((b) => b !== 128), "the meta must produce audio");
 });
+
+// item 81: starting playback mid-pattern on a ghosted (Pattern-Ditto, effect 7)
+// row must SOUND — setTrackerRow re-arms the ditto region so the ghost row
+// re-derives its inherited note, instead of the engine seeing no active ditto
+// (the arm row was seeked past) and playing the empty raw cell.
+test("mid-pattern seek onto a ditto ghost row re-arms + sounds it (item 81)", () => {
+  const eng = makeTestEngine(); // looping inst in slot 1
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; } // vol/pan no-op
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;                 // row 0: C4 (0x5000), inst 1
+  pat[8 + 5] = 0x07; pat[8 + 6] = 0x04; pat[8 + 7] = 0x01;  // row 1: OP_7 arg 0x0104 (len 1, rep 4)
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0; cue[1] = 0; // ch0 → pattern 0
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+
+  // Seek onto row 3 — a pure ghost (the arm at row 1 covers rows 1..4, srcRow 0).
+  eng.setCuePosition(0, 0);
+  eng.setTrackerRow(0, 3);
+  const ts = eng.playheads[0].trackerState;
+  const v = ts.voices[0];
+  assert.equal(v.dittoActive, true, "ditto re-armed on the mid-pattern seek");
+  assert.equal(v.dittoSourceStart, 0);
+  assert.equal(v.dittoLength, 1);
+  assert.equal(v.dittoEndRow, 4);
+
+  eng.play(0);
+  renderSamples(eng, 512); // process row 3's first tick
+  assert.equal(v.active, true, "the ghost row triggers the note");
+  assert.equal(v.noteVal, 0x5000, "it sounds the ditto SOURCE note (C4)");
+
+  // Control: seeking PAST the ditto region (row 5 > endRow 4) onto an empty row
+  // must NOT trigger — the reconstruction sets state, it doesn't over-play.
+  const eng2 = makeTestEngine();
+  eng2.uploadPattern(0, pat);
+  eng2.uploadCue(0, cue);
+  eng2.setBPM(0, 125); eng2.setTickRate(0, 6); eng2.setMasterVolume(0, 255);
+  eng2.setCuePosition(0, 0);
+  eng2.setTrackerRow(0, 5);
+  const v2 = eng2.playheads[0].trackerState.voices[0];
+  assert.equal(v2.dittoActive, true, "arm still detected");
+  assert.equal(v2.dittoEndRow, 4, "but its coverage ended at row 4");
+  eng2.play(0);
+  renderSamples(eng2, 512);
+  assert.equal(v2.active, false, "empty row past the ditto stays silent");
+});

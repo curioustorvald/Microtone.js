@@ -246,6 +246,27 @@ function updateStatus() {
   $("octDisp").textContent = jam.octave;
   $("instDisp").textContent = hex2(jam.currentInst);
   updateUndoUI();
+  updateHint();
+}
+
+/** Contextual status-bar hint (item 78): text follows the active view — and,
+ *  on the grid views, the record mode. No doc → a "get started" prompt. */
+function updateHint() {
+  const el = $("stHint");
+  if (!el) return;
+  let key = "status.hint"; // generic / no-doc prompt
+  if (store.doc || store.view === "files") {
+    switch (store.view) {
+      case "timeline": key = store.record ? "status.hint.timelineRec" : "status.hint.timeline"; break;
+      case "pattern":  key = store.record ? "status.hint.patternRec" : "status.hint.pattern"; break;
+      case "cues": key = "status.hint.cues"; break;
+      case "samples": key = "status.hint.samples"; break;
+      case "instruments": key = "status.hint.instruments"; break;
+      case "project": key = "status.hint.project"; break;
+      case "files": key = "status.hint.files"; break;
+    }
+  }
+  el.textContent = t(key);
 }
 
 function updateUndoUI() {
@@ -262,6 +283,8 @@ function updateUndoUI() {
 store.on("saved", updateStatus);
 store.on("edit", updateUndoUI);
 store.on("status", updateStatus); // e.g. project rename
+store.on("view", updateHint);     // per-view contextual hint (item 78)
+updateHint();                     // initial no-doc prompt
 
 /** New Project wizard — optionally seeded from a .tsii instrument bank. */
 async function newProject({ fromBank = null, bankName = null } = {}) {
@@ -576,6 +599,7 @@ function setRecord(on) {
   timeline.invalidate();
   cuesView.invalidate();
   patternView.invalidate();
+  updateHint(); // record mode changes the grid-view hint (item 78)
 }
 $("recBtn").addEventListener("click", () => setRecord(!store.record));
 $("undoBtn").addEventListener("click", () => store.undo?.undo());
@@ -1028,7 +1052,7 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, jam, instLookup, loadBytes, playCursor };
+window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, jam, instLookup, loadBytes, playCursor };
 
 // ── frame loop ──
 function frame() {

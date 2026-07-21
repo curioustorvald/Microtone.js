@@ -74,11 +74,14 @@ export class FilesView {
           `<td>${(e.size / 1024).toFixed(1)} K</td>` +
           `<td>${new Date(e.mtime).toLocaleString()}</td>`;
         const td = document.createElement("td");
+        const renameBtn = mkBtn("✎", () => this.rename(e.name));
+        renameBtn.title = t("common.rename");
         td.append(
           mkBtn(t("files.open"), async () => {
             await this.cb.openBytes(e.name, await opfs.read(e.name));
             this.refresh();
           }),
+          renameBtn,
           mkBtn("⬇", async () => download(await opfs.read(e.name), e.name)),
           mkBtn("✕", async () => {
             const yes = await showModal({ title: t("files.deleteAsk", { name: e.name }), okLabel: t("common.delete") });
@@ -117,6 +120,30 @@ export class FilesView {
     doc.dirty = false;
     this.store.fileName = name;
     this.store.emit("saved", name);
+    this.refresh();
+  }
+
+  /** Rename an OPFS project file (item 80). If it is the currently-open file,
+   *  the status-bar filename follows so a later Save targets the new name. */
+  async rename(oldName) {
+    const result = await showModal({
+      title: t("files.renameTitle", { name: oldName }),
+      fields: [{ name: "name", label: t("files.name"), value: oldName }],
+      okLabel: t("common.rename"),
+    });
+    if (!result) return;
+    let name = (result.name || "").trim();
+    if (!name.endsWith(".taud")) name += ".taud";
+    if (!name || name === oldName) return;
+    if ((await opfs.list()).some((f) => f.name === name)) {
+      await showModal({ title: t("files.renameExists", { name }), okLabel: t("common.ok") });
+      return;
+    }
+    await opfs.rename(oldName, name);
+    if (this.store.fileName === oldName) {
+      this.store.fileName = name;
+      this.store.emit("status"); // status-bar filename follows the rename
+    }
     this.refresh();
   }
 

@@ -22,6 +22,7 @@ export function showAbout() {
     <p>
       <a href="docs.html" target="_blank" rel="noopener">${esc(t("about.docs"))}</a> ·
       <a href="https://github.com/curioustorvald/Microtone.js" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="https://bsky.app/profile/did:plc:3enk4wk6acr23segkntcdzzc" target="_blank" rel="noopener">Bluesky</a> ·
       <a href="https://paypal.me/curioustorvald" target="_blank" rel="noopener">${esc(t("topbar.donate"))}</a> ·
       <a href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener">${esc(t("topbar.sponsor"))}</a>
     </p>

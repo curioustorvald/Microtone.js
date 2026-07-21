@@ -199,7 +199,9 @@
     <span id="stFile" class="dim" data-i18n="status.noFile">no file</span>
     <span id="stDirty" class="dirty" hidden>&#65038;●</span>
     <div class="grow"></div>
-    <span id="stHint" class="dim" data-i18n="status.hint">Space play/stop · arrows navigate · wheel scroll</span>
+    <!-- Contextual per-view hint, driven by app.js updateHint() (item 78);
+         no data-i18n so applyDom can't clobber the view-specific text. -->
+    <span id="stHint" class="dim">Open or import a file to begin</span>
     <a class="gh-link" href="docs.html" target="_blank" rel="noopener" data-i18n="status.docs" data-i18n-title="status.docsTitle">Docs &#65038;↗</a>
   </footer>
 

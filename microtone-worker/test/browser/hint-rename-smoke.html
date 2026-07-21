@@ -1,0 +1,99 @@
+<!doctype html><meta charset="utf-8"><title>contextual hint (item 78) + file rename (item 80)</title>
+<pre id="out">running…</pre>
+<!-- real-time /hang recipe (tools/test-server.py on :8932):
+       python3 tools/test-server.py
+       chromium --headless=new --dump-dom --timeout=60000 \
+         http://localhost:8932/test/browser/hint-rename-smoke.html -->
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1100px;height:640px"></iframe>
+<iframe id="app2" src="../../index.html" style="width:900px;height:360px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+const en = (await import("../../src/ui/lang/en.js")).default;
+
+async function bootFrame(id, needDoc) {
+  const app = document.getElementById(id);
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  if (needDoc) for (let i = 0; i < 200 && !win.__microtone?.store.doc; i++) await sleep(50);
+  return win;
+}
+
+(async () => {
+  const app2Promise = bootFrame("app2", false); // kick the doc-less boot off in parallel
+  const win = await bootFrame("app", true);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  const doc = win.document;
+  const stHint = () => doc.getElementById("stHint").textContent;
+  const showTab = async (view) => {
+    doc.querySelector(`#tabs button[data-view="${view}"]`).click();
+    await sleep(30);
+  };
+
+  // ── item 78: hint text is per-view ──
+  // WHEN boots with record ON (store.record = true), so Timeline shows the
+  // record-mode hint first.
+  await showTab("timeline");
+  check(stHint() === en["status.hint.timelineRec"], "Timeline (record) hint", stHint());
+
+  // Toggle record off via the ● button → the navigate-mode hint.
+  doc.getElementById("recBtn").click();
+  await sleep(30);
+  check(M.store.record === false, "record toggled off");
+  check(stHint() === en["status.hint.timeline"], "Timeline (navigate) hint", stHint());
+
+  for (const [view, key] of [
+    ["cues", "status.hint.cues"],
+    ["pattern", "status.hint.pattern"],
+    ["samples", "status.hint.samples"],
+    ["instruments", "status.hint.instruments"],
+    ["project", "status.hint.project"],
+    ["files", "status.hint.files"],
+  ]) {
+    await showTab(view);
+    check(stHint() === en[key], `${view} hint`, stHint());
+  }
+
+  // Every hint distinct (a real contextual set, not one repeated string).
+  const seen = new Set();
+  for (const k of ["timeline", "timelineRec", "cues", "pattern", "patternRec",
+                   "samples", "instruments", "project", "files"]) seen.add(en["status.hint." + k]);
+  check(seen.size >= 8, "hints are distinct per context", `${seen.size} unique`);
+
+  // ── item 80: File-tab rename modal ──
+  await showTab("files");
+  check(typeof M.filesView.rename === "function", "FilesView.rename exists");
+  // Drive the rename dialog directly (no OPFS write needed — OPFS writes hang in
+  // the sandboxed headless): the modal appears BEFORE any storage call.
+  M.filesView.rename("demo.taud"); // fire-and-forget; await the dialog
+  await sleep(60);
+  const dlg = doc.querySelector("dialog.modal");
+  check(!!dlg, "rename dialog opens");
+  if (dlg) {
+    check(dlg.textContent.includes("Rename demo.taud"), "dialog title names the file", dlg.querySelector("h3")?.textContent);
+    const okBtn = dlg.querySelector(".modal-buttons button");
+    check(okBtn && okBtn.textContent === en["common.rename"], "OK button reads Rename", okBtn?.textContent);
+    const nameInput = dlg.querySelector("input");
+    check(nameInput && nameInput.value === "demo.taud", "name field seeded with current name", nameInput?.value);
+    // Cancel — second button — so nothing touches OPFS.
+    dlg.querySelectorAll(".modal-buttons button")[1].click();
+    await sleep(30);
+    check(!doc.querySelector("dialog.modal"), "dialog closes on cancel");
+  }
+
+  // ── item 78: no-doc generic prompt (second, doc-less instance) ──
+  const win2 = await app2Promise;
+  check(!!win2.__microtone && !win2.__microtone.store.doc, "second instance booted doc-less");
+  const h2 = win2.document.getElementById("stHint").textContent;
+  check(h2 === en["status.hint"], "no-doc generic hint", h2);
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAIL`);
+})().catch((e) => log("THREW: " + e.message + "\n" + e.stack));
+</script>

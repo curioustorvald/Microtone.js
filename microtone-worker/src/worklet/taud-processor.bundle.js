@@ -3484,6 +3484,50 @@ function advanceTrackerCue(eng, ts, playhead) {
   playhead.position = ts.cuePos;
 }
 
+/**
+ * Rebuild each voice's Pattern-Ditto (effect 7) arm state as if the current
+ * cue's pattern had been played from row 0 up to (but NOT including) startRow.
+ * This lets playback that STARTS mid-pattern on a ghosted (repeated) row still
+ * sound it — the ghost cells are painted from the same static expansion but the
+ * engine only re-derives them at play time once dittoActive is set on the
+ * arming row, so seeking past the arm left the ghosts silent (item 81).
+ *
+ * Faithful mirror of the arm branch in applyTrackerRow (reads RAW rows only, so
+ * cascaded/re-armed regions resolve exactly like the running engine); call it
+ * right after the play-time voice reset in setTrackerRow. [needs the same TSVM
+ * + taut.js fix].
+ */
+function reconstructDittoState(eng, ts, startRow) {
+  const cue = eng.cueSheet[ts.cuePos];
+  const patLen = cue.rowLimit();
+  const limit = Math.min(startRow, patLen);
+  const channels = eng.channelCount();
+  for (let vi = 0; vi < channels; vi++) {
+    const voice = ts.voices[vi];
+    voice.dittoActive = false;
+    voice.dittoSourceStart = 0;
+    voice.dittoLength = 0;
+    voice.dittoEndRow = 0;
+    const patNum = cue.pattern(vi);
+    if (patNum === PATTERN_EMPTY) continue;
+    const patIdx = clamp(patNum, 0, NUM_PATTERNS - 1);
+    const rows = eng.patternRead(patIdx);
+    for (let n = 0; n < limit; n++) {
+      const rawRow = rows[n];
+      if (rawRow.effect !== EffectOp.OP_7 || rawRow.effectArg === 0) continue;
+      const length = (rawRow.effectArg >>> 8) & 0xff;
+      const repeats = rawRow.effectArg & 0xff;
+      if (length > 0 && repeats > 0 && length <= n) {
+        voice.dittoSourceStart = n - length;
+        voice.dittoLength = length;
+        voice.dittoEndRow = Math.min(n + length * repeats - 1, patLen - 1);
+        voice.dittoActive = true;
+      }
+      // else: malformed — leave a previously-armed ditto alone.
+    }
+  }
+}
+
 /** Per-pattern voice state reset (S$Bx loop counters + ditto), on every cue advance. */
 function resetPatternLoopState(ts) {
   for (const voice of ts.voices) {
@@ -4187,6 +4231,7 @@ function generateTrackerAudio(eng, playhead, out) {
 
 
 
+
 // Scratch instrument slot for the raw-sample preview (jamSample). It sits just
 // past the 1024 addressable bank slots so an audition never borrows a real one;
 // every `instruments[voice.instrumentId]` lookup indexes it directly (no & mask).
@@ -4402,6 +4447,9 @@ class TaudEngine {
       v.dittoActive = false; v.dittoSourceStart = 0; v.dittoLength = 0; v.dittoEndRow = 0;
     }
     ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
+    // Re-arm any Pattern-Ditto (effect 7) region that a mid-pattern start lands
+    // inside, so a ghosted (repeated) row sounds when you play from it (item 81).
+    reconstructDittoState(this, ts, ts.rowIndex);
   }
 
   setTrackerMixerFlags(ph, flags) {
