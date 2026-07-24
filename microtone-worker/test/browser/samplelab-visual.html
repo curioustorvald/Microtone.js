@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sample Lab visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Opens the Lab on a synthetic take with chop mode + the EQ panel up, and
+       leaves it open — a screenshot/layout harness like newproject-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/lab.png \
+           --timeout=15000 "http://localhost:8932/test/browser/samplelab-visual.html?theme=dark"
+       (?theme=light for the light theme). -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const theme = new URLSearchParams(location.search).get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+      const rate = 32000;
+      const data = new win.Float32Array(rate * 2);
+      for (const at of [0.25, 0.75, 1.3, 1.7]) {
+        const start = Math.round(at * rate), dur = Math.round(rate * 0.09);
+        for (let i = 0; i < dur; i++) {
+          const decay = Math.exp(-i / (rate * 0.02));
+          data[start + i] = 0.85 * Math.sin(i / 3) * decay;
+        }
+      }
+      openSampleLab(win.__microtone.store, { data, rate, name: "visual take", sourceLabel: "take.wav" });
+      const dlg = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const d = win.document.querySelector(".samplelab-modal");
+          if (d) { clearInterval(poll); resolve(d); }
+        }, 50);
+      });
+      const q = new URLSearchParams(location.search);
+      if (q.get("chop") !== "0") { dlg.__lab.setChop(true); dlg.__lab.toggleChunk(0); }
+      if (q.get("eq") !== "0") {
+        dlg.__lab.setBand(2, { gainDb: 6 });
+        dlg.__lab.setBand(4, { gainDb: -4 });
+        dlg.querySelector(".lab-eqtoggle").click();
+      }
+      dlg.__lab.setSelection(Math.round(0.75 * rate), Math.round(1.3 * rate));
+    })();
+  </script>
+</body>
+</html>

@@ -365,58 +365,105 @@ export function buildFreshInstRecord({ samplePtr, sampleLength, samplingRate,
  * `nameBytes`. Returns {error} on failure, else a plan shaped exactly like
  * planImport's — apply it with importBankOp for full undo.
  */
-export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, rate, loop = false }) {
+export function planSampleImport(destDoc, item) {
+  return planMultiSampleImport(destDoc, [item]);
+}
+
+/**
+ * The N-sample generalisation (item 84 — the Sample Lab's chopper lands every
+ * kept chunk in ONE undo step): `items` is [{nameBytes, pcm, rate, loop}].
+ * Each item becomes its own instrument (free $01–$FF slots ascending, in item
+ * order); PCM dedupes against the pool AND within the batch; INam/SNam names
+ * land per item (a deduped span keeps its existing name; for a batch-internal
+ * dupe the first item's name wins). Same plan shape, same importBankOp.
+ */
+export function planMultiSampleImport(destDoc, items) {
   if (destDoc.sampleInstImage === null) {
     return { error: "This project has no sample+instrument image to import into." };
   }
-  if (!pcm || pcm.length === 0) return { error: "The decoded sample is empty." };
-  if (pcm.length > 0xffff) {
-    return { error: `Sample too long: ${pcm.length} bytes (65535 max) — resample it first.` };
+  if (!items || items.length === 0) return { error: "The decoded sample is empty." };
+  for (const it of items) {
+    if (!it.pcm || it.pcm.length === 0) return { error: "The decoded sample is empty." };
+    if (it.pcm.length > 0xffff) {
+      return { error: `Sample too long: ${it.pcm.length} bytes (65535 max) — resample it first.` };
+    }
   }
 
+  // ── slots: one per item, lowest free $01–$FF ascending ──
   const taken = new Set(destDoc.usedInstrumentSlots());
+  const slots = [];
   let slot = 1;
-  while (slot <= 255 && taken.has(slot)) slot++;
-  if (slot > 255) {
-    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  for (let i = 0; i < items.length; i++) {
+    while (slot <= 255 && taken.has(slot)) slot++;
+    if (slot > 255) {
+      return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+    }
+    taken.add(slot);
+    slots.push(slot);
   }
 
+  // ── pool: dedupe (census, then batch), first-fit the rest ──
   const destCensus = destDoc.sampleList();
   const destPool = destDoc.sampleBin;
-  let ptr = null;
+  const extents = freeExtents(destCensus);
   const samples = [];
-  for (const e of destCensus) {
-    if (e.len === pcm.length && bytesEqual(destPool.subarray(e.ptr, e.ptr + e.len), pcm)) {
-      ptr = e.ptr; // identical content already pooled — reuse it
-      break;
+  const ptrs = [];
+  let newSampleBytes = 0, dedupedSamples = 0;
+  for (const it of items) {
+    let ptr = null;
+    for (const e of destCensus) {
+      if (e.len === it.pcm.length && bytesEqual(destPool.subarray(e.ptr, e.ptr + e.len), it.pcm)) {
+        ptr = e.ptr; // identical content already pooled — reuse it
+        dedupedSamples++;
+        break;
+      }
     }
-  }
-  if (ptr === null) {
-    const ext = freeExtents(destCensus).find((x) => x.len >= pcm.length);
-    if (!ext) {
-      return { error: `Sample pool full: needs ${pcm.length} more bytes and no free extent is large enough.` };
+    if (ptr === null) {
+      for (const ns of samples) {
+        if (bytesEqual(ns.bytes, it.pcm)) { ptr = ns.ptr; dedupedSamples++; break; }
+      }
     }
-    ptr = ext.ptr;
-    samples.push({ ptr, bytes: Uint8Array.from(pcm), srcKeys: [] });
+    if (ptr === null) {
+      const ext = extents.find((x) => x.len >= it.pcm.length);
+      if (!ext) {
+        return { error: `Sample pool full: needs ${it.pcm.length} more bytes and no free extent is large enough.` };
+      }
+      ptr = ext.ptr;
+      ext.ptr += it.pcm.length;
+      ext.len -= it.pcm.length;
+      samples.push({ ptr, bytes: Uint8Array.from(it.pcm), srcKeys: [], nameBytes: it.nameBytes ?? new Uint8Array(0) });
+      newSampleBytes += it.pcm.length;
+    }
+    ptrs.push(ptr);
   }
 
-  const record = buildFreshInstRecord({
-    samplePtr: ptr,
-    sampleLength: pcm.length,
-    samplingRate: Math.max(1, Math.min(0xffff, Math.round(rate) || 0)),
-    // Optional forward loop over the whole sample — a painted single-cycle
-    // waveform (item 53) needs it to sustain as a tone.
-    sampleLoopEnd: loop ? pcm.length : 0,
-    loopMode: loop ? 1 : 0,
-  });
+  const insts = items.map((it, i) => ({
+    srcSlot: -(i + 1), // unique synthetic keys so slotMap can't collide
+    destSlot: slots[i],
+    topLevel: true,
+    record: buildFreshInstRecord({
+      samplePtr: ptrs[i],
+      sampleLength: it.pcm.length,
+      samplingRate: Math.max(1, Math.min(0xffff, Math.round(it.rate) || 0)),
+      // Optional forward loop over the whole sample — a painted single-cycle
+      // waveform (item 53) needs it to sustain as a tone.
+      sampleLoopEnd: it.loop ? it.pcm.length : 0,
+      loopMode: it.loop ? 1 : 0,
+    }),
+    ixmpBlob: null,
+    ixmpCount: 0,
+  }));
 
-  // INam: splice the instrument name in by slot.
+  // INam: splice each instrument name in by slot.
   const destInamPayload = sectionPayload(destDoc, "INam");
+  const anyName = items.some((it) => (it.nameBytes?.length ?? 0) > 0);
   let inamPayload = null;
-  if (nameBytes.length > 0 || destInamPayload !== null) {
+  if (anyName || destInamPayload !== null) {
     const parts = splitNameTable(destInamPayload);
-    while (parts.length <= slot) parts.push(new Uint8Array(0));
-    parts[slot] = nameBytes;
+    items.forEach((it, i) => {
+      while (parts.length <= slots[i]) parts.push(new Uint8Array(0));
+      parts[slots[i]] = it.nameBytes ?? new Uint8Array(0);
+    });
     inamPayload = joinNameTable(parts);
   }
 
@@ -425,19 +472,18 @@ export function planSampleImport(destDoc, { nameBytes = new Uint8Array(0), pcm, 
   const snamNames = new Map();
   const destSnam = splitNameTable(sectionPayload(destDoc, "SNam"));
   destCensus.forEach((e, i) => snamNames.set(sampleKey(e.ptr, e.len), destSnam[i] ?? new Uint8Array(0)));
-  const key = sampleKey(ptr, pcm.length);
-  if (!snamNames.has(key)) snamNames.set(key, nameBytes);
-  const writeSnam = nameBytes.length > 0 || sectionPayload(destDoc, "SNam") !== null;
+  for (const ns of samples) snamNames.set(sampleKey(ns.ptr, ns.bytes.length), ns.nameBytes);
+  const writeSnam = anyName || sectionPayload(destDoc, "SNam") !== null;
 
   return {
-    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob: null, ixmpCount: 0 }],
+    insts,
     samples,
     inamPayload,
     snamNames,
     writeSnam,
-    slotMap: new Map([[-1, slot]]),
-    newSampleBytes: samples.length > 0 ? pcm.length : 0,
-    dedupedSamples: samples.length > 0 ? 0 : 1,
+    slotMap: new Map(insts.map((it) => [it.srcSlot, it.destSlot])),
+    newSampleBytes,
+    dedupedSamples,
   };
 }
 

@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { planSampleImport, buildFreshInstRecord, planExistingSampleAsInstrument } from "../../src/doc/bankmerge.js";
+import {
+  planSampleImport, planMultiSampleImport, buildFreshInstRecord, planExistingSampleAsInstrument,
+} from "../../src/doc/bankmerge.js";
 import { importBankOp } from "../../src/doc/ops.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
@@ -170,6 +172,77 @@ test("planSampleImport: rejects empty / oversized PCM", () => {
   const doc = loadWhen();
   assert.ok(planSampleImport(doc, { pcm: new Uint8Array(0), rate: 32000 }).error);
   assert.ok(planSampleImport(doc, { pcm: new Uint8Array(0x10000), rate: 32000 }).error);
+});
+
+test("planMultiSampleImport: N chunks land as N instruments in one undoable op (item 84)", () => {
+  const doc = loadWhen();
+  const before = Buffer.from(doc.toBytes());
+  const undo = new UndoStack(doc);
+  const usedBefore = new Set(doc.usedInstrumentSlots());
+  const censusBefore = doc.sampleList().length;
+
+  const chunks = [mkPcm(300), mkPcm(400), mkPcm(500)];
+  const items = chunks.map((pcm, i) => ({
+    nameBytes: enc.encode(`take ${i + 1}`), pcm, rate: 32000 - i,
+  }));
+  const plan = planMultiSampleImport(doc, items);
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.insts.length, 3);
+  assert.equal(plan.newSampleBytes, 1200);
+  const slots = plan.insts.map((it) => it.destSlot);
+  assert.deepEqual([...slots].sort((a, b) => a - b), slots, "slots ascend in item order");
+  assert.ok(slots.every((s) => s >= 1 && s <= 255 && !usedBefore.has(s)));
+  assert.equal(new Set(slots).size, 3, "distinct slots");
+
+  undo.apply(importBankOp(plan));
+  const census = doc.sampleList();
+  assert.equal(census.length, censusBefore + 3);
+  chunks.forEach((pcm, i) => {
+    const inst = doc.instruments[slots[i]];
+    assert.equal(inst.sampleLength, pcm.length);
+    assert.equal(inst.samplingRate, 32000 - i);
+    assert.deepEqual(
+      [...doc.sampleBin.subarray(inst.samplePtr, inst.samplePtr + pcm.length)], [...pcm]);
+    assert.equal(doc.instrumentName(slots[i]), `take ${i + 1}`, "INam per chunk");
+    const entry = census.find((e) => e.ptr === inst.samplePtr && e.len === pcm.length);
+    assert.equal(doc.sampleName(entry.index), `take ${i + 1}`, "SNam per chunk");
+  });
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(before), "ONE undo step, byte-exact");
+});
+
+test("planMultiSampleImport: batch-internal dupes share a span; first name wins", () => {
+  const doc = loadWhen();
+  const undo = new UndoStack(doc);
+  const pcm = mkPcm(256);
+  const plan = planMultiSampleImport(doc, [
+    { nameBytes: enc.encode("first"), pcm, rate: 32000 },
+    { nameBytes: enc.encode("second"), pcm: Uint8Array.from(pcm), rate: 16000 },
+  ]);
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.samples.length, 1, "one pool write for identical content");
+  assert.equal(plan.dedupedSamples, 1);
+  assert.equal(plan.newSampleBytes, 256);
+
+  undo.apply(importBankOp(plan));
+  const [a, b] = plan.insts.map((it) => doc.instruments[it.destSlot]);
+  assert.equal(a.samplePtr, b.samplePtr, "both instruments point at the shared span");
+  assert.equal(b.samplingRate, 16000, "each keeps its own rate");
+  const entry = doc.sampleList().find((e) => e.ptr === a.samplePtr && e.len === 256);
+  assert.equal(doc.sampleName(entry.index), "first", "first item's sample name wins");
+});
+
+test("planMultiSampleImport: errors when the batch outgrows $01–$FF or the pool", () => {
+  const doc = loadWhen();
+  for (let s = 1; s <= 254; s++) doc.markInstUsed(s); // leave exactly one slot
+  const two = planMultiSampleImport(doc, [
+    { pcm: mkPcm(16), rate: 32000 }, { pcm: mkPcm(17), rate: 32000 },
+  ]);
+  assert.match(two.error ?? "", /note-addressable/);
+  const one = planMultiSampleImport(doc, [{ pcm: mkPcm(16), rate: 32000 }]);
+  assert.ok(!one.error, "a single item still fits the last slot");
+  assert.ok(planMultiSampleImport(doc, []).error, "empty batch refused");
 });
 
 test("escapeNonAscii/unescapeName: inverse pair, idempotent escape", () => {

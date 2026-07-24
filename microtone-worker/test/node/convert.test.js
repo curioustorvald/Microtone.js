@@ -143,7 +143,7 @@ test("mod2taud stamps notation 1 and its notes land on the ProTracker grid", () 
   const doc = new Document(parseTaud(out));
   assert.equal(doc.meta.songMeta[0].notation, 1, "sMet notation must be ProTracker pitch");
   const preset = presetForNotation(doc.meta.songMeta[0].notation, doc);
-  assert.equal(preset.name, "ProTracker pitch");
+  assert.equal(preset.name, "ProTracker Temperament"); // renamed in e31d771
 
   const onPt = surveyTuning(doc.songs[0], preset, null);
   assert.equal(onPt.total, periods.length);

@@ -155,6 +155,13 @@ export class InstrumentsView {
       const { paintNewSample } = await import("../popups/waveformpaint.js");
       adopt(await paintNewSample(this.store));
     });
+    const recBtn = document.createElement("button");
+    recBtn.textContent = t("inst.record");
+    recBtn.title = t("inst.recordTitle");
+    recBtn.addEventListener("click", async () => {
+      const { recordSample } = await import("../popups/recordsample.js");
+      adopt(await recordSample(this.store));
+    });
     const metaBtn = document.createElement("button");
     metaBtn.textContent = t("inst.newMeta");
     metaBtn.title = t("inst.newMetaTitle");
@@ -162,7 +169,7 @@ export class InstrumentsView {
       const { showNewMeta } = await import("../popups/newmeta.js");
       adopt(await showNewMeta(this.store));
     });
-    bar.append(addBtn, importBtn, smpBtn, paintBtn, metaBtn);
+    bar.append(addBtn, importBtn, smpBtn, paintBtn, recBtn, metaBtn);
     this.listEl.appendChild(bar);
     // Only top-level instruments are listed — a metainstrument's sub-instruments
     // are not directly selectable (item 59); edit them via their metainstrument.

@@ -298,6 +298,59 @@ original bytes.
 DSP edits rewrite the pool bytes, so *every* instrument using the sample hears
 the change. **Apply** keeps the edits; **Cancel** rolls all of them back.
 
+**Lab…** opens a *copy* of the selected sample in the Sample Lab (below) —
+use it when you want to crop, EQ or chop a pooled sample: the result lands as
+new samples and instruments, and the original is untouched. (A pooled span's
+length can never change in place — every other pool pointer would move.)
+
+## The Sample Lab
+
+The Sample Lab is the import-time sample editor — a tiny Audacity that opens
+whenever audio enters the project from outside: **New from sample…** (audio
+files), **Record sample…** (the microphone) and the Samples view's **Lab…**
+button. It works on a high-resolution float copy of the take, so every edit
+here happens *before* the 8-bit, 65535-frame pool format is committed — the
+one place where cropping and resampling are still reversible.
+
+- **Waveform** — drag to select a range; mouse wheel scrolls, Ctrl+wheel
+  zooms at the pointer, and the Zoom/Fit buttons do the same from the bar.
+  Space plays the selection (or everything); Delete cuts it.
+- **Tools** — Crop (keep only the selection), Cut, Silence, Fade in/out,
+  Gain… (dB), Normalise, Reverse, Invert, Remove DC. Tools apply to the
+  selection, or the whole take when nothing is selected. The Lab keeps its own
+  undo/redo (Ctrl+Z / Ctrl+Y) separate from the project's.
+- **EQ** — a five-band parametric equaliser (high-pass, low shelf, two peaks,
+  high shelf) with a live response graph. Playback previews the bands in real
+  time; **Apply EQ** renders them into the sample at 2× oversampling, which
+  keeps bell and shelf shapes honest near the top of the spectrum.
+- **Chop** (transient splitting) — the **Chop** button detects transients and
+  splits the take into chunks, one flag per hit. Click the waveform to add a
+  split, click a flag to remove it, and use the **Threshold** slider +
+  **Detect** to re-run detection. Each chunk appears as a pill under the
+  waveform: click its number to select it (audition with Space), untick it to
+  leave it out of the import.
+  - **Merging chunks** — removing a split flag joins the two chunks around it,
+    so clicking a flag merges that pair. To merge several consecutive chunks at
+    once, drag a selection across them and press **Merge** — every split inside
+    the selection is removed and the chunks collapse into one.
+  - **Import N chunks** lands every kept chunk as its own sample + instrument,
+    named `name 1…N`, in a single undo step.
+- **Rate and the frame budget** — the info line always shows what will land
+  in the pool: each chunk is resampled to the target rate (32 kHz ceiling —
+  the engine's output rate) with a band-limited Kaiser-sinc resampler (the
+  same kernel the converters use), and anything still longer than 65535
+  frames is squeezed to fit with the rate following, preserving pitch. Both
+  steps are irreversible once imported, which is exactly why the Lab shows
+  them first — crop or chop until the numbers read the way you want.
+
+### Recording from the microphone
+
+**Record sample…** (Instruments view) captures raw PCM from the microphone —
+no lossy codec touches the take. A level meter runs while you record (up to
+120 s); **Edit in Sample Lab** then opens the take for cropping and chopping
+before anything reaches the pool. Browsers only expose the microphone on
+secure origins, and will ask for permission on first use.
+
 ## Instruments (F5)
 
 The left list shows every defined instrument slot; rows light up while an
@@ -305,8 +358,9 @@ instrument plays. Above it:
 
 - **Add…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
 - **Import…** — merge instruments (with their samples and patches) from a `.taud`, `.tsii` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
-- **New from sample…** — build a fresh instrument from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded, mixed to mono and squeezed into the engine's 8-bit format.
+- **New from sample…** — build instruments from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded to mono and opens in the [Sample Lab](#the-sample-lab) for cropping, EQ and chopping before it is committed to the engine's 8-bit format.
 - **Paint sample…** — draw a waveform by hand and add it as an instrument.
+- **Record sample…** — record from the microphone; the take opens in the Sample Lab.
 - **New metainstrument…** — layer several of the project's instruments into one (below).
 
 All imports are single undo steps.

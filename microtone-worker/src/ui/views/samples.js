@@ -58,7 +58,28 @@ export class SamplesView {
       await paintEditSample(this.store, s);
       this.refresh(); // repaint the waveform view
     });
-    this.toolbar.append(this.editBtn, this.paintBtn, this.newInstBtn);
+    // "Lab…" opens a COPY of the selected sample in the Sample Lab (item 83):
+    // length-changing edits (crop/chop/EQ) are legal there because the commit
+    // creates NEW samples+instruments — the pooled original is untouched.
+    this.labBtn = document.createElement("button");
+    this.labBtn.textContent = t("smp.lab");
+    this.labBtn.title = t("smp.labTitle");
+    this.labBtn.addEventListener("click", async () => {
+      const s = this.list?.[this.selected];
+      if (!s) return;
+      const [{ openSampleLab }, { u8ToFloat }] = await Promise.all([
+        import("../popups/samplelab.js"), import("../../doc/wavelab.js"),
+      ]);
+      const bytes = this.store.doc.sampleBin.subarray(s.ptr, s.ptr + s.len);
+      const res = await openSampleLab(this.store, {
+        data: u8ToFloat(bytes),
+        rate: s.rate,
+        name: unescapeName(s.name) || `sample ${s.index}`,
+        sourceLabel: t("smp.labSource", { idx: s.index }),
+      });
+      if (res) this.cb.onNewInstrument?.(res.firstSlot);
+    });
+    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);

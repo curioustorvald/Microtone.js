@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sample Lab smoke: edit ops, chop, multi-import, mic record (items 83/84)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- Audio capture + AudioContext need REAL time (virtual-time starves the
+       render/worklet threads like Pyodide and decodeAudioData). Run:
+         python3 tools/test-server.py &   # repo server + /hang on :8932
+         chromium --headless=new --autoplay-policy=no-user-gesture-required \
+           --use-fake-ui-for-media-streams --dump-dom --timeout=45000 \
+           http://localhost:8932/test/browser/samplelab-smoke.html -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, name) => log(`${name}: ${cond ? "ok" : "FAIL"}`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const waitFor = async (fn, ms = 15000) => {
+      const t0 = Date.now();
+      for (;;) {
+        const v = fn();
+        if (v) return v;
+        if (Date.now() - t0 > ms) throw new Error("waitFor timeout");
+        await sleep(50);
+      }
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        }, 30000);
+        const { store } = win.__microtone;
+        win.alert = () => {};        // a real alert blocks headless → empty dump
+        win.confirm = () => true;
+        log("app loaded");
+
+        const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+
+        // deterministic take: 2 s @ 32 kHz, four decaying bursts over silence
+        const rate = 32000;
+        const data = new win.Float32Array(rate * 2);
+        for (const at of [0.25, 0.75, 1.3, 1.7]) {
+          const start = Math.round(at * rate), dur = Math.round(rate * 0.05);
+          for (let i = 0; i < dur; i++) {
+            const decay = Math.exp(-i / (rate * 0.012));
+            data[start + i] = (Math.floor(i / 16) % 2 === 0 ? 0.9 : -0.9) * decay;
+          }
+        }
+
+        const before = win.eval("__microtone.store.doc.toBytes()");
+        const censusBefore = store.doc.sampleList().length;
+        const pLab = openSampleLab(store, { data, rate, name: "smoke take" });
+        const dlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const lab = dlg.__lab;
+        ok(dlg.querySelector(".lab-wave") && lab.state().len === data.length, "t1 lab opens on the buffer");
+
+        // t2: drag selection via real pointer events
+        const canvas = dlg.querySelector(".lab-wave");
+        const r = canvas.getBoundingClientRect();
+        const pe = (type, x) => canvas.dispatchEvent(new win.PointerEvent(type, {
+          bubbles: true, pointerId: 7, clientX: r.left + x, clientY: r.top + 60,
+        }));
+        pe("pointerdown", 100); pe("pointermove", 300); pe("pointerup", 300);
+        const dragSel = lab.state().sel;
+        ok(dragSel && dragSel.b > dragSel.a, "t2 pointer drag selects a range");
+
+        // t3: crop + in-lab undo
+        lab.setSelection(1000, 2000);
+        lab.tool("crop");
+        ok(lab.state().len === 1000, "t3 crop keeps the selection");
+        lab.undo();
+        ok(lab.state().len === data.length, "t3b undo restores the length");
+
+        // t4: cut
+        lab.setSelection(0, 8000);
+        lab.tool("cut");
+        ok(lab.state().len === data.length - 8000, "t4 cut removes the selection");
+        lab.undo();
+
+        // t5: gain −6 dB halves the RMS
+        const rms = (b) => { let a = 0; for (let i = 0; i < b.length; i++) a += b[i] * b[i]; return Math.sqrt(a / b.length); };
+        const r0 = rms(lab.buffer());
+        lab.clearSelection();
+        lab.gainDb(-6.02);
+        ok(Math.abs(rms(lab.buffer()) / r0 - 0.5) < 0.01, "t5 gain −6 dB halves RMS");
+        lab.undo();
+
+        // t6: EQ apply changes the buffer, keeps the length
+        lab.setBand(2, { gainDb: 12 });
+        const preEq = lab.buffer().slice(8000, 8100).join(",");
+        lab.applyEq();
+        ok(lab.state().len === data.length &&
+           lab.buffer().slice(8000, 8100).join(",") !== preEq, "t6 EQ applies in place");
+        lab.undo();
+
+        // t7: chop auto-detects the four bursts → five chunks
+        lab.setChop(true);
+        ok(lab.state().splits.length === 4, `t7 detect finds 4 splits (got ${lab.state().splits.length})`);
+        ok(lab.chunks().length === 5, "t7b five chunks incl. leading silence");
+
+        // t8: manual split editing via canvas click (chop mode: click = add)
+        const nSplits = lab.state().splits.length;
+        pe("pointerdown", 20); pe("pointerup", 20);
+        ok(lab.state().splits.length === nSplits + 1, "t8 click adds a split");
+        lab.undo();
+
+        // t8c: merge — select across several splits and collapse them at once
+        const sp = lab.state().splits; // 4 splits
+        lab.setSelection(sp[0] + 1, sp[sp.length - 1] + 1);
+        lab.merge();
+        ok(lab.state().splits.length === 1, `t8c merge collapses interior splits (got ${lab.state().splits.length})`);
+        lab.undo();
+        ok(lab.state().splits.length === 4, "t8d merge undo restores splits");
+        lab.clearSelection();
+
+        // t9: discard the leading silence chunk, import the rest in ONE op
+        lab.toggleChunk(0);
+        ok(lab.state().discarded.length === 1, "t9 chunk discarded");
+        const usedBefore = new Set(store.doc.usedInstrumentSlots());
+        lab.commit();
+        const res = await pLab;
+        ok(res && res.count === 4, `t10 commit imported 4 chunks (got ${res && res.count})`);
+        const names = [];
+        for (let i = 0; i < 4; i++) names.push(store.doc.instrumentName(res.firstSlot + i));
+        ok(names.join("|") === "smoke take 1|smoke take 2|smoke take 3|smoke take 4",
+          `t10b chunk names (got ${names.join("|")})`);
+        ok(store.doc.sampleList().length === censusBefore + 4, "t10c census grew by 4");
+        ok(!usedBefore.has(res.firstSlot), "t10d fresh slot");
+        store.undo.undo();
+        const after = win.eval("__microtone.store.doc.toBytes()");
+        ok(after.length === before.length && after.every((v, i) => v === before[i]),
+          "t11 ONE undo step, byte-exact");
+
+        // ── mic record leg (item 83.1): fake a mic with an oscillator stream ──
+        const ac = new win.AudioContext();
+        await ac.resume();
+        const osc = ac.createOscillator();
+        const dest = ac.createMediaStreamDestination();
+        osc.connect(dest);
+        osc.start();
+        win.navigator.mediaDevices.getUserMedia = async () => dest.stream;
+
+        const { recordSample } = await win.eval('import("/src/ui/popups/recordsample.js")');
+        const pRec = recordSample(store);
+        const recDlg = await waitFor(() => win.document.querySelector(".record-modal"));
+        recDlg.__rec.setRecording(true);
+        await sleep(600);
+        recDlg.__rec.setRecording(false);
+        ok(recDlg.__rec.taken() > 0, `t12 capture produced frames (got ${recDlg.__rec.taken()})`);
+        recDlg.__rec.use();
+        const labDlg2 = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const lab2 = labDlg2.__lab;
+        let peak = 0;
+        const b2 = lab2.buffer();
+        for (let i = 0; i < b2.length; i++) peak = Math.max(peak, Math.abs(b2[i]));
+        ok(lab2.state().len > 0 && peak > 0.1,
+          `t13 take opened in the Lab with signal (len ${lab2.state().len}, peak ${peak.toFixed(2)})`);
+        lab2.cancel();
+        ok((await pRec) === null, "t14 cancelled take resolves null");
+        osc.stop();
+        ac.close();
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

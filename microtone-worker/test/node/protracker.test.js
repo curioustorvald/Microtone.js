@@ -45,7 +45,7 @@ const songOf = (notes) => ({ patterns: [notes.map((n) => cell(n, 1))] });
 
 test("ProTracker pitch has the nota interval-0 shape", () => {
   assert.equal(PT.index, 1);
-  assert.equal(PT.name, "ProTracker pitch");
+  assert.equal(PT.name, "ProTracker Temperament"); // renamed in e31d771
   assert.equal(PT.interval, 0, "interval 0 = no interval system");
   assert.equal(PT.t, "d", "12 notes per octave");
   assert.equal(PT.table.length, 60);

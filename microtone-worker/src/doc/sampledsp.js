@@ -2,8 +2,8 @@
 // editor's operation set. Pure functions: take a Uint8Array view, return a
 // NEW Uint8Array of the same length (callers apply via setSampleBytesOp so
 // the edit is one invertible undo step). Everything here is length-preserving;
-// length changes belong to sample-IMPORT time (a future endeavour), never to
-// the in-place editor — they'd ripple every pool pointer.
+// length changes belong to sample-IMPORT time (the Sample Lab — wavelab.js),
+// never to the in-place editor — they'd ripple every pool pointer.
 
 /** Peak-normalise to full scale (max deviation from centre → 127). */
 export function normalise(bytes) {

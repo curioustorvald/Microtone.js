@@ -975,6 +975,50 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .smp-toolbar { padding: 0.3rem 0.6rem 0; }
 
+/* ── Sample Lab (items 83/84) ── */
+.samplelab-modal { max-width: min(1280px, 94vw); }
+.samplelab-modal .lab-info { margin: 0.2rem 0 0.4rem; font-size: 0.85rem; }
+.lab-tools {
+  display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;
+  margin: 0.35rem 0; color: var(--dim); font-size: 0.85rem;
+}
+.lab-tools button { padding: 0.2rem 0.6rem; font-size: 0.82rem; }
+.lab-tools .lab-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 0.3rem; }
+.lab-chop.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.lab-chopctl { display: inline-flex; align-items: center; gap: 0.5rem; }
+.lab-wave {
+  display: block; cursor: crosshair; touch-action: none;
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.lab-chunks { display: flex; gap: 0.3rem; flex-wrap: wrap; margin: 0.35rem 0; }
+.lab-chunk {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.35rem;
+  background: var(--panel-2);
+}
+.lab-chunk button { background: none; border: none; color: var(--fg); cursor: pointer; padding: 0.05rem 0.2rem; }
+.lab-chunk.off { opacity: 0.45; }
+.lab-chunk.off button { text-decoration: line-through; }
+.lab-eq { border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; margin: 0.35rem 0; }
+.lab-eqbands { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.35rem; }
+.lab-eqband { display: flex; gap: 0.6rem; align-items: center; color: var(--dim); font-size: 0.85rem; }
+.lab-eqband .lab-eqkind { width: 6.5rem; color: var(--fg2); }
+.lab-eqband input[type="number"] {
+  width: 4.6rem; background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.3rem;
+}
+.lab-eqgraph { display: block; border: 1px solid var(--border); border-radius: 4px; }
+.lab-eqhint { font-size: 0.78rem; }
+.lab-row { display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0; color: var(--dim); }
+.lab-row .lab-name { width: 14rem; }
+.lab-row .lab-rate { width: 6rem; }
+.lab-hint { font-size: 0.78rem; margin: 0.2rem 0 0; }
+
+/* ── mic recorder (item 83.1) ── */
+.record-modal { max-width: 420px; }
+.rec-meter { display: block; margin: 0.5rem 0 0.3rem; border: 1px solid var(--border); border-radius: 4px; }
+.rec-hint { font-size: 0.8rem; }
+
 /* ── About popup (brand click) ── */
 .about-modal { max-width: 460px; }
 .about-modal h3 { font-size: 1.3rem; }
