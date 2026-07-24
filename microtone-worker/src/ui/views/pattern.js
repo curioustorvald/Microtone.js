@@ -15,7 +15,7 @@ import {
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
   colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty,
 } from "../edit.js";
-import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp } from "../../doc/ops.js";
+import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp, changeInstrumentOp } from "../../doc/ops.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import {
@@ -498,7 +498,9 @@ class PatternPane {
     this._applyBytes((src) => transformPanBytes(src, mult, shift, rows));
   }
 
-  /** Change instrument: From blank → every non-empty inst becomes To. */
+  /** Change instrument: From blank → every non-empty inst becomes To. The
+   *  "All patterns" scope applies the change to every pattern in the song (one
+   *  undo step, via changeInstrumentOp) rather than just this pattern/selection. */
   async instrumentOp() {
     if (!this.pattern()) return;
     const { rows, scope } = this._opScope();
@@ -508,6 +510,11 @@ class PatternPane {
       fields: [
         { name: "from", label: t("pat.instFrom"), type: "text", value: "", placeholder: t("pat.instAll") },
         { name: "to", label: t("pat.instTo"), type: "text", value: "" },
+        { name: "target", label: t("pat.instScope"), type: "select", value: "here",
+          options: [
+            { value: "here", label: t("pat.instScopeHere", { scope }) },
+            { value: "song", label: t("pat.instScopeSong") },
+          ] },
       ],
       okLabel: t("common.apply"),
     });
@@ -515,7 +522,12 @@ class PatternPane {
     const fromStr = (result.from ?? "").trim();
     const from = fromStr === "" ? null : (parseInt(fromStr, 16) & 0xff);
     const to = parseInt((result.to ?? "").trim() || "0", 16) & 0xff;
-    this._applyBytes((src) => changeInstrumentBytes(src, from, to, rows));
+    if (result.target === "song") {
+      this.store.undo.apply(changeInstrumentOp(from, to, [this.store.songIndex]));
+      this.invalidate();
+    } else {
+      this._applyBytes((src) => changeInstrumentBytes(src, from, to, rows));
+    }
   }
 
   /** Apply a bytes→bytes pattern transform as one undo step + repaint. */

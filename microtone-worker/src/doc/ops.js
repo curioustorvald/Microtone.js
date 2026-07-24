@@ -728,6 +728,148 @@ export function renumberInstrumentOp(plan, gestureId = null) {
   };
 }
 
+/**
+ * Delete one instrument (this feature): swap in the image with its record zeroed
+ * (its parent metainstruments already rewired + any uniquely-owned samples freed
+ * by the planner), the INam entry blanked, and the Ixmp slot id dropped, then
+ * rewrite the pattern cells the plan lists (the reassign writes; empty when the
+ * user left the notes dangling). `plan` is planDeleteInstrument()'s result; the
+ * inverse has the same shape (previous image/INam/Ixmp + the cells' previous
+ * instrument bytes), so this op is its own undo/redo — structurally identical to
+ * renumberInstrumentOp. Dirty: the bank plus every touched pattern.
+ */
+export function deleteInstrumentOp(plan, gestureId = null) {
+  return {
+    type: "deleteInstrument",
+    plan, gestureId,
+    apply(doc) {
+      const secOf = (fourcc) => {
+        const s = doc.projSections.find((x) => x.fourcc === fourcc);
+        return s ? s.payload : null;
+      };
+      const old = {
+        image: doc.sampleInstImage,
+        inam: secOf("INam"),
+        ixmp: doc.ixmp,
+        ixmpSection: secOf("Ixmp"),
+        cells: [],
+      };
+      doc.sampleInstImage = plan.image;
+      doc.setSection("INam", plan.inam);
+      doc.ixmp = plan.ixmp;
+      // toBytes()/reload read the SECTION, not doc.ixmp — rebuild it so the
+      // dropped patches don't come back on reload (buildIxmpSection is the
+      // proven byte-exact inverse of parseIxmpSection). The inverse restores
+      // the captured payload verbatim.
+      doc.setSection("Ixmp", "ixmpSection" in plan
+        ? plan.ixmpSection
+        : (plan.ixmp.length > 0 ? buildIxmpSection(plan.ixmp) : null));
+      doc._resetInstrumentCache();
+      for (const w of plan.cells) {
+        const cell = doc.songs[w.song].patterns[w.pat]?.[w.row];
+        if (!cell) continue;
+        old.cells.push({ song: w.song, pat: w.pat, row: w.row, inst: cell.instrment });
+        cell.instrment = w.inst;
+      }
+      doc.dirty = true;
+      return deleteInstrumentOp(old, gestureId);
+    },
+    dirty: () => {
+      const tags = [{ kind: "bank" }];
+      const seen = new Set();
+      for (const w of plan.cells) {
+        const key = `${w.song}:${w.pat}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push({ kind: "pattern", song: w.song, pat: w.pat });
+      }
+      return tags;
+    },
+  };
+}
+
+/**
+ * Change every note's instrument number `from` → `to` across whole patterns
+ * (the Patterns-tab "Change instrument" made global). `from` is $00–$FF or null
+ * (null = every non-empty instrument becomes `to`); `to` is $00–$FF. `songs` is a
+ * list of song indices, or null for all songs. One undo step; the inverse
+ * restores every touched cell's previous instrument byte. Dirty: one pattern tag
+ * per touched pattern (non-current-song tags are ignored by DocSync — the
+ * worklet only holds the current song, re-pushed on switch).
+ */
+export function changeInstrumentOp(from, to, songs = null, gestureId = null) {
+  return {
+    type: "changeInstrument",
+    from, to, songs, gestureId,
+    coalesceKey: `changeInst:${from}:${to}`,
+    apply(doc) {
+      const idxs = songs ?? doc.songs.map((_, i) => i);
+      const inverse = [];
+      for (const si of idxs) {
+        const pats = doc.songs[si].patterns;
+        for (let pi = 0; pi < pats.length; pi++) {
+          const p = pats[pi];
+          if (!p) continue;
+          for (let r = 0; r < p.length; r++) {
+            const cell = p[r];
+            const cur = cell.instrment & 0xff;
+            const match = from === null ? cur !== 0 : cur === (from & 0xff);
+            if (!match) continue;
+            inverse.push({ song: si, pat: pi, row: r, inst: cell.instrment });
+            cell.instrment = to & 0xff;
+          }
+        }
+      }
+      this._touched = inverse;
+      doc.dirty = true;
+      return restoreCellInstsOp(inverse, gestureId);
+    },
+    dirty() {
+      const seen = new Set();
+      const tags = [];
+      for (const w of this._touched ?? []) {
+        const key = `${w.song}:${w.pat}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push({ kind: "pattern", song: w.song, pat: w.pat });
+      }
+      return tags;
+    },
+  };
+}
+
+/** Inverse of changeInstrumentOp: restore each listed cell's instrument byte. */
+function restoreCellInstsOp(cells, gestureId = null) {
+  return {
+    type: "restoreCellInsts",
+    cells, gestureId,
+    coalesceKey: `changeInst:restore`,
+    apply(doc) {
+      const inverse = [];
+      for (const w of cells) {
+        const cell = doc.songs[w.song].patterns[w.pat]?.[w.row];
+        if (!cell) continue;
+        inverse.push({ song: w.song, pat: w.pat, row: w.row, inst: cell.instrment });
+        cell.instrment = w.inst;
+      }
+      this._touched = inverse;
+      doc.dirty = true;
+      return restoreCellInstsOp(inverse, gestureId);
+    },
+    dirty() {
+      const seen = new Set();
+      const tags = [];
+      for (const w of this._touched ?? cells) {
+        const key = `${w.song}:${w.pat}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push({ kind: "pattern", song: w.song, pat: w.pat });
+      }
+      return tags;
+    },
+  };
+}
+
 /** Bank cleanup (items 60, 74): swap in the cleaned image + INam/SNam + Ixmp
  *  (unused instruments removed, orphaned samples freed, unreachable patches
  *  dropped) in one invertible step. `plan` is planBankCleanup()'s or

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>delete-instrument smoke: delete + reassign + global change-instrument</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { store, instrumentsView: iv, projectView: pv } = win.__microtone;
+        log("app loaded (module graph booted ok)");
+
+        const doc = store.doc;
+        const refsOf = (s) => {
+          let n = 0;
+          for (const song of doc.songs) for (const p of song.patterns) if (p)
+            for (const c of p) if ((c.instrment & 0xff) === s) n++;
+          return n;
+        };
+
+        // ── Instruments view: the Delete button renders with the right label ──
+        iv.show();
+        const delBtn = await waitFor(() => iv.panel.querySelector(".inst-del-btn"));
+        log(`delete button present ("${delBtn.textContent}"): ${delBtn.textContent === "Delete…" ? "ok" : "FAIL"}`);
+
+        // ── Delete a referenced instrument, leaving its notes dangling ──
+        const target = doc.selectableInstrumentSlots().find((s) => refsOf(s) > 0);
+        const danglingRefs = refsOf(target);
+        const usedBefore = doc.usedInstrumentSlots().length;
+        const p1 = iv.deleteInstrument();
+        const dlg1 = await waitFor(() => win.document.querySelector("dialog.modal"));
+        // leave "reassign" blank → dangling; click OK (first modal button)
+        dlg1.querySelector(".modal-buttons button").click();
+        await p1;
+        const goneOk = !doc.usedInstrumentSlots().includes(target) &&
+          doc.usedInstrumentSlots().length === usedBefore - 1 &&
+          refsOf(target) === danglingRefs && // notes still name the empty slot
+          iv.selected !== target &&
+          !!iv.panel.querySelector(".inst-del-btn"); // panel re-rendered cleanly
+        log(`delete → dangling ($${target.toString(16)}, ${danglingRefs} notes kept): ${goneOk ? "ok" : "FAIL"}`);
+
+        // ── Undo restores the instrument and its list row ──
+        store.undo.undo();
+        iv.refresh();
+        const undoOk = doc.usedInstrumentSlots().includes(target) &&
+          doc.usedInstrumentSlots().length === usedBefore;
+        log(`undo restores the instrument: ${undoOk ? "ok" : "FAIL"}`);
+
+        // ── Global change-instrument (Project view): reassign the danglers ──
+        // First delete-with-dangle again, then use the Project op to fix it.
+        const p2 = iv.deleteInstrument();
+        (await waitFor(() => win.document.querySelector("dialog.modal")))
+          .querySelector(".modal-buttons button").click();
+        await p2;
+        log(`re-deleted $${target.toString(16)} (${refsOf(target)} dangling)`);
+
+        pv.show();
+        const globHead = [...pv.root.querySelectorAll("h3")].some((h) => h.textContent === "Global Operations");
+        const globBtn = [...pv.root.querySelectorAll("button")].find((b) => b.textContent === "Change instrument…");
+        log(`Global Operations section + button: ${globHead && globBtn ? "ok" : "FAIL"}`);
+
+        const spare = doc.selectableInstrumentSlots().find((s) => s !== target);
+        const spareRefsBefore = refsOf(spare);
+        const p3 = pv.changeInstrumentGlobal();
+        const dlg3 = await waitFor(() => win.document.querySelector("dialog.modal"));
+        dlg3.querySelector('input[name="from"]').value = target.toString(16);
+        dlg3.querySelector('input[name="to"]').value = spare.toString(16);
+        dlg3.querySelector(".modal-buttons button").click();
+        await p3;
+        const reassignOk = refsOf(target) === 0 && refsOf(spare) === spareRefsBefore + danglingRefs;
+        log(`global change-instrument $${target.toString(16)}→$${spare.toString(16)} fixes danglers: ${reassignOk ? "ok" : "FAIL"}`);
+
+        // ── Delete a metainstrument: the modal reports + cascades its $100+ children ──
+        const { importBankOp } = await import("../../src/doc/ops.js");
+        const { planCreateMeta } = await import("../../src/doc/bankmerge.js");
+        const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
+        store.undo.apply(importBankOp(planCreateMeta(doc, picks, "Stack")));
+        const meta = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+        const kids = doc.instruments[meta].metaLayers.map((l) => l.instIdx & 0x3ff);
+        iv.selected = meta; iv.refresh();
+        const p4 = iv.deleteInstrument();
+        const dlg4 = await waitFor(() => win.document.querySelector("dialog.modal"));
+        const bodyTxt = dlg4.querySelector("p")?.textContent || "";
+        dlg4.querySelector(".modal-buttons button").click();
+        await p4;
+        const cascadeOk = !doc.usedInstrumentSlots().includes(meta) &&
+          kids.every((k) => k >= 0x100 && !doc.usedInstrumentSlots().includes(k)) &&
+          /sub-instrument/.test(bodyTxt);
+        log(`delete meta cascades $100+ children (${kids.map((k) => "$" + k.toString(16)).join(",")}): ${cascadeOk ? "ok" : "FAIL"}`);
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

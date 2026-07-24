@@ -6,9 +6,13 @@
 
 import {
   setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp,
-  setMetaBytesOp, setSectionOp, renumberInstrumentOp,
+  setMetaBytesOp, setSectionOp, renumberInstrumentOp, deleteInstrumentOp,
 } from "../../doc/ops.js";
-import { planRenumberInstrument, instrumentCellRefs } from "../../doc/cleanup.js";
+import {
+  planRenumberInstrument, instrumentCellRefs,
+  planDeleteInstrument, metainstrumentParents,
+  classifyMetaChildren, uniqueSampleSpansForSet,
+} from "../../doc/cleanup.js";
 import { showModal } from "../widgets/modal.js";
 import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
@@ -318,8 +322,118 @@ export class InstrumentsView {
     renumBtn.textContent = t("inst.renumber");
     renumBtn.title = t("inst.renumberTitle");
     renumBtn.addEventListener("click", () => this.renumber());
-    row.append(idx, input, renumBtn);
+    const delBtn = document.createElement("button");
+    delBtn.className = "inst-del-btn";
+    delBtn.textContent = t("inst.delete");
+    delBtn.title = t("inst.deleteTitle");
+    delBtn.addEventListener("click", () => this.deleteInstrument());
+    row.append(idx, input, renumBtn, delBtn);
     return row;
+  }
+
+  /** Delete the selected instrument. The dialog adapts to the situation: notes
+   *  reference it (offer reassign, else leave dangling); it is a metainstrument
+   *  layer child (rewire the parents); it is a metainstrument (cascade-delete its
+   *  now-orphaned $100+ sub-instruments, offer to delete its $01–$FF ones); and/or
+   *  it uniquely owns samples (offer to free them). One undo step; selection moves
+   *  off the slot. */
+  async deleteInstrument() {
+    const doc = this.store.doc;
+    const slot = this.selected;
+    if (!doc || !doc.usedInstrumentSlots().includes(slot)) return;
+    const wide = slot > 0xff;
+    const label = "$" + slot.toString(16).toUpperCase().padStart(wide ? 3 : 2, "0");
+    const name = unescapeName(doc.instrumentName(slot)) || t("inst.unnamed");
+
+    const hex3 = (x) => "$" + x.toString(16).toUpperCase().padStart(3, "0");
+    const refs = instrumentCellRefs(doc, slot);      // note references (all songs; [] for $100+)
+    const parents = metainstrumentParents(doc, slot); // metas to rewire (deleting a child)
+    // Metainstrument cascade: $100+ orphans auto-delete; $01–$FF children opt-in.
+    const { autoChildren, lowChildren } = classifyMetaChildren(doc, slot);
+    // Samples freed by the always-deleted set (this inst + its auto-cascade kids).
+    const spans = uniqueSampleSpansForSet(doc, [slot, ...autoChildren]);
+    const uniqueBytes = spans.reduce((n, s) => n + s.len, 0);
+
+    const bodyParts = [];
+    if (refs.length > 0) bodyParts.push(t("del.bodyRefs", { n: refs.length }));
+    if (parents.length > 0) {
+      bodyParts.push(t("del.bodyMeta", { n: parents.length, metas: parents.map((p) => hex3(p.slot)).join(", ") }));
+    }
+    if (autoChildren.length > 0) {
+      bodyParts.push(t("del.bodyAutoChildren", { n: autoChildren.length, list: autoChildren.map(hex3).join(", ") }));
+    }
+    if (lowChildren.length > 0) {
+      const list = lowChildren.map((c) => t("del.lowChild", { slot: hex3(c.slot), n: c.patternRefs })).join(", ");
+      bodyParts.push(t("del.bodyLowChildren", { n: lowChildren.length, list }));
+    }
+    if (refs.length === 0 && parents.length === 0 && autoChildren.length === 0 && lowChildren.length === 0) {
+      bodyParts.push(t("del.bodyClean"));
+    }
+
+    const fields = [];
+    if (refs.length > 0) {
+      fields.push({ name: "reassign", label: t("del.reassignTo"), type: "text",
+        value: "", placeholder: t("del.reassignPlaceholder") });
+    }
+    if (lowChildren.length > 0) {
+      fields.push({ name: "deleteLow", type: "checkbox", value: false,
+        label: t("del.deleteLow", { n: lowChildren.length }) });
+    }
+    if (spans.length > 0) {
+      fields.push({ name: "free", type: "checkbox", value: true,
+        label: t("del.freeSamples", { n: spans.length, kb: (uniqueBytes / 1024).toFixed(1) }) });
+    }
+
+    const res = await showModal({
+      title: t("del.title", { slot: label, name }),
+      body: bodyParts.join(" "),
+      fields,
+      okLabel: t("del.ok"),
+    });
+    if (!res) return;
+
+    let reassignTo = null;
+    if (refs.length > 0) {
+      const raw = String(res.reassign ?? "").replace(/^\$/, "").trim();
+      if (raw !== "") {
+        reassignTo = parseInt(raw, 16);
+        if (!Number.isFinite(reassignTo) || reassignTo < 1 || reassignTo > 0xff) {
+          alert(t("del.badNumber"));
+          return;
+        }
+      }
+    }
+    const freeSamples = spans.length > 0 && res.free === true;
+    const deleteLowChildren = lowChildren.length > 0 && res.deleteLow === true;
+
+    const plan = planDeleteInstrument(doc, slot, { freeSamples, reassignTo, deleteLowChildren });
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(deleteInstrumentOp(plan));
+
+    // Move selection off the deleted slot. A layer child returns to its parent
+    // (unless the parent was itself deleted/emptied); anything else falls to the
+    // first remaining selectable instrument.
+    const removed = new Set([...plan.emptiedMetas, slot, ...plan.autoChildren, ...plan.deletedLowChildren]);
+    const parentAlive = this._childParent !== null && !removed.has(this._childParent) &&
+      doc.usedInstrumentSlots().includes(this._childParent);
+    if (this._childSelected === slot && parentAlive) {
+      this.selected = this._childParent;
+      this._childSelected = null;
+      this._childParent = null;
+      this.tab = doc.instruments[this.selected].isMeta ? "meta" : "general";
+    } else {
+      this._childSelected = null;
+      this._childParent = null;
+      const remaining = doc.selectableInstrumentSlots();
+      this.selected = remaining[0] ?? 1;
+    }
+    this.advanced = false;
+    if (this.jam.currentInst === slot || !doc.usedInstrumentSlots().includes(this.jam.currentInst)) {
+      this.jam.currentInst = this.selected;
+    }
+    this.store.emit("instsel");
+    this.store.emit("status");
+    this.refresh();
   }
 
   /** Renumber the selected instrument (item 73). Wiring references (Ixmp slot

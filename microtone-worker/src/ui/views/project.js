@@ -4,6 +4,7 @@
 
 import {
   setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
+  changeInstrumentOp,
 } from "../../doc/ops.js";
 import { tuningRatioOf } from "../../engine/tables.js";
 import {
@@ -330,6 +331,47 @@ export class ProjectView {
       hbtn(t("clean.ixmp"), t("clean.ixmpTitle"), () => this.cleanupIxmp()),
     );
     this.root.appendChild(houseBar);
+
+    // ── Global Operations: whole-document note edits ──
+    const globHead = document.createElement("h3");
+    globHead.textContent = t("glob.title");
+    this.root.appendChild(globHead);
+    const globBar = document.createElement("div");
+    globBar.className = "toolbox";
+    globBar.style.borderBottom = "none";
+    globBar.style.padding = "0.4rem 0";
+    globBar.style.flexWrap = "wrap";
+    globBar.append(
+      hbtn(t("glob.changeInst"), t("glob.changeInstTitle"), () => this.changeInstrumentGlobal()),
+    );
+    this.root.appendChild(globBar);
+  }
+
+  /** Change every note's instrument $a → $b across all patterns of every song —
+   *  the Patterns-tab Change instrument made project-wide (the way to reassign or
+   *  fix "dangling" notes a delete left behind). Leave From blank for "every
+   *  non-empty instrument → To". One undo step. */
+  async changeInstrumentGlobal() {
+    const store = this.store;
+    const result = await showModal({
+      title: t("glob.changeInstTitle"),
+      body: t("glob.changeInstBody"),
+      fields: [
+        { name: "from", label: t("pat.instFrom"), type: "text", value: "", placeholder: t("pat.instAll") },
+        { name: "to", label: t("pat.instTo"), type: "text", value: "" },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const fromStr = String(result.from ?? "").replace(/^\$/, "").trim();
+    const toStr = String(result.to ?? "").replace(/^\$/, "").trim();
+    const from = fromStr === "" ? null : (parseInt(fromStr, 16) & 0xff);
+    const to = parseInt(toStr || "0", 16) & 0xff;
+    if (from !== null && !Number.isFinite(parseInt(fromStr, 16))) { alert(t("del.badNumber")); return; }
+    if (toStr !== "" && !Number.isFinite(parseInt(toStr, 16))) { alert(t("del.badNumber")); return; }
+    store.undo.apply(changeInstrumentOp(from, to)); // null songs = every song
+    store.emit("doc"); // notes moved across many patterns — full redraw
+    this.refresh();
   }
 
   /** Remove patterns no cue references, merge byte-identical duplicates onto their

@@ -285,6 +285,8 @@ export default {
   "inst.newMetaTitle": "이 프로젝트의 악기 여러 개를 하나의 메타악기로 레이어링합니다",
   "inst.renumber": "번호 바꾸기…",
   "inst.renumberTitle": "이 악기에 다른 번호를 지정합니다",
+  "inst.delete": "삭제…",
+  "inst.deleteTitle": "이 악기를 삭제합니다 (메타악기를 다시 연결하고, 선택 시 샘플을 해제하며 노트를 재지정합니다)",
 
   // ── 악기 번호 바꾸기 (항목 73) ──
   "renum.title": "악기 {slot} 번호 바꾸기",
@@ -294,6 +296,21 @@ export default {
   "renum.remapPatterns": "해당 패턴 셀이 새 번호를 가리키게 합니다",
   "renum.ok": "번호 바꾸기",
   "renum.badNumber": "16진수가 아닙니다.",
+
+  // ── 악기 삭제 ──
+  "del.title": "악기 {slot} 삭제 — {name}",
+  "del.ok": "삭제",
+  "del.bodyRefs": "패턴 셀 {n}개가 이 악기를 연주합니다.",
+  "del.bodyMeta": "메타악기 {n}개 ({metas})의 레이어입니다 — 다시 연결됩니다.",
+  "del.bodyAutoChildren": "하위 악기 {n}개 ({list})는 이 악기로만 접근할 수 있어 함께 제거됩니다.",
+  "del.bodyLowChildren": "노트로 지정 가능한 하위 악기 {n}개 ({list})는 패턴에서도 연주될 수 있습니다. 함께 삭제하려면 아래를 선택하세요. 그렇지 않으면 남깁니다.",
+  "del.lowChild": "{slot} (노트 {n}개)",
+  "del.deleteLow": "노트로 지정 가능한 하위 악기 {n}개도 삭제",
+  "del.bodyClean": "이 악기를 참조하는 곳이 없습니다.",
+  "del.reassignTo": "해당 노트를 다른 악기로 재지정 (16진수 $01–$FF, 비우면 미연결 상태로 둠)",
+  "del.reassignPlaceholder": "미연결 상태로 둠",
+  "del.freeSamples": "이 악기만 쓰는 샘플 {n}개 (~{kb} KB)도 해제",
+  "del.badNumber": "올바른 악기 번호가 아닙니다 ($01–$FF).",
 
   // ── 새 메타악기 (항목 72) ──
   "newmeta.title": "새 메타악기",
@@ -525,7 +542,10 @@ export default {
   "pat.panModalTitle": "팬 — 패턴 {pat}",
   "pat.panBody": "새 팬 = 중앙 + (기존 − 중앙) × 넓히기 + 이동, 0–63으로 제한. 넓히기 값이 음수면 좌우를 바꿉니다. 적용 대상: {scope}.",
   "pat.instModalTitle": "악기 변경 — 패턴 {pat}",
-  "pat.instBody": "원본을 비우면 모든 악기를 대상으로 바꿉니다. 그렇지 않으면 원본과 일치하는 셀만. 적용 대상: {scope}.",
+  "pat.instBody": "원본을 비우면 모든 악기를 대상으로 바꿉니다. 그렇지 않으면 원본과 일치하는 셀만.",
+  "pat.instScope": "적용 범위",
+  "pat.instScopeHere": "{scope}",
+  "pat.instScopeSong": "이 곡의 모든 패턴",
 
   // ── command palette (Timeline/Patterns bottom bar) ──
   // FX opcode names/args (FX_INFO) stay English for now (large data tables).
@@ -715,6 +735,12 @@ export default {
   "clean.ixmp": "악기 패치 정리",
   "clean.ixmpTitle": "절대 트리거될 수 없는 패치를 제거합니다: 악기가 없는 패치, 빈 패치, 우선순위가 높은 패치에 완전히 가려진 패치",
   "clean.ixmpConfirm": "악기 {insts}개에서 도달할 수 없는 패치 {patches}개를 제거하고 패치 집합 {blobs}개를 완전히 비울까요? 실행 취소할 수 있습니다.",
+
+  // ── 전역 작업 (프로젝트 뷰) ──
+  "glob.title": "전역 작업",
+  "glob.changeInst": "악기 변경…",
+  "glob.changeInstTitle": "모든 패턴에서 악기 변경",
+  "glob.changeInstBody": "모든 곡의 모든 패턴에서 노트의 악기를 원본 → 대상으로 바꿉니다. 원본을 비우면 모든 악기를 대상으로 바꿉니다. 삭제로 미연결된 노트를 재지정할 때 쓰세요. 실행 취소 한 번으로 되돌립니다.",
 
   // ── retune popup (project view) ──
   "retune.title": "모든 패턴 리튜닝",

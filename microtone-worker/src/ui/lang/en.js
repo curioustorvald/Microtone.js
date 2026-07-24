@@ -290,6 +290,8 @@ export default {
   "inst.newMetaTitle": "Layer several of this project's instruments into one metainstrument",
   "inst.renumber": "Renumber…",
   "inst.renumberTitle": "Give this instrument a different number",
+  "inst.delete": "Delete…",
+  "inst.deleteTitle": "Delete this instrument (rewires metainstruments; optionally frees its samples and reassigns its notes)",
   "inst.unnamed": "(unnamed)",
 
   // ── Renumber instrument (item 73) ──
@@ -300,6 +302,21 @@ export default {
   "renum.remapPatterns": "Point those pattern cells at the new number",
   "renum.ok": "Renumber",
   "renum.badNumber": "That isn't a hexadecimal number.",
+
+  // ── Delete instrument ──
+  "del.title": "Delete instrument {slot} — {name}",
+  "del.ok": "Delete",
+  "del.bodyRefs": "{n} pattern cells play this instrument.",
+  "del.bodyMeta": "It is a layer of {n} metainstrument(s) ({metas}) — they will be rewired.",
+  "del.bodyAutoChildren": "{n} orphaned sub-instrument(s) ({list}) are only reachable through it and will be removed too.",
+  "del.bodyLowChildren": "{n} note-addressable sub-instrument(s) ({list}) can also be played by patterns; tick below to delete them too, otherwise they stay.",
+  "del.lowChild": "{slot} ({n} notes)",
+  "del.deleteLow": "Also delete {n} note-addressable sub-instrument(s)",
+  "del.bodyClean": "Nothing references this instrument.",
+  "del.reassignTo": "Reassign those notes to instrument (hex $01–$FF; blank = leave dangling)",
+  "del.reassignPlaceholder": "leave dangling",
+  "del.freeSamples": "Also free {n} sample(s) (~{kb} KB) only this instrument uses",
+  "del.badNumber": "That isn't a valid instrument number ($01–$FF).",
 
   // ── New metainstrument (item 72) ──
   "newmeta.title": "New metainstrument",
@@ -528,7 +545,10 @@ export default {
   "pat.panModalTitle": "Pan — pattern {pat}",
   "pat.panBody": "New pan = centre + (old − centre) × Widen + Shift, clamped 0–63. Negative Widen swaps L/R. Applies to {scope}.",
   "pat.instModalTitle": "Change instrument — pattern {pat}",
-  "pat.instBody": "Leave From blank to change every instrument to To; else only cells matching From. Applies to {scope}.",
+  "pat.instBody": "Leave From blank to change every instrument to To; else only cells matching From.",
+  "pat.instScope": "Apply to",
+  "pat.instScopeHere": "{scope}",
+  "pat.instScopeSong": "all patterns in this song",
 
   // ── command palette (Timeline/Patterns bottom bar) ──
   // FX opcode names/args (FX_INFO) stay English for now (large data tables).
@@ -718,6 +738,12 @@ export default {
   "clean.patternsConfirm": "Remove {removed} unused pattern(s) and merge {merged} duplicate(s), then renumber the rest? Cues are rewritten. This can be undone.",
   "clean.bankConfirm": "Remove {insts} unused instrument(s) and free {bytes} sample bytes? This can be undone.",
   "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely? This can be undone.",
+
+  // ── global operations (project view) ──
+  "glob.title": "Global Operations",
+  "glob.changeInst": "Change instrument…",
+  "glob.changeInstTitle": "Change instrument across all patterns",
+  "glob.changeInstBody": "Change every note's instrument From → To across all patterns in every song. Leave From blank to change every instrument to To. Use it to reassign notes a delete left dangling. One undo step.",
 
   // ── retune popup (project view) ──
   "retune.title": "Retune all patterns",

@@ -3,7 +3,7 @@ node_modules/
 *.wav
 microtone-worker/test/reference/
 .DS_Store
-CLAUDE.md
+CLAUDE.*
 microtone-worker/vendor/converters/__pycache__
 *.sf2
 *.taud.sf2

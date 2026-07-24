@@ -11,7 +11,7 @@
 // remap must preserve it.
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
-import { writePatchesBlob } from "../engine/inst.js";
+import { writePatchesBlob, buildMetaRecord } from "../engine/inst.js";
 import { emptyPatternBytes } from "./patterntools.js";
 
 const PAT_MASK = 0x7fff;
@@ -438,5 +438,165 @@ export function planIxmpCleanup(doc) {
     report,
     removedPatches,
     removedBlobs,
+  };
+}
+
+// ── instrument delete ──
+
+/** Metainstruments (used slots) that carry `slot` as one of their layers — the
+ *  "parents" a delete has to rewire. Returns [{slot, layers}] (layers = how many
+ *  of that meta's layers reference this sub-instrument). */
+export function metainstrumentParents(doc, slot) {
+  const s = slot & 0x3ff;
+  const parents = [];
+  for (const m of doc.usedInstrumentSlots()) {
+    if (m === s) continue;
+    const layers = doc.instruments[m].metaLayers;
+    if (!layers) continue;
+    const n = layers.filter((l) => (l.instIdx & 0x3ff) === s).length;
+    if (n > 0) parents.push({ slot: m, layers: n });
+  }
+  return parents;
+}
+
+/** Sample spans (ptr:len) whose EVERY census user is in `slots` — the bytes a
+ *  delete of that whole set can free without stealing a survivor's sample. Uses
+ *  the deduped census (base insts + Ixmp patches); a shared span (a user outside
+ *  the set) is never listed. Returns [{ptr, len}]. */
+export function uniqueSampleSpansForSet(doc, slots) {
+  const set = slots instanceof Set ? slots : new Set(slots);
+  return doc.sampleList()
+    .filter((e) => e.users.every((u) => set.has(u)))
+    .map((e) => ({ ptr: e.ptr, len: e.len }));
+}
+
+/** Sample spans only `slot` uses (the single-slot case of the above). */
+export function uniqueSampleSpans(doc, slot) {
+  return uniqueSampleSpansForSet(doc, [slot & 0x3ff]);
+}
+
+/**
+ * Classify a metainstrument's layer children for a cascade delete. A child still
+ * layered by some OTHER used metainstrument is kept (it is in use elsewhere). The
+ * rest split by addressability:
+ *   * $100+ children — outside the 8-bit note-addressable range, so nothing but a
+ *     meta layer can reach them; once their meta goes they are orphans and are
+ *     auto-deleted (no pattern probe needed).
+ *   * $01–$FF children — can still be played by pattern cells, so they are only
+ *     OFFERED (with their pattern-reference count) — the caller decides.
+ * Returns {autoChildren:[slot…], lowChildren:[{slot, patternRefs}…]}; both empty
+ * for a non-meta.
+ */
+export function classifyMetaChildren(doc, metaSlot) {
+  const m = metaSlot & 0x3ff;
+  const inst = doc.instruments[m];
+  if (!inst?.isMeta || !inst.metaLayers) return { autoChildren: [], lowChildren: [] };
+  const used = doc.usedInstrumentSlots();
+  const kids = [...new Set(inst.metaLayers.map((l) => l.instIdx & 0x3ff))].filter((k) => k !== m);
+  const autoChildren = [];
+  const lowChildren = [];
+  for (const kid of kids) {
+    const referencedElsewhere = used.some((o) => {
+      if (o === m || o === kid) return false;
+      const ml = doc.instruments[o].metaLayers;
+      return ml && ml.some((l) => (l.instIdx & 0x3ff) === kid);
+    });
+    if (referencedElsewhere) continue; // still a layer of another meta — keep it
+    if (kid >= 0x100) autoChildren.push(kid);
+    else lowChildren.push({ slot: kid, patternRefs: instrumentCellRefs(doc, kid).length });
+  }
+  return { autoChildren, lowChildren };
+}
+
+/**
+ * Plan deleting instrument `slot` (this feature). Zeroes its record, blanks its
+ * INam entry, drops its Ixmp patches, rewires every SURVIVING metainstrument that
+ * layered a deleted slot (that layer is repacked out; a meta reduced to zero
+ * layers is removed too, since a 0-layer record decodes as neither meta nor
+ * sample), and — when `freeSamples` — frees the sample bytes only the deleted
+ * instruments used.
+ *
+ * When `slot` is a metainstrument the delete CASCADES to its now-orphaned sub-
+ * instruments (classifyMetaChildren): $100+ orphans always, and — only when
+ * `deleteLowChildren` — its $01–$FF children too (those can be played by
+ * patterns, hence the opt-in).
+ *
+ * Pattern cells are the note references. The PRIMARY slot's notes are LEFT
+ * pointing at the now-empty number (a "dangling instrument") unless `reassignTo`
+ * ($01–$FF) moves them onto another number first (the global Change-instrument
+ * op, folded into the same undo step); any deleted $01–$FF sub-instrument's notes
+ * are left to dangle. $100+ slots can't be note-referenced.
+ *
+ * Returns {error} or a deleteInstrumentOp plan {image, inam, ixmp, cells, …} plus
+ * a report the confirm dialog can show. The op rebuilds the Ixmp SECTION from
+ * `ixmp` (like the renumber/cleanup ops), so the delete survives a save.
+ */
+export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignTo = null, deleteLowChildren = false } = {}) {
+  if (!doc.sampleInstImage) return { error: "This project has no sample+instrument image." };
+  const s = slot & 0x3ff;
+  if (!doc.usedInstrumentSlots().includes(s)) return { error: "That instrument slot is empty." };
+  doc._rebuildInstRegion(); // flush pending inst edits into the image
+
+  const { autoChildren, lowChildren } = classifyMetaChildren(doc, s);
+  const deleteSet = new Set([s, ...autoChildren]);
+  if (deleteLowChildren) for (const c of lowChildren) deleteSet.add(c.slot);
+
+  const recOff = (x) => SAMPLEBIN_SIZE + x * 256;
+  const image = doc.sampleInstImage.slice();
+  for (const x of deleteSet) image.fill(0, recOff(x), recOff(x) + 256);
+
+  // Rewire surviving metainstruments: repack any layer that pointed at a deleted
+  // slot out of the table (a meta left with zero layers is removed too). Deleted
+  // metas are skipped — their whole record is already zeroed.
+  const rewiredMetas = [];
+  const emptiedMetas = [];
+  for (const o of doc.usedInstrumentSlots()) {
+    if (deleteSet.has(o)) continue;
+    const oi = doc.instruments[o];
+    if (!oi.metaLayers || !oi.metaLayers.some((l) => deleteSet.has(l.instIdx & 0x3ff))) continue;
+    const kept = oi.metaLayers.filter((l) => !deleteSet.has(l.instIdx & 0x3ff));
+    if (kept.length === 0) {
+      image.fill(0, recOff(o), recOff(o) + 256);
+      emptiedMetas.push(o);
+    } else {
+      image.set(buildMetaRecord(kept, {
+        strict: oi.metaStrict,
+        percussion: (oi.metaRaw[0] & 0x02) !== 0,
+      }), recOff(o));
+      rewiredMetas.push(o);
+    }
+  }
+
+  const removedSet = new Set([...deleteSet, ...emptiedMetas]);
+
+  // Free sample bytes only the removed instruments used.
+  let freedSampleBytes = 0, freedSamples = 0;
+  if (freeSamples) {
+    const pool = image.subarray(0, SAMPLEBIN_SIZE);
+    for (const sp of uniqueSampleSpansForSet(doc, removedSet)) {
+      for (let i = sp.ptr; i < sp.ptr + sp.len; i++) if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
+      freedSamples++;
+    }
+  }
+
+  // INam: blank every removed slot.
+  const inamArr = doc._nameTable("INam").slice();
+  for (const x of removedSet) if (x < inamArr.length) inamArr[x] = "";
+  while (inamArr.length && inamArr[inamArr.length - 1] === "") inamArr.pop();
+
+  // Ixmp: drop every removed slot's patch entries.
+  const ixmp = doc.ixmp.filter((e) => !removedSet.has(e.instId & 0x3ff));
+
+  // Note references: reassign only the PRIMARY slot (a deleted low sub-instrument
+  // dangles). $100+ can't be note-referenced.
+  const refs = s <= 0xff ? instrumentCellRefs(doc, s) : [];
+  const doReassign = reassignTo !== null && s <= 0xff;
+  const cells = doReassign ? refs.map((r) => ({ ...r, inst: reassignTo & 0xff })) : [];
+
+  return {
+    image, inam: encodeNameTable(inamArr), ixmp, cells, from: s,
+    freedSamples, freedSampleBytes, rewiredMetas, emptiedMetas,
+    autoChildren, deletedLowChildren: deleteLowChildren ? lowChildren.map((c) => c.slot) : [],
+    danglingRefs: doReassign ? 0 : refs.length,
   };
 }
