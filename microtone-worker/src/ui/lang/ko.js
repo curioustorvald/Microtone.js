@@ -100,7 +100,7 @@ export default {
   "lang.field": "언어",
 
   // ── about ──
-  "about.blurb": "TSVM Taud 포맷을 위한 미분음 뮤직 트래커 — 서버 없이 브라우저 안에서만 동작합니다.",
+  "about.blurb": "미분음 뮤직 트래커 — 모든 기능이 브라우저 안에서 동작합니다.",
   "about.license": "Microtone은 GNU 일반 공중 사용 허가서 제3판에 의해 배포되는 자유 소프트웨어입니다.",
   "about.thanks": "특별히 감사드립니다",
   "about.thanksEmpty": "후원자와 스폰서가 이곳에 실립니다 — 프로젝트를 지원해 주셔서 감사합니다!",

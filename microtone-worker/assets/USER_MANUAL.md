@@ -85,7 +85,7 @@ From top to bottom:
 - **Toolbox** (Timeline and Patterns only) — **Retune…**, the **Raw** hex-note toggle and the quick **Instruments** lookup panel.
 - **The main view.**
 - **Command palette** — a context strip above the status bar showing the actions and documentation for the column under the cursor while recording.
-- **Status bar** — file name, project name, dirty marker, cue/row/BPM/speed position, and links to GitHub and these docs.
+- **Status bar** — file name, project name, dirty marker, cue/row/BPM/speed position, and links to these docs.
 
 ## Views
 
@@ -110,7 +110,7 @@ live VU/pan meters, the channel's current pitch, and the name of the pattern whi
 Each cell is five columns:
 
 ```
- C--4   01   v3F  p20 A0F00
+ C--4   01   v3F  p20  A0F00
 └note┘└inst┘└vol┘└pan┘└─fx─┘
 ```
 
@@ -177,9 +177,9 @@ click = one table degree).
 | Keys | Word | Symbol | Meaning |
 |---|---|---|---|
 | **z** or **`** | `0001` | `===` | Key-off — release the note (envelopes enter their release phase) |
-| **x** or **1** | `0002` | `^^^` | Note cut — stop immediately |
-| **c** or **2** | `0003` | `~~~` | Note fade — fade out at the instrument's fade rate |
-| **v** or **3** | `0004` | `~^~` | Fast fade |
+| **x** | `0002` | `^^^` | Note cut — stop immediately |
+| **c** | `0003` | `~~~` | Note fade — fade out at the instrument's fade rate |
+| **v** | `0004` | `~^~` | Fast fade |
 | **Delete** or **.** | — | | Clear the note (and instrument) |
 
 ### Instrument, volume and pan columns
@@ -192,7 +192,7 @@ cell stays blank.
 
 ### The effect column
 
-The first character is the opcode — any base-36 key (**0–9, A–Z**); the caret
+The first character is the opcode — any base-36 key (**1–9, A–Z**); the caret
 then moves into the four-digit hex argument. The command palette lists every
 opcode with a tooltip, and while on the argument column it documents the
 argument format of the current opcode. **Delete** clears the effect.
@@ -312,36 +312,13 @@ button. It works on a high-resolution float copy of the take, so every edit
 here happens *before* the 8-bit, 65535-frame pool format is committed — the
 one place where cropping and resampling are still reversible.
 
-- **Waveform** — drag to select a range; mouse wheel scrolls, Ctrl+wheel
-  zooms at the pointer, and the Zoom/Fit buttons do the same from the bar.
-  Space plays the selection (or everything); Delete cuts it.
-- **Tools** — Crop (keep only the selection), Cut, Silence, Fade in/out,
-  Gain… (dB), Normalise, Reverse, Invert, Remove DC. Tools apply to the
-  selection, or the whole take when nothing is selected. The Lab keeps its own
-  undo/redo (Ctrl+Z / Ctrl+Y) separate from the project's.
-- **EQ** — a five-band parametric equaliser (high-pass, low shelf, two peaks,
-  high shelf) with a live response graph. Playback previews the bands in real
-  time; **Apply EQ** renders them into the sample at 2× oversampling, which
-  keeps bell and shelf shapes honest near the top of the spectrum.
-- **Chop** (transient splitting) — the **Chop** button detects transients and
-  splits the take into chunks, one flag per hit. Click the waveform to add a
-  split, click a flag to remove it, and use the **Threshold** slider +
-  **Detect** to re-run detection. Each chunk appears as a pill under the
-  waveform: click its number to select it (audition with Space), untick it to
-  leave it out of the import.
-  - **Merging chunks** — removing a split flag joins the two chunks around it,
-    so clicking a flag merges that pair. To merge several consecutive chunks at
-    once, drag a selection across them and press **Merge** — every split inside
-    the selection is removed and the chunks collapse into one.
-  - **Import N chunks** lands every kept chunk as its own sample + instrument,
-    named `name 1…N`, in a single undo step.
-- **Rate and the frame budget** — the info line always shows what will land
-  in the pool: each chunk is resampled to the target rate (32 kHz ceiling —
-  the engine's output rate) with a band-limited Kaiser-sinc resampler (the
-  same kernel the converters use), and anything still longer than 65535
-  frames is squeezed to fit with the rate following, preserving pitch. Both
-  steps are irreversible once imported, which is exactly why the Lab shows
-  them first — crop or chop until the numbers read the way you want.
+- **Waveform** — drag to select a range; mouse wheel scrolls, Ctrl+wheel zooms at the pointer, and the Zoom/Fit buttons do the same from the bar. Space plays the selection (or everything); Delete cuts it.
+- **Tools** — Crop (keep only the selection), Cut, Silence, Fade in/out, Gain… (dB), Normalise, Reverse, Invert, Remove DC. Tools apply to the selection, or the whole take when nothing is selected. The Lab keeps its own undo/redo (Ctrl+Z / Ctrl+Y) separate from the project's.
+- **EQ** — an eight-band parametric equaliser (high-pass, low shelf, five peaks, high shelf) with a live response graph. Playback previews the bands in real time; **Apply EQ** renders them into the sample at 2× oversampling, which keeps bell and shelf shapes honest near the top of the spectrum.
+- **Chop** (transient splitting) — the **Chop** button detects transients and splits the take into chunks, one flag per hit. Click the waveform to add a split, click a flag to remove it, and use the **Threshold** slider + **Detect** to re-run detection. Each chunk appears as a pill under the waveform: click its number to select it (audition with Space), untick it to leave it out of the import.
+  - **Merging chunks** — removing a split flag joins the two chunks around it, so clicking a flag merges that pair. To merge several consecutive chunks at once, drag a selection across them and press **Merge** — every split inside the selection is removed and the chunks collapse into one.
+  - **Import N chunks** lands every kept chunk as its own sample + instrument, named `name 1…N`, in a single undo step.
+- **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the engine's output rate) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
 
 ### Recording from the microphone
 
@@ -392,7 +369,7 @@ either way.
 
 ### Editing an instrument
 
-- **General** — global volume, volume swing, fadeout; default pan, pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / key-off / fade / key lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
+- **General** — global volume, volume swing, fadeout; default pan, pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
 - **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
@@ -464,6 +441,12 @@ Four clean-up operations, each a single undo step:
 - **Renumber patterns** — compact every pattern into play order, dropping the gaps.
 - **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its layers) and free the sample data only they referenced.
 - **Cleanup instrument patches** — remove [Ixmp patches](#advanced-edit-ixmp-patches) that can never be triggered: patches belonging to no instrument, patches with an empty rectangle or no sample, and patches lying entirely under a higher-priority one (remember the *first* matching patch wins, so a fully covered patch is dead weight).
+
+### Global Operations
+
+Miscellaneous edit functions that affects all patterns, each a single undo step:
+
+- **Change instrument** — changes every note referencing one instrument to another.
 
 ## File (F7)
 
@@ -632,8 +615,8 @@ sidebar (also at [Note Effects](#effects)).
 | Op | Name | Argument |
 |---|---|---|
 | 1 | Global flags | `$ff00` — tone-slide mode and interpolation bits |
-| 5 | Filter cutoff | IT: `$xx00` · SF: `$xxxx` cents · `$FFFF` reset |
-| 6 | Filter resonance | IT: `$xx00` · SF: `$xxxx` centibels · `$FFFF` reset |
+| 5 | Filter cutoff | IT: `$xx00` · SF2: `$xxxx` absolute cents · `$FFFF` reset |
+| 6 | Filter resonance | IT: `$xx00` · SF2: `$xxxx` centibels · `$FFFF` reset |
 | 7 | Pattern ditto | `$llrr` — repeat the last `ll` rows `rr` times |
 | 8 | Bitcrusher | `$xyzz` — clip mode, bit depth, sample-skip |
 | 9 | Overdrive | `$x0zz` — clip mode, gain (16+zz)/16 |
@@ -705,9 +688,9 @@ hear, exactly as if you had played through the arming row.
 |---|---|
 | A S D F G H J K | Piano white keys (C D E F G A B C) |
 | W E · T Y U | Piano black keys |
-| z x c v (or ` 1 2 3) | Key-off `===` · cut `^^^` · fade `~~~` · fast-fade `~^~` |
+| z x c v | Key-off `===` · cut `^^^` · fade `~~~` · fast-fade `~^~` |
 | 0–9 A–F | Hex entry (instrument / volume / pan / fx argument) |
-| 0–Z | Effect opcode (base-36) |
+| 1–Z | Effect opcode (base-36) |
 | + / - | Volume/pan slide selectors |
 | Delete / . | Clear the field |
 | ← → / Tab | Sub-column / next channel |
@@ -723,7 +706,7 @@ hear, exactly as if you had played through the arming row.
 
 ## About
 
-Microtone is free software, distributed under the GNU General Public License
+Microtone is free software, distributed under the terms of the GNU General Public License
 version 3. Source, issues and discussion:
 [github.com/curioustorvald/Microtone.js](https://github.com/curioustorvald/Microtone.js)
 — you can support development via

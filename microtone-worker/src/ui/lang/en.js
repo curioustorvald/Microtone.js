@@ -103,8 +103,8 @@ export default {
   "lang.field": "Language",
 
   // ── about ──
-  "about.blurb": "A microtonal music tracker for the TSVM Taud format — runs entirely in your browser, no server.",
-  "about.license": "Microtone is a free software distributed under the terms of the GNU General Public License version 3.",
+  "about.blurb": "A microtonal music tracker — runs entirely in your browser.",
+  "about.license": "Microtone is free software distributed under the terms of the GNU General Public License version 3.",
   "about.thanks": "Special thanks",
   "about.thanksEmpty": "Donors and sponsors will be listed here — thank you for supporting the project!",
   "about.docs": "Documentation",

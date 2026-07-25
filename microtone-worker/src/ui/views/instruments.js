@@ -735,8 +735,8 @@ export class InstrumentsView {
 
     this.group(t("inst.grpNoteActions"),
       this.selectRow(t("inst.nna"), nna,
-        [[0, t("inst.nnaNoteOff")], [1, t("inst.nnaNoteCut")], [2, t("inst.nnaContinue")],
-         [3, t("inst.nnaNoteFade")], [4, t("inst.nnaKeyLift")]],
+        [[1, t("inst.nnaNoteCut")], [2, t("inst.nnaContinue")],
+         [0, t("inst.nnaNoteOff")], [3, t("inst.nnaNoteFade")], [4, t("inst.nnaKeyLift")]],
         (v) => {
           // Key Lift = bit 5 set, NNA bits 0-1 = 00 (the 0b100 "Nnn" pattern);
           // 0..3 = traditional NNA with bit 5 clear. Preserve vib-waveform bits.
