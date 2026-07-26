@@ -3,7 +3,10 @@
 // vol/pan columns, an effect-opcode chooser on the fx-op column, and argument
 // documentation (no commands) on the fx-arg column.
 
-import { SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "./edit.js";
+import {
+  SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  volPanOp, volPanSelect,
+} from "./edit.js";
 import { t } from "./i18n.js";
 
 // Effect reference (TAUD_NOTE_EFFECTS.md digest): name + argument format.
@@ -55,7 +58,12 @@ export class CommandPalette {
       this.lastKey = null;
       return;
     }
-    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:${ctx.cell?.volumeEff ?? -1}:${ctx.cell?.panEff ?? -1}`;
+    // The vol/pan buttons highlight by OPERATION, and a fine slide's direction
+    // lives in the value's bit 5 — so the key tracks the op, not the selector
+    // (and not the whole value, which would re-render on every digit typed).
+    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:` +
+      `${ctx.cell ? volPanOp(ctx.cell.volume, ctx.cell.volumeEff) : ""}:` +
+      `${ctx.cell ? volPanOp(ctx.cell.pan, ctx.cell.panEff) : ""}`;
     if (key === this.lastKey && !this.host.hidden) return; // avoid re-render churn
     this.lastKey = key;
     this.host.hidden = false;
@@ -97,28 +105,33 @@ export class CommandPalette {
         label(t("pal.instrument"));
         hint(t("pal.instHint"));
         break;
+      // The vol/pan buttons drive the same operation model as the symbol cell
+      // (item 87): picking one re-interprets the argument already in the cell,
+      // and a fine slide seeds a magnitude of 1 rather than the $C0 no-op.
       case SUB_VOL: {
         label(t("pal.volColumn"));
-        const sel = ctx.cell.volumeEff;
-        const isNoop = sel === 3 && ctx.cell.volume === 0;
-        btn(t("pal.volSet"), t("pal.volSetTitle"), () => ctx.apply({ volumeEff: 0 }), !isNoop && sel === 0);
-        btn(t("pal.slideUp"), t("pal.slideUpTitle"), () => ctx.apply({ volumeEff: 1 }), sel === 1);
-        btn(t("pal.slideDn"), t("pal.slideDnTitle"), () => ctx.apply({ volumeEff: 2 }), sel === 2);
-        btn(t("pal.fine"), t("pal.volFineTitle"), () => ctx.apply({ volumeEff: 3 }), !isNoop && sel === 3);
+        const op = volPanOp(ctx.cell.volume, ctx.cell.volumeEff);
+        const pick = (o) => () => { const f = volPanSelect(false, o, ctx.cell); if (f) ctx.apply(f); };
+        btn(t("pal.volSet"), t("pal.volSetTitle"), pick("set"), op === "set");
+        btn(t("pal.slideUp"), t("pal.slideUpTitle"), pick("up"), op === "up");
+        btn(t("pal.slideDn"), t("pal.slideDnTitle"), pick("down"), op === "down");
+        btn(t("pal.fineUp"), t("pal.volFineUpTitle"), pick("fineUp"), op === "fineUp");
+        btn(t("pal.fineDn"), t("pal.volFineDnTitle"), pick("fineDown"), op === "fineDown");
         btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply({ volume: 0, volumeEff: 3 }));
-        hint(t("pal.hexHint"));
+        hint(t("pal.volHint"));
         break;
       }
       case SUB_PAN: {
         label(t("pal.panColumn"));
-        const sel = ctx.cell.panEff;
-        const isNoop = sel === 3 && ctx.cell.pan === 0;
-        btn(t("pal.panSet"), t("pal.panSetTitle"), () => ctx.apply({ panEff: 0 }), !isNoop && sel === 0);
-        btn(t("pal.slideRight"), t("pal.slideRightTitle"), () => ctx.apply({ panEff: 1 }), sel === 1);
-        btn(t("pal.slideLeft"), t("pal.slideLeftTitle"), () => ctx.apply({ panEff: 2 }), sel === 2);
-        btn(t("pal.fine"), t("pal.panFineTitle"), () => ctx.apply({ panEff: 3 }), !isNoop && sel === 3);
+        const op = volPanOp(ctx.cell.pan, ctx.cell.panEff);
+        const pick = (o) => () => { const f = volPanSelect(true, o, ctx.cell); if (f) ctx.apply(f); };
+        btn(t("pal.panSet"), t("pal.panSetTitle"), pick("set"), op === "set");
+        btn(t("pal.slideLeft"), t("pal.slideLeftTitle"), pick("down"), op === "down");
+        btn(t("pal.slideRight"), t("pal.slideRightTitle"), pick("up"), op === "up");
+        btn(t("pal.fineUp"), t("pal.panFineUpTitle"), pick("fineUp"), op === "fineUp");
+        btn(t("pal.fineDn"), t("pal.panFineDnTitle"), pick("fineDown"), op === "fineDown");
         btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply({ pan: 0, panEff: 3 }));
-        hint(t("pal.hexHint"));
+        hint(t("pal.panHint"));
         break;
       }
       case SUB_FX_OP: {

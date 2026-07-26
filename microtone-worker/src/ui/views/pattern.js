@@ -7,13 +7,13 @@
 // ACTIVE column. Column count follows the viewport width (minimum 2).
 // Reference: taut.js VIEW_PATTERN_DETAILS + PREVIEW_CUE_IDX.
 
-import { hex2, volToStr, panToStr, fxToStr } from "../notenames.js";
-import { paintNoteCell, monoPalette } from "../glyphs.js";
-import { stepNoteInTable, transposePatternNotes } from "../pitchtables.js";
+import { hex2, fxToStr } from "../notenames.js";
+import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
+import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
-  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty,
+  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty, volPanStep,
 } from "../edit.js";
 import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp, changeInstrumentOp } from "../../doc/ops.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -408,16 +408,8 @@ class PatternPane {
     const store = this.store;
     if (!store.doc || !this.pattern()) return;
     const preset = store.pitchPreset;
-    const raw = !preset || preset.table.length === 0;
-    // `t: "d"` is the 12-notes-per-octave family (12-TET, Pythagorean, Shi'er
-    // lü, ProTracker) — there a table step IS a semitone.
-    const fineLabel = raw ? t("pat.unitNoteUnits")
-      : preset.t === "d" ? t("pat.unitSemitones") : t("pat.unitSteps");
-    // interval 0 = an absolute table (ProTracker): coarse moves an octave in
-    // pitch and re-snaps, so it is octaves here too.
-    const iv = preset?.interval ?? 0x1000;
-    const coarseLabel = (iv === 0x1000 || iv === 0)
-      ? t("pat.unitOctaves") : t("pat.unitPeriods");
+    const units = transposeUnitKeys(preset);
+    const fineLabel = t(units.fine), coarseLabel = t(units.coarse);
     const result = await showModal({
       title: t("pat.transposeModalTitle", { pat: this._titlePat() }),
       body: t("pat.transposeBody", { scope: this._opScope().scope }),
@@ -636,8 +628,10 @@ class PatternPane {
     switch (hit.sub) {
       case SUB_NOTE: fields = { note: stepNoteInTable(cell.note, this.store.pitchPreset, dir) }; break;
       case SUB_INST: fields = { instrment: clampInt(cell.instrment + dir, 0, 255) }; break;
-      case SUB_VOL: fields = { volume: clampInt(cell.volume + dir, 0, 0x3f) }; break;
-      case SUB_PAN: fields = { pan: clampInt(cell.pan + dir, 0, 0x3f) }; break;
+      // vol/pan: a fine slide steps its SIGNED delta (item 87), everything else
+      // the plain value; neither ever steps into the no-op sentinel.
+      case SUB_VOL: fields = volPanStep(false, cell, dir); break;
+      case SUB_PAN: fields = volPanStep(true, cell, dir); break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
     }
@@ -766,19 +760,18 @@ class PatternPane {
       }
       const instS = ghost?.inst != null ? hex2(ghost.inst)
         : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-      const volS = ghost?.vol ? volToStr(ghost.vol[0], ghost.vol[1])
-        : volToStr(cell.volume, cell.volumeEff);
-      const panS = ghost?.pan ? panToStr(ghost.pan[0], ghost.pan[1])
-        : panToStr(cell.pan, cell.panEff);
       const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
         : fxToStr(cell.effect, cell.effectArg);
       ctx.fillStyle = ghost?.inst != null ? C.ditto
         : cell.instrment !== 0 ? C.accent2 : C.dim;
       ctx.fillText(instS, x0 + 5 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = ghost?.vol ? C.ditto : volS === "···" ? C.dim : C.meter;
-      ctx.fillText(volS, x0 + 8 * CHAR_W, y + ROW_H / 2);
-      ctx.fillStyle = ghost?.pan ? C.ditto : panS === "···" ? C.dim : C.colPan;
-      ctx.fillText(panS, x0 + 12 * CHAR_W, y + ROW_H / 2);
+      // vol/pan: symbol cell (vector ticks) + argument digits — item 87
+      const vol = ghost?.vol ?? [cell.volume, cell.volumeEff];
+      paintVolPanCell(ctx, vol[0], vol[1], false, x0 + 8 * CHAR_W, y, CHAR_W, ROW_H,
+        { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim });
+      const pan = ghost?.pan ?? [cell.pan, cell.panEff];
+      paintVolPanCell(ctx, pan[0], pan[1], true, x0 + 12 * CHAR_W, y, CHAR_W, ROW_H,
+        { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim });
       ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
       ctx.fillText(fxS, x0 + 16 * CHAR_W, y + ROW_H / 2);
     }

@@ -542,3 +542,39 @@ export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coa
   }
   return changes;
 }
+
+/**
+ * The same transpose over EVERY materialised pattern of one song (item 85 —
+ * the Project view's global operation). Unmaterialised pattern numbers (item
+ * 48 gaps) hold nothing to shift, so they stay unmaterialised. Other songs in
+ * the project are never touched: `song` is the only thing this reads.
+ * Returns the concatenated [{pat, row, prev}] list for restoreNotesOp.
+ */
+export function transposeAllPatterns(song, preset, percSlots, fine, coarse) {
+  const changes = [];
+  for (let p = 0; p < song.patterns.length; p++) {
+    if (!song.patterns[p]) continue;
+    for (const c of transposePatternNotes(song, p, preset, percSlots, fine, coarse)) {
+      changes.push(c);
+    }
+  }
+  return changes;
+}
+
+/**
+ * i18n keys naming the two transpose units for a preset, so the pattern-scoped
+ * and global dialogs always agree. The fine unit follows the song's tuning
+ * (semitones in the 12-notes-per-octave family, table steps elsewhere, raw
+ * note units with no table) and the coarse unit is octaves — or periods when
+ * the tuning isn't octave-based, e.g. Bohlen-Pierce tritaves. Interval 0 is an
+ * absolute table (ProTracker): coarse moves an octave in pitch and re-snaps.
+ */
+export function transposeUnitKeys(preset) {
+  const raw = !preset || preset.table.length === 0;
+  const iv = preset?.interval ?? 0x1000;
+  return {
+    fine: raw ? "pat.unitNoteUnits"
+      : preset.t === "d" ? "pat.unitSemitones" : "pat.unitSteps",
+    coarse: (iv === 0x1000 || iv === 0) ? "pat.unitOctaves" : "pat.unitPeriods",
+  };
+}

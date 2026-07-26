@@ -12,9 +12,12 @@ import {
   scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
 } from "../../src/doc/patterntools.js";
 import { setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellOp } from "../../src/doc/ops.js";
-import { pitchTablePresets, transposePatternNotes, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
+import {
+  pitchTablePresets, transposePatternNotes, transposeAllPatterns, transposeUnitKeys,
+  ANCHOR_NOTE,
+} from "../../src/ui/pitchtables.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
-import { Document } from "../../src/doc/document.js";
+import { Document, Song } from "../../src/doc/document.js";
 import { UndoStack } from "../../src/doc/undo.js";
 
 const corpusDir = fileURLToPath(new URL("../corpus/", import.meta.url));
@@ -326,4 +329,79 @@ test("bulkNotesOp: transpose one pattern on WHEN, single undo step, byte-exact",
 
   undo.undo();
   assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+});
+
+// ── item 85: the same transpose as a GLOBAL (whole-song) operation ──
+
+test("transposeAllPatterns: every materialised pattern, gaps left unmaterialised", () => {
+  const preset = pitchTablePresets[120];
+  const cellOf = (note, inst = 0) => ({ note, instrment: inst });
+  const song = {
+    patterns: [
+      [cellOf(ANCHOR_NOTE), cellOf(0x0001)],
+      null,                                     // item 48 gap: nothing to shift
+      [cellOf(ANCHOR_NOTE + 0x1000), cellOf(0)],
+    ],
+  };
+  const changes = transposeAllPatterns(song, preset, null, 1, 0);
+  assert.equal(song.patterns[0][0].note, ANCHOR_NOTE + preset.table[1]);
+  assert.equal(song.patterns[2][0].note, ANCHOR_NOTE + 0x1000 + preset.table[1]);
+  assert.equal(song.patterns[1], null, "the gap stays unmaterialised");
+  assert.deepEqual(changes.map((c) => c.pat), [0, 2], "changes carry their pattern index");
+  assert.equal(song.patterns[0][1].note, 0x0001, "sentinels skipped, as pattern-scoped");
+});
+
+test("global transpose on WHEN: one undo step over all patterns, byte-exact", () => {
+  const doc = loadWhen();
+  const before = Buffer.from(doc.toBytes());
+  const undo = new UndoStack(doc);
+  const preset = pitchTablePresets[120];
+
+  const dirty = undo.apply(bulkNotesOp(0,
+    (song) => transposeAllPatterns(song, preset, null, 0, 1))); // +1 octave
+  assert.ok(dirty.length > 1, "more than one pattern moved");
+  assert.equal(undo.undoStack.length, 1, "one undo step for the whole song");
+  assert.ok(dirty.every((d) => d.kind === "pattern" && d.song === 0));
+  assert.ok(!Buffer.from(doc.toBytes()).equals(before), "notes moved");
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+});
+
+// 85.00: a global operation must stop at the current song's edge.
+test("global transpose leaves the project's other songs alone", () => {
+  const doc = loadWhen();
+  // Clone song 0 into a second song (fresh byte images — no aliasing).
+  const patterns = doc.songs[0].patterns.map((_, p) => doc.patternBytes(0, p));
+  const s0 = doc.songs[0];
+  doc.songs.push(new Song({
+    numVoices: s0.numVoices, bpm: s0.bpm, tickRate: s0.tickRate,
+    tuningBaseNote: s0.tuningBaseNote, tuningFreq: s0.tuningFreq,
+    globalFlags: s0.globalFlags, globalVolume: s0.globalVolume,
+    mixingVolume: s0.mixingVolume, patterns, cues: s0.cues.map((c) => Uint16Array.from(c)),
+  }));
+  const snapshot = (si) => doc.songs[si].patterns.map((p) => (p ?? []).map((c) => c.note));
+  const song1Before = JSON.stringify(snapshot(1));
+
+  const undo = new UndoStack(doc);
+  undo.apply(bulkNotesOp(0,
+    (song) => transposeAllPatterns(song, pitchTablePresets[120], null, 2, 0)));
+  assert.notEqual(JSON.stringify(snapshot(0)), song1Before, "song 0 moved");
+  assert.equal(JSON.stringify(snapshot(1)), song1Before, "song 1 untouched");
+});
+
+test("transposeUnitKeys: the unit labels follow the song's tuning", () => {
+  // 12 notes per octave (t: 'd') → semitones + octaves…
+  assert.deepEqual(transposeUnitKeys(pitchTablePresets[120]),
+    { fine: "pat.unitSemitones", coarse: "pat.unitOctaves" });
+  // …a denser TET counts table steps…
+  assert.equal(transposeUnitKeys(pitchTablePresets[190]).fine, "pat.unitSteps");
+  // …Bohlen-Pierce repeats at a tritave, so coarse is periods…
+  assert.equal(transposeUnitKeys(pitchTablePresets[35130]).coarse, "pat.unitPeriods");
+  // …an absolute table (ProTracker) still moves by octave in pitch…
+  assert.equal(transposeUnitKeys(pitchTablePresets[1]).coarse, "pat.unitOctaves");
+  // …and Raw (no table) shifts by raw note units.
+  assert.deepEqual(transposeUnitKeys(pitchTablePresets[0]),
+    { fine: "pat.unitNoteUnits", coarse: "pat.unitOctaves" });
+  assert.equal(transposeUnitKeys(null).fine, "pat.unitNoteUnits");
 });

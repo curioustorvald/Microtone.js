@@ -1,7 +1,9 @@
 // Pattern-cell edit interpreter — pure functions (Node-testable), glued to the
 // canvas views by timeline.js. Column model per cell:
-//   sub 0 = note, 1 = instrument (2 nibbles), 2 = volume (2 nibbles),
-//   sub 3 = effect opcode (base-36), 4 = effect arg (4 nibbles).
+//   sub 0 = note, 1 = instrument (2 nibbles), 2 = volume, 3 = panning,
+//   sub 4 = effect opcode (base-36), 5 = effect arg (4 nibbles).
+// The vol and pan columns are three positions wide: the SYMBOL cell (which
+// operation the column carries) followed by the two argument digits — item 87.
 // The jam map mirrors taut.js SC_JAM: physical-position piano on the A-row
 // (KeyA..KeyK white, KeyW/E/T/Y/U black) — layout-independent via e.code.
 
@@ -15,7 +17,8 @@ export const SUB_PAN = 3;
 export const SUB_FX_OP = 4;
 export const SUB_FX_ARG = 5;
 export const NUM_SUBS = 6;
-export const SUB_NIBBLES = [1, 2, 2, 2, 1, 4];
+// vol/pan: [symbol][argument hi][argument lo]
+export const SUB_NIBBLES = [1, 2, 3, 3, 1, 4];
 
 // ── shared cell layout (Timeline + Pattern views) ──
 // "♯C-4 01 v3F p20 A0F00": note glyphs 0-3, inst 5-6, vol 8-10, pan 12-14,
@@ -72,8 +75,8 @@ export function subCharPos(sub, nib) {
   switch (sub) {
     case SUB_NOTE: return [0, 4];         // 4 glyph slots
     case SUB_INST: return [5 + nib, 1];
-    case SUB_VOL: return [9 + nib, 1];    // char 8 is the selector prefix
-    case SUB_PAN: return [13 + nib, 1];   // char 12 is the selector prefix
+    case SUB_VOL: return [8 + nib, 1];    // char 8 is the symbol cell
+    case SUB_PAN: return [12 + nib, 1];   // char 12 is the symbol cell
     case SUB_FX_OP: return [16, 1];
     case SUB_FX_ARG: return [17 + nib, 1];
     default: return [0, 1];
@@ -108,10 +111,146 @@ export function charToSub(charX) {
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   if (charX >= 17) return [SUB_FX_ARG, clamp(Math.floor(charX - 17), 0, 3)];
   if (charX >= 16) return [SUB_FX_OP, 0];
-  if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 13), 0, 1)];
-  if (charX >= 8) return [SUB_VOL, clamp(Math.floor(charX - 9), 0, 1)];
+  if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 12), 0, 2)];
+  if (charX >= 8) return [SUB_VOL, clamp(Math.floor(charX - 8), 0, 2)];
   if (charX >= 5) return [SUB_INST, clamp(Math.floor(charX - 5), 0, 1)];
   return [SUB_NOTE, 0];
+}
+
+// ── the volume / panning column (item 87) ──
+// One byte: 2-bit selector + 6-bit value (engine applyVolColumn /
+// applyPanColumn). The five operations a column can carry:
+//   "set"       SEL_SET  — set the volume / panning outright (00..3F)
+//   "up"/"down" SEL_UP / SEL_DOWN — per-tick slide (louder/quieter, R/L)
+//   "fineUp"/"fineDown"  SEL_FINE — one-shot delta, magnitude in the low 5
+//                        bits and DIRECTION in bit 5 (set = louder / rightward,
+//                        AudioAdapter.kt:2980 + 3001)
+//   "none"      the SEL_FINE-with-0 no-op sentinel ($C0) — an empty cell
+// So a fine slide's argument is always the magnitude 00..1F, and the symbol
+// carries its sign; the engine's 20..3F halves never surface in the UI.
+const SEL_FINE = 3, FINE_DIR = 0x20, FINE_MAG = 0x1f;
+
+/** The operation a vol/pan byte encodes. */
+export function volPanOp(value, sel) {
+  if (sel !== SEL_FINE) return ["set", "up", "down"][sel] ?? "set";
+  if (value === 0) return "none";
+  return (value & FINE_DIR) !== 0 ? "fineUp" : "fineDown";
+}
+
+/** The argument as DISPLAYED and TYPED: a fine slide's magnitude (00..1F), the
+ *  plain 6-bit value (00..3F) for everything else. */
+export function volPanArg(value, sel) {
+  return sel === SEL_FINE ? (value & FINE_MAG) : (value & 0x3f);
+}
+
+/** Signed one-shot delta a fine byte encodes (0 for any other selector). */
+export function fineSigned(value, sel) {
+  if (sel !== SEL_FINE) return 0;
+  const mag = value & FINE_MAG;
+  return (value & FINE_DIR) !== 0 ? mag : -mag;
+}
+
+/** Byte value for a signed fine delta; 0 (the no-op sentinel) at zero. */
+export function fineValue(signed) {
+  const mag = Math.min(Math.abs(signed), FINE_MAG);
+  return mag === 0 ? 0 : (signed > 0 ? FINE_DIR | mag : mag);
+}
+
+/** setCellOp fields naming whichever column `isPan` selects. */
+function vpFields(isPan, value, sel) {
+  return isPan ? { pan: value, panEff: sel } : { volume: value, volumeEff: sel };
+}
+
+/** …wrapped as an interpretBracketKey action. */
+function vpFieldsFor(isPan, value, sel) { return { fields: vpFields(isPan, value, sel) }; }
+
+/** Read a cell's vol or pan column as {value, sel, arg, op, empty}. */
+export function volPanState(isPan, cell) {
+  const value = (isPan ? cell.pan : cell.volume) & 0x3f;
+  const sel = (isPan ? cell.panEff : cell.volumeEff) & 3;
+  return { value, sel, arg: volPanArg(value, sel), op: volPanOp(value, sel),
+           empty: sel === SEL_FINE && value === 0 };
+}
+
+/**
+ * Switch the column to operation `op`, keeping the argument the user can see:
+ * an existing value is re-interpreted under the new operation rather than
+ * cleared. A fine slide can't carry a zero argument (that byte IS the no-op
+ * sentinel), so selecting one on a blank argument seeds a magnitude of 1.
+ * Selecting "set" on an already-empty cell is a no-op — there is nothing to
+ * re-interpret, and conjuring "set volume 00" out of an empty cell (from the
+ * Delete key, no less) would silence the note.
+ * Returns setCellOp fields, or null when nothing changes.
+ */
+export function volPanSelect(isPan, op, cell) {
+  const st = volPanState(isPan, cell);
+  let value, sel;
+  switch (op) {
+    case "set": if (st.empty) return null; value = st.arg; sel = 0; break;
+    case "up": value = st.arg; sel = 1; break;
+    case "down": value = st.arg; sel = 2; break;
+    case "fineUp": value = FINE_DIR | Math.max(1, st.arg & FINE_MAG); sel = SEL_FINE; break;
+    case "fineDown": value = Math.max(1, st.arg & FINE_MAG); sel = SEL_FINE; break;
+    case "none": value = 0; sel = SEL_FINE; break;
+    default: return null;
+  }
+  if (value === st.value && sel === st.sel) return null;
+  return vpFields(isPan, value, sel);
+}
+
+/**
+ * Type hex digit `d` into argument nibble `nib` (1 = high, 2 = low) of the
+ * vol/pan column. A fine slide's argument is 00..1F, so its high digit only
+ * carries bit 4 (2..F all read as 1), and typing it down to zero clears the
+ * cell exactly as the $C0 no-op sentinel would. An empty cell promotes to SET.
+ */
+export function volPanDigit(isPan, cell, nib, d) {
+  const st = volPanState(isPan, cell);
+  if (st.sel === SEL_FINE && !st.empty) {
+    const mag = nib === 1 ? (((d & 1) << 4) | (st.arg & 0x0f)) : ((st.arg & 0x10) | d);
+    return vpFields(isPan, mag === 0 ? 0 : ((st.value & FINE_DIR) | mag), SEL_FINE);
+  }
+  const sel = st.empty ? 0 : st.sel;
+  const value = nib === 1 ? (((d << 4) | (st.arg & 0x0f)) & 0x3f) : ((st.arg & 0x30) | d);
+  return vpFields(isPan, value, sel);
+}
+
+/** Wheel/step the column by `dir`: the signed delta for a fine slide (it never
+ *  steps through zero — that direction is the symbol cell's business), the
+ *  plain value otherwise. Null when nothing moves. */
+export function volPanStep(isPan, cell, dir) {
+  const st = volPanState(isPan, cell);
+  if (st.sel === SEL_FINE) {
+    const signed = fineSigned(st.value, st.sel) + dir;
+    if (signed === 0 || Math.abs(signed) > FINE_MAG) return null;
+    return vpFields(isPan, fineValue(signed), SEL_FINE);
+  }
+  const value = Math.min(Math.max(st.value + dir, 0), 0x3f);
+  return value === st.value ? null : vpFields(isPan, value, st.sel);
+}
+
+/**
+ * Symbol-cell keys (item 87). Returns the chosen operation, or null.
+ *   vol: '^'/'u' slide up · 'v'/'d' slide down · '+'/'=' fine up · '-' fine down
+ *   pan: '>'/'r' slide right · '<'/'l' slide left · '+'/'=' fine right (up) ·
+ *        '-' fine left (down)
+ *   both: '.' / Delete / Backspace → plain set
+ * Checked on e.key, so the printed key is the one that acts (Shift+6 = '^',
+ * Shift+, = '<'), and BEFORE the Delete/Period codes — Shift+Period is '>'.
+ */
+export function volPanSymbolKey(isPan, code, key) {
+  const k = key.length === 1 ? key.toLowerCase() : key;
+  if (k === "+" || k === "=") return "fineUp";
+  if (k === "-") return "fineDown";
+  if (isPan) {
+    if (k === ">" || k === "r") return "up";      // rightward = the positive selector
+    if (k === "<" || k === "l") return "down";
+  } else {
+    if (k === "^" || k === "u") return "up";
+    if (k === "v" || k === "d") return "down";
+  }
+  if (code === "Delete" || code === "Backspace" || code === "Period") return "set";
+  return null;
 }
 
 // Physical piano rows (KeyboardEvent.code → semitone offset from C).
@@ -214,25 +353,23 @@ export function interpretBracketKey(dir, shift, sub, cell, ctx) {
       const instrment = stepInstSlot(cell.instrment, dir > 0 ? +1 : -1, ctx.instSlots);
       return instrment == null || instrment === cell.instrment ? null : { fields: { instrment } };
     }
-    case SUB_VOL: {
-      const empty = cell.volumeEff === 3 && cell.volume === 0;
-      if (shift) { // FINE selector, value ∓1
-        const base = empty ? 0x20 : cell.volume;
-        return { fields: { volume: clampV(base + dir), volumeEff: 3 } };
-      }
-      if (empty) return { fields: { volume: 0x20, volumeEff: 0 } };  // default set
-      // '[' = quieter, ']' = louder (so value += dir).
-      return { fields: { volume: clampV(cell.volume + dir), volumeEff: cell.volumeEff } };
-    }
+    case SUB_VOL:
     case SUB_PAN: {
-      const empty = cell.panEff === 3 && cell.pan === 0;
-      if (shift) { // FINE selector, ∓1 toward L / R
-        const base = empty ? 0x20 : cell.pan;
-        return { fields: { pan: clampV(base + dir), panEff: 3 } };
+      const isPan = sub === SUB_PAN;
+      const st = volPanState(isPan, cell);
+      if (shift) {
+        // FINE selector, SIGNED delta ∓1 — the symbol carries the direction now
+        // (item 87), so '{' walks +2 → +1 → −1 → −2 rather than wrapping round
+        // the raw byte into a 31-unit slide the other way.
+        // Stepping a ∓1 through zero lands on the no-op sentinel, i.e. clears.
+        const value = fineValue(fineSigned(st.value, st.sel) + dir);
+        return value === st.value && st.sel === 3
+          ? null : vpFieldsFor(isPan, value, 3);
       }
-      if (empty) return { fields: { pan: 0x20, panEff: 0 } };  // default centre
-      // '[' = toward L (pan-), ']' = toward R (pan+).
-      return { fields: { pan: clampV(cell.pan + dir), panEff: cell.panEff } };
+      // '[' = quieter / toward L, ']' = louder / toward R.
+      if (st.empty) return vpFieldsFor(isPan, 0x20, 0); // default set / centre
+      const value = clampV(st.value + dir);
+      return value === st.value ? null : vpFieldsFor(isPan, value, st.sel);
     }
     default: return null; // fx op/arg: no-op
   }
@@ -244,6 +381,12 @@ function hexDigit(key) {
   if (c >= 48 && c <= 57) return c - 48;
   if (c >= 97 && c <= 102) return c - 87;
   return -1;
+}
+
+/** Keys that blank a cell column: Delete, '.', and (item 86) Backspace — one
+ *  key for "erase" on the pattern grids, whichever one the hand reaches for. */
+function isClearKey(code) {
+  return code === "Delete" || code === "Backspace" || code === "Period";
 }
 
 function base36Digit(key) {
@@ -274,7 +417,7 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
     // 16-bit note word (left-to-right), OVERRIDING the piano jam, the sentinels
     // and any other note-column key; non-hex keys are swallowed so nothing jams.
     if (ctx.rawHex) {
-      if (code === "Delete" || code === "Period") {
+      if (isClearKey(code)) {
         return { fields: { note: 0, instrment: 0 }, advanceRow: true };
       }
       const d = hexDigit(key);
@@ -297,14 +440,14 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
       case "KeyX": return { fields: { note: 0x0002 }, advanceRow: true };    // note cut
       case "KeyC": return { fields: { note: 0x0003 }, advanceRow: true };    // note fade
       case "KeyV": return { fields: { note: 0x0004 }, advanceRow: true };    // fast fade
-      case "Delete": case "Period":
+      case "Delete": case "Backspace": case "Period":
         return { fields: { note: 0, instrment: 0 }, advanceRow: true };
     }
     return null;
   }
 
   if (sub === SUB_INST) {
-    if (code === "Delete" || code === "Period") {
+    if (isClearKey(code)) {
       return { fields: { instrment: 0 }, advanceRow: true };
     }
     const d = hexDigit(key);
@@ -316,43 +459,37 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
       : { fields: { instrment: val }, advanceRow: true };
   }
 
-  if (sub === SUB_VOL) {
-    if (code === "Delete" || code === "Period") {
-      // vol-column no-op sentinel: SEL_FINE(3) with value 0
-      return { fields: { volume: 0, volumeEff: 3 }, advanceRow: true };
+  if (sub === SUB_VOL || sub === SUB_PAN) {
+    const isPan = sub === SUB_PAN;
+    // nib 0 — the symbol cell: pick the operation, then step onto its argument.
+    if (nib === 0) {
+      const op = volPanSymbolKey(isPan, code, key);
+      if (op === null) {
+        // Hex digits fall through to the argument's first digit, so landing on
+        // the symbol and typing a value just works. ('d' on the vol column is
+        // the down-slide key above, and never a hex digit here.)
+        const d = hexDigit(key);
+        if (d < 0) return null;
+        return { fields: volPanDigit(isPan, cell, 1, d), advanceNib: true };
+      }
+      const fields = volPanSelect(isPan, op, cell);
+      // A no-change selection still consumes the key (never jams a note).
+      return fields ? { fields, advanceNib: true } : { consumed: true };
     }
-    // selector prefixes: v = SET, + = slide-up, - = slide-down, f = fine
-    if (key === "+") return { fields: { volumeEff: 1 } };
-    if (key === "-") return { fields: { volumeEff: 2 } };
+    // nib 1/2 — the two argument digits.
+    if (isClearKey(code)) {
+      // clear: the SEL_FINE-0 no-op sentinel ($C0)
+      return { fields: isPan ? { pan: 0, panEff: 3 } : { volume: 0, volumeEff: 3 },
+               advanceRow: true };
+    }
     const d = hexDigit(key);
     if (d < 0) return null;
-    const cur = cell.volume & 0x3f;
-    const sel = cell.volumeEff === 3 && cell.volume === 0 ? 0 : cell.volumeEff;
-    const val = nib === 0 ? (((d << 4) | (cur & 0x0f)) & 0x3f) : ((cur & 0x30) | d);
-    return nib === 0
-      ? { fields: { volume: val, volumeEff: sel }, advanceNib: true }
-      : { fields: { volume: val, volumeEff: sel }, advanceRow: true };
-  }
-
-  if (sub === SUB_PAN) {
-    if (code === "Delete" || code === "Period") {
-      // pan-column no-op sentinel: SEL_FINE(3) with value 0
-      return { fields: { pan: 0, panEff: 3 }, advanceRow: true };
-    }
-    if (key === "+") return { fields: { panEff: 1 } }; // slide right
-    if (key === "-") return { fields: { panEff: 2 } }; // slide left
-    const d = hexDigit(key);
-    if (d < 0) return null;
-    const cur = cell.pan & 0x3f;
-    const sel = cell.panEff === 3 && cell.pan === 0 ? 0 : cell.panEff;
-    const val = nib === 0 ? (((d << 4) | (cur & 0x0f)) & 0x3f) : ((cur & 0x30) | d);
-    return nib === 0
-      ? { fields: { pan: val, panEff: sel }, advanceNib: true }
-      : { fields: { pan: val, panEff: sel }, advanceRow: true };
+    const fields = volPanDigit(isPan, cell, nib, d);
+    return nib === 1 ? { fields, advanceNib: true } : { fields, advanceRow: true };
   }
 
   if (sub === SUB_FX_OP) {
-    if (code === "Delete" || code === "Period") {
+    if (isClearKey(code)) {
       return { fields: { effect: 0, effectArg: 0 }, advanceRow: true };
     }
     const d = base36Digit(key);
@@ -361,7 +498,7 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
   }
 
   if (sub === SUB_FX_ARG) {
-    if (code === "Delete" || code === "Period") {
+    if (isClearKey(code)) {
       return { fields: { effectArg: 0 }, advanceRow: true };
     }
     const d = hexDigit(key);

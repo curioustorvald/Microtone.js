@@ -4,6 +4,7 @@
 // marker (microtonal pitch-table content).
 
 import { MIDDLE_C } from "../engine/constants.js";
+import { volPanOp, volPanArg } from "./edit.js";
 
 const NAMES = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"];
 const SEMI = 4096 / 12;
@@ -41,16 +42,28 @@ export function fxToStr(effect, arg) {
   return effect.toString(36).toUpperCase() + hex4(arg);
 }
 
-/** Volume column: selector-prefixed hex ("···" for the SEL_FINE-0 no-op). */
+// Volume / panning columns (item 87): a SYMBOL cell naming the operation plus
+// two argument digits. The symbol is blank for a plain set (nothing is
+// happening to the value), a tick for a per-tick slide, and +/− for the
+// one-shot fine slides — whose argument is the magnitude 00..1F, the direction
+// having moved into the symbol. "···" is the $C0 no-op sentinel (empty cell).
+// The grids paint the ticks as vectors (glyphs.paintVolPanCell); these strings
+// are the text fallback and what the tests read.
+const VOL_SYM = { set: " ", up: "˄", down: "˅", fineUp: "+", fineDown: "−", none: "·" };
+const PAN_SYM = { set: " ", up: "˃", down: "˂", fineUp: "+", fineDown: "−", none: "·" };
+
+/** Volume column text: symbol + two hex digits ("···" for the no-op). */
 export function volToStr(volume, volumeEff) {
-  if (volumeEff === 3 && volume === 0) return "···";
-  const prefix = ["v", "+", "-", "f"][volumeEff];
-  return prefix + hex2(volume);
+  return volPanToStr(false, volume, volumeEff);
 }
 
-/** Pan column: selector-prefixed hex (p set, › right, ‹ left, f fine). */
+/** Pan column text (00 = left, 20 = centre, 3F = right). */
 export function panToStr(pan, panEff) {
-  if (panEff === 3 && pan === 0) return "···";
-  const prefix = ["p", "›", "‹", "f"][panEff];
-  return prefix + hex2(pan);
+  return volPanToStr(true, pan, panEff);
+}
+
+function volPanToStr(isPan, value, sel) {
+  const op = volPanOp(value, sel);
+  if (op === "none") return "···";
+  return (isPan ? PAN_SYM : VOL_SYM)[op] + hex2(volPanArg(value, sel));
 }

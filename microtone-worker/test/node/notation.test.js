@@ -200,11 +200,14 @@ test("autoAssignSyms: sequence mode spreads > 26 degrees over the alphabet (item
   }
 
   // The null tick of a tick ladder must match the shipped Kite convention.
-  for (const n of [78, 104, 130, 200]) {
+  for (const n of [78, 104, 130, 300]) {
     assert.ok(mk(n).every((s) => s[0] !== " "),
       `n=${n}: a tick-bearing table never leaves the tick slot blank`);
   }
-  assert.ok(mk(52).every((s) => s[0] === " "), "a tickless ladder keeps the blank tick slot");
+  // A ladder is either all-tick or tickless — never a mix.
+  for (const n of [52, 200]) {
+    assert.ok(mk(n).every((s) => s[0] === " "), `n=${n}: a tickless ladder keeps the blank tick slot`);
+  }
 
   // Invariants across every size: symbols stay unique and letters never step back.
   for (let n = 1; n <= 260; n++) {
@@ -217,8 +220,39 @@ test("autoAssignSyms: sequence mode spreads > 26 degrees over the alphabet (item
     if (n > 26) assert.equal(new Set(s.map((x) => x[1])).size, 26, `n=${n}: all 26 letters used`);
   }
 
-  // Degenerate scales (> 260 degrees) still produce a symbol per degree.
-  assert.equal(mk(400).length, 400);
+  // Degenerate scales (> 1300 degrees) still produce a symbol per degree.
+  assert.equal(mk(1400).length, 1400);
+});
+
+// Item 88: with only ticks to vary, a letter's run ran out of variants at 5 and
+// cycled — a 1200-EDO table repeated the same symbol every 10 degrees. Flats and
+// the rest of the accidental palette now carry the distinction.
+test("autoAssignSyms: sequence mode uses accidentals past 5 per letter (item 88)", () => {
+  const mk = (n) => autoAssignSyms(
+    { table: Array.from({ length: n }, (_, i) => Math.round((i * 0x1000) / n)), interval: 0x1000 },
+    "sequence");
+
+  // 6..10 per letter: accidentals alone, ♮ in the middle of the run.
+  const seq156 = mk(156); // 6 per letter
+  assert.deepEqual(seq156.slice(0, 6), [" Ab", " Ap", " A-", " At", " A#", " Ax"]);
+  const seq260 = mk(260); // 10 per letter — the whole palette
+  assert.deepEqual(seq260.slice(0, 10),
+    [" AT", " AB", " Ab", " Ap", " A-", " At", " A#", " Ax", " A3", " A4"]);
+
+  // Past 10 the accidental is the coarse variant and the tick the fine one.
+  const seq300 = mk(300); // 12 per letter
+  assert.deepEqual(seq300.slice(0, 4), [".Ap", "uAp", "UAp", "DA-"]);
+
+  // The reported case: 1200 equal divisions, every degree named exactly once.
+  const seq1200 = mk(1200);
+  assert.equal(new Set(seq1200).size, 1200, "no duplicate symbols in 1200-EDO");
+  assert.ok(seq1200.some((s) => s[2] === "b"), "flats are used");
+  assert.equal(new Set(seq1200.map((s) => s[1])).size, 26, "all 26 letters used");
+  for (let i = 1; i < seq1200.length; i++) {
+    assert.ok(seq1200[i][1] >= seq1200[i - 1][1], `letter steps backwards at degree ${i}`);
+  }
+  // 26 letters × 50 variants is the ceiling; beyond it duplicates are inevitable.
+  assert.equal(new Set(mk(1300)).size, 1300);
 });
 
 test("validateDef issue codes", () => {

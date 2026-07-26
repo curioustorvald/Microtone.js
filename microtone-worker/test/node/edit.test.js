@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable, subIsEmpty, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG } from "../../src/ui/edit.js";
+import {
+  interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable,
+  subIsEmpty, subCharPos, charToSub, subToCol, SUB_POSITIONS, SUB_NIBBLES,
+  volPanOp, volPanArg, volPanStep, fineSigned, fineValue,
+  SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+} from "../../src/ui/edit.js";
+import { volToStr, panToStr } from "../../src/ui/notenames.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -243,4 +249,172 @@ test("lookahead: cursor free in the central 64%, scrolls at the 18% edge", () =>
   assert.equal(lookahead(2, 5, 20, 1000), 0, "clamps at 0");
   assert.equal(lookahead(70, 45, 20, 47), 47, "clamps at maxScroll");
   assert.equal(lookahead(3, 0, 0, 100), 0, "vis 0 → clamp only");
+});
+
+// ── item 86: Backspace erases like Delete on the pattern grids ──
+test("Backspace clears every column, exactly as Delete does", () => {
+  const mk = () => {
+    const c = new TaudPlayData();
+    c.note = MIDDLE_C; c.instrment = 0x11;
+    c.volume = 0x20; c.volumeEff = 0;
+    c.pan = 0x20; c.panEff = 0;
+    c.effect = 5; c.effectArg = 0x1234;
+    return c;
+  };
+  const rctx = { ...ctx, preset: pitchTablePresets[120] };
+  // The argument digits and the note/inst/fx columns: identical to Delete.
+  for (const [sub, nib] of [[SUB_NOTE, 0], [SUB_INST, 0], [SUB_INST, 1],
+                            [SUB_VOL, 1], [SUB_VOL, 2], [SUB_PAN, 1], [SUB_PAN, 2],
+                            [SUB_FX_OP, 0], [SUB_FX_ARG, 0], [SUB_FX_ARG, 3]]) {
+    const del = interpretEditKey({ code: "Delete", key: "Delete" }, sub, nib, mk(), rctx);
+    const bsp = interpretEditKey({ code: "Backspace", key: "Backspace" }, sub, nib, mk(), rctx);
+    assert.deepEqual(bsp, del, `sub ${sub} nib ${nib}`);
+  }
+  // …including in raw-hex note mode.
+  const raw = { ...rctx, rawHex: true };
+  assert.deepEqual(
+    interpretEditKey({ code: "Backspace", key: "Backspace" }, SUB_NOTE, 0, mk(), raw).fields,
+    { note: 0, instrment: 0 });
+});
+
+// ── item 87: the vol/pan symbol cell ──
+test("vol/pan columns are three positions wide: symbol + two digits", () => {
+  assert.deepEqual(SUB_NIBBLES, [1, 2, 3, 3, 1, 4]);
+  // char 8 = vol symbol, 9/10 its digits; 12 = pan symbol, 13/14 its digits
+  assert.deepEqual(subCharPos(SUB_VOL, 0), [8, 1]);
+  assert.deepEqual(subCharPos(SUB_VOL, 2), [10, 1]);
+  assert.deepEqual(subCharPos(SUB_PAN, 0), [12, 1]);
+  assert.deepEqual(charToSub(8), [SUB_VOL, 0]);
+  assert.deepEqual(charToSub(10), [SUB_VOL, 2]);
+  assert.deepEqual(charToSub(12), [SUB_PAN, 0]);
+  assert.deepEqual(charToSub(14), [SUB_PAN, 2]);
+  // Every position is reachable by walking the cursor, in reading order.
+  const walk = SUB_POSITIONS.filter(([s]) => s === SUB_VOL || s === SUB_PAN);
+  assert.deepEqual(walk, [[SUB_VOL, 0], [SUB_VOL, 1], [SUB_VOL, 2],
+                          [SUB_PAN, 0], [SUB_PAN, 1], [SUB_PAN, 2]]);
+  // The logical clipboard column is unchanged — the symbol travels with its value.
+  assert.equal(subToCol(SUB_VOL), 2);
+  assert.equal(subToCol(SUB_PAN), 3);
+});
+
+test("volPanOp/volPanArg: the engine's bit-5 fine direction reads as a symbol", () => {
+  // SEL_FINE with bit 5 SET raises the value (AudioAdapter.kt:2980/3001).
+  assert.equal(volPanOp(0x2a, 3), "fineUp");
+  assert.equal(volPanArg(0x2a, 3), 0x0a, "argument is the magnitude alone");
+  assert.equal(volPanOp(0x0a, 3), "fineDown");
+  assert.equal(volPanArg(0x0a, 3), 0x0a);
+  assert.equal(volPanOp(0x00, 3), "none", "$C0 is the empty-cell sentinel");
+  assert.equal(volPanOp(0x30, 0), "set");
+  assert.equal(volPanArg(0x30, 0), 0x30, "a set/slide argument is the full 6 bits");
+  assert.equal(volPanOp(0x05, 1), "up");
+  assert.equal(volPanOp(0x05, 2), "down");
+  // signed round-trip
+  for (const s of [-0x1f, -1, 1, 0x1f]) assert.equal(fineSigned(fineValue(s), 3), s);
+  assert.equal(fineValue(0), 0, "zero delta IS the no-op sentinel");
+});
+
+test("symbol cell keys: vol ^u/vd/+=/−, pan >r/<l/+=/−, '.' set", () => {
+  const cell = new TaudPlayData();
+  cell.volume = 0x2a; cell.volumeEff = 0;   // set volume $2A
+  cell.pan = 0x2a; cell.panEff = 0;
+  const key = (k, code = "") => ({ code, key: k });
+  const volOf = (k, code) => interpretEditKey(key(k, code), SUB_VOL, 0, cell, ctx);
+  const panOf = (k, code) => interpretEditKey(key(k, code), SUB_PAN, 0, cell, ctx);
+
+  // Slides keep the argument the user can see and only swap the operation.
+  for (const k of ["^", "u"]) assert.deepEqual(volOf(k).fields, { volume: 0x2a, volumeEff: 1 }, k);
+  for (const k of ["v", "d"]) assert.deepEqual(volOf(k).fields, { volume: 0x2a, volumeEff: 2 }, k);
+  for (const k of [">", "r"]) assert.deepEqual(panOf(k).fields, { pan: 0x2a, panEff: 1 }, k);
+  for (const k of ["<", "l"]) assert.deepEqual(panOf(k).fields, { pan: 0x2a, panEff: 2 }, k);
+  // Shift+Period is '>' on the pan column, NOT the clear key.
+  assert.deepEqual(panOf(">", "Period").fields, { pan: 0x2a, panEff: 1 });
+
+  // Fine slides re-read the argument as a magnitude (00..1F): $2A → $0A.
+  for (const k of ["+", "="]) {
+    assert.deepEqual(volOf(k).fields, { volume: 0x20 | 0x0a, volumeEff: 3 }, k);
+    assert.deepEqual(panOf(k).fields, { pan: 0x20 | 0x0a, panEff: 3 }, k);
+  }
+  assert.deepEqual(volOf("-").fields, { volume: 0x0a, volumeEff: 3 });
+  assert.deepEqual(panOf("-").fields, { pan: 0x0a, panEff: 3 });
+
+  // '.' / Delete / Backspace select "set" (they do NOT blank the column here).
+  cell.volumeEff = 1;
+  for (const [k, code] of [[".", "Period"], ["Delete", "Delete"], ["Backspace", "Backspace"]]) {
+    assert.deepEqual(interpretEditKey(key(k, code), SUB_VOL, 0, cell, ctx).fields,
+      { volume: 0x2a, volumeEff: 0 }, code);
+  }
+  // Every symbol key steps onto the argument's first digit.
+  cell.volumeEff = 0;
+  assert.ok(volOf("^").advanceNib);
+});
+
+test("symbol cell: a fine slide never carries a zero argument", () => {
+  const cell = new TaudPlayData();
+  cell.volume = 0; cell.volumeEff = 3;      // the $C0 empty cell
+  // Selecting fine on a blank argument seeds a magnitude of 1…
+  assert.deepEqual(interpretEditKey({ code: "", key: "+" }, SUB_VOL, 0, cell, ctx).fields,
+    { volume: 0x21, volumeEff: 3 }, "fine up by 1");
+  assert.deepEqual(interpretEditKey({ code: "", key: "-" }, SUB_VOL, 0, cell, ctx).fields,
+    { volume: 0x01, volumeEff: 3 }, "fine down by 1");
+  // …and "set" on an empty cell stays empty: Delete must never conjure a
+  // "set volume 00" (which would silence the note) out of a blank column.
+  const set = interpretEditKey({ code: "Delete", key: "Delete" }, SUB_VOL, 0, cell, ctx);
+  assert.ok(set && !set.fields, "consumed, no edit");
+});
+
+test("argument digits: fine magnitude is 00..1F and zero clears the cell", () => {
+  const cell = new TaudPlayData();
+  cell.volume = 0x20 | 0x1f; cell.volumeEff = 3;  // fine up by $1F
+  // high digit carries bit 4 only — 2..F all read as 1, keeping 00..1F
+  assert.deepEqual(interpretEditKey({ code: "Digit0", key: "0" }, SUB_VOL, 1, cell, ctx).fields,
+    { volume: 0x20 | 0x0f, volumeEff: 3 });
+  assert.deepEqual(interpretEditKey({ code: "KeyF", key: "f" }, SUB_VOL, 1, cell, ctx).fields,
+    { volume: 0x20 | 0x1f, volumeEff: 3 }, "clamped to 1");
+  // low digit
+  assert.deepEqual(interpretEditKey({ code: "Digit3", key: "3" }, SUB_VOL, 2, cell, ctx).fields,
+    { volume: 0x20 | 0x13, volumeEff: 3 });
+  // …the direction bit survives every digit edit
+  cell.volume = 0x0f; // fine DOWN by $F
+  assert.deepEqual(interpretEditKey({ code: "Digit2", key: "2" }, SUB_VOL, 2, cell, ctx).fields,
+    { volume: 0x02, volumeEff: 3 }, "still a fine down");
+  // typing the magnitude down to zero clears the cell like $C0 would
+  cell.volume = 0x20 | 0x10;
+  assert.deepEqual(interpretEditKey({ code: "Digit0", key: "0" }, SUB_VOL, 1, cell, ctx).fields,
+    { volume: 0, volumeEff: 3 }, "fine slide of zero = the no-op sentinel");
+  // a set/slide argument keeps its full 6-bit range
+  cell.volume = 0x00; cell.volumeEff = 0;
+  assert.deepEqual(interpretEditKey({ code: "Digit3", key: "3" }, SUB_VOL, 1, cell, ctx).fields,
+    { volume: 0x30, volumeEff: 0 });
+});
+
+test("volPanStep (wheel): fine steps its signed delta, never through zero", () => {
+  const cell = new TaudPlayData();
+  cell.volume = 0x20 | 0x05; cell.volumeEff = 3;    // fine up 5
+  assert.deepEqual(volPanStep(false, cell, +1), { volume: 0x26, volumeEff: 3 });
+  assert.deepEqual(volPanStep(false, cell, -1), { volume: 0x24, volumeEff: 3 });
+  cell.volume = 0x20 | 0x01;                        // fine up 1 — one step from zero
+  assert.equal(volPanStep(false, cell, -1), null, "stops rather than flipping direction");
+  cell.volume = 0x01;                               // fine down 1
+  assert.equal(volPanStep(false, cell, +1), null);
+  assert.deepEqual(volPanStep(false, cell, -1), { volume: 0x02, volumeEff: 3 }, "deeper drop");
+  // plain values still step ±1 and clamp
+  cell.volume = 0x3f; cell.volumeEff = 0;
+  assert.equal(volPanStep(false, cell, +1), null, "clamped at 3F");
+  assert.deepEqual(volPanStep(false, cell, -1), { volume: 0x3e, volumeEff: 0 });
+  cell.pan = 0x10; cell.panEff = 2;
+  assert.deepEqual(volPanStep(true, cell, +1), { pan: 0x11, panEff: 2 });
+});
+
+test("volToStr/panToStr: symbol + argument, fine shows its magnitude", () => {
+  assert.equal(volToStr(0, 3), "···", "empty cell");
+  assert.equal(volToStr(0x3f, 0), " 3F", "set = blank symbol");
+  assert.equal(volToStr(0x0a, 1), "˄0A", "vol slide up tick");
+  assert.equal(volToStr(0x0a, 2), "˅0A", "vol slide down tick");
+  assert.equal(volToStr(0x20 | 0x0a, 3), "+0A", "fine up");
+  assert.equal(volToStr(0x0a, 3), "−0A", "fine down");
+  assert.equal(panToStr(0x20, 0), " 20", "pan set = blank symbol");
+  assert.equal(panToStr(0x03, 1), "˃03", "pan slide right tick");
+  assert.equal(panToStr(0x03, 2), "˂03", "pan slide left tick");
+  assert.equal(panToStr(0x20 | 0x03, 3), "+03");
+  assert.equal(panToStr(0x03, 3), "−03");
 });

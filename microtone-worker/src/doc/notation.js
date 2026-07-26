@@ -344,10 +344,42 @@ const SEQ_LADDERS = [
   ["d-", ".-", "u-", "U-"],             // 4: v · ^ ^^
   ["D-", "d-", ".-", "u-", "U-"],       // 5: vv v · ^ ^^
 ];
-// Past 5 per letter (> 130 degrees) the spec stops: cross the tick ladder with
-// ♮/♯ for 10, then cycle. Such a scale is beyond readable naming either way.
-const SEQ_LADDER_WIDE =
-  ["D-", "D#", "d-", "d#", ".-", ".#", "u-", "u#", "U-", "U#"];
+// Past 5 per letter the spec stops naming ladders, so we build them (item 88).
+// The whole accidental palette the glyph painter can draw, in ascending pitch
+// order — ♭♭♭ ♭♭ ♭ demiflat ♮ demisharp ♯ 𝄪 ♯𝄪 𝄪𝄪:
+const ACC_ASC = ["T", "B", "b", "p", "-", "t", "#", "x", "3", "4"];
+const ACC_NEUTRAL = 4;                              // index of '-' (♮)
+// …and the tick ladder, ascending: vv v · ^ ^^.
+const TICK_ASC = ["D", "d", ".", "u", "U"];
+const TICK_NEUTRAL = 2;                             // index of '.' (the Kite dot)
+
+/** `k` consecutive entries of `list` centred on `neutral` (the whole list when
+ *  it is too short — the caller then cycles). */
+function centredWindow(list, neutral, k) {
+  if (k >= list.length) return list.slice();
+  const start = Math.min(Math.max(neutral - ((k - 1) >> 1), 0), list.length - k);
+  return list.slice(start, start + k);
+}
+
+/**
+ * Variant ladder for `per` degrees sharing one letter. Up to 5 the spec's fixed
+ * tick ladders; past that accidentals carry the distinction — a bare A..Z run
+ * with only ticks runs out at 5 and used to cycle, which is what made a
+ * 1200-EDO table repeat the same symbol every 10 degrees (item 88).
+ *   6..10   accidentals alone, ♮ in the middle, no tick column
+ *   11..50  accidental (coarse) × tick (fine) — 50 distinct variants, so every
+ *           scale up to 26 × 50 = 1300 degrees still names each degree once
+ * Beyond that the caller cycles; such a scale is past readable naming anyway.
+ */
+function ladderFor(per) {
+  if (per <= 5) return SEQ_LADDERS[per];
+  if (per <= ACC_ASC.length) {
+    return centredWindow(ACC_ASC, ACC_NEUTRAL, per).map((a) => " " + a);
+  }
+  const cross = [];
+  for (const acc of ACC_ASC) for (const tick of TICK_ASC) cross.push(tick + acc);
+  return centredWindow(cross, ACC_NEUTRAL * TICK_ASC.length + TICK_NEUTRAL, per);
+}
 
 /** Sequence mode: plain ascending letters, extended by variant when a scale has
  *  more degrees than letters. Degrees spread evenly over all 26 letters. */
@@ -358,7 +390,7 @@ function sequenceSyms(n) {
     return out;
   }
   const per = Math.ceil(n / SEQ_LETTERS);
-  const ladder = SEQ_LADDERS[per] ?? SEQ_LADDER_WIDE;
+  const ladder = ladderFor(per);
   // Even spread → each letter's run is `per` or `per - 1` long, so a run never
   // outgrows its ladder; a degree's variant is its position within that run.
   let runStart = 0, runLetter = 0;

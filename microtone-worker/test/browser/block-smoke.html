@@ -87,6 +87,9 @@
         const tb = timeline.selBounds();
         const tRowsOk = tb && tb.r0 === 0 && tb.r1 === 2 && tb.c0 === 2 && tb.c1 === 2;
         const tVolOnly = eq(timeline.selCols(), [COL_VOL]);
+        // The vol column is three positions wide since item 87 (symbol + two
+        // digits), so the band reaches pan on the third step.
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
         key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
         key(win, "ArrowRight", "ArrowRight", { shiftKey: true }); // widen band to pan
         const tWidened = eq(timeline.selCols(), [COL_VOL, COL_PAN]);
@@ -159,6 +162,9 @@
         const kb = patternView.sel;
         const kbRowsOk = kb && Math.min(kb.aRow, kb.row) === 0 && Math.max(kb.aRow, kb.row) === 2;
         const kbVolOnly = eq(patternView.active.selCols(), [COL_VOL]);
+        // The vol column is three positions wide since item 87 (symbol + two
+        // digits), so the band reaches pan on the third step.
+        key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
         key(win, "ArrowRight", "ArrowRight", { shiftKey: true });
         key(win, "ArrowRight", "ArrowRight", { shiftKey: true }); // widen band to pan
         const kbWidened = eq(patternView.active.selCols(), [COL_VOL, COL_PAN]);

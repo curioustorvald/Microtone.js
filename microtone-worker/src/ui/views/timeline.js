@@ -4,13 +4,13 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
-import { hex2, hex4, volToStr, panToStr, fxToStr } from "../notenames.js";
+import { hex2, hex4, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
-import { paintNoteCell, monoPalette } from "../glyphs.js";
+import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
-  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty,
+  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty, volPanStep, volPanState,
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
 import { dittoGhosts } from "../../doc/ditto.js";
@@ -398,8 +398,10 @@ export class TimelineView {
     switch (hit.sub) {
       case SUB_NOTE: fields = { note: stepNoteInTable(cell.note, store.pitchPreset, dir) }; break;
       case SUB_INST: fields = { instrment: clampInt(cell.instrment + dir, 0, 255) }; break;
-      case SUB_VOL: fields = { volume: clampInt(cell.volume + dir, 0, 0x3f) }; break;
-      case SUB_PAN: fields = { pan: clampInt(cell.pan + dir, 0, 0x3f) }; break;
+      // vol/pan: a fine slide steps its SIGNED delta (item 87), everything else
+      // the plain value; neither ever steps into the no-op sentinel.
+      case SUB_VOL: fields = volPanStep(false, cell, dir); break;
+      case SUB_PAN: fields = volPanStep(true, cell, dir); break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
     }
@@ -767,10 +769,6 @@ export class TimelineView {
         }
         const instS = ghost?.inst != null ? hex2(ghost.inst)
           : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-        const volS = ghost?.vol ? volToStr(ghost.vol[0], ghost.vol[1])
-          : volToStr(cell.volume, cell.volumeEff);
-        const panS = ghost?.pan ? panToStr(ghost.pan[0], ghost.pan[1])
-          : panToStr(cell.pan, cell.panEff);
         const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
           : fxToStr(cell.effect, cell.effectArg);
 
@@ -779,14 +777,13 @@ export class TimelineView {
         if (cell.instrment === 0 && !(ghost?.inst != null)) ctx.globalAlpha = 0.4;
         ctx.fillText(instS, x + 2 + 5 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = ghost?.vol ? C.ditto : volS === "···" ? C.dim : C.meter;
-        if (volS === "···") ctx.globalAlpha = 0.4;
-        ctx.fillText(volS, x + 2 + 8 * CHAR_W, y + ROW_H / 2);
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = ghost?.pan ? C.ditto : panS === "···" ? C.dim : C.colPan;
-        if (panS === "···") ctx.globalAlpha = 0.4;
-        ctx.fillText(panS, x + 2 + 12 * CHAR_W, y + ROW_H / 2);
-        ctx.globalAlpha = 1;
+        // vol/pan: symbol cell (vector ticks) + argument digits — item 87
+        const vol = ghost?.vol ?? [cell.volume, cell.volumeEff];
+        paintVolPanCell(ctx, vol[0], vol[1], false, x + 2 + 8 * CHAR_W, y, CHAR_W, ROW_H,
+          { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim });
+        const pan = ghost?.pan ?? [cell.pan, cell.panEff];
+        paintVolPanCell(ctx, pan[0], pan[1], true, x + 2 + 12 * CHAR_W, y, CHAR_W, ROW_H,
+          { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim });
         ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
         if (fxS === "·····") ctx.globalAlpha = 0.4;
         ctx.fillText(fxS, x + 2 + 16 * CHAR_W, y + ROW_H / 2);

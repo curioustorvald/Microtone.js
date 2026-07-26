@@ -110,15 +110,30 @@ live VU/pan meters, the channel's current pitch, and the name of the pattern whi
 Each cell is five columns:
 
 ```
- C--4   01   v3F  p20  A0F00
+ C--4   01    3F   20  A0F00
 └note┘└inst┘└vol┘└pan┘└─fx─┘
 ```
 
 - **Note** — the pitch in the song's notation (or a sentinel symbol: `===` key-off, `^^^` cut, `~~~` fade, `~^~` fast fade). Notes that don't sit on the current pitch table are shown snapped to the nearest degree and painted **yellow**. The toolbox **Raw** toggle switches to 4-digit hex words.
 - **Instrument** — two hex digits, `01`–`FF`.
-- **Volume** — a selector prefix + two hex digits (00–3F): `v` set, `+` slide up, `-` slide down, `f` fine (one-shot) change.
-- **Pan** — same shape: `p` set (00 = left, 20 = centre, 3F = right), `+` slide right, `-` slide left, `f` fine.
+- **Volume** — a **symbol** cell + two hex digits. The symbol says what the column *does*; the digits are its argument.
+- **Pan** — the same shape, with sideways symbols (00 = left, 20 = centre, 3F = right).
 - **Effect** — a base-36 opcode letter and a 16-bit argument in four hex digits. See [Effect commands](#effect-commands).
+
+#### The volume and panning symbols
+
+| Symbol | Volume | Panning | Argument |
+|---|---|---|---|
+| *(blank)* | set the volume | set the panning | 00–3F |
+| ˄ / ˅ | slide up / down, once per tick | — | 00–3F |
+| ˃ / ˂ | — | slide right / left, once per tick | 00–3F |
+| **+** / **−** | fine (one-shot) rise / drop | fine step right / left | **00–1F** |
+| `···` | nothing — the column is empty | | |
+
+A fine slide happens once on the row rather than every tick, so its argument is
+just a magnitude (00–1F) and the **+ / −** symbol carries the direction. Setting
+a fine slide's argument to zero empties the cell, since "shift by nothing" and
+"no command" are the same thing.
 
 ### Navigation
 
@@ -180,15 +195,38 @@ click = one table degree).
 | **x** | `0002` | `^^^` | Note cut — stop immediately |
 | **c** | `0003` | `~~~` | Note fade — fade out at the instrument's fade rate |
 | **v** | `0004` | `~^~` | Fast fade |
-| **Delete** or **.** | — | | Clear the note (and instrument) |
+| **Delete**, **Backspace** or **.** | — | | Clear the note (and instrument) |
+
+**Delete**, **Backspace** and **.** are interchangeable everywhere on the
+pattern grids: whichever one you reach for erases the column under the caret.
 
 ### Instrument, volume and pan columns
 
-Type **hex digits** to set values nibble by nibble. On the volume and pan
-columns, **+** and **-** first switch the selector (slide up/down, or
-right/left for pan); the command palette shows buttons for all four selector
-modes including *fine*. **Delete** / **.** writes the no-op sentinel so the
-cell stays blank.
+Type **hex digits** to set values nibble by nibble.
+
+The volume and panning columns are three positions wide — the **symbol** cell
+and the two argument digits — and the left/right arrows walk through all three.
+On the symbol cell one keypress chooses what the column does:
+
+| Key | Volume | Panning |
+|---|---|---|
+| **^** or **u** | slide up | — |
+| **v** or **d** | slide down | — |
+| **>** or **r** | — | slide right |
+| **<** or **l** | — | slide left |
+| **+** or **=** | fine slide up | fine step right |
+| **-** | fine slide down | fine step left |
+| **.**, **Delete** or **Backspace** | plain set | plain set |
+
+Any argument already in the cell is kept and re-read under the operation you
+picked, and the caret hops onto the first digit so you can retype it straight
+away. Picking a fine slide over a blank argument starts at 1 (a fine slide of
+zero would be no command at all). Typing hex on the symbol cell skips ahead to
+the digits, so you can also just type a value and leave the symbol alone.
+
+On the two digit positions, **Delete** / **Backspace** / **.** write the no-op
+sentinel so the cell goes blank. The command palette carries a button for every
+operation.
 
 ### The effect column
 
@@ -200,7 +238,9 @@ argument format of the current opcode. **Delete** clears the effect.
 ### Mouse-wheel editing
 
 In record mode, the wheel over any cell steps the hovered column in place:
-notes by one degree of the pitch table, everything else by one. Hovering the
+notes by one degree of the pitch table, everything else by one. On a fine
+slide the wheel walks the signed delta (…−2, −1, +1, +2…) and stops either
+side of zero, since the direction is the symbol cell's business. Hovering the
 top-bar **Oct** / **Inst** / **Spd** displays and wheeling changes the jam
 octave, steps through the used instrument slots, or nudges the live playback
 speed.
@@ -444,8 +484,12 @@ Four clean-up operations, each a single undo step:
 
 ### Global Operations
 
-Miscellaneous edit functions that affects all patterns, each a single undo step:
+Miscellaneous edit functions that affect **every pattern of the current song**,
+each a single undo step. They stop at the song's edge: the other songs of a
+multi-song project are never touched — switch songs and run the operation again
+if you want them changed too.
 
+- **Transpose** — the [Patterns](#patterns-f3) tab's Transpose applied song-wide: the same notation-aware fine/coarse units, and the same skipping of sentinels and percussion instruments.
 - **Change instrument** — changes every note referencing one instrument to another.
 
 ## File (F7)
@@ -587,7 +631,11 @@ dot/arrows), a **letter** A–Z and an **accidental** (♮ ♯ ♭ demi, double,
 triple, quadruple) — with a live preview drawn by the same glyph engine as the
 grids. **Equal divisions…** refills the table with N equal steps of the
 period; the two **Auto-name** tools assign symbols by nearest quarter-tone or
-as a plain letter sequence. Degree 0 is always the base note — **Middle C
+as a plain letter sequence. The letter sequence spreads the degrees over all
+26 letters and tells the ones sharing a letter apart by a variant ladder:
+ticks while a letter carries up to five degrees, then accidentals (♭♭♭ … 𝄪𝄪),
+then both crossed — enough for a unique symbol per degree up to 1300 of them.
+Degree 0 is always the base note — **Middle C
 ($5000)** unless the notation declares its own (below) — and this anchor is
 what keeps non-octave systems well-defined.
 
@@ -679,7 +727,7 @@ hear, exactly as if you had played through the arming row.
 | Ctrl+G | Go to cue:row |
 | Shift+arrows · drag | Extend a block selection |
 | Ctrl+C / X / V | Copy / cut / paste the block |
-| Esc · Delete | Clear the selection · blank the block |
+| Esc · Delete / Backspace | Clear the selection · blank the block |
 | ? | Keyboard help popup |
 
 ### Editing keys
@@ -691,8 +739,10 @@ hear, exactly as if you had played through the arming row.
 | z x c v | Key-off `===` · cut `^^^` · fade `~~~` · fast-fade `~^~` |
 | 0–9 A–F | Hex entry (instrument / volume / pan / fx argument) |
 | 1–Z | Effect opcode (base-36) |
-| + / - | Volume/pan slide selectors |
-| Delete / . | Clear the field |
+| ^ v / u d | Volume symbol cell: slide up / down |
+| > < / r l | Panning symbol cell: slide right / left |
+| + = / - | Symbol cell: fine slide up / down (right / left) |
+| Delete / Backspace / . | Clear the field — on a symbol cell, plain set |
 | ← → / Tab | Sub-column / next channel |
 | wheel · Shift+wheel | Scroll rows · channels |
 | wheel on cursor cell | Step the hovered column (notes by one table degree) |

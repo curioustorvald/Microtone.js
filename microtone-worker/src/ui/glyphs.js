@@ -19,7 +19,8 @@
 // the cut-like spike at x=0 sits inside a decaying sinc envelope).
 
 import { resolveNoteSymbol } from "./pitchtables.js";
-import { hex4 } from "./notenames.js";
+import { hex2, hex4 } from "./notenames.js";
+import { volPanOp, volPanArg } from "./edit.js";
 
 export const NOTE_CELL_CHARS = 4;
 
@@ -264,6 +265,28 @@ function drawTick(ctx, x, y, w, h, up, double_) {
   }
 }
 
+/** Sideways tick (item 87) — the up/down tick rotated, for the pan column's
+ *  left/right slides. `right` points the apex toward +x. */
+function drawSideTick(ctx, x, y, w, h, right) {
+  const cx = x + w * 0.5;
+  const cy = y + h * 0.5;
+  // The tick's "amplitude" runs horizontally here, so the two axes swap: keep
+  // the same ink length by measuring the arms against the cell's height.
+  const aw = h * GLYPH.tickW * 0.5;
+  const ah = w * GLYPH.tickH * 1.4;
+  ctx.beginPath();
+  if (right) {
+    ctx.moveTo(cx - ah, cy - aw);
+    ctx.lineTo(cx + ah, cy);
+    ctx.lineTo(cx - ah, cy + aw);
+  } else {
+    ctx.moveTo(cx + ah, cy - aw);
+    ctx.lineTo(cx - ah, cy);
+    ctx.lineTo(cx + ah, cy + aw);
+  }
+  ctx.stroke();
+}
+
 function drawBigDot(ctx, x, y, w, h) {
   ctx.beginPath();
   ctx.arc(x + w * 0.5, y + h * 0.5, Math.max(w, 4) * GLYPH.bigDotR, 0, Math.PI * 2);
@@ -388,4 +411,48 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
     drawAccidental(ctx, symb.acc, x1 + charW * 1.05, y + 2 + dy, charW * 1.9, rowH - 4);
     ctx.fillText(String(symb.octave), x + charW * 3.1, midY);
   }
+}
+
+/**
+ * Paint a volume or panning column (item 87) at (x, y): the SYMBOL cell then
+ * two argument digits, 3 chars in all.
+ *   set          blank symbol — nothing is happening to the value, the digits
+ *                simply are the volume / panning
+ *   slide        a tick: up/down for volume, left/right for panning, drawn as
+ *                vectors so they read at grid size
+ *   fine slide   '+' / '−' — a one-shot delta, sign in the symbol and
+ *                magnitude (00..1F) in the digits
+ *   no-op ($C0)  "···", dimmed like every other empty column
+ * palette: {ink, dim} — ink covers symbol + digits (the callers colour the
+ * volume, panning and ditto-ghost variants differently).
+ */
+export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palette) {
+  const op = volPanOp(value, sel);
+  const midY = y + rowH / 2;
+  if (op === "none") {
+    ctx.fillStyle = palette.dim;
+    ctx.globalAlpha = 0.4;
+    ctx.fillText("···", x, midY);
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.fillStyle = palette.ink;
+  ctx.strokeStyle = palette.ink;
+  ctx.lineWidth = GLYPH.lineWidth;
+  ctx.lineJoin = "miter";
+  const dy = rowH * GLYPH.baselineOffset;
+  switch (op) {
+    case "up":
+      if (isPan) drawSideTick(ctx, x, y + dy, charW, rowH, true);
+      else drawTick(ctx, x, y + 1 + dy, charW, rowH - 2, true, false);
+      break;
+    case "down":
+      if (isPan) drawSideTick(ctx, x, y + dy, charW, rowH, false);
+      else drawTick(ctx, x, y + 1 + dy, charW, rowH - 2, false, false);
+      break;
+    case "fineUp": ctx.fillText("+", x, midY); break;
+    case "fineDown": ctx.fillText("−", x, midY); break;
+    default: break; // "set" — a deliberate blank
+  }
+  ctx.fillText(hex2(volPanArg(value, sel)), x + charW, midY);
 }

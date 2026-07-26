@@ -41,8 +41,12 @@
   <canvas id="t410" width="900" height="40"></canvas>
   <h3>Shi'er lü (十二律): 黃4 大4 太4 夾4 姑4 仲4 蕤4 林4 夷4 南4 無4 應4</h3>
   <canvas id="t10123" width="900" height="40"></canvas>
+  <h3>volume column (item 87): empty · set 3F · slide up 0A · slide down 0A · fine up 0A · fine down 0A</h3>
+  <canvas id="volc" width="900" height="40"></canvas>
+  <h3>panning column: empty · set 20 · slide right 03 · slide left 03 · fine right 03 · fine left 03</h3>
+  <canvas id="panc" width="900" height="40"></canvas>
   <script type="module">
-    import { paintNoteCell, GLYPH } from "../../src/ui/glyphs.js";
+    import { paintNoteCell, paintVolPanCell, GLYPH } from "../../src/ui/glyphs.js";
     import { pitchTablePresets, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 
     const CH = 13, RH = 26; // big cells for inspection
@@ -65,8 +69,20 @@
       ["t410", degreeNotes(pitchTablePresets[410], 17), pitchTablePresets[410]],
       ["t10123", degreeNotes(pitchTablePresets[10123], 12), pitchTablePresets[10123]],
     ];
+    // [value, selector] pairs covering every operation of a vol/pan column.
+    const VP = [[0, 3], [0x3f, 0], [0x0a, 1], [0x0a, 2], [0x2a, 3], [0x0a, 3]];
+    const VP_PAN = [[0, 3], [0x20, 0], [0x03, 1], [0x03, 2], [0x23, 3], [0x03, 3]];
 
     function repaint() {
+      for (const [id, list, isPan] of [["volc", VP, false], ["panc", VP_PAN, true]]) {
+        const cv = document.getElementById(id);
+        const ctx = cv.getContext("2d");
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.font = fontStr();
+        ctx.textBaseline = "middle";
+        list.forEach(([v, sel], i) => paintVolPanCell(ctx, v, sel, isPan,
+          8 + i * (CH * 3 + 18), 6, CH, RH, { ink: PAL.note, dim: PAL.dim }));
+      }
       for (const [id, notes, preset] of ROWS) {
         const cv = document.getElementById(id);
         const ctx = cv.getContext("2d");

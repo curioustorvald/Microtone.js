@@ -81,8 +81,10 @@ function recorder(ctx) {
   const inkOf = (cells, text) => cells.find((c) => c.text === text)?.ink;
 
   check(inkOf(t1, "05") === DITTO, "row 1 instrument ghosted", `ink=${inkOf(t1, "05")}`);
-  check(inkOf(t1, "v20") === DITTO, "row 1 volume ghosted", `ink=${inkOf(t1, "v20")}`);
-  check(inkOf(t1, "p10") === DITTO, "row 1 pan ghosted", `ink=${inkOf(t1, "p10")}`);
+  // vol/pan paint as [symbol][2 digits] since item 87; a plain SET draws no
+  // symbol at all, so the ghosted text is the bare argument.
+  check(inkOf(t1, "20") === DITTO, "row 1 volume ghosted", `ink=${inkOf(t1, "20")}`);
+  check(inkOf(t1, "10") === DITTO, "row 1 pan ghosted", `ink=${inkOf(t1, "10")}`);
   check(t1.some((c) => c.text === "70102"), "row 1 keeps its own visible 7$llrr command");
   check(!t1.some((c) => c.text === "10123"), "the arming row's fx is NOT overpainted by a ghost");
 
@@ -90,7 +92,7 @@ function recorder(ctx) {
     `ink=${inkOf(t2, "09")}`);
   check(inkOf(t2, "10123") === DITTO, "row 2's blank fx column shows the ghosted effect",
     `ink=${inkOf(t2, "10123")}`);
-  check(inkOf(t2, "v20") === DITTO, "row 2 volume ghosted");
+  check(inkOf(t2, "20") === DITTO, "row 2 volume ghosted");
 
   check(t3.every((c) => c.ink !== DITTO), "row 3 (outside the region) has no ghost ink");
   check(t3.some((c) => c.text === "··"), "row 3 still paints the empty-instrument dots");
@@ -116,7 +118,7 @@ function recorder(ctx) {
   const p3 = prec.calls.filter((c) => prowOf(c) === 3);
   check(p1.find((c) => c.text === "05")?.ink === DITTO, "Patterns: row 1 instrument ghosted",
     `ink=${p1.find((c) => c.text === "05")?.ink}`);
-  check(p1.find((c) => c.text === "v20")?.ink === DITTO, "Patterns: row 1 volume ghosted");
+  check(p1.find((c) => c.text === "20")?.ink === DITTO, "Patterns: row 1 volume ghosted");
   check(p3.every((c) => c.ink !== DITTO), "Patterns: row 3 has no ghost ink");
 
   // ── undo restores the pre-ditto painting ────────────────────────────────

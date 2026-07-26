@@ -1,0 +1,200 @@
+<!doctype html><meta charset="utf-8"><title>vol/pan symbol cell + global ops (items 85-87)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Items 85-87 driven through the REAL app: the vol/pan symbol cell (navigation,
+// key scheme, painting), Backspace-as-Delete on the grids, and the Project
+// view's global Transpose (current song only).
+//
+// Canvas assertions record every fillText with the fillStyle in force — the
+// same trick ditto-smoke uses; pixel sampling would be at the mercy of font
+// rasterisation. Vector ticks draw no text, so the symbol cell is checked by
+// the ABSENCE of a symbol glyph plus the presence of stroke() calls.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const frames = async (win, n) => { for (let i = 0; i < n; i++) await new Promise((r) => win.requestAnimationFrame(r)); };
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+/** Record fillText (with ink) and stroke counts off a 2D context. */
+function recorder(ctx) {
+  const calls = [];
+  let strokes = 0;
+  const origText = ctx.fillText.bind(ctx);
+  const origStroke = ctx.stroke.bind(ctx);
+  ctx.fillText = (text, x, y) => { calls.push({ text, x, y, ink: ctx.fillStyle }); origText(text, x, y); };
+  ctx.stroke = () => { strokes++; origStroke(); };
+  return { calls, strokeCount: () => strokes,
+           restore() { ctx.fillText = origText; ctx.stroke = origStroke; } };
+}
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  await frames(win, 3);
+
+  const { store, timeline, jam, patternView } = M;
+  const edit = await import("../../src/ui/edit.js");
+  const { SUB_NOTE, SUB_VOL, SUB_PAN, SUB_FX_ARG } = edit;
+
+  // ── 1. cursor walk: vol/pan are three positions wide ──────────────────────
+  store.record = true;
+  store.cursor = { row: 0, ch: 0, sub: SUB_NOTE, nib: 0 };
+  const walk = [];
+  for (let i = 0; i < 12; i++) { timeline.moveSubCursor(1); walk.push(`${store.cursor.sub}.${store.cursor.nib}`); }
+  const want = ["1.0", "1.1", "2.0", "2.1", "2.2", "3.0", "3.1", "3.2", "4.0", "5.0", "5.1", "5.2"];
+  check(walk.join(" ") === want.join(" "), "arrow keys walk symbol + 2 digits on both columns", walk.join(" "));
+
+  // ── 2. symbol-cell keys write the right bytes ─────────────────────────────
+  const cellNow = () => timeline.cursorCell().cell;
+  store.cursor = { row: 0, ch: 0, sub: SUB_VOL, nib: 0 };
+  const cell = cellNow();
+  store.undo.apply((await import("../../src/doc/ops.js")).setCellOp(
+    store.songIndex, timeline.cursorCell().pat, timeline.cursorCell().rowInCue,
+    { volume: 0x2a, volumeEff: 0 }));
+  const press = (code, key) => timeline.processEditKey({ code, key }, jam);
+
+  store.cursor.nib = 0;
+  press("", "^");
+  check(cellNow().volumeEff === 1 && cellNow().volume === 0x2a,
+    "'^' turns a set into a per-tick slide up, argument kept",
+    `eff=${cellNow().volumeEff} val=${cellNow().volume.toString(16)}`);
+  check(store.cursor.nib === 1, "the caret steps onto the first argument digit", `nib=${store.cursor.nib}`);
+
+  store.cursor.nib = 0;
+  press("", "+");
+  check(cellNow().volumeEff === 3 && cellNow().volume === (0x20 | 0x0a),
+    "'+' makes it a fine slide UP, argument re-read as the magnitude $0A",
+    `val=${cellNow().volume.toString(16)}`);
+  store.cursor.nib = 0;
+  press("", "-");
+  check(cellNow().volumeEff === 3 && cellNow().volume === 0x0a,
+    "'-' flips it to a fine slide DOWN, same magnitude", `val=${cellNow().volume.toString(16)}`);
+
+  // the argument digits stay 00..1F while a fine slide is selected.
+  // (A completed digit advances the row, so each press re-seats the caret.)
+  const at = (sub, nib) => { store.cursor = { row: 0, ch: 0, sub, nib }; };
+  at(SUB_VOL, 1);
+  press("KeyF", "f");
+  check(cellNow().volume === 0x1a, "fine argument high digit clamps to 1 (00..1F)",
+    `val=${cellNow().volume.toString(16)}`);
+  at(SUB_VOL, 2); press("Digit0", "0");
+  at(SUB_VOL, 1); press("Digit0", "0");
+  at(SUB_VOL, 0);
+  check(cellNow().volumeEff === 3 && cellNow().volume === 0,
+    "typing the magnitude to zero clears the cell ($C0)",
+    `eff=${cellNow().volumeEff} val=${cellNow().volume.toString(16)}`);
+
+  // …and selecting a fine slide on the now-empty cell seeds a magnitude of 1
+  at(SUB_VOL, 0);
+  press("", "+");
+  check(cellNow().volume === 0x21 && cellNow().volumeEff === 3,
+    "fine slide over a blank argument starts at 1", `val=${cellNow().volume.toString(16)}`);
+
+  // Delete on the symbol cell selects "set" (it does NOT blank the column)
+  at(SUB_VOL, 0);
+  press("Delete", "Delete");
+  check(cellNow().volumeEff === 0 && cellNow().volume === 0x01,
+    "Delete on the symbol cell means plain set", `eff=${cellNow().volumeEff}`);
+
+  // pan column: '<' / '>' and the fine pair
+  at(SUB_PAN, 0);
+  press("", ">");
+  check(cellNow().panEff === 1, "'>' = pan slide right", `eff=${cellNow().panEff}`);
+  at(SUB_PAN, 0); press("Period", "<");
+  check(cellNow().panEff === 2, "'<' = pan slide left even though its code is Period");
+  at(SUB_PAN, 0); press("", "+");
+  check(cellNow().panEff === 3 && (cellNow().pan & 0x20) !== 0, "'+' = fine step right");
+
+  // ── 3. item 86: Backspace erases like Delete ──────────────────────────────
+  at(SUB_PAN, 1);
+  press("Backspace", "Backspace");
+  at(SUB_PAN, 0);
+  check(cellNow().panEff === 3 && cellNow().pan === 0, "Backspace on an argument digit blanks the column");
+  at(SUB_NOTE, 0);
+  press("Backspace", "Backspace");
+  at(SUB_NOTE, 0);
+  check(cellNow().note === 0 && cellNow().instrment === 0, "Backspace clears the note column");
+  at(SUB_FX_ARG, 0);
+  press("Backspace", "Backspace");
+  at(SUB_FX_ARG, 0);
+  check(cellNow().effectArg === 0, "Backspace clears the fx argument");
+  while (store.undo.undoStack.length > 0) store.undo.undo();
+  store.emit("edit");
+  await frames(win, 2);
+
+  // ── 4. painting: symbol cell + digits ─────────────────────────────────────
+  const ops = await import("../../src/doc/ops.js");
+  const tgt = timeline.cellAt(0, 0);
+  store.undo.apply(ops.setCellOp(store.songIndex, tgt.pat, tgt.rowInCue,
+    { volume: 0x0a, volumeEff: 1, pan: 0x20 | 0x03, panEff: 3 })); // slide up $0A · fine right $03
+  store.cursor = { row: 40, ch: 3, sub: SUB_NOTE, nib: 0 }; // caret away from row 0
+  store.emit("edit");
+  await frames(win, 2);
+  timeline.scrollRow = 0; timeline.scrollCh = 0;
+  const rec = recorder(timeline.ctx);
+  timeline.draw(-1);
+  rec.restore();
+  const row0 = rec.calls.filter((c) => Math.round((c.y - 58 - 8) / 16) === 0 && c.x >= 76 && c.x < 76 + 176);
+  const texts = row0.map((c) => c.text);
+  check(texts.includes("0A"), "the slide's argument paints as two digits", texts.join("|"));
+  check(!texts.includes("v0A") && !texts.some((t) => t.startsWith("v")),
+    "the old 'v' selector prefix is gone");
+  check(texts.includes("+"), "a fine slide paints its '+' sign");
+  check(texts.includes("03"), "…next to the magnitude alone (not the $23 byte)");
+  check(!texts.includes("23"), "the engine's direction bit never shows in the digits");
+  check(rec.strokeCount() > 0, "vector ticks are stroked");
+
+  // ── 4b. the contextual palette follows the new operation model ────────────
+  const palHost = win.document.getElementById("cmdPalette");
+  store.record = true;
+  store.cursor = { row: 0, ch: 0, sub: SUB_VOL, nib: 0 };
+  store.emit("cursor");
+  await sleep(80);
+  const volPal = palHost.textContent;
+  check(/fine \+/.test(volPal) && /fine −/.test(volPal),
+    "the vol palette offers both fine directions", volPal.slice(0, 80));
+  check(!/fine ±/.test(volPal), "the old single 'fine ±' selector button is gone");
+  store.cursor = { row: 0, ch: 0, sub: SUB_PAN, nib: 0 };
+  store.emit("cursor");
+  await sleep(80);
+  check(/slide ˂/.test(palHost.textContent) && /slide ˃/.test(palHost.textContent),
+    "the pan palette shows the sideways ticks", palHost.textContent.slice(0, 80));
+
+  // ── 5. item 85: global Transpose, current song only ───────────────────────
+  const { transposeAllPatterns } = await import("../../src/ui/pitchtables.js");
+  const notesOf = (si) => store.doc.songs[si].patterns.map((p) => (p ?? []).map((c) => c.note));
+  const before = JSON.stringify(notesOf(0));
+  const undoDepth = store.undo.undoStack.length;
+  store.undo.apply(ops.bulkNotesOp(0,
+    (song) => transposeAllPatterns(song, store.pitchPreset, null, 0, 1)));
+  const after = notesOf(0);
+  check(JSON.stringify(after) !== before, "global transpose moved the song's notes");
+  check(store.undo.undoStack.length === undoDepth + 1, "…in a single undo step");
+  let allUp = true, moved = 0;
+  const beforeArr = JSON.parse(before);
+  for (let p = 0; p < after.length; p++) {
+    for (let r = 0; r < after[p].length; r++) {
+      const b = beforeArr[p][r], a = after[p][r];
+      if (b < 0x20) { if (a !== b) allUp = false; continue; } // sentinels untouched
+      if (a !== Math.min(b + 0x1000, 0xffff)) allUp = false; else moved++;
+    }
+  }
+  check(allUp && moved > 0, "every playable note rose exactly one octave", `moved=${moved}`);
+  store.undo.undo();
+  check(JSON.stringify(notesOf(0)) === before, "undo restores every pattern");
+
+  // The Project view exposes it, and says so in the UI.
+  const projBtns = [...win.document.querySelectorAll("button")].map((b) => b.textContent);
+  check(projBtns.some((b) => /transpose/i.test(b)), "a Transpose button exists");
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

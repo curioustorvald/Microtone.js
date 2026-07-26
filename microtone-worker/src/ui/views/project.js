@@ -4,7 +4,7 @@
 
 import {
   setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
-  changeInstrumentOp,
+  changeInstrumentOp, bulkNotesOp,
 } from "../../doc/ops.js";
 import { tuningRatioOf } from "../../engine/tables.js";
 import {
@@ -14,7 +14,10 @@ import {
   planCleanupPatterns, planMergeDuplicatePatterns, planRenumberPatterns, applyPatternOrder,
   encodeNameTable, planBankCleanup, planIxmpCleanup,
 } from "../../doc/cleanup.js";
-import { pitchTablePresets, presetForNotation, retuneAllPatterns, surveyTuning } from "../pitchtables.js";
+import {
+  pitchTablePresets, presetForNotation, retuneAllPatterns, surveyTuning,
+  transposeAllPatterns, transposeUnitKeys,
+} from "../pitchtables.js";
 import { defToPreset } from "../../doc/notation.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
@@ -342,15 +345,60 @@ export class ProjectView {
     globBar.style.padding = "0.4rem 0";
     globBar.style.flexWrap = "wrap";
     globBar.append(
+      hbtn(t("glob.transpose"), t("glob.transposeTitle"), () => this.transposeGlobal()),
       hbtn(t("glob.changeInst"), t("glob.changeInstTitle"), () => this.changeInstrumentGlobal()),
     );
     this.root.appendChild(globBar);
+    // 85.00: every global operation stops at the current song's edge.
+    const globNote = document.createElement("p");
+    globNote.className = "dim";
+    globNote.textContent = t("glob.songScopeNote", { song: this.store.songIndex });
+    this.root.appendChild(globNote);
   }
 
-  /** Change every note's instrument $a → $b across all patterns of every song —
-   *  the Patterns-tab Change instrument made project-wide (the way to reassign or
-   *  fix "dangling" notes a delete left behind). Leave From blank for "every
-   *  non-empty instrument → To". One undo step. */
+  /** Percussion slots (their pitch selects the drum, so note edits skip them) —
+   *  the same map the Patterns-tab bulk note ops build. */
+  _percSlots() {
+    const doc = this.store.doc;
+    const percSlots = new Uint8Array(1024);
+    for (const s of doc.usedInstrumentSlots()) {
+      if (doc.instruments[s].isPercussion) percSlots[s] = 1;
+    }
+    return percSlots;
+  }
+
+  /** Transpose EVERY pattern of the current song — the Patterns-tab Transpose
+   *  (same notation-aware units, same percussion/sentinel skips) applied song-
+   *  wide in one undo step. Other songs in the project are never touched. */
+  async transposeGlobal() {
+    const store = this.store;
+    if (!store.doc || !store.song) return;
+    const preset = store.pitchPreset;
+    const units = transposeUnitKeys(preset);
+    const result = await showModal({
+      title: t("glob.transposeTitle"),
+      body: t("glob.transposeBody", { song: store.songIndex }),
+      fields: [
+        { name: "fine", label: t(units.fine), type: "number", value: 0, min: -4096, max: 4096 },
+        { name: "coarse", label: t(units.coarse), type: "number", value: 0, min: -10, max: 10 },
+      ],
+      okLabel: t("common.apply"),
+    });
+    if (!result) return;
+    const fine = parseInt(result.fine || "0", 10) | 0;
+    const coarse = parseInt(result.coarse || "0", 10) | 0;
+    if (fine === 0 && coarse === 0) return;
+    const percSlots = this._percSlots();
+    store.undo.apply(bulkNotesOp(store.songIndex,
+      (song) => transposeAllPatterns(song, preset, percSlots, fine, coarse)));
+    store.emit("doc"); // notes moved across many patterns — full redraw
+    this.refresh();
+  }
+
+  /** Change every note's instrument $a → $b across all patterns of the CURRENT
+   *  song — the Patterns-tab Change instrument made song-wide (the way to
+   *  reassign or fix "dangling" notes a delete left behind). Leave From blank for
+   *  "every non-empty instrument → To". One undo step. */
   async changeInstrumentGlobal() {
     const store = this.store;
     const result = await showModal({
@@ -369,7 +417,9 @@ export class ProjectView {
     const to = parseInt(toStr || "0", 16) & 0xff;
     if (from !== null && !Number.isFinite(parseInt(fromStr, 16))) { alert(t("del.badNumber")); return; }
     if (toStr !== "" && !Number.isFinite(parseInt(toStr, 16))) { alert(t("del.badNumber")); return; }
-    store.undo.apply(changeInstrumentOp(from, to)); // null songs = every song
+    // Scoped to the current song (85.00) — a global operation must not reach
+    // into the project's other songs.
+    store.undo.apply(changeInstrumentOp(from, to, [store.songIndex]));
     store.emit("doc"); // notes moved across many patterns — full redraw
     this.refresh();
   }
