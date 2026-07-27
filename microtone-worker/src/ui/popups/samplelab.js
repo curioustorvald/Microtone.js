@@ -53,8 +53,11 @@ const DEFAULT_BANDS = () => ([
  * @param name default instrument/sample name
  * @param sourceLabel free-text provenance shown in the title
  * @param confirmDiscard confirm before closing without importing (recordings)
+ * @param openChord open the chord maker straight away (the Samples view's
+ *        "Chord…" button lands here — the Lab is where the result gets named,
+ *        auditioned and committed)
  */
-export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", confirmDiscard = false }) {
+export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", confirmDiscard = false, openChord = false }) {
   if (!store.doc || !data || data.length === 0) return Promise.resolve(null);
   return new Promise((resolve) => {
     // ── state ──
@@ -126,6 +129,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         <button data-op="removeDC">${esc(t("lab.removeDC"))}</button>
         <span class="lab-sep"></span>
         <button class="lab-eqtoggle">${esc(t("lab.eq"))} ▾</button>
+        <button class="lab-chord" title="${esc(t("lab.chordTitle"))}">${esc(t("lab.chord"))}</button>
       </div>
       <div class="lab-eq" hidden>
         <div class="lab-eqbands"></div>
@@ -627,6 +631,28 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       refresh();
     });
 
+    // ── chord maker (item 89) ──────────────────────────────────────────────
+    // Mixes pitch-shifted copies of the WHOLE working buffer into one chorded
+    // sample. Length-changing (a voice below unison runs longer), which is
+    // legal here for the same reason crop is: nothing is pooled yet. Chop
+    // positions describe the old waveform, so they go.
+    async function chordTool() {
+      const { openChordMaker } = await import("./chordmaker.js");
+      const res = await openChordMaker(store, {
+        data: buf, rate: srcRate, name: nameInput.value.trim() || name,
+      });
+      if (!res) return;
+      pushUndo();
+      buf = res.data;
+      splits = [];
+      discarded.clear();
+      sel = null;
+      scroll = 0; spp = fitSpp();
+      clampView();
+      refresh();
+    }
+    $(".lab-chord").addEventListener("click", (e) => { e.preventDefault(); chordTool(); });
+
     // ── audition (Web Audio on the working buffer — it is not pooled yet) ──
     function playPos() {
       if (!playing || !actx) return null;
@@ -769,6 +795,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       bands: () => bands,
       setBand: (i, patch) => { Object.assign(bands[i], patch); if (eqOpen) { buildEqBands(); paintEqGraph(); } },
       applyEq: () => $(".lab-eqapply").click(),
+      chord: () => chordTool(),
       setName: (s) => { nameInput.value = s; },
       setTargetRate: (v) => { rateInput.value = v; refreshInfo(); },
       commit,
@@ -777,5 +804,6 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
 
     refresh();
     dlg.showModal();
+    if (openChord) chordTool();
   });
 }

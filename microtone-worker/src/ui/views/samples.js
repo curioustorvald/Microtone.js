@@ -64,22 +64,15 @@ export class SamplesView {
     this.labBtn = document.createElement("button");
     this.labBtn.textContent = t("smp.lab");
     this.labBtn.title = t("smp.labTitle");
-    this.labBtn.addEventListener("click", async () => {
-      const s = this.list?.[this.selected];
-      if (!s) return;
-      const [{ openSampleLab }, { u8ToFloat }] = await Promise.all([
-        import("../popups/samplelab.js"), import("../../doc/wavelab.js"),
-      ]);
-      const bytes = this.store.doc.sampleBin.subarray(s.ptr, s.ptr + s.len);
-      const res = await openSampleLab(this.store, {
-        data: u8ToFloat(bytes),
-        rate: s.rate,
-        name: unescapeName(s.name) || `sample ${s.index}`,
-        sourceLabel: t("smp.labSource", { idx: s.index }),
-      });
-      if (res) this.cb.onNewInstrument?.(res.firstSlot);
-    });
-    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.newInstBtn);
+    this.labBtn.addEventListener("click", () => this.openInLab());
+    // "Chord…" (item 89) is the same copy-into-the-Lab trip with the chord
+    // maker opened on arrival: mix pitch-shifted copies of the sample into one
+    // chorded sample, the Amiga trick. The Lab then names/auditions/commits it.
+    this.chordBtn = document.createElement("button");
+    this.chordBtn.textContent = t("smp.chord");
+    this.chordBtn.title = t("smp.chordTitle");
+    this.chordBtn.addEventListener("click", () => this.openInLab(true));
+    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.chordBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);
@@ -97,6 +90,26 @@ export class SamplesView {
 
   show() { this.visible = true; this.refresh(); }
   hide() { this.visible = false; }
+
+  /** Open a float COPY of the selected sample in the Sample Lab; `openChord`
+   *  opens the chord maker on top of it. The pooled original is untouched
+   *  either way — the Lab's commit creates new samples and instruments. */
+  async openInLab(openChord = false) {
+    const s = this.list?.[this.selected];
+    if (!s) return;
+    const [{ openSampleLab }, { u8ToFloat }] = await Promise.all([
+      import("../popups/samplelab.js"), import("../../doc/wavelab.js"),
+    ]);
+    const bytes = this.store.doc.sampleBin.subarray(s.ptr, s.ptr + s.len);
+    const res = await openSampleLab(this.store, {
+      data: u8ToFloat(bytes),
+      rate: s.rate,
+      name: unescapeName(s.name) || `sample ${s.index}`,
+      sourceLabel: t("smp.labSource", { idx: s.index }),
+      openChord,
+    });
+    if (res) this.cb.onNewInstrument?.(res.firstSlot);
+  }
 
   refresh() {
     const doc = this.store.doc;

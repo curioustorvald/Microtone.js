@@ -296,6 +296,23 @@ function gridDistance(note, preset) {
 }
 
 /**
+ * SIGNED distance from `note` to the nearest degree of `preset`, in 4096-TET
+ * units — positive means the note sits sharp of the degree the glyph painter
+ * names it by. Raw (no table) has no grid to be off, so it reads 0. Used by
+ * the chord maker (item 89) to say how far a just interval lands from the
+ * notation's own nearest degree.
+ */
+export function gridDelta(note, preset) {
+  if (!preset || preset.table.length === 0) return 0;
+  let best = 0, bestAbs = Infinity;
+  eachCandidate(preset, note, (cand) => {
+    const d = note - cand;
+    if (Math.abs(d) < bestAbs) { bestAbs = Math.abs(d); best = d; }
+  });
+  return best;
+}
+
+/**
  * Survey how a song's notes sit on `preset`'s grid (item 73). Uses exactly the
  * skip rules of retuneAllPatterns (sentinels < 0x20, percussion by running
  * instrument), so the counts describe the same notes a retune would touch:

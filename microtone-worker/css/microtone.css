@@ -1016,6 +1016,45 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .lab-row .lab-rate { width: 6rem; }
 .lab-hint { font-size: 0.78rem; margin: 0.2rem 0 0; }
 
+/* ── chord maker (item 89) ── */
+.chord-modal { max-width: min(960px, 94vw); }
+.chord-modal .chord-lead { margin: 0.2rem 0 0.6rem; font-size: 0.85rem; }
+.chord-head {
+  display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap;
+  margin: 0 0 0.5rem; color: var(--dim); font-size: 0.85rem;
+}
+.chord-voices { display: flex; flex-direction: column; gap: 0.25rem; }
+.chord-voice {
+  display: grid; gap: 0.4rem; align-items: center;
+  /* on · № · mode · value · oct · dB · glyph · readout (fixed width: the
+     widest reading is "×1.9632 · +1167.8 cents · grid −32", never clipped) */
+  grid-template-columns: auto 1.1rem 6.4rem minmax(7rem, 1fr) auto auto auto 16rem;
+  padding: 0.15rem 0.4rem; font-size: 0.85rem; color: var(--dim);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
+}
+.chord-voice.off { opacity: 0.5; }
+.chord-voice .cv-num { color: var(--fg2); text-align: right; }
+.chord-voice select,
+.chord-voice input[type="number"],
+.chord-voice input[type="text"] {
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.12rem 0.25rem; font-size: 0.82rem;
+}
+.chord-voice .cv-val { display: block; min-width: 0; }
+.chord-voice .cv-val > * { width: 100%; }
+.chord-voice .cv-oct-l, .chord-voice .cv-gain-l { white-space: nowrap; }
+.chord-voice .cv-oct, .chord-voice .cv-gain { width: 3.6rem; }
+.chord-voice .cv-glyph { border: 1px solid var(--border); border-radius: 3px; }
+.chord-voice .cv-read {
+  color: var(--fg2); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.chord-hint { font-size: 0.78rem; margin: 0.5rem 0 0; }
+.chord-wave {
+  display: block; width: 100%; margin-top: 0.4rem;
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.chord-info { font-size: 0.85rem; margin: 0.35rem 0 0; }
+
 /* ── mic recorder (item 83.1) ── */
 .record-modal { max-width: 420px; }
 .rec-meter { display: block; margin: 0.5rem 0 0.3rem; border: 1px solid var(--border); border-radius: 4px; }

@@ -343,6 +343,9 @@ use it when you want to crop, EQ or chop a pooled sample: the result lands as
 new samples and instruments, and the original is untouched. (A pooled span's
 length can never change in place — every other pool pointer would move.)
 
+**Chord…** is the same trip with the [chord maker](#the-chord-maker) already
+open: mix pitch-shifted copies of the sample into one chorded waveform.
+
 ## The Sample Lab
 
 The Sample Lab is the import-time sample editor — a tiny Audacity that opens
@@ -358,7 +361,45 @@ one place where cropping and resampling are still reversible.
 - **Chop** (transient splitting) — the **Chop** button detects transients and splits the take into chunks, one flag per hit. Click the waveform to add a split, click a flag to remove it, and use the **Threshold** slider + **Detect** to re-run detection. Each chunk appears as a pill under the waveform: click its number to select it (audition with Space), untick it to leave it out of the import.
   - **Merging chunks** — removing a split flag joins the two chunks around it, so clicking a flag merges that pair. To merge several consecutive chunks at once, drag a selection across them and press **Merge** — every split inside the selection is removed and the chunks collapse into one.
   - **Import N chunks** lands every kept chunk as its own sample + instrument, named `name 1…N`, in a single undo step.
+- **Chord…** opens the [chord maker](#the-chord-maker) on the take.
 - **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the engine's output rate) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
+
+### The chord maker
+
+A tracker channel plays one note at a time, so the Amiga answer to "I want a
+chord here" was to bake the chord into the sample itself. The **Chord…** button
+does exactly that: it mixes up to six pitch-shifted copies of the working
+buffer into one waveform. Reach it from the Samples view (**Chord…**, on a copy
+of a pooled sample) or from inside the Lab, on anything you have just recorded,
+imported or cropped.
+
+Each of the six voices is a tick-box, a **mode**, one value, an octave and a
+level — and the modes are independent, so voice 1 can be a just fifth while
+voice 2 counts degrees of the song's tuning and voice 3 is a number you typed:
+
+- **Just** — a named just interval, chosen from a list that shows each one's ratio and its size in cents (a perfect fifth is `3:2 · +702¢`). Always available, whatever the song is tuned to.
+- **Degrees** — a signed count of degrees of *the song's own pitch table*, so the choices multiply with the tuning: 4 degrees is a major third in 12-TET and a whole tone in 24-TET. Counts wrap into the next period, and negative counts go down. On a notation with an absolute table (ProTracker) the count clamps at the ends, because those ends are every note it can express.
+- **Ratio ×** — a playback ratio typed as a decimal: `2.0` is an octave up, `1.9632` is whatever `1.9632` is.
+- **4096-TET** — a raw offset in note-word units, the same units the note column counts in; `0x1000` is an octave, and hex is accepted so `0x100` works as written.
+
+**oct** shifts that voice by whole octaves on top of its mode, and **dB** sets
+its level in the mix.
+
+Every row reads out what it will actually sound: the ratio, the offset in
+cents, the note it lands on painted in the song's own notation, and — when the
+voice sits between two degrees — how many cents off that degree it is. A just
+major third in 12-TET therefore shows up as `E-4` in the off-grid colour with
+`off by −13 cents` beside it; the same third in 31-TET lands on a degree and says nothing.
+
+- **Chord** fills all six slots at once with a ready-made voicing (major, minor, sus4, the sevenths, power, octaves) — or **Detune (chorus)**, three near-unison copies that show what the manual ratio mode is for.
+- **Length** — *longest voice* lets a voice below unison run past the end of the source (it plays slower, so it lasts longer) and keeps its whole tail; *source length* crops back to the original length, which is what you want if the result is going to loop.
+- **Normalise result** scales the mix to full scale. Leave it on: six copies at unity peak far above what 8 bits can hold, and the info line tells you what the raw mix peaked at.
+
+**Preview** auditions the mix; **Apply** hands it back to the Lab as the working
+buffer (one Lab undo step), where you name it, set its rate and import it like
+any other take. The result is a plain one-shot sample — the voices are at
+irrational ratios to each other, so a loop point that suits all six at once is
+not something the mixer can arrange for you.
 
 ### Recording from the microphone
 

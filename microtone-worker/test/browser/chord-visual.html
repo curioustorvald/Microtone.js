@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Chord maker visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Opens the chord maker (item 89) on a synthetic take with all six voices
+       in play — one per mode — and leaves it open, a layout harness like
+       samplelab-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/chord.png \
+           --timeout=15000 "http://localhost:8932/test/browser/chord-visual.html?theme=dark"
+       ?theme=light for the light theme, ?notation=240 to see how the degree
+       mode and the note glyphs follow a finer tuning. -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+      const notation = params.get("notation");
+      if (notation) {
+        const pt = await win.eval('import("/src/ui/pitchtables.js")');
+        win.__microtone.store.pitchPreset = pt.presetForNotation(Number(notation), win.__microtone.store.doc);
+      }
+
+      const { openChordMaker } = await win.eval('import("/src/ui/popups/chordmaker.js")');
+      const rate = 32000;
+      const data = new win.Float32Array(rate); // 1 s of a decaying pluck
+      for (let i = 0; i < data.length; i++) {
+        data[i] = 0.8 * Math.sin((2 * Math.PI * 220 * i) / rate) * Math.exp(-i / (rate * 0.3));
+      }
+      openChordMaker(win.__microtone.store, { data, rate, name: "pluck" });
+      const dlg = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const d = win.document.querySelector(".chord-modal");
+          if (d) { clearInterval(poll); resolve(d); }
+        }, 50);
+      });
+      // one voice per mode, so every control shape is on screen at once
+      dlg.__chord.setVoice(0, { on: true, mode: "ji", ji: "1/1" });
+      dlg.__chord.setVoice(1, { on: true, mode: "ji", ji: "5/4" });
+      dlg.__chord.setVoice(2, { on: true, mode: "key", step: 7 });
+      dlg.__chord.setVoice(3, { on: true, mode: "ratio", ratio: 1.9632, gainDb: -3 });
+      dlg.__chord.setVoice(4, { on: true, mode: "units", units: 0x100, oct: -1 });
+      dlg.__chord.setVoice(5, { on: false, mode: "ji", ji: "3/2", oct: 1 });
+    })();
+  </script>
+</body>
+</html>

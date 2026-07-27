@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Chord maker smoke: voice modes, notation degrees, mix + Lab hand-off (item 89)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- The Lab's audition and the chord preview need an AudioContext, i.e. REAL
+       time (virtual-time starves the audio threads). Run:
+         python3 tools/test-server.py &   # repo server + /hang on :8932
+         chromium --headless=new --autoplay-policy=no-user-gesture-required \
+           --dump-dom --timeout=45000 \
+           http://localhost:8932/test/browser/chord-smoke.html -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, name) => log(`${name}: ${cond ? "ok" : "FAIL"}`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const waitFor = async (fn, ms = 15000) => {
+      const t0 = Date.now();
+      for (;;) {
+        const v = fn();
+        if (v) return v;
+        if (Date.now() - t0 > ms) throw new Error("waitFor timeout");
+        await sleep(50);
+      }
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        }, 30000);
+        const { store } = win.__microtone;
+        win.alert = () => {};
+        win.confirm = () => true;
+        log("app loaded");
+
+        // ── leg A: the maker standalone, on a synthetic 1 kHz tone ──────────
+        const { openChordMaker } = await win.eval('import("/src/ui/popups/chordmaker.js")');
+        const rate = 32000;
+        const data = new win.Float32Array(rate); // 1 s
+        for (let i = 0; i < data.length; i++) data[i] = 0.5 * Math.sin((2 * Math.PI * 1000 * i) / rate);
+
+        const pMaker = openChordMaker(store, { data, rate, name: "smoke tone" });
+        const dlg = await waitFor(() => win.document.querySelector(".chord-modal"));
+        const ch = dlg.__chord;
+        ok(dlg.querySelectorAll(".chord-voice").length === 6, "a1 six voice slots");
+        ok(ch.voices().filter((v) => v.on).length === 3, "a2 opens on a major triad");
+
+        // a3: the readouts the whole UI exists for — ratio, cents, glyph, and
+        // how far the just third sits from 12-TET's own E
+        const read1 = ch.read(1);
+        ok(/×1\.2500/.test(read1) && /\+386/.test(read1) && /−13|-13/.test(read1),
+          `a3 just-third readout names ratio, cents and grid offset (got "${read1}")`);
+        const glyphPainted = (() => {
+          const cv = dlg.querySelectorAll(".chord-voice")[1].querySelector(".cv-glyph");
+          const px = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+          const first = [px[0], px[1], px[2]];
+          for (let i = 4; i < px.length; i += 4) {
+            if (px[i] !== first[0] || px[i + 1] !== first[1] || px[i + 2] !== first[2]) return true;
+          }
+          return false;
+        })();
+        ok(glyphPainted, "a4 the voice paints a note glyph");
+
+        // a5: the four modes are independent, per voice
+        ch.setVoice(0, { on: true, mode: "ji", ji: "3/2" });
+        ch.setVoice(1, { on: true, mode: "key", step: 4 });
+        ch.setVoice(2, { on: true, mode: "units", units: 0x100 });
+        ch.setVoice(3, { on: true, mode: "ratio", ratio: 1.9632 });
+        const u = [0, 1, 2, 3].map((i) => ch.units(i));
+        ok(Math.abs(u[0] - 4096 * Math.log2(1.5)) < 1e-6, `a5 v1 just fifth (${u[0].toFixed(1)})`);
+        ok(u[1] === 0x555, `a5b v2 four degrees of 12-TET (${u[1]})`);
+        ok(u[2] === 0x100, "a5c v3 raw 4096-TET offset");
+        ok(Math.abs(u[3] - 4096 * Math.log2(1.9632)) < 1e-6, "a5d v4 typed ratio");
+
+        // a6: degrees follow the SONG's notation — switch it and v2 moves
+        const prevPreset = store.pitchPreset;
+        store.pitchPreset = (await win.eval('import("/src/ui/pitchtables.js")')).pitchTablePresets[240];
+        const pMaker24 = openChordMaker(store, { data, rate, name: "24-TET" });
+        const dlg24 = await waitFor(() => {
+          const l = [...win.document.querySelectorAll(".chord-modal")];
+          return l.length === 2 ? l[1] : null;
+        });
+        dlg24.__chord.setVoice(0, { on: true, mode: "key", step: 4 });
+        ok(dlg24.__chord.units(0) === 0x2ab, `a6 4 degrees of 24-TET is a whole tone (${dlg24.__chord.units(0)})`);
+        dlg24.__chord.cancel();
+        ok((await pMaker24) === null, "a6b cancel resolves null");
+        store.pitchPreset = prevPreset;
+
+        // a7: the mix — three voices at unison length, normalised to full scale
+        ch.setChordPreset("major");
+        await sleep(300);
+        const mix = ch.mix();
+        let peak = 0;
+        for (let i = 0; i < mix.data.length; i++) peak = Math.max(peak, Math.abs(mix.data[i]));
+        ok(mix.voices === 3 && mix.data.length === data.length, "a7 major triad, source length");
+        ok(Math.abs(peak - 1) < 1e-4, `a7b normalised to full scale (${peak.toFixed(4)})`);
+
+        // a8: a voice below unison stretches the result; "source length" caps it
+        ch.setVoice(3, { on: true, mode: "ji", ji: "1/1", oct: -1 });
+        await sleep(300);
+        ok(ch.mix().data.length === data.length * 2, `a8 an octave down doubles the length (${ch.mix().data.length})`);
+        ch.setLength("source");
+        await sleep(300);
+        ok(ch.mix().data.length === data.length, "a8b source length crops the low voice");
+        ch.setLength("longest");
+        ch.setVoice(3, { on: false });
+
+        // a9: normalise off leaves the raw sum, and the info line reports peak
+        ch.setNormalise(false);
+        await sleep(300);
+        let rawPeak = 0;
+        const raw = ch.mix().data;
+        for (let i = 0; i < raw.length; i++) rawPeak = Math.max(rawPeak, Math.abs(raw[i]));
+        ok(rawPeak > 1.05, `a9 three copies at unity overshoot (${rawPeak.toFixed(3)})`);
+        ok(/dBFS/.test(ch.info()), `a9b info reports the mix peak (got "${ch.info()}")`);
+        ch.setNormalise(true);
+        await sleep(300);
+
+        ch.apply();
+        const applied = await pMaker;
+        ok(applied && applied.data.length === data.length, "a10 Apply resolves with the mix");
+
+        // ── leg B: through the Sample Lab, all the way into the pool ────────
+        const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+        const before = win.eval("__microtone.store.doc.toBytes()");
+        const censusBefore = store.doc.sampleList().length;
+        const pLab = openSampleLab(store, { data, rate, name: "chorded", openChord: true });
+        const labDlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const lab = labDlg.__lab;
+        const dlg2 = await waitFor(() => win.document.querySelector(".chord-modal"));
+        ok(!!dlg2, "b1 openChord opens the maker on top of the Lab");
+
+        dlg2.__chord.setChordPreset("power");
+        dlg2.__chord.setVoice(2, { on: true, mode: "ji", ji: "1/1", oct: -1 });
+        await sleep(300);
+        const srcLen = lab.state().len;
+        dlg2.__chord.apply();
+        await waitFor(() => !win.document.querySelector(".chord-modal"));
+        ok(lab.state().len === srcLen * 2, `b2 the Lab buffer became the chord (${lab.state().len})`);
+        ok(lab.state().undoDepth > 0, "b3 the chord is one Lab undo step");
+        lab.undo();
+        ok(lab.state().len === srcLen, "b4 undo restores the source take");
+        lab.redo();
+        ok(lab.state().len === srcLen * 2, "b5 redo re-applies it");
+
+        // b6: the Lab's own commit path still lands it as a sample + instrument
+        lab.setTargetRate(16000);
+        lab.commit();
+        const res = await pLab;
+        ok(res && res.count === 1, `b6 committed as one instrument (got ${res && res.count})`);
+        ok(store.doc.sampleList().length === censusBefore + 1, "b6b census grew by one");
+        store.undo.undo();
+        const after = win.eval("__microtone.store.doc.toBytes()");
+        ok(after.length === before.length && after.every((v, i) => v === before[i]),
+          "b7 ONE undo step, byte-exact");
+
+        // ── leg C: the Samples view button ─────────────────────────────────
+        win.document.querySelector('#tabs button[data-view="samples"]').click();
+        await sleep(200);
+        const chordBtn = [...win.document.querySelectorAll(".smp-toolbar button")]
+          .find((b) => /Chord/i.test(b.textContent));
+        ok(!!chordBtn, "c1 Samples view has a Chord… button");
+        chordBtn.click();
+        const labDlg3 = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const dlg3 = await waitFor(() => win.document.querySelector(".chord-modal"));
+        ok(!!dlg3 && labDlg3.__lab.state().len > 0,
+          "c2 it opens a Lab copy of the pooled sample with the maker on top");
+        dlg3.__chord.cancel();
+        await waitFor(() => !win.document.querySelector(".chord-modal"));
+        labDlg3.__lab.cancel();
+        const afterC = win.eval("__microtone.store.doc.toBytes()");
+        ok(afterC.length === before.length && afterC.every((v, i) => v === before[i]),
+          "c3 cancelling touched nothing");
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>
