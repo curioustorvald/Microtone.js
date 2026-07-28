@@ -62,27 +62,32 @@ export function refreshVoiceFilter(voice) {
   voice.filterActive = true;
 }
 
-/** Apply the cached voice low-pass to one mono sample. */
-export function applyVoiceFilter(voice, x0) {
+/**
+ * Apply the cached voice low-pass to one sample. Coefficients come from the
+ * voice; the delay line comes from `st`, which is the voice itself for a mono
+ * voice (or a stereo pair's first channel) and voice.right for the second
+ * channel of a stereo pair — same coefficients, independent history.
+ */
+export function applyVoiceFilter(voice, x0, st = voice) {
   if (!voice.filterActive) return x0;
   if (voice.filterIsBiquad) {
     // FluidSynth RBJ biquad, Direct Form I (unclamped — the SF2 gain-norm bounds it).
-    const y0 = voice.filterBqB02 * (x0 + voice.filterX2) +
-               voice.filterBqB1 * voice.filterX1 -
-               voice.filterBqA1 * voice.filterY1 -
-               voice.filterBqA2 * voice.filterY2;
-    voice.filterX2 = voice.filterX1;
-    voice.filterX1 = x0;
-    voice.filterY2 = voice.filterY1;
-    voice.filterY1 = y0;
+    const y0 = voice.filterBqB02 * (x0 + st.filterX2) +
+               voice.filterBqB1 * st.filterX1 -
+               voice.filterBqA1 * st.filterY1 -
+               voice.filterBqA2 * st.filterY2;
+    st.filterX2 = st.filterX1;
+    st.filterX1 = x0;
+    st.filterY2 = st.filterY1;
+    st.filterY1 = y0;
     return y0;
   }
   // IT all-pole recurrence; history taps clipped ±2.0 (OpenMPT ClipFilter).
-  const y1Clipped = Math.min(Math.max(voice.filterY1, -2.0), 2.0);
-  const y2Clipped = Math.min(Math.max(voice.filterY2, -2.0), 2.0);
+  const y1Clipped = Math.min(Math.max(st.filterY1, -2.0), 2.0);
+  const y2Clipped = Math.min(Math.max(st.filterY2, -2.0), 2.0);
   const y0 = voice.filterA0 * x0 + voice.filterB0 * y1Clipped + voice.filterB1 * y2Clipped;
-  voice.filterY2 = voice.filterY1;
-  voice.filterY1 = y0;
+  st.filterY2 = st.filterY1;
+  st.filterY1 = y0;
   return y0;
 }
 
@@ -105,8 +110,10 @@ export function clipSample(x, mode) {
   }
 }
 
-/** Overdrive (9) → shared clipper → bitcrusher (8): per output sample, per voice. */
-export function applyTaudVoiceFx(voice, sample) {
+/** Overdrive (9) → shared clipper → bitcrusher (8): per output sample, per voice.
+ *  `st` holds the crusher's hold/counter state (voice.right for a stereo pair's
+ *  second channel) — the parameters themselves are always the voice's. */
+export function applyTaudVoiceFx(voice, sample, st = voice) {
   let s = sample;
   const overdriveOn = voice.overdriveAmp > 0;
   const depthQuantises = voice.bitcrusherDepth >= 1 && voice.bitcrusherDepth <= 7;
@@ -119,21 +126,21 @@ export function applyTaudVoiceFx(voice, sample) {
   }
 
   if (crushActive) {
-    if (voice.bitcrusherCounter === 0) {
+    if (st.bitcrusherCounter === 0) {
       if (depthQuantises) {
         const levels = (1 << voice.bitcrusherDepth) - 1;
         const clipped = Math.min(Math.max(clipSample(s, voice.clipMode), -1.0), 1.0);
         const q = Math.min(Math.max(Math.floor((clipped + 1.0) * 0.5 * levels + 0.5), 0.0), levels);
         s = (q / levels) * 2.0 - 1.0;
       }
-      voice.bitcrusherHeld = s;
+      st.bitcrusherHeld = s;
     } else {
-      s = voice.bitcrusherHeld;
+      s = st.bitcrusherHeld;
     }
     if (skipActive) {
-      voice.bitcrusherCounter = (voice.bitcrusherCounter + 1) % (voice.bitcrusherSkip + 1);
+      st.bitcrusherCounter = (st.bitcrusherCounter + 1) % (voice.bitcrusherSkip + 1);
     } else {
-      voice.bitcrusherCounter = 0;
+      st.bitcrusherCounter = 0;
     }
   }
   return s;

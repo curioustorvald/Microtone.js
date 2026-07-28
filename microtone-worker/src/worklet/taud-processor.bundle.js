@@ -458,6 +458,12 @@ function makeEnv(defaultValue) {
  * absent (null env / hasExtra=false) defers to the base TaudInst.
  * Sentinels: defaultPan 0xFF, defaultNoteVolume 0, vibratoWaveform 0xFF all
  * mean "inherit the base instrument's value".
+ *
+ * The 's' block (hasChanBlock) makes the patch MULTI-CHANNEL: every channel is
+ * a separate pool span sharing this record's length / loop / rate geometry,
+ * with `chanPtrs` holding the pointers for channels 2..chanCount (channel 1 is
+ * samplePtr). Only stereo (chanCount 2) is played today; the format's
+ * quadraphonic/ambisonic cases are TODO #998.
  */
 function makeInstPatch(fields) {
   return {
@@ -473,12 +479,31 @@ function makeInstPatch(fields) {
     pitchEnv: null, pitchEnvLoop: 0, pitchEnvSustain: 0,
     hasExtra: false, fadeoutStep: 0, filterSfMode: false,
     extraCutoff: 0xff, extraResonance: 0xff, extraInitialAttenOctet: 0,
+    hasChanBlock: false, chanCount: 1, chanMode: CHAN_MODE_DISCRETE,
+    chanFlags: 0, chanPtrs: [],
     ...fields,
   };
 }
 
+/** 's' block channel modes (low nibble of the count/mode byte). */
+const CHAN_MODE_DISCRETE = 0; // XY stereo, 4-track quad — one channel per speaker feed
+const CHAN_MODE_MATRIX = 1;   // M/S stereo, ambisonic B-format — decoded before panning
+
 function patchSampleLoopSustain(patch) {
   return (patch.loopMode & 0x04) !== 0;
+}
+
+/** Every pool span the patch plays, channel order: [samplePtr, ...chanPtrs]. */
+function patchChannelPtrs(patch) {
+  return patch.hasChanBlock && patch.chanCount > 1
+    ? [patch.samplePtr, ...patch.chanPtrs.slice(0, patch.chanCount - 1)]
+    : [patch.samplePtr];
+}
+
+/** True when the patch plays exactly two channels (the only multi-channel case
+ *  the mixer renders today). */
+function patchIsStereo(patch) {
+  return patch.hasChanBlock && patch.chanCount === 2 && patch.chanPtrs.length >= 1;
 }
 
 /**
@@ -529,6 +554,21 @@ function parsePatchesBlob(bytes) {
     if ((ver & 0x04) !== 0) { const e = readEnv(); if (e === null) break outer; panEnv = e.arr; panLoop = e.loop; panSus = e.sus; }
     if ((ver & 0x08) !== 0) { const e = readEnv(); if (e === null) break outer; filEnv = e.arr; filLoop = e.loop; filSus = e.sus; }
     if ((ver & 0x10) !== 0) { const e = readEnv(); if (e === null) break outer; pitEnv = e.arr; pitLoop = e.loop; pitSus = e.sus; }
+    // 's' block LAST (terranmon.txt Ixmp Note 6): u8 count/mode + u24 flags +
+    // one u32 sample pointer per EXTRA channel.
+    let hasChanBlock = false, chanCount = 1, chanMode = CHAN_MODE_DISCRETE;
+    let chanFlags = 0, chanPtrs = [];
+    if ((ver & 0x20) !== 0) {
+      if (p + 4 > bytes.length) break;
+      const cb = u8(p);
+      chanCount = (cb >>> 4) + 1;
+      chanMode = cb & 0x0f;
+      chanFlags = u8(p + 1) | (u8(p + 2) << 8) | (u8(p + 3) << 16);
+      if (p + 4 + 4 * (chanCount - 1) > bytes.length) break;
+      for (let k = 0; k < chanCount - 1; k++) chanPtrs.push(u32(p + 4 + 4 * k));
+      hasChanBlock = true;
+      p += 4 + 4 * (chanCount - 1);
+    }
     patches.push(makeInstPatch({
       pitchStart: u16(o + 1),
       pitchEnd: u16(o + 3),
@@ -555,6 +595,7 @@ function parsePatchesBlob(bytes) {
       pitchEnv: pitEnv, pitchEnvLoop: pitLoop, pitchEnvSustain: pitSus,
       hasExtra, fadeoutStep, filterSfMode,
       extraCutoff, extraResonance, extraInitialAttenOctet: extraAttenOctet,
+      hasChanBlock, chanCount, chanMode, chanFlags, chanPtrs,
     }));
     o = p;
   }
@@ -563,9 +604,9 @@ function parsePatchesBlob(bytes) {
 
 /**
  * Serialise patch objects back to the flat wire blob — the exact byte-inverse
- * of parsePatchesBlob (blocks emitted in on-wire order x, v, p, f, P). Shared
- * by the engine capture path (getInstrumentPatches) and the document layer's
- * Ixmp patch editor.
+ * of parsePatchesBlob (blocks emitted in on-wire order x, v, p, f, P, s).
+ * Shared by the engine capture path (getInstrumentPatches) and the document
+ * layer's Ixmp patch editor.
  */
 function writePatchesBlob(patches) {
   const out = [];
@@ -583,6 +624,7 @@ function writePatchesBlob(patches) {
     if (p.panEnv !== null) ver |= 0x04;
     if (p.filterEnv !== null) ver |= 0x08;
     if (p.pitchEnv !== null) ver |= 0x10;
+    if (p.hasChanBlock) ver |= 0x20;
     w8(ver);
     w16(p.pitchStart); w16(p.pitchEnd);
     w8(p.volumeStart); w8(p.volumeEnd);
@@ -601,6 +643,12 @@ function writePatchesBlob(patches) {
     if (p.panEnv !== null) wEnv(p.panEnv, p.panEnvLoop, p.panEnvSustain);
     if (p.filterEnv !== null) wEnv(p.filterEnv, p.filterEnvLoop, p.filterEnvSustain);
     if (p.pitchEnv !== null) wEnv(p.pitchEnv, p.pitchEnvLoop, p.pitchEnvSustain);
+    if (p.hasChanBlock) {
+      const extra = Math.max(0, Math.min(15, p.chanCount - 1));
+      w8(((extra & 0x0f) << 4) | (p.chanMode & 0x0f));
+      w8(p.chanFlags); w8(p.chanFlags >>> 8); w8(p.chanFlags >>> 16);
+      for (let k = 0; k < extra; k++) w32(p.chanPtrs[k] ?? 0);
+    }
   }
   return Uint8Array.from(out);
 }
@@ -1025,6 +1073,47 @@ function makeActiveEnv(defaultValue) {
   return a;
 }
 
+/**
+ * Per-channel DSP history for a multi-channel (Ixmp 's') voice — item 90.
+ * Channel 1 uses the Voice's OWN fields (so the mono path is untouched); this
+ * mirrors the same field names for channel 2, which is why applyVoiceFilter /
+ * applyTaudVoiceFx / fetchTrackerSample can take either object as their state
+ * holder. Coefficients, envelopes and pitch stay shared — only the history
+ * that must not be crossed between channels lives here.
+ */
+class ChannelState {
+  constructor() {
+    this.filterY1 = 0.0;
+    this.filterY2 = 0.0;
+    this.filterX1 = 0.0;
+    this.filterX2 = 0.0;
+    this.bitcrusherCounter = 0;
+    this.bitcrusherHeld = 0.0;
+    this.nesDpcmCounter = 63;
+  }
+
+  /** Trigger-time reset — mirrors what triggerNote does to the Voice's own. */
+  reset() {
+    this.filterY1 = 0.0;
+    this.filterY2 = 0.0;
+    this.filterX1 = 0.0;
+    this.filterX2 = 0.0;
+    this.bitcrusherCounter = 0;
+    this.bitcrusherHeld = 0.0;
+    this.nesDpcmCounter = 63;
+  }
+
+  copyFrom(src) {
+    this.filterY1 = src.filterY1;
+    this.filterY2 = src.filterY2;
+    this.filterX1 = src.filterX1;
+    this.filterX2 = src.filterX2;
+    this.bitcrusherCounter = src.bitcrusherCounter;
+    this.bitcrusherHeld = src.bitcrusherHeld;
+    this.nesDpcmCounter = src.nesDpcmCounter;
+  }
+}
+
 class Voice {
   constructor() {
     this.active = false;
@@ -1116,6 +1205,15 @@ class Voice {
     this.activeVibratoDepth = 0;
     this.activeVibratoRate = 0;
     this.activeVibratoWaveform = 0;
+    // Multi-channel view (Ixmp 's' block, item 90). 1 = mono — the only case
+    // before stereo, and the only one the base instrument can express. 2 = the
+    // sample is a stereo PAIR: chanPtr2 is the right channel's pool span, which
+    // shares every geometry field above (length / play-start / loop / rate).
+    // chanMode 0 = discrete L,R; 1 = matrix M,S (decoded at mix time).
+    this.activeChanCount = 1;
+    this.activeChanMode = 0;
+    this.activeChanPtr2 = 0;
+    this.right = new ChannelState();
 
     // Active-envelope view (snapshot by resolveActiveEnvelopes at trigger).
     this.activeVolEnv = makeActiveEnv(0x3f);
@@ -1276,6 +1374,8 @@ class Voice {
   }
 
   get activeSampleLoopSustain() { return (this.activeLoopMode & 0x04) !== 0; }
+  /** True when this voice renders a stereo pair (see activeChanCount). */
+  get isStereo() { return this.activeChanCount === 2; }
 }
 
 // ══ src/engine/state.js ══
@@ -1616,6 +1716,8 @@ class Playhead {
       it.filterCutoffCached = -1; it.filterResonanceCached = -1;
       it.currentCutoff = 0xff; it.currentResonance = 0xff;
       it.nesDpcmCounter = 63;
+      it.right.reset();
+      it.activeChanCount = 1; it.activeChanMode = 0; it.activeChanPtr2 = 0;
     }
     ts.backgroundVoices.length = 0;
     // Funk masks + notefx 5/6 overrides are per-instrument runtime state — clear
@@ -1668,10 +1770,14 @@ function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 /**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
  * instrument's funk-repeat mask. Caller wraps loop regions first.
+ * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
+ * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
+ * for its right channel (both channels share the funk mask and geometry).
  */
-function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax) {
+function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
+                                basePtr = voice.activeSamplePtr) {
   const i = Math.min(Math.max(idx, 0), sampleLen - 1);
-  let b = eng.sampleBin[Math.min(voice.activeSamplePtr + i, binMax)];
+  let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
   if (inst.funkMask !== null && inst.sampleLoopEnd > inst.sampleLoopStart) {
     const ls = inst.sampleLoopStart;
     if (i >= ls && i < inst.sampleLoopEnd && inst.funkBit(i - ls)) b = b ^ 0xff;
@@ -1679,34 +1785,30 @@ function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax) {
   return (b - 127.5) / 127.5;
 }
 
-function fetchTrackerSample(eng, voice, inst, interpMode) {
-  if (inst.index === 0) return 0.0;
-
-  const sampleLen = Math.max(voice.activeSampleLength, 1);
-  const loopStart = voice.activeSampleLoopStart;
-  const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
-  const binMax = SAMPLE_BIN_TOTAL - 1;
-
+/**
+ * Interpolate ONE channel at the voice's current position WITHOUT advancing it.
+ * `basePtr` selects the channel's pool span and `st` its DPCM counter (the
+ * Voice itself for channel 1, voice.right for a stereo right channel).
+ */
+function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st) {
   const i0 = Math.min(Math.max(Math.trunc(voice.samplePos), 0), sampleLen - 1);
   const frac = voice.samplePos - i0;
 
-  let sample;
   switch (interpMode) {
     case INTERP_DEFAULT: {
       let acc = 0.0;
       for (let j = -SINC_WIDTH; j <= SINC_WIDTH; j++) {
         const coeff = sincTap(frac, j);
-        if (coeff !== 0.0) acc += readSamplePoint(eng, voice, inst, i0 + j, sampleLen, binMax) * coeff;
+        if (coeff !== 0.0) acc += readSamplePoint(eng, voice, inst, i0 + j, sampleLen, binMax, basePtr) * coeff;
       }
-      sample = acc;
-      break;
+      return acc;
     }
     case INTERP_SNES: {
       // SNES BRR 4-tap gaussian with the int16 mid-sum overflow "chirp" preserved.
-      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax) * 32767.0);
-      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax) * 32767.0);
-      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax) * 32767.0);
-      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax) * 32767.0);
+      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr) * 32767.0);
+      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr) * 32767.0);
+      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr) * 32767.0);
+      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr) * 32767.0);
       const offset = Math.min(Math.max(Math.trunc(frac * 256.0), 0), 255);
       let out = (SNES_GAUSS[0xff - offset] * oldest) >> 10;
       out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;
@@ -1714,33 +1816,65 @@ function fetchTrackerSample(eng, voice, inst, interpMode) {
       out = (out << 16) >> 16; // int16 wrap (the hardware overflow)
       out += (SNES_GAUSS[offset] * news) >> 10;
       out = Math.min(Math.max(out, -32768), 32767);
-      sample = (out >> 1) / 16384.0;
-      break;
+      return (out >> 1) / 16384.0;
     }
     case INTERP_NES_DPCM: {
       // NES 2A03 DMC 1-bit sigma-delta simulation (±2 slew on a 7-bit counter).
-      const target = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax);
+      const target = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr);
       const targetLevel = Math.min(Math.max(Math.trunc((target + 1.0) * 63.5), 0), 127);
-      if (targetLevel > voice.nesDpcmCounter && voice.nesDpcmCounter <= 125) {
-        voice.nesDpcmCounter += 2;
-      } else if (targetLevel < voice.nesDpcmCounter && voice.nesDpcmCounter >= 2) {
-        voice.nesDpcmCounter -= 2;
+      if (targetLevel > st.nesDpcmCounter && st.nesDpcmCounter <= 125) {
+        st.nesDpcmCounter += 2;
+      } else if (targetLevel < st.nesDpcmCounter && st.nesDpcmCounter >= 2) {
+        st.nesDpcmCounter -= 2;
       }
-      sample = (voice.nesDpcmCounter - 63.5) / 63.5;
-      break;
+      return (st.nesDpcmCounter - 63.5) / 63.5;
     }
     case INTERP_NONE:
     case INTERP_A500:
     case INTERP_A1200:
     default:
       // Paula-style ZOH; aliasing removed by the post-mix Amiga LPFs.
-      sample = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax);
-      break;
+      return readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr);
   }
+}
+
+/**
+ * Fetch BOTH channels of a stereo voice at one position, then advance once —
+ * the pair is one sample of one voice, so pitch, loop wrapping and the
+ * sample-end ramp are shared. Writes [ch1, ch2] into `out` (a length-2 array
+ * the mixer recycles). Channel meaning is the patch's chanMode: discrete L,R
+ * or matrix M,S (the mixer decodes).
+ */
+function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
+  if (inst.index === 0) { out[0] = 0.0; out[1] = 0.0; return out; }
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const binMax = SAMPLE_BIN_TOTAL - 1;
+  out[0] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeSamplePtr, voice);
+  out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeChanPtr2, voice.right);
+  if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
+  return out;
+}
+
+function fetchTrackerSample(eng, voice, inst, interpMode) {
+  if (inst.index === 0) return 0.0;
+
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const binMax = SAMPLE_BIN_TOTAL - 1;
+  const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeSamplePtr, voice);
 
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
+  advanceSamplePos(voice, sampleLen);
+  return sample;
+}
 
+/** Step samplePos by the playback rate and apply the loop/end rules. */
+function advanceSamplePos(voice, sampleLen) {
+  const loopStart = voice.activeSampleLoopStart;
+  const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
   if (voice.forward) {
     voice.samplePos += voice.playbackRate;
     // Sustain bit set + key-off ⇒ escape the loop (loopMode 0 semantics).
@@ -1770,7 +1904,6 @@ function fetchTrackerSample(eng, voice, inst, interpMode) {
     voice.samplePos -= voice.playbackRate;
     if (voice.samplePos < loopStart) { voice.samplePos = loopStart; voice.forward = true; }
   }
-  return sample;
 }
 
 /** Engage the MilkyTracker-style sample-end ramp (no-op if already ramping). */
@@ -1874,27 +2007,32 @@ function refreshVoiceFilter(voice) {
   voice.filterActive = true;
 }
 
-/** Apply the cached voice low-pass to one mono sample. */
-function applyVoiceFilter(voice, x0) {
+/**
+ * Apply the cached voice low-pass to one sample. Coefficients come from the
+ * voice; the delay line comes from `st`, which is the voice itself for a mono
+ * voice (or a stereo pair's first channel) and voice.right for the second
+ * channel of a stereo pair — same coefficients, independent history.
+ */
+function applyVoiceFilter(voice, x0, st = voice) {
   if (!voice.filterActive) return x0;
   if (voice.filterIsBiquad) {
     // FluidSynth RBJ biquad, Direct Form I (unclamped — the SF2 gain-norm bounds it).
-    const y0 = voice.filterBqB02 * (x0 + voice.filterX2) +
-               voice.filterBqB1 * voice.filterX1 -
-               voice.filterBqA1 * voice.filterY1 -
-               voice.filterBqA2 * voice.filterY2;
-    voice.filterX2 = voice.filterX1;
-    voice.filterX1 = x0;
-    voice.filterY2 = voice.filterY1;
-    voice.filterY1 = y0;
+    const y0 = voice.filterBqB02 * (x0 + st.filterX2) +
+               voice.filterBqB1 * st.filterX1 -
+               voice.filterBqA1 * st.filterY1 -
+               voice.filterBqA2 * st.filterY2;
+    st.filterX2 = st.filterX1;
+    st.filterX1 = x0;
+    st.filterY2 = st.filterY1;
+    st.filterY1 = y0;
     return y0;
   }
   // IT all-pole recurrence; history taps clipped ±2.0 (OpenMPT ClipFilter).
-  const y1Clipped = Math.min(Math.max(voice.filterY1, -2.0), 2.0);
-  const y2Clipped = Math.min(Math.max(voice.filterY2, -2.0), 2.0);
+  const y1Clipped = Math.min(Math.max(st.filterY1, -2.0), 2.0);
+  const y2Clipped = Math.min(Math.max(st.filterY2, -2.0), 2.0);
   const y0 = voice.filterA0 * x0 + voice.filterB0 * y1Clipped + voice.filterB1 * y2Clipped;
-  voice.filterY2 = voice.filterY1;
-  voice.filterY1 = y0;
+  st.filterY2 = st.filterY1;
+  st.filterY1 = y0;
   return y0;
 }
 
@@ -1917,8 +2055,10 @@ function clipSample(x, mode) {
   }
 }
 
-/** Overdrive (9) → shared clipper → bitcrusher (8): per output sample, per voice. */
-function applyTaudVoiceFx(voice, sample) {
+/** Overdrive (9) → shared clipper → bitcrusher (8): per output sample, per voice.
+ *  `st` holds the crusher's hold/counter state (voice.right for a stereo pair's
+ *  second channel) — the parameters themselves are always the voice's. */
+function applyTaudVoiceFx(voice, sample, st = voice) {
   let s = sample;
   const overdriveOn = voice.overdriveAmp > 0;
   const depthQuantises = voice.bitcrusherDepth >= 1 && voice.bitcrusherDepth <= 7;
@@ -1931,21 +2071,21 @@ function applyTaudVoiceFx(voice, sample) {
   }
 
   if (crushActive) {
-    if (voice.bitcrusherCounter === 0) {
+    if (st.bitcrusherCounter === 0) {
       if (depthQuantises) {
         const levels = (1 << voice.bitcrusherDepth) - 1;
         const clipped = Math.min(Math.max(clipSample(s, voice.clipMode), -1.0), 1.0);
         const q = Math.min(Math.max(Math.floor((clipped + 1.0) * 0.5 * levels + 0.5), 0.0), levels);
         s = (q / levels) * 2.0 - 1.0;
       }
-      voice.bitcrusherHeld = s;
+      st.bitcrusherHeld = s;
     } else {
-      s = voice.bitcrusherHeld;
+      s = st.bitcrusherHeld;
     }
     if (skipActive) {
-      voice.bitcrusherCounter = (voice.bitcrusherCounter + 1) % (voice.bitcrusherSkip + 1);
+      st.bitcrusherCounter = (st.bitcrusherCounter + 1) % (voice.bitcrusherSkip + 1);
     } else {
-      voice.bitcrusherCounter = 0;
+      st.bitcrusherCounter = 0;
     }
   }
   return s;
@@ -2227,6 +2367,7 @@ function advanceAutoVibrato(voice, inst) {
 
 
 
+
 /**
  * Snapshot the sample-scope state for voice from the base instrument or a
  * resolved Ixmp patch. Patch sentinels: defaultPan 0xFF, defaultNoteVolume 0,
@@ -2247,6 +2388,10 @@ function applyActiveSample(voice, inst, patch) {
     voice.activeVibratoDepth = inst.vibratoDepth;
     voice.activeVibratoRate = inst.vibratoRate;
     voice.activeVibratoWaveform = inst.vibratoWaveform;
+    // A base instrument record has no channel block: always mono.
+    voice.activeChanCount = 1;
+    voice.activeChanMode = 0;
+    voice.activeChanPtr2 = 0;
   } else {
     voice.activeSamplePtr = patch.samplePtr;
     voice.activeSampleLength = patch.sampleLength;
@@ -2262,6 +2407,18 @@ function applyActiveSample(voice, inst, patch) {
     voice.activeVibratoRate = patch.vibratoRate;
     voice.activeVibratoWaveform =
       patch.vibratoWaveform === 0xff ? inst.vibratoWaveform : patch.vibratoWaveform;
+    // Ixmp 's' block (item 90). Only the stereo case is rendered; a patch with
+    // more channels (quad / ambisonic — TODO #998) plays its first channel as
+    // mono rather than guessing a downmix.
+    if (patchIsStereo(patch)) {
+      voice.activeChanCount = 2;
+      voice.activeChanMode = patch.chanMode;
+      voice.activeChanPtr2 = patch.chanPtrs[0];
+    } else {
+      voice.activeChanCount = 1;
+      voice.activeChanMode = 0;
+      voice.activeChanPtr2 = 0;
+    }
   }
   resolveActiveEnvelopes(voice, inst, patch);
 }
@@ -2486,6 +2643,7 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.autoVibPhase = 0;
   voice.autoVibTicksSinceTrigger = 0;
   voice.nesDpcmCounter = 63;
+  voice.right.reset(); // stereo channel 2's filter/crusher/DPCM history
   // Funk repeat: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
   voice.funkWritePos = 0;
   // Random vol/pan swing biases — seeded once per trigger.
@@ -2704,6 +2862,12 @@ function ghostVoice(src, channel) {
   v.activeVibratoDepth = src.activeVibratoDepth;
   v.activeVibratoRate = src.activeVibratoRate;
   v.activeVibratoWaveform = src.activeVibratoWaveform;
+  // A ghost of a stereo note keeps playing BOTH channels, with its own copy of
+  // the second channel's filter/crusher history (same rule as the voice's own).
+  v.activeChanCount = src.activeChanCount;
+  v.activeChanMode = src.activeChanMode;
+  v.activeChanPtr2 = src.activeChanPtr2;
+  v.right.copyFrom(src.right);
   // Active-envelope view follows too — ghosts keep their patch's envelopes.
   v.activeVolEnv = src.activeVolEnv;
   v.activeVolEnvLoop = src.activeVolEnvLoop;
@@ -2832,12 +2996,14 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.bitcrusherDepth = 0;
         voice.bitcrusherSkip = 0;
         voice.bitcrusherCounter = 0;
+        voice.right.bitcrusherCounter = 0;
       } else if (y === 0 && z === 0) {
         // x000 — clip mode only.
       } else {
         voice.bitcrusherDepth = y;
         voice.bitcrusherSkip = z;
         voice.bitcrusherCounter = 0;
+        voice.right.bitcrusherCounter = 0;
       }
       break;
     }
@@ -3803,6 +3969,7 @@ function applyTrackerTick(eng, ts, playhead) {
         voice.autoVibPhase = 0;
         voice.autoVibTicksSinceTrigger = 0;
         voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
+        voice.right.reset();
         voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod);
         voice.rowVolume = voice.noteVolume;
       }
@@ -3974,7 +4141,45 @@ function applyTrackerTick(eng, ts, playhead) {
 
 
 
+
 const fround = Math.fround;
+
+/** Scratch pair for fetchTrackerSampleStereo — one voice is mixed at a time. */
+const stereoPair = [0.0, 0.0];
+
+/**
+ * One voice's contribution as a [left, right] PAIR, before pan and gain.
+ * Mono voices put the same sample on both sides, which is what makes the
+ * stereo path a strict generalisation: a stereo sample whose channels are
+ * identical mixes bit-for-bit like the mono sample it was made from.
+ *
+ * Channel mode 0 (discrete) is the sample's own L,R. Mode 1 (matrix) holds
+ * M,S and decodes L = M+S, R = M−S — the inverse of the M=(L+R)/2,
+ * S=(L−R)/2 encoding. The decode happens BEFORE the filter and the voice FX
+ * so those act on speaker feeds (the filter is linear so its result is the
+ * same either way; the bitcrusher/overdrive are not, and crushing a speaker
+ * feed is the sane reading). Surround/spatial modes get their own rules with
+ * TODO #998 — anything not stereo-shaped stays mono here.
+ */
+function renderVoicePair(eng, voice, inst, interpMode, out) {
+  if (voice.activeChanCount !== 2) {
+    const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
+      fetchTrackerSample(eng, voice, inst, interpMode)));
+    out[0] = s;
+    out[1] = s;
+    return out;
+  }
+  fetchTrackerSampleStereo(eng, voice, inst, interpMode, out);
+  let c0 = out[0], c1 = out[1];
+  if (voice.activeChanMode === CHAN_MODE_MATRIX) {
+    const m = c0, s = c1;
+    c0 = m + s;
+    c1 = m - s;
+  }
+  out[0] = applyTaudVoiceFx(voice, applyVoiceFilter(voice, c0));
+  out[1] = applyTaudVoiceFx(voice, applyVoiceFilter(voice, c1, voice.right), voice.right);
+  return out;
+}
 
 /** urand: (xorshift32() & 0xFFFFFF) / 16777216 — exact in Float32. */
 function urand(eng) {
@@ -4079,8 +4284,11 @@ function generateTrackerAudio(eng, playhead, out) {
         continue;
       }
       const voiceInst = eng.instruments[voice.instrumentId];
-      const s = applyTaudVoiceFx(voice,
-        applyVoiceFilter(voice, fetchTrackerSample(eng, voice, voiceInst, ts.interpolationMode)));
+      renderVoicePair(eng, voice, voiceInst, ts.interpolationMode, stereoPair);
+      const sL = stereoPair[0];
+      const sR = stereoPair[1];
+      // Soundscope shows the mono sum — a stereo voice is still one voice.
+      const sScope = voice.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
       const instGv = voiceInst.instGlobalVolume / 255.0;
       const swingScale = 1.0 + voice.randomVolBias / 255.0;
       // Per-sample envelope smoothing.
@@ -4114,10 +4322,10 @@ function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
-      voice.scopeBuffer[voice.scopeWritePos] = s * perVoiceGain * rampGain;
+      voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
-      mixL += s * vol * lGain * rampGain;
-      mixR += s * vol * rGain * rampGain;
+      mixL += sL * vol * lGain * rampGain;
+      mixR += sR * vol * rGain * rampGain;
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -4128,8 +4336,9 @@ function generateTrackerAudio(eng, playhead, out) {
       const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
       if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
-      const s = applyTaudVoiceFx(bg,
-        applyVoiceFilter(bg, fetchTrackerSample(eng, bg, bgInst, ts.interpolationMode)));
+      renderVoicePair(eng, bg, bgInst, ts.interpolationMode, stereoPair);
+      const sL = stereoPair[0];
+      const sR = stereoPair[1];
       const instGv = bgInst.instGlobalVolume / 255.0;
       const swingScale = 1.0 + bg.randomVolBias / 255.0;
       bg.envVolMix += bg.envVolStep;
@@ -4159,8 +4368,8 @@ function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
-      mixL += s * vol * lGain * rampGain;
-      mixR += s * vol * rGain * rampGain;
+      mixL += sL * vol * lGain * rampGain;
+      mixR += sR * vol * rGain * rampGain;
     }
 
     // Amiga interpolation modes: post-mix LPF chain.
@@ -4509,7 +4718,10 @@ class TaudEngine {
    * JS-only (no Kotlin counterpart): a scratch instrument in AUDITION_SLOT
    * carries the sample and its clean default envelope so the note simply
    * sounds at full volume until jamStop / sample end.
-   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune? }.
+   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune?,
+   * chanPtr2?, chanMode? } — chanPtr2 auditions a STEREO pair (item 90) by
+   * hanging a synthetic full-range 's' patch off the scratch instrument, since
+   * only an Ixmp patch can carry a second channel.
    */
   jamSample(ph, vi, note, spec) {
     const p = this.playheads[ph];
@@ -4525,7 +4737,17 @@ class TaudEngine {
     inst.sampleLoopEnd = spec.loopEnd | 0;
     inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
     inst.sampleDetune = (spec.detune | 0) & 0xffff;
-    inst.extraPatches = null;
+    inst.extraPatches = spec.chanPtr2
+      ? [makeInstPatch({
+          pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+          samplePtr: inst.samplePtr, sampleLength: inst.sampleLength,
+          playStart: inst.samplePlayStart, loopStart: inst.sampleLoopStart,
+          loopEnd: inst.sampleLoopEnd, samplingRate: inst.samplingRate,
+          sampleDetune: inst.sampleDetuneSigned, loopMode: inst.loopMode,
+          hasChanBlock: true, chanCount: 2, chanMode: spec.chanMode | 0,
+          chanPtrs: [spec.chanPtr2 >>> 0],
+        })]
+      : null;
     triggerNote(this, ts, ts.voices[v], note, AUDITION_SLOT, -1);
     p.jamActive = true;
   }

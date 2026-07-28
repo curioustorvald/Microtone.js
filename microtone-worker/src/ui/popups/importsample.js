@@ -30,7 +30,9 @@ export async function importSampleAsInstrument(store) {
 
   const { openSampleLab } = await import("./samplelab.js");
   return openSampleLab(store, {
-    data: decoded.data,
+    // A stereo file opens as a stereo take (item 90); the Lab's channel button
+    // folds it to mono when the user would rather spend half the pool bytes.
+    data: decoded.channels,
     rate: decoded.rate,
     name: file.name.replace(/\.[^.]+$/, ""),
     sourceLabel: file.name,

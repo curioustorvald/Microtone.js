@@ -8,7 +8,7 @@ file is Microtone.js code (not vendored); it only ORCHESTRATES the canonical
 functions so there is still exactly one SF2→Taud mapping implementation.
 
     sf2bank.py list  <in.sf2> <out.json>
-    sf2bank.py build <in.sf2> <selection.json> <out.tsii> [--bpm N]
+    sf2bank.py build <in.sf2> <selection.json> <out.tsii> [--bpm N] [--stereo]
 
 list  → out.json: [{"bank": B, "program": P, "name": "..."}] sorted.
 build → selection.json holds [[bank, program], ...]; emits a .tsii whose
@@ -19,8 +19,13 @@ build → selection.json holds [[bank, program], ...]; emits a .tsii whose
 Unlike a MIDI conversion there is no trigger histogram to trim patches with,
 so `build` fabricates a UNIFORM full-range histogram (every MIDI key at every
 vol6 level, count 1): every zone is kept and weighting-sensitive choices
-(canonical zone, mean-pitch fallback) stay neutral. --bpm should be the
-DESTINATION song's BPM — fadeout steps encode SF2 release seconds per
+(canonical zone, mean-pitch fallback) stay neutral.
+
+--stereo (item 90.1) keeps an instrument's SF2 stereo sample pairs as genuine
+stereo samples — two pool spans joined by an Ixmp 's' patch — instead of mixing
+them down to mono; it costs twice the pool bytes per stereo instrument.
+
+--bpm should be the DESTINATION song's BPM — fadeout steps encode SF2 release seconds per
 song-tick, so the bank matches that tempo exactly (midi2taud batch-mode
 semantics).
 """
@@ -70,9 +75,11 @@ def cmd_build(args):
         no_project_data=False,   # keep INam/SNam/Ixmp — the merge carries names
         fadeout=None,            # derive per-instrument from SF2 release @ bpm
         force_synth_loop=True,   # far-loop rescue (upstream midi2taud default)
+        stereo_samples=args.stereo,
     )
     registry = {}
-    presets = build_presets(sf, slot_keys, triggers, None, registry, args.max_layers)
+    presets = build_presets(sf, slot_keys, triggers, None, registry, args.max_layers,
+                            False, args.stereo)
     layer_insts, meta_records, slot_name, _note_slot = allocate_slots(presets, slot_keys)
     if not layer_insts:
         sys.exit("error: no usable zones in the selected presets")
@@ -99,6 +106,8 @@ def main():
     bp.add_argument("output")
     bp.add_argument("--bpm", type=int, default=125)
     bp.add_argument("--max-layers", type=int, default=4, dest="max_layers")
+    bp.add_argument("--stereo", action="store_true",
+                    help="Keep stereo sample pairs as stereo samples (item 90.1)")
     bp.set_defaults(fn=cmd_build)
     args = ap.parse_args()
     args.fn(args)

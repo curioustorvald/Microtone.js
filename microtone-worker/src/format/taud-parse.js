@@ -82,7 +82,7 @@ export function parseIxmpSection(payload) {
     let blobLen = 0, scan = q, ok = true;
     for (let i = 0; i < patchCnt; i++) {
       if (scan + 31 > qEnd) { ok = false; break; }
-      const len = ixmpPatchLen(payload[scan]);
+      const len = ixmpPatchLen(payload, scan);
       if (scan + len > qEnd) { ok = false; break; }
       scan += len;
       blobLen += len;

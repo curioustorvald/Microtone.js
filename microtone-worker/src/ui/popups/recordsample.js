@@ -30,9 +30,9 @@ export async function recordSample(store) {
 
   const take = await runRecorderModal(stream);
   stream.getTracks().forEach((tr) => tr.stop());
-  if (!take || take.data.length === 0) return null;
+  if (!take || take.channels[0].length === 0) return null;
   return openSampleLab(store, {
-    data: take.data,
+    data: take.channels,
     rate: take.rate,
     name: t("rec.defaultName"),
     sourceLabel: t("rec.sourceLabel", { rate: take.rate }),
@@ -41,7 +41,8 @@ export async function recordSample(store) {
 }
 
 /** The capture modal: level meter, Record/Stop, Use-take. Resolves
- *  {data: Float32Array, rate} | null. */
+ *  {channels: Float32Array[], rate} | null — one buffer per captured channel
+ *  (a stereo input records as a stereo take, item 90). */
 function runRecorderModal(stream) {
   return new Promise(async (resolve) => {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -50,20 +51,26 @@ function runRecorderModal(stream) {
     const src = ctx.createMediaStreamSource(stream);
 
     let recording = false;
-    let chunks = [];
+    let chunks = [];      // [[chan0, chan1?], …] per captured quantum
     let total = 0;
+    let nChan = 1;
     let lastPeak = 0;
     const maxFrames = MAX_REC_SECONDS * ctx.sampleRate;
-    const onChunk = (mono) => {
+    // `quantum` is an array of per-channel Float32Arrays; the meter shows the
+    // loudest channel.
+    const onChunk = (quantum) => {
       let peak = 0;
-      for (let i = 0; i < mono.length; i++) {
-        const v = Math.abs(mono[i]);
-        if (v > peak) peak = v;
+      for (const ch of quantum) {
+        for (let i = 0; i < ch.length; i++) {
+          const v = Math.abs(ch[i]);
+          if (v > peak) peak = v;
+        }
       }
       lastPeak = peak;
       if (!recording) return;
-      chunks.push(mono);
-      total += mono.length;
+      nChan = Math.max(nChan, quantum.length);
+      chunks.push(quantum);
+      total += quantum[0].length;
       if (total >= maxFrames) setRecording(false);
     };
 
@@ -80,15 +87,10 @@ function runRecorderModal(stream) {
     } catch {
       const sp = ctx.createScriptProcessor(4096, 2, 1);
       sp.onaudioprocess = (e) => {
-        const nCh = e.inputBuffer.numberOfChannels;
-        const n = e.inputBuffer.length;
-        const mono = new Float32Array(n);
-        for (let c = 0; c < nCh; c++) {
-          const d = e.inputBuffer.getChannelData(c);
-          for (let i = 0; i < n; i++) mono[i] += d[i];
-        }
-        if (nCh > 1) for (let i = 0; i < n; i++) mono[i] /= nCh;
-        onChunk(mono);
+        const nCh = Math.min(2, e.inputBuffer.numberOfChannels);
+        const q = [];
+        for (let c = 0; c < nCh; c++) q.push(Float32Array.from(e.inputBuffer.getChannelData(c)));
+        onChunk(q);
       };
       capture = sp;
     }
@@ -151,10 +153,15 @@ function runRecorderModal(stream) {
       resolve(result);
     };
     useBtn.addEventListener("click", () => {
-      const data = new Float32Array(total);
+      // Concatenate per channel; a quantum that arrived with fewer channels
+      // than the take ended up having repeats its first channel.
+      const channels = Array.from({ length: nChan }, () => new Float32Array(total));
       let o = 0;
-      for (const c of chunks) { data.set(c, o); o += c.length; }
-      finish({ data, rate: ctx.sampleRate });
+      for (const q of chunks) {
+        for (let c = 0; c < nChan; c++) channels[c].set(q[c] ?? q[0], o);
+        o += q[0].length;
+      }
+      finish({ channels, rate: ctx.sampleRate });
     });
     dlg.querySelector(".rec-cancel").addEventListener("click", () => finish(null));
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(null); });

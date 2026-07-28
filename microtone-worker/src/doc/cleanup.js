@@ -12,6 +12,7 @@
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { writePatchesBlob, buildMetaRecord } from "../engine/inst.js";
+import { sampleSpans } from "./document.js";
 import { emptyPatternBytes } from "./patterntools.js";
 
 const PAT_MASK = 0x7fff;
@@ -170,19 +171,31 @@ export function usedInstrumentSlots(song, allUsedSlots, instAt) {
 }
 
 /** Sample spans referenced by `slots` (deduped by ptr:len, ptr-sorted).
- *  instAt(slot) → decoded TaudInst. Returns [{ptr, len, key}]. */
+ *  instAt(slot) → decoded TaudInst. Returns [{ptr, len, key, chan}], where
+ *  chan > 0 marks the EXTRA channels of a stereo/multi-channel patch (item 90):
+ *  those bytes are live and must survive the pool sweep, but they are not
+ *  separate samples — only chan 0 spans carry an SNam name. */
 function censusForSlots(instAt, slots) {
   const byKey = new Map();
-  const add = (ptr, len) => {
+  const add = (ptr, len, chan = 0) => {
     if (len <= 0) return;
     const key = ptr + ":" + len;
-    if (!byKey.has(key)) byKey.set(key, { ptr, len, key });
+    if (!byKey.has(key)) byKey.set(key, { ptr, len, key, chan });
   };
   for (const s of slots) {
     const inst = instAt(s);
     if (!inst) continue;
     if (!inst.isMeta) add(inst.samplePtr, inst.sampleLength);
-    if (inst.extraPatches) for (const p of inst.extraPatches) add(p.samplePtr, p.sampleLength);
+    if (inst.extraPatches) {
+      for (const p of inst.extraPatches) {
+        add(p.samplePtr, p.sampleLength);
+        if (p.hasChanBlock) {
+          for (let k = 0; k < Math.min(p.chanPtrs.length, p.chanCount - 1); k++) {
+            add(p.chanPtrs[k], p.sampleLength, k + 1);
+          }
+        }
+      }
+    }
   }
   return [...byKey.values()].sort((a, b) => a.ptr - b.ptr);
 }
@@ -243,9 +256,10 @@ export function planBankCleanup(doc) {
   while (inamArr.length && inamArr[inamArr.length - 1] === "") inamArr.pop();
 
   // SNam: realign to the surviving census (names keyed by ptr:len identity).
+  // Extra stereo channels are live pool spans but not named samples.
   const oldNameByKey = new Map();
   for (const e of doc.sampleList()) oldNameByKey.set(e.ptr + ":" + e.len, e.name);
-  const snamArr = keep.map((sp) => oldNameByKey.get(sp.key) ?? "");
+  const snamArr = keep.filter((sp) => sp.chan === 0).map((sp) => oldNameByKey.get(sp.key) ?? "");
   while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
 
   // Ixmp: keep the patches of surviving slots only.
@@ -462,12 +476,13 @@ export function metainstrumentParents(doc, slot) {
 /** Sample spans (ptr:len) whose EVERY census user is in `slots` — the bytes a
  *  delete of that whole set can free without stealing a survivor's sample. Uses
  *  the deduped census (base insts + Ixmp patches); a shared span (a user outside
- *  the set) is never listed. Returns [{ptr, len}]. */
+ *  the set) is never listed. A stereo sample frees BOTH of its channels.
+ *  Returns [{ptr, len}]. */
 export function uniqueSampleSpansForSet(doc, slots) {
   const set = slots instanceof Set ? slots : new Set(slots);
   return doc.sampleList()
     .filter((e) => e.users.every((u) => set.has(u)))
-    .map((e) => ({ ptr: e.ptr, len: e.len }));
+    .flatMap((e) => sampleSpans(e).map((sp) => ({ ptr: sp.ptr, len: sp.len })));
 }
 
 /** Sample spans only `slot` uses (the single-slot case of the above). */

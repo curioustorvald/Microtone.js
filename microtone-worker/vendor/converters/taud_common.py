@@ -813,7 +813,12 @@ IXMP_VER_V = 0x02            # has volume envelope block
 IXMP_VER_P = 0x04            # has panning envelope block
 IXMP_VER_F = 0x08            # has filter envelope block
 IXMP_VER_PITCH = 0x10        # has pitch envelope block ('P')
+IXMP_VER_S = 0x20            # has stereo/surround channel block ('s')
 IXMP_VER_X = 0x80            # has extra-base-info block
+
+# 's' block channel modes (low nibble of the count/mode byte).
+IXMP_CHAN_DISCRETE = 0       # XY stereo, 4-track quad — one channel per speaker feed
+IXMP_CHAN_MATRIX   = 1       # M/S stereo, ambisonic B-format — decoded before panning
 
 
 # "Perceptually Significant Octet to Decibel Table" → linear gain (octet → amplitude).
@@ -907,6 +912,11 @@ def encode_ixmp_patch(p: dict) -> bytes:
         pan_env    : env-block dict → 'p' block
         filter_env : env-block dict → 'f' block
         pitch_env  : env-block dict → 'P' block
+        channels   : dict {mode (0 discrete / 1 matrix), flags (u24, reserved),
+                           ptrs [u32, …]} → 's' block, emitted LAST. `ptrs` are the
+                     EXTRA channels' sample pointers (channel 1 is sample_ptr), so a
+                     stereo sample passes one pointer. Every channel shares this
+                     record's length / play-start / loop / rate.
     """
     pitch_start = max(0, min(0xFFFF, int(p['pitch_start'])))
     pitch_end   = max(0, min(0xFFFF, int(p['pitch_end'])))
@@ -925,6 +935,9 @@ def encode_ixmp_patch(p: dict) -> bytes:
     pan_e  = p.get('pan_env')
     filt_e = p.get('filter_env')
     pit_e  = p.get('pitch_env')
+    chans  = p.get('channels')
+    if chans is not None and not chans.get('ptrs'):
+        chans = None                             # no extra channels ⇒ plain mono patch
 
     ver = IXMP_VER_I
     if extra  is not None: ver |= IXMP_VER_X
@@ -932,6 +945,7 @@ def encode_ixmp_patch(p: dict) -> bytes:
     if pan_e  is not None: ver |= IXMP_VER_P
     if filt_e is not None: ver |= IXMP_VER_F
     if pit_e  is not None: ver |= IXMP_VER_PITCH
+    if chans  is not None: ver |= IXMP_VER_S
 
     common = struct.pack(
         '<BHHBBIHHHHHhBBBBBBBB',
@@ -967,6 +981,13 @@ def encode_ixmp_patch(p: dict) -> bytes:
     if pan_e  is not None: out += _encode_env_block(pan_e)
     if filt_e is not None: out += _encode_env_block(filt_e)
     if pit_e  is not None: out += _encode_env_block(pit_e)
+    if chans is not None:                        # 's' block, always LAST
+        ptrs = list(chans['ptrs'])[:15]          # count-1 fits a nibble
+        out.append(((len(ptrs) & 0x0F) << 4) | (int(chans.get('mode', IXMP_CHAN_DISCRETE)) & 0x0F))
+        flags = int(chans.get('flags', 0)) & 0xFFFFFF
+        out += bytes([flags & 0xFF, (flags >> 8) & 0xFF, (flags >> 16) & 0xFF])
+        for ptr in ptrs:
+            out += struct.pack('<I', int(ptr) & 0xFFFFFFFF)
     return bytes(out)
 
 
@@ -1079,6 +1100,38 @@ def build_project_data(*, project_name: str = '',
 
 
 # ── Sample normalisation ─────────────────────────────────────────────────────
+
+def normalise_sample_channels(raw: bytes, signed: bool, is_16bit: bool,
+                              is_stereo: bool, name: str) -> list:
+    """Return unsigned 8-bit sample bytes PER CHANNEL — [mono] or [left, right].
+
+    Same depth conversion as [normalise_sample], minus the downmix: a stereo
+    source keeps its two channels, which the Taud side stores as two pool spans
+    tied together by an Ixmp 's' patch (terranmon.txt "Patch definition flag
+    's'"). The on-disk layout is split (non-interleaved): the whole left channel
+    block followed by the whole right one, matching IT/S3M/XM (Schism's SF_SS).
+    """
+    bps      = 2 if is_16bit else 1
+    chans    = 2 if is_stereo else 1
+    n_frames = len(raw) // (bps * chans)
+    chan_bytes = n_frames * bps
+    out = []
+    for c in range(chans):
+        base = c * chan_bytes
+        buf = bytearray(n_frames)
+        for i in range(n_frames):
+            if is_16bit:
+                s16 = struct.unpack_from('<h', raw, base + i * 2)[0]
+                buf[i] = ((s16 >> 8) + 128) & 0xFF
+            else:
+                b = raw[base + i]
+                buf[i] = ((b ^ 0x80) & 0xFF) if signed else b
+        out.append(bytes(buf))
+    if is_16bit or is_stereo:
+        vprint(f"  info: '{name}' converted to unsigned 8-bit "
+               f"{'stereo' if chans == 2 else 'mono'} ({n_frames} frames)")
+    return out
+
 
 def normalise_sample(raw: bytes, signed: bool, is_16bit: bool,
                      is_stereo: bool, name: str) -> bytes:

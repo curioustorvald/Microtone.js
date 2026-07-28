@@ -84,3 +84,35 @@ export const SAMPLE_DSP = [
   ["Invert", invert],
   ["Remove DC", removeDC],
 ];
+
+/** Peak-normalise a stereo pair by ONE shared factor, so the stereo image
+ *  survives (normalising the channels independently would re-balance them).
+ *  `spans` are the channels' byte views; returns one new Uint8Array each. */
+export function normaliseLinked(spans) {
+  let maxDev = 0;
+  for (const s of spans) {
+    for (let i = 0; i < s.length; i++) {
+      const d = Math.abs(s[i] - 128);
+      if (d > maxDev) maxDev = d;
+    }
+  }
+  if (maxDev === 0) return spans.map((s) => Uint8Array.from(s));
+  const scale = 127 / maxDev;
+  return spans.map((s) => {
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
+      out[i] = Math.max(0, Math.min(255, Math.round(128 + (s[i] - 128) * scale)));
+    }
+    return out;
+  });
+}
+
+/**
+ * Apply one length-preserving DSP op to every channel of a sample (item 90).
+ * Normalise is linked (shared peak); everything else is genuinely per channel —
+ * a fade, a reverse or a polarity flip means the same thing on each side, and
+ * DC is a per-channel property of the recording.
+ */
+export function applyChannels(fn, spans) {
+  return fn === normalise ? normaliseLinked(spans) : spans.map((s) => fn(s));
+}

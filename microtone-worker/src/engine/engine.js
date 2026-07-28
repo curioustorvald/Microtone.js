@@ -15,7 +15,7 @@ import {
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
 } from "./constants.js";
 import { tuningRatioOf } from "./tables.js";
-import { TaudInst, parsePatchesBlob, writePatchesBlob } from "./inst.js";
+import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { generateTrackerAudio } from "./mixer.js";
@@ -299,7 +299,10 @@ export class TaudEngine {
    * JS-only (no Kotlin counterpart): a scratch instrument in AUDITION_SLOT
    * carries the sample and its clean default envelope so the note simply
    * sounds at full volume until jamStop / sample end.
-   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune? }.
+   * `spec`: { ptr, len, rate, playStart?, loopStart, loopEnd, loopMode, detune?,
+   * chanPtr2?, chanMode? } — chanPtr2 auditions a STEREO pair (item 90) by
+   * hanging a synthetic full-range 's' patch off the scratch instrument, since
+   * only an Ixmp patch can carry a second channel.
    */
   jamSample(ph, vi, note, spec) {
     const p = this.playheads[ph];
@@ -315,7 +318,17 @@ export class TaudEngine {
     inst.sampleLoopEnd = spec.loopEnd | 0;
     inst.loopMode = (spec.loopMode | 0) & 0x07; // loop mode + sustain, drop percussion bit
     inst.sampleDetune = (spec.detune | 0) & 0xffff;
-    inst.extraPatches = null;
+    inst.extraPatches = spec.chanPtr2
+      ? [makeInstPatch({
+          pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+          samplePtr: inst.samplePtr, sampleLength: inst.sampleLength,
+          playStart: inst.samplePlayStart, loopStart: inst.sampleLoopStart,
+          loopEnd: inst.sampleLoopEnd, samplingRate: inst.samplingRate,
+          sampleDetune: inst.sampleDetuneSigned, loopMode: inst.loopMode,
+          hasChanBlock: true, chanCount: 2, chanMode: spec.chanMode | 0,
+          chanPtrs: [spec.chanPtr2 >>> 0],
+        })]
+      : null;
     triggerNote(this, ts, ts.voices[v], note, AUDITION_SLOT, -1);
     p.jamActive = true;
   }

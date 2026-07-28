@@ -7,6 +7,7 @@
 
 import { MAX_BG_VOICES } from "./constants.js";
 import { Voice } from "./voice.js";
+import { patchIsStereo } from "./inst.js";
 import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { computePlaybackRate } from "./sampler.js";
@@ -32,6 +33,10 @@ export function applyActiveSample(voice, inst, patch) {
     voice.activeVibratoDepth = inst.vibratoDepth;
     voice.activeVibratoRate = inst.vibratoRate;
     voice.activeVibratoWaveform = inst.vibratoWaveform;
+    // A base instrument record has no channel block: always mono.
+    voice.activeChanCount = 1;
+    voice.activeChanMode = 0;
+    voice.activeChanPtr2 = 0;
   } else {
     voice.activeSamplePtr = patch.samplePtr;
     voice.activeSampleLength = patch.sampleLength;
@@ -47,6 +52,18 @@ export function applyActiveSample(voice, inst, patch) {
     voice.activeVibratoRate = patch.vibratoRate;
     voice.activeVibratoWaveform =
       patch.vibratoWaveform === 0xff ? inst.vibratoWaveform : patch.vibratoWaveform;
+    // Ixmp 's' block (item 90). Only the stereo case is rendered; a patch with
+    // more channels (quad / ambisonic — TODO #998) plays its first channel as
+    // mono rather than guessing a downmix.
+    if (patchIsStereo(patch)) {
+      voice.activeChanCount = 2;
+      voice.activeChanMode = patch.chanMode;
+      voice.activeChanPtr2 = patch.chanPtrs[0];
+    } else {
+      voice.activeChanCount = 1;
+      voice.activeChanMode = 0;
+      voice.activeChanPtr2 = 0;
+    }
   }
   resolveActiveEnvelopes(voice, inst, patch);
 }
@@ -271,6 +288,7 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.autoVibPhase = 0;
   voice.autoVibTicksSinceTrigger = 0;
   voice.nesDpcmCounter = 63;
+  voice.right.reset(); // stereo channel 2's filter/crusher/DPCM history
   // Funk repeat: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
   voice.funkWritePos = 0;
   // Random vol/pan swing biases — seeded once per trigger.
@@ -489,6 +507,12 @@ export function ghostVoice(src, channel) {
   v.activeVibratoDepth = src.activeVibratoDepth;
   v.activeVibratoRate = src.activeVibratoRate;
   v.activeVibratoWaveform = src.activeVibratoWaveform;
+  // A ghost of a stereo note keeps playing BOTH channels, with its own copy of
+  // the second channel's filter/crusher history (same rule as the voice's own).
+  v.activeChanCount = src.activeChanCount;
+  v.activeChanMode = src.activeChanMode;
+  v.activeChanPtr2 = src.activeChanPtr2;
+  v.right.copyFrom(src.right);
   // Active-envelope view follows too — ghosts keep their patch's envelopes.
   v.activeVolEnv = src.activeVolEnv;
   v.activeVolEnvLoop = src.activeVolEnvLoop;

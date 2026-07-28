@@ -346,6 +346,35 @@ length can never change in place — every other pool pointer would move.)
 **Chord…** is the same trip with the [chord maker](#the-chord-maker) already
 open: mix pitch-shifted copies of the sample into one chorded waveform.
 
+### Stereo samples
+
+A sample can be **stereo**: two channels that play as one voice. The list marks
+those rows `ST`, the info line says *stereo*, and the waveform shows the two
+channels stacked (L above R). A stereo sample is still ONE sample — one name,
+one row, one set of loop points and one rate — it simply occupies two spans of
+the sample pool, so it costs twice the bytes.
+
+Only an instrument *patch* can carry a second channel, so an instrument that
+plays a stereo sample always has at least one Ixmp patch (see
+[Advanced Edit](#advanced-edit-ixmp-patches)); the instrument's own record
+points at the left channel, which is what a mono player would fall back to.
+
+Panning treats a stereo sample as a mixer balance: at centre you hear both
+channels in their own speakers, and panning fully left silences the right
+channel. A stereo sample whose channels are identical sounds exactly like the
+mono sample it came from.
+
+Editing follows the pair. **Edit…** shows both channels as full-height lanes and
+applies each tool to both in one undo step (Normalise shares one factor across
+them, so the stereo image is not re-balanced). **Paint…** also opens one lane
+per channel: a stroke edits the lane it starts in, so you can draw the channels
+apart — the shape buttons (Sine, Saw, …) fill both lanes, since a seed is a
+whole-waveform shape.
+
+Stereo samples reach a project from a stereo audio file or recording (through
+the Sample Lab), from an `.it` module whose samples are stereo, or from a
+SoundFont import with **Import stereo instruments in stereo** ticked.
+
 ## The Sample Lab
 
 The Sample Lab is the import-time sample editor — a tiny Audacity that opens
@@ -362,6 +391,7 @@ one place where cropping and resampling are still reversible.
   - **Merging chunks** — removing a split flag joins the two chunks around it, so clicking a flag merges that pair. To merge several consecutive chunks at once, drag a selection across them and press **Merge** — every split inside the selection is removed and the chunks collapse into one.
   - **Import N chunks** lands every kept chunk as its own sample + instrument, named `name 1…N`, in a single undo step.
 - **Chord…** opens the [chord maker](#the-chord-maker) on the take.
+- **Mono / Stereo** — a stereo file or recording opens as a stereo take: two lanes, and every tool applies to both channels (Normalise uses one shared factor, so the image survives; transient detection listens to the mono fold). The **→ Mono** button folds the take down to one channel, halving what it will cost in the pool; **→ Stereo** splits a mono take back into a pair. Both are ordinary Lab edits — Ctrl+Z undoes them.
 - **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the engine's output rate) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
 
 ### The chord maker
@@ -462,6 +492,7 @@ An instrument may carry a list of **Ixmp patches**: per-zone sample bindings ove
 - **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
 - **Zone map** — the patches as rectangles over pitch (x) × velocity (y), with live blobs at each sounding note's pitch/velocity and lit rectangles for zones currently playing. Click a rectangle to select its patch.
 - **Detail form** — the selected patch's rectangle, sample binding (pick any pooled sample — rate and loop follow), play/loop points, rate, detune, loop mode/sustain; pan / note-volume / vibrato-waveform overrides (unchecked = inherit from the base instrument); and the *extra block*: per-patch fadeout, filter cutoff/resonance (IT or SF2 units) and SF2 initial attenuation.
+  - **Stereo** — makes the patch play a [stereo pair](#stereo-samples): **Ch 2** picks the pooled sample that supplies the second channel (only same-length samples can pair up, since one set of loop points serves both), and **Mode** chooses `L/R` (the channels *are* left and right) or `M/S` (mid/side, decoded to L = M+S, R = M−S at mix time). Binding the patch to a stereo sample sets all of this for you.
 - **Vol / Pan / Filter / Pitch** sub-tabs — per-patch envelope overrides. Ticking *Patch overrides the … envelope* copies the base instrument's envelope as a starting point; the graph then edits exactly like the base envelope tabs (drag nodes, add/remove, sustain/loop ranges, log timescale). **Wave** shows the bound sample with live play positions.
 
 Jamming on the piano keys while the panel is open auditions the instrument live; the map, list and envelope graphs all follow the sounding voices. **‹ Back** returns to the normal tabs.
@@ -573,6 +604,7 @@ the **bundled GeneralUser-GS** bank or pick your own `.sf2`. The result loads
 as an unsaved project. Two options shape the conversion:
 
 - **Rows/beat** — pins the pattern grid. *Auto* picks it from the time signatures and note onsets.
+- **Import stereo instruments in stereo** (off by default) — SoundFont instruments built from a stereo sample pair normally arrive mixed down to mono. Tick this to keep both channels as a [stereo sample](#stereo-samples); it doubles what each such instrument costs in the 8 MB pool, so a big bank may end up resampled harder to fit. The same option appears on the **Import MIDI…** dialog and on the SoundFont preset picker (Instruments → Import…).
 - **Trim unused patches** (off by default) — each SoundFont preset is imported with its **whole** key/velocity zone map, so an imported instrument stays playable across the entire keyboard, not just at the notes this particular song happens to use. The extra zones are inert: the song sounds exactly the same either way. Tick the box to keep only the zones the song triggers, which makes the bank considerably smaller. You can always trim later with **Project → Housekeeping → Cleanup instrument patches**.
 
   One caveat worth knowing: the converter's sample pool is capped at 8 MB, and
@@ -585,7 +617,9 @@ as an unsaved project. Two options shape the conversion:
 ### Tracker modules
 
 `.mod`, `.s3m`, `.xm`, `.it` and `.mon` files convert directly — just open or
-drop them.
+drop them. An `.it` whose samples are stereo keeps them as
+[stereo samples](#stereo-samples) — the other formats have no stereo samples to
+begin with.
 
 ### Banks and pattern files
 

@@ -55,6 +55,7 @@ function jobSpec(m) {
       argv: buildArgv({
         isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
         rpb: m.rpb ?? null, trimPatches: m.trimPatches === true,
+        stereoSamples: m.stereoSamples === true,
       }),
       inputs,
       output: "/out.taud",
@@ -75,7 +76,8 @@ function jobSpec(m) {
   return {
     label: `building bank (${m.selection.length} presets)…`,
     script: SF2BANK_SOURCE,
-    argv: ["build", "/sf.sf2", "/sel.json", "/out.tsii", "--bpm", String(m.bpm ?? 125)],
+    argv: ["build", "/sf.sf2", "/sel.json", "/out.tsii", "--bpm", String(m.bpm ?? 125),
+           ...(m.stereo ? ["--stereo"] : [])],
     inputs,
     output: "/out.tsii",
   };

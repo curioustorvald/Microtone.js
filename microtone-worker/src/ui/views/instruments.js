@@ -1236,7 +1236,10 @@ export class InstrumentsView {
       ctx.fillStyle = C.fg;
       ctx.font = "10px monospace";
       if (pw > 30) {
-        ctx.fillText(`${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)}`, x + 2, y + 11);
+        // A stereo zone (Ixmp 's') is tagged, since two zones that look alike
+        // on the map can differ by costing twice the pool bytes.
+        const tag = p.hasChanBlock && p.chanCount > 1 ? ` ${t("smp.stereoTag")}` : "";
+        ctx.fillText(`${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)}${tag}`, x + 2, y + 11);
       }
     });
   }

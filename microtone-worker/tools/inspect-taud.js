@@ -5,7 +5,7 @@
 
 import { readFile } from "node:fs/promises";
 import { parseTaud, cueInstructionWords } from "../src/format/taud-parse.js";
-import { ixmpPatchLen, CUE_EMPTY } from "../src/format/taud-const.js";
+import { ixmpPatchLen, ixmpChanCount, CUE_EMPTY } from "../src/format/taud-const.js";
 
 const args = process.argv.slice(2);
 const path = args.find((a) => !a.startsWith("--"));
@@ -77,8 +77,9 @@ if (doc.ixmp.length > 0) {
         if (ver & 0x04) f.push("p");
         if (ver & 0x08) f.push("f");
         if (ver & 0x10) f.push("P");
+        if (ver & 0x20) f.push(`s${ixmpChanCount(e.blob, o)}`);
         feats.push(f.join("") || "i");
-        o += ixmpPatchLen(ver);
+        o += ixmpPatchLen(e.blob, o);
       }
       console.log(`  inst $${e.instId.toString(16).padStart(3, "0")}: ${e.count} patches [${feats.join(",")}]`);
     }

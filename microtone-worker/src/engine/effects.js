@@ -38,12 +38,14 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
         voice.bitcrusherDepth = 0;
         voice.bitcrusherSkip = 0;
         voice.bitcrusherCounter = 0;
+        voice.right.bitcrusherCounter = 0;
       } else if (y === 0 && z === 0) {
         // x000 — clip mode only.
       } else {
         voice.bitcrusherDepth = y;
         voice.bitcrusherSkip = z;
         voice.bitcrusherCounter = 0;
+        voice.right.bitcrusherCounter = 0;
       }
       break;
     }

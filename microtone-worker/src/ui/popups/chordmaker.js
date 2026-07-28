@@ -37,12 +37,16 @@ const signed = (v, digits = 0) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d
 /**
  * Open the chord maker on a float working buffer.
  * @param store the app store (only `pitchPreset` is read — no document edits)
- * @param data Float32Array mono, nominal ±1
+ * @param data Float32Array mono, nominal ±1 (channel 1 — what the preview and
+ *        the audition use)
+ * @param dataR optional second channel of a STEREO take (item 90): the same
+ *        voices are mixed into it and the two results share one normalisation
+ *        factor, so the chord keeps the take's stereo image
  * @param rate sample rate of `data` (audition + the info line)
  * @param name shown in the title
- * @returns Promise<{data, voices} | null> — null on cancel
+ * @returns Promise<{data, dataR, voices} | null> — null on cancel
  */
-export function openChordMaker(store, { data, rate, name = "" }) {
+export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
   if (!data || data.length === 0) return Promise.resolve(null);
   return new Promise((resolve) => {
     const preset = store?.pitchPreset ?? presetForNotation(120);
@@ -359,7 +363,25 @@ export function openChordMaker(store, { data, rate, name = "" }) {
     function apply() {
       const m = ensureMix();
       if (!m.data.length) return;
-      finish({ data: m.data, voices: voices.map((v) => ({ ...v })), lengthMode, normalise });
+      const out = { data: m.data, dataR: null, voices: voices.map((v) => ({ ...v })), lengthMode, normalise };
+      if (dataR) {
+        // Build both channels UNNORMALISED, then scale by the shared peak —
+        // normalising each on its own would re-balance the stereo image.
+        const opts = { normalise: false, lengthMode };
+        const l = buildChord(data, voices, preset, opts);
+        const r = buildChord(dataR, voices, preset, opts);
+        const peak = Math.max(l.peak, r.peak);
+        const scale = normalise && peak > 0 ? 1 / peak : 1;
+        const scaled = (buf) => {
+          if (scale === 1) return buf;
+          const o = new Float32Array(buf.length);
+          for (let i = 0; i < buf.length; i++) o[i] = buf[i] * scale;
+          return o;
+        };
+        out.data = scaled(l.data);
+        out.dataR = scaled(r.data);
+      }
+      finish(out);
     }
     $(".chord-ok").addEventListener("click", (e) => { e.preventDefault(); apply(); });
     $(".chord-cancel").addEventListener("click", (e) => { e.preventDefault(); finish(null); });

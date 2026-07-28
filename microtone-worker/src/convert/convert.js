@@ -45,12 +45,13 @@ function ensureWorker() {
  * @param opts.onStatus  (line) => void progress stream
  */
 export function convertToTaud(fileName, bytes,
-                              { sf2 = null, rpb = null, trimPatches = false, onStatus = null } = {}) {
+                              { sf2 = null, rpb = null, trimPatches = false,
+                                stereoSamples = false, onStatus = null } = {}) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject, onStatus });
     const buf = bytes.slice().buffer;
-    const msg = { t: "convert", id, fileName, bytes: buf, rpb, trimPatches };
+    const msg = { t: "convert", id, fileName, bytes: buf, rpb, trimPatches, stereoSamples };
     const transfer = [buf];
     if (sf2) {
       const sfBuf = sf2.bytes.slice().buffer;
@@ -80,9 +81,9 @@ export async function listSf2Presets(sf2Bytes, { onStatus = null } = {}) {
  * via the canonical midi2taud machinery. `bpm` should be the destination
  * song's BPM (fadeout steps are tempo-relative).
  */
-export function buildSf2Bank(sf2Bytes, selection, { bpm = 125, onStatus = null } = {}) {
+export function buildSf2Bank(sf2Bytes, selection, { bpm = 125, stereo = false, onStatus = null } = {}) {
   return sf2Request(
-    { t: "sf2", mode: "build", bytes: sf2Bytes.slice().buffer, selection, bpm },
+    { t: "sf2", mode: "build", bytes: sf2Bytes.slice().buffer, selection, bpm, stereo },
     onStatus,
   );
 }

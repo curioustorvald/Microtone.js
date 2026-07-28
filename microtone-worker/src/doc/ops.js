@@ -489,6 +489,27 @@ export function setSampleBytesOp(ptr, bytes, gestureId = null) {
   };
 }
 
+/** Pool bytes across SEVERAL spans in one undo step — a stereo sample (item 90)
+ *  is two spans that must always move together, so every DSP edit on one is an
+ *  edit on the other. `writes` = [{ptr, bytes}]. */
+export function multiSampleBytesOp(writes, gestureId = null) {
+  return {
+    type: "multiSampleBytes",
+    writes, gestureId,
+    coalesceKey: `msmpbytes:${writes.map((w) => `${w.ptr}:${w.bytes.length}`).join(",")}`,
+    apply(doc) {
+      const inverse = writes.map(({ ptr, bytes }) => {
+        const prev = Uint8Array.from(doc.sampleBin.subarray(ptr, ptr + bytes.length));
+        doc.sampleBin.set(bytes, ptr);
+        return { ptr, bytes: prev };
+      });
+      doc.dirty = true;
+      return multiSampleBytesOp(inverse, gestureId);
+    },
+    dirty: () => [{ kind: "bank" }],
+  };
+}
+
 /** Raw record bytes across SEVERAL instruments in one undo step — the sample
  *  editor writes shared loop/play fields to every base-instrument user of a
  *  sample at once. edits = [{slot, pairs: [[offset, byte], …]}]. */

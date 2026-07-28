@@ -81,6 +81,37 @@ export function normaliseRange(buf, a, b) {
   return gainRange(buf, a, b, 1 / peak);
 }
 
+/**
+ * Peak-normalise a MULTI-CHANNEL take over [a, b) with ONE shared factor, so a
+ * stereo image survives the operation (per-channel normalisation would re-pan
+ * everything toward the centre). One channel behaves exactly like
+ * normaliseRange. Returns new buffers.
+ */
+export function normaliseRangeLinked(chans, a, b) {
+  if (chans.length === 1) return [normaliseRange(chans[0], a, b)];
+  let peak = 0;
+  for (const buf of chans) {
+    const [x, y] = clampRange(buf.length, a, b);
+    for (let i = x; i < y; i++) {
+      const v = Math.abs(buf[i]);
+      if (v > peak) peak = v;
+    }
+  }
+  if (peak === 0) return chans.map((c) => c.slice());
+  return chans.map((c) => gainRange(c, a, b, 1 / peak));
+}
+
+/** Average of every channel — the mono fold used for downmixing a take and for
+ *  analysis that needs one signal (transient detection). */
+export function downmixChannels(chans) {
+  if (chans.length === 1) return chans[0].slice();
+  const n = chans[0].length;
+  const out = new Float32Array(n);
+  for (const c of chans) for (let i = 0; i < n; i++) out[i] += c[i];
+  for (let i = 0; i < n; i++) out[i] /= chans.length;
+  return out;
+}
+
 export function reverseRange(buf, a, b) {
   [a, b] = clampRange(buf.length, a, b);
   const out = buf.slice();

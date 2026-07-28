@@ -13,11 +13,18 @@
 // Entry points (all resolve {firstSlot, count} | null):
 //   file import (importsample.js) · mic recording (recordsample.js) ·
 //   Samples-view "Lab…" (a pooled sample's copy — the original is untouched).
+//
+// The working buffer is a CHANNEL LIST (item 90): one Float32Array for mono,
+// two for a stereo take. Every op maps over the channels — normalise is the
+// one that must not (a shared peak keeps the stereo image), and transient
+// detection runs on the mono fold. Committing a stereo take allocates two pool
+// spans and an Ixmp 's' patch (planMultiSampleImport).
 
 import { planMultiSampleImport } from "../../doc/bankmerge.js";
 import { importBankOp } from "../../doc/ops.js";
 import {
-  crop, cut, silenceRange, fadeInRange, fadeOutRange, gainRange, normaliseRange,
+  crop, cut, silenceRange, fadeInRange, fadeOutRange, gainRange,
+  normaliseRangeLinked, downmixChannels,
   reverseRange, invertRange, removeDCRange, eqApply, eqResponseDb,
   detectTransients, chunksFromSplits, planFit, fitToBudget, quantiseU8,
   TARGET_RATE_MAX,
@@ -48,7 +55,8 @@ const DEFAULT_BANDS = () => ([
 /**
  * Open the Lab on a working buffer.
  * @param store the app store (doc + undo + audio)
- * @param data Float32Array mono, nominal ±1
+ * @param data Float32Array mono, nominal ±1 — or an ARRAY of them (one per
+ *        channel, same length) for a stereo take
  * @param rate sample rate of `data`
  * @param name default instrument/sample name
  * @param sourceLabel free-text provenance shown in the title
@@ -58,10 +66,17 @@ const DEFAULT_BANDS = () => ([
  *        auditioned and committed)
  */
 export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", confirmDiscard = false, openChord = false }) {
-  if (!store.doc || !data || data.length === 0) return Promise.resolve(null);
+  const srcChans = (Array.isArray(data) ? data : [data]).filter((c) => c && c.length > 0);
+  if (!store.doc || srcChans.length === 0) return Promise.resolve(null);
   return new Promise((resolve) => {
     // ── state ──
-    let buf = Float32Array.from(data);
+    // chans[0] is channel 1 (left); a stereo take adds chans[1]. `buf` is kept
+    // as the shorthand for channel 1 — it drives the view maths and every
+    // length question, since the channels are always the same length.
+    let chans = srcChans.slice(0, 2).map((c) => Float32Array.from(c));
+    let buf = chans[0];
+    const setChans = (next) => { chans = next; buf = chans[0]; };
+    const isStereo = () => chans.length === 2;
     const srcRate = Math.max(1, Math.round(rate));
     let sel = null;            // {a, b} in samples, a < b
     let splits = [];           // chop boundaries (samples)
@@ -130,6 +145,8 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         <span class="lab-sep"></span>
         <button class="lab-eqtoggle">${esc(t("lab.eq"))} ▾</button>
         <button class="lab-chord" title="${esc(t("lab.chordTitle"))}">${esc(t("lab.chord"))}</button>
+        <span class="lab-sep"></span>
+        <button class="lab-chans" title="${esc(t("lab.channelsTitle"))}"></button>
       </div>
       <div class="lab-eq" hidden>
         <div class="lab-eqbands"></div>
@@ -158,6 +175,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     const nameInput = $(".lab-name");
     const rateInput = $(".lab-rate");
     const playBtn = $(".lab-play");
+    const chanBtn = $(".lab-chans");
     const okBtn = $(".lab-ok");
     const dpr = window.devicePixelRatio || 1;
     canvas.width = W * dpr; canvas.height = WAVE_H * dpr;
@@ -174,13 +192,13 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     };
 
     function pushUndo() {
-      undoStack.push({ buf, splits: [...splits], discarded: new Set(discarded) });
+      undoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
       if (undoStack.length > UNDO_CAP) undoStack.shift();
       redoStack.length = 0;
       edited = true;
     }
     function restore(s) {
-      buf = s.buf;
+      setChans(s.chans);
       splits = [...s.splits];
       discarded = new Set(s.discarded);
       sel = null;
@@ -189,12 +207,12 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     }
     const labUndo = () => {
       if (!undoStack.length) return;
-      redoStack.push({ buf, splits: [...splits], discarded: new Set(discarded) });
+      redoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
       restore(undoStack.pop());
     };
     const labRedo = () => {
       if (!redoStack.length) return;
-      undoStack.push({ buf, splits: [...splits], discarded: new Set(discarded) });
+      undoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
       restore(redoStack.pop());
     };
 
@@ -208,9 +226,12 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       const [a, b] = sel ? [sel.a, sel.b] : [0, buf.length];
       if ((op === "crop" || op === "cut") && !sel) { alert(t("lab.needSel")); return; }
       pushUndo();
+      // Every channel gets the same treatment; only normalise is LINKED, so a
+      // stereo take keeps its balance instead of being re-centred.
+      const each = (fn) => setChans(chans.map(fn));
       switch (op) {
         case "crop": {
-          buf = crop(buf, a, b);
+          each((c) => crop(c, a, b));
           const shift = (p) => (p <= a ? null : p >= b ? null : p - a);
           splits = remapPositions(splits, shift);
           discarded = new Set(remapPositions([...discarded], shift));
@@ -218,20 +239,20 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
           break;
         }
         case "cut": {
-          buf = cut(buf, a, b);
+          each((c) => cut(c, a, b));
           const shift = (p) => (p < a ? p : p < b ? null : p - (b - a));
           splits = remapPositions(splits, shift);
           discarded = new Set(remapPositions([...discarded], shift));
           sel = null;
           break;
         }
-        case "silence": buf = silenceRange(buf, a, b); break;
-        case "fadeIn": buf = fadeInRange(buf, a, b); break;
-        case "fadeOut": buf = fadeOutRange(buf, a, b); break;
-        case "normalise": buf = normaliseRange(buf, a, b); break;
-        case "reverse": buf = reverseRange(buf, a, b); break;
-        case "invert": buf = invertRange(buf, a, b); break;
-        case "removeDC": buf = removeDCRange(buf, a, b); break;
+        case "silence": each((c) => silenceRange(c, a, b)); break;
+        case "fadeIn": each((c) => fadeInRange(c, a, b)); break;
+        case "fadeOut": each((c) => fadeOutRange(c, a, b)); break;
+        case "normalise": setChans(normaliseRangeLinked(chans, a, b)); break;
+        case "reverse": each((c) => reverseRange(c, a, b)); break;
+        case "invert": each((c) => invertRange(c, a, b)); break;
+        case "removeDC": each((c) => removeDCRange(c, a, b)); break;
       }
       clampView();
       refresh();
@@ -247,19 +268,53 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       const db = Number(res.db);
       if (!Number.isFinite(db)) return;
       pushUndo();
-      buf = gainRange(buf, a, b, Math.pow(10, db / 20));
+      setChans(chans.map((c) => gainRange(c, a, b, Math.pow(10, db / 20))));
       refresh();
     }
 
     // ── painting ──
+    // One channel's lane: [top, top+h) of the canvas, same x transform.
+    function paintChannel(ctx, C, data, top, h) {
+      const mid = top + h / 2;
+      const yOf = (v) => mid - v * (h / 2 - 4);
+      ctx.fillStyle = C.dim;
+      ctx.fillRect(0, Math.round(mid), W, 1);
+      ctx.strokeStyle = C.wave;
+      ctx.fillStyle = C.wave;
+      if (spp <= 1) {
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        const i0 = Math.max(0, Math.floor(scroll));
+        const i1 = Math.min(data.length - 1, Math.ceil(scroll + W * spp));
+        for (let i = i0; i <= i1; i++) {
+          const x = xOf(i), y = yOf(data[i]);
+          i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      } else {
+        for (let col = 0; col < W; col++) {
+          const a = Math.floor(scroll + col * spp);
+          const b = Math.min(data.length, Math.floor(scroll + (col + 1) * spp));
+          if (b <= a || a >= data.length) continue;
+          const step = Math.max(1, ((b - a) / 8) | 0);
+          let mn = Infinity, mx = -Infinity;
+          for (let p = a; p < b; p += step) {
+            const v = data[p];
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+          }
+          const yT = yOf(mx), yB = yOf(mn);
+          ctx.fillRect(col, Math.min(yT, mid), 1, Math.max(1, Math.abs(yB - yT)));
+        }
+      }
+    }
+
     function paintWave() {
       const C = themeColors();
       const ctx = canvas.getContext("2d");
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = C.cvBg;
       ctx.fillRect(0, 0, W, WAVE_H);
-      const mid = WAVE_H / 2;
-      const yOf = (v) => mid - v * (mid - 4);
 
       // selection under the wave
       if (sel) {
@@ -268,36 +323,20 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         ctx.fillRect(xOf(sel.a), 0, xOf(sel.b) - xOf(sel.a), WAVE_H);
         ctx.globalAlpha = 1;
       }
-      ctx.fillStyle = C.dim;
-      ctx.fillRect(0, Math.round(mid), W, 1);
 
-      ctx.strokeStyle = C.wave;
-      ctx.fillStyle = C.wave;
-      if (spp <= 1) {
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        const i0 = Math.max(0, Math.floor(scroll));
-        const i1 = Math.min(buf.length - 1, Math.ceil(scroll + W * spp));
-        for (let i = i0; i <= i1; i++) {
-          const x = xOf(i), y = yOf(buf[i]);
-          i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      } else {
-        for (let col = 0; col < W; col++) {
-          const a = Math.floor(scroll + col * spp);
-          const b = Math.min(buf.length, Math.floor(scroll + (col + 1) * spp));
-          if (b <= a || a >= buf.length) continue;
-          const step = Math.max(1, ((b - a) / 8) | 0);
-          let mn = Infinity, mx = -Infinity;
-          for (let p = a; p < b; p += step) {
-            const v = buf[p];
-            if (v < mn) mn = v;
-            if (v > mx) mx = v;
-          }
-          const yT = yOf(mx), yB = yOf(mn);
-          ctx.fillRect(col, Math.min(yT, mid), 1, Math.max(1, Math.abs(yB - yT)));
-        }
+      // one lane per channel, stacked, with a divider and L/R tags when stereo
+      const laneH = WAVE_H / chans.length;
+      chans.forEach((data, i) => paintChannel(ctx, C, data, i * laneH, laneH));
+      if (chans.length > 1) {
+        ctx.fillStyle = C.dim;
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(0, Math.round(laneH), W, 1);
+        ctx.globalAlpha = 0.9;
+        ctx.font = "10px sans-serif";
+        ctx.fillStyle = C.fg2 || C.fg;
+        ctx.fillText(t("lab.chanL"), 3, 11);
+        ctx.fillText(t("lab.chanR"), 3, Math.round(laneH) + 11);
+        ctx.globalAlpha = 1;
       }
 
       if (chopOn) {
@@ -407,8 +446,10 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     function refreshInfo() {
       const secs = (n) => (n / srcRate).toFixed(2);
       let line = t("lab.info", { frames: buf.length, rate: srcRate, secs: secs(buf.length) });
+      line += " · " + t(isStereo() ? "lab.stereo" : "lab.mono");
       if (sel) line += t("lab.selInfo", { frames: sel.b - sel.a, secs: secs(sel.b - sel.a) });
       $(".lab-info").textContent = line;
+      chanBtn.textContent = t(isStereo() ? "lab.toMono" : "lab.toStereo");
 
       const kept = keptChunks();
       let fitStr;
@@ -552,7 +593,8 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     const chopBtn = $(".lab-chop");
     const detect = () => {
       pushUndo();
-      splits = detectTransients(buf, srcRate, { sensitivity: Number($(".lab-sens").value) });
+      splits = detectTransients(downmixChannels(chans), srcRate,
+        { sensitivity: Number($(".lab-sens").value) });
       discarded.clear();
       refresh();
     };
@@ -627,7 +669,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     $(".lab-eqapply").addEventListener("click", () => {
       const [a, b] = sel ? [sel.a, sel.b] : [0, buf.length];
       pushUndo();
-      buf = eqApply(buf, srcRate, bands, { a, b });
+      setChans(chans.map((c) => eqApply(c, srcRate, bands, { a, b })));
       refresh();
     });
 
@@ -639,11 +681,14 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     async function chordTool() {
       const { openChordMaker } = await import("./chordmaker.js");
       const res = await openChordMaker(store, {
-        data: buf, rate: srcRate, name: nameInput.value.trim() || name,
+        data: buf, dataR: chans[1] ?? null, rate: srcRate,
+        name: nameInput.value.trim() || name,
       });
       if (!res) return;
       pushUndo();
-      buf = res.data;
+      // A stereo take is chorded channel by channel with the SAME voices, and
+      // the maker links the normalisation across them.
+      setChans(res.dataR ? [res.data, res.dataR] : [res.data]);
       splits = [];
       discarded.clear();
       sel = null;
@@ -652,6 +697,21 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       refresh();
     }
     $(".lab-chord").addEventListener("click", (e) => { e.preventDefault(); chordTool(); });
+
+    // ── mono / stereo ──────────────────────────────────────────────────────
+    // Undoable, like every other buffer change: → mono folds the channels
+    // together, → stereo duplicates channel 1 (a dual-mono pair, which costs
+    // twice the pool bytes — the info line says so).
+    function setChannelCount(n) {
+      if (n === chans.length || n < 1 || n > 2) return;
+      pushUndo();
+      setChans(n === 1 ? [downmixChannels(chans)] : [chans[0], Float32Array.from(chans[0])]);
+      refresh();
+    }
+    chanBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      setChannelCount(isStereo() ? 1 : 2);
+    });
 
     // ── audition (Web Audio on the working buffer — it is not pooled yet) ──
     function playPos() {
@@ -674,8 +734,8 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       const [a, b] = sel ? [sel.a, sel.b] : [0, buf.length];
       // AudioBuffer rates clamp to [8000, 96000]; playbackRate restores pitch
       const bufRate = Math.max(8000, Math.min(96000, srcRate));
-      const ab = actx.createBuffer(1, buf.length, bufRate);
-      ab.getChannelData(0).set(buf);
+      const ab = actx.createBuffer(chans.length, buf.length, bufRate);
+      chans.forEach((c, i) => ab.getChannelData(i).set(c));
       const src = actx.createBufferSource();
       src.buffer = ab;
       src.playbackRate.value = srcRate / bufRate;
@@ -718,13 +778,16 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       const nm = nameInput.value.trim() || name || t("lab.untitled");
       let clippedCount = 0;
       const items = kept.map((c, i) => {
-        const fitted = fitToBudget(buf.slice(c.a, c.b), srcRate, targetRate());
-        const q = quantiseU8(fitted.data);
-        if (q.clipped) clippedCount++;
+        // planFit depends only on the frame count, so every channel of a chunk
+        // resamples by the same ratio to the same length and rate.
+        const fitted = chans.map((ch) => fitToBudget(ch.slice(c.a, c.b), srcRate, targetRate()));
+        const q = fitted.map((f) => quantiseU8(f.data));
+        if (q.some((x) => x.clipped)) clippedCount++;
         return {
           nameBytes: enc.encode(escapeNonAscii(kept.length > 1 ? `${nm} ${i + 1}` : nm)),
-          pcm: q.pcm,
-          rate: fitted.rate,
+          pcm: q[0].pcm,
+          pcmR: q.length > 1 ? q[1].pcm : null,
+          rate: fitted[0].rate,
         };
       });
       if (clippedCount > 0 && !confirm(t("lab.clipWarn", { n: clippedCount }))) return;
@@ -770,14 +833,21 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     dlg.__lab = {
       state: () => ({
         len: buf.length, rate: srcRate, sel: sel && { ...sel },
-        splits: [...splits], chop: chopOn,
+        splits: [...splits], chop: chopOn, channels: chans.length,
         discarded: [...discarded], undoDepth: undoStack.length,
       }),
       buffer: () => buf,
+      buffers: () => chans,
+      setChannelCount,
       setSelection: (a, b) => { sel = { a: Math.min(a, b), b: Math.max(a, b) }; refresh(); },
       clearSelection: () => { sel = null; refresh(); },
       tool: (op) => applyRanged(op),
-      gainDb: (db) => { pushUndo(); const [a, b] = sel ? [sel.a, sel.b] : [0, buf.length]; buf = gainRange(buf, a, b, Math.pow(10, db / 20)); refresh(); },
+      gainDb: (db) => {
+        pushUndo();
+        const [a, b] = sel ? [sel.a, sel.b] : [0, buf.length];
+        setChans(chans.map((c) => gainRange(c, a, b, Math.pow(10, db / 20))));
+        refresh();
+      },
       undo: labUndo,
       redo: labRedo,
       setChop: (on) => setChopMode(on),

@@ -222,6 +222,7 @@ export function applyTrackerTick(eng, ts, playhead) {
         voice.autoVibPhase = 0;
         voice.autoVibTicksSinceTrigger = 0;
         voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
+        voice.right.reset();
         voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod);
         voice.rowVolume = voice.noteVolume;
       }

@@ -30,6 +30,27 @@ function encodePattern(rows) {
   return bytes;
 }
 
+/**
+ * Every pool span a sampleList() census entry occupies: [{ptr, len, chan}],
+ * channel 0 first. A mono sample yields one span; a stereo pair (Ixmp 's')
+ * yields two. Anything that frees, moves, copies or edits pool bytes for a
+ * census entry must go through this — freeing only channel 0 would leave the
+ * right channel as unreachable garbage, and moving only channel 0 would break
+ * the pairing.
+ */
+export function sampleSpans(e) {
+  const extra = e.chanPtrs ?? [];
+  return [
+    { ptr: e.ptr, len: e.len, chan: 0 },
+    ...extra.map((p, i) => ({ ptr: p, len: e.len, chan: i + 1 })),
+  ];
+}
+
+/** True when a census entry is a stereo pair. */
+export function isStereoSample(e) {
+  return (e?.chanPtrs?.length ?? 0) === 1;
+}
+
 /** Decode a cue's instruction words into {rowLimit, isHalt, flow:{type,arg}|null}. */
 export function cueInfo(words) {
   const [w0, w1] = cueInstructionWords(words);
@@ -303,21 +324,34 @@ export class Document {
 
   /**
    * Deduped sample census across base instruments + Ixmp patches, sorted by
-   * pool pointer: [{ptr, len, rate, loopStart, loopEnd, loopMode, users}].
-   * SNam names map by pool order (converter emission order).
+   * pool pointer: [{ptr, len, rate, loopStart, loopEnd, loopMode, chanPtrs,
+   * chanMode, users}]. SNam names map by pool order (converter emission order).
    * `patchOverrides` (Map slot → patches[]|null) substitutes a slot's Ixmp
    * patches WITHOUT applying them — the patch editor uses it to compute the
    * prospective census (and the SNam realignment it implies) before an edit.
+   *
+   * A MULTI-CHANNEL sample (Ixmp 's', item 90) is ONE census entry, keyed by
+   * its first channel's span, with `chanPtrs` holding the extra channels'
+   * pointers (same length/loop/rate). One sample = one name = one row in the
+   * Samples view; every consumer that frees or moves pool bytes has to walk
+   * `chanPtrs` too — allSpans() is the shorthand for that.
    */
   sampleList(patchOverrides = null) {
     const byKey = new Map();
-    const add = (ptr, len, rate, loopStart, loopEnd, loopMode, user) => {
+    const add = (ptr, len, rate, loopStart, loopEnd, loopMode, user,
+                 chanPtrs = [], chanMode = 0) => {
       if (len <= 0) return;
       const key = `${ptr}:${len}`;
       let e = byKey.get(key);
       if (!e) {
-        e = { ptr, len, rate, loopStart, loopEnd, loopMode, users: new Set() };
+        e = { ptr, len, rate, loopStart, loopEnd, loopMode, chanPtrs, chanMode,
+              users: new Set() };
         byKey.set(key, e);
+      } else if (chanPtrs.length > e.chanPtrs.length) {
+        // A span used both as a mono base sample and as a stereo patch's first
+        // channel is stereo — the extra channels exist either way.
+        e.chanPtrs = chanPtrs;
+        e.chanMode = chanMode;
       }
       e.users.add(user);
     };
@@ -331,7 +365,9 @@ export class Document {
       if (patches !== null) {
         for (const p of patches) {
           add(p.samplePtr, p.sampleLength, p.samplingRate,
-              p.loopStart, p.loopEnd, p.loopMode, s);
+              p.loopStart, p.loopEnd, p.loopMode, s,
+              p.hasChanBlock ? p.chanPtrs.slice(0, Math.max(0, p.chanCount - 1)) : [],
+              p.chanMode ?? 0);
         }
       }
     }

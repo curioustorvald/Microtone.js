@@ -37,6 +37,47 @@ function makeActiveEnv(defaultValue) {
   return a;
 }
 
+/**
+ * Per-channel DSP history for a multi-channel (Ixmp 's') voice — item 90.
+ * Channel 1 uses the Voice's OWN fields (so the mono path is untouched); this
+ * mirrors the same field names for channel 2, which is why applyVoiceFilter /
+ * applyTaudVoiceFx / fetchTrackerSample can take either object as their state
+ * holder. Coefficients, envelopes and pitch stay shared — only the history
+ * that must not be crossed between channels lives here.
+ */
+export class ChannelState {
+  constructor() {
+    this.filterY1 = 0.0;
+    this.filterY2 = 0.0;
+    this.filterX1 = 0.0;
+    this.filterX2 = 0.0;
+    this.bitcrusherCounter = 0;
+    this.bitcrusherHeld = 0.0;
+    this.nesDpcmCounter = 63;
+  }
+
+  /** Trigger-time reset — mirrors what triggerNote does to the Voice's own. */
+  reset() {
+    this.filterY1 = 0.0;
+    this.filterY2 = 0.0;
+    this.filterX1 = 0.0;
+    this.filterX2 = 0.0;
+    this.bitcrusherCounter = 0;
+    this.bitcrusherHeld = 0.0;
+    this.nesDpcmCounter = 63;
+  }
+
+  copyFrom(src) {
+    this.filterY1 = src.filterY1;
+    this.filterY2 = src.filterY2;
+    this.filterX1 = src.filterX1;
+    this.filterX2 = src.filterX2;
+    this.bitcrusherCounter = src.bitcrusherCounter;
+    this.bitcrusherHeld = src.bitcrusherHeld;
+    this.nesDpcmCounter = src.nesDpcmCounter;
+  }
+}
+
 export class Voice {
   constructor() {
     this.active = false;
@@ -128,6 +169,15 @@ export class Voice {
     this.activeVibratoDepth = 0;
     this.activeVibratoRate = 0;
     this.activeVibratoWaveform = 0;
+    // Multi-channel view (Ixmp 's' block, item 90). 1 = mono — the only case
+    // before stereo, and the only one the base instrument can express. 2 = the
+    // sample is a stereo PAIR: chanPtr2 is the right channel's pool span, which
+    // shares every geometry field above (length / play-start / loop / rate).
+    // chanMode 0 = discrete L,R; 1 = matrix M,S (decoded at mix time).
+    this.activeChanCount = 1;
+    this.activeChanMode = 0;
+    this.activeChanPtr2 = 0;
+    this.right = new ChannelState();
 
     // Active-envelope view (snapshot by resolveActiveEnvelopes at trigger).
     this.activeVolEnv = makeActiveEnv(0x3f);
@@ -288,4 +338,6 @@ export class Voice {
   }
 
   get activeSampleLoopSustain() { return (this.activeLoopMode & 0x04) !== 0; }
+  /** True when this voice renders a stereo pair (see activeChanCount). */
+  get isStereo() { return this.activeChanCount === 2; }
 }

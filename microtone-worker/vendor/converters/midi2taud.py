@@ -136,7 +136,7 @@ from taud_common import (
     compress_blob, build_project_data, cue_instruction_len,
     cue_instruction_halt_at, cue_instruction_jump,
     last_note_cue_index, nearest_minifloat,
-    IXMP_PAN_NO_OVERRIDE, atten_cb_to_octet,
+    IXMP_PAN_NO_OVERRIDE, IXMP_CHAN_DISCRETE, atten_cb_to_octet,
 )
 
 SIGNATURE = b'midi2taud/TSVM'   # 14 bytes
@@ -830,7 +830,7 @@ class SFZone:
     """One effective preset×instrument zone (post combination)."""
     __slots__ = ('keylo', 'keyhi', 'vello', 'velhi', 'sample', 'rootkey',
                  'tune_cents', 'modes', 'pan', 'scale', 'a_start', 'a_end',
-                 'loop_abs_start', 'loop_abs_end', 'pair', 'rate', 'name',
+                 'loop_abs_start', 'loop_abs_end', 'pair', 'stereo', 'rate', 'name',
                  'env_delay', 'env_attack', 'env_hold', 'env_decay',
                  'env_sustain_cb', 'env_release',
                  # initialAttenuation (cB static per-zone gain) + static filter.
@@ -1224,6 +1224,7 @@ def parse_sf2(path: str) -> SF2:
                 z.loop_abs_end   = (s.loopend + iz.get(GEN_ENDLOOP_OFF, 0)
                                     + 32768 * iz.get(GEN_ENDLOOP_COARSE, 0))
                 z.pair = None
+                z.stereo = False
                 z.rate = s.rate
                 z.name = s.name
                 zones.append(z)
@@ -1256,13 +1257,16 @@ def resolve_preset(sf: SF2, inst_key, perc_force):
     return None
 
 
-def merge_stereo_zones(zones: list, shdrs: list) -> list:
-    """Collapse L/R zone pairs into single mono zones. Two flavours are merged:
+def merge_stereo_zones(zones: list, shdrs: list, keep_stereo: bool = False) -> list:
+    """Collapse L/R zone pairs into single zones. Two flavours are merged:
       (1) LINKED stereo — samples are each other's sampleLink with L/R types;
       (2) PAN stereo — two MONO-typed zones with the same key/vel rect and
           opposite hard pan (±500). SGM/Timbres store most "stereo" samples this
           way (e.g. 'VA LGFF C3-L' / '…-R'), NOT as linked L/R.
-    The merged zone mixes both channels to mono and drops the pan override.
+    The merged zone mixes both channels to mono and drops the pan override —
+    unless `keep_stereo` (item 90), where the pair is kept as a genuine stereo
+    sample: two pool spans joined by an Ixmp 's' patch. Either way the pan
+    override goes, because the pair itself carries the image.
     Merging is essential: an unmerged R zone fully overlaps its L zone, so the
     disjointify spills it into a SECOND layer that then plays CENTRED alongside
     the L zone — a spurious +6 dB doubling. Lone L/R zones keep their channel."""
@@ -1303,6 +1307,7 @@ def merge_stereo_zones(zones: list, shdrs: list) -> list:
             used.add(partner)
             z2 = zones[partner]
             z.pair = (z.sample, z2.sample, z2.a_start)
+            z.stereo = keep_stereo
             z.pan = None                          # mixed to mono → centred
             z.a_end = z.a_start + min(z.a_end - z.a_start,
                                       z2.a_end - z2.a_start)
@@ -1330,7 +1335,7 @@ def apply_exclusive_class(song, sf, perc_force):
         zones = zone_cache.get(n.inst_key)
         if zones is None:
             res = resolve_preset(sf, n.inst_key, perc_force)
-            zones = merge_stereo_zones(res[1], sf.shdrs) if res else []
+            zones = merge_stereo_zones(res[1], sf.shdrs) if res else []  # mono view: only rects/classes are read here
             zone_cache[n.inst_key] = zones
         # SF2 zone selection: first zone whose key/velocity rect contains the note.
         for z in zones:
@@ -1392,11 +1397,18 @@ def _rect_subtract(r, k):
 
 
 class MonoSample:
-    """One pooled (deduplicated) mono u8 sample slice."""
-    __slots__ = ('pair', 'a_start', 'frames', 'rate', 'name',
-                 'data', 'ratio', 'offset', 'loop_native', 'synth_loop', 'synth_decay')
+    """One pooled (deduplicated) u8 sample slice — mono, or (item 90) a STEREO
+    pair, where `data_r` holds the right channel: a second pool span of the same
+    length that every resample/cap/truncate step below keeps frame-aligned with
+    `data`, and that the Ixmp patch names through its 's' block."""
+    __slots__ = ('pair', 'stereo', 'a_start', 'frames', 'rate', 'name',
+                 'data', 'data_r', 'offset', 'offset_r',
+                 'ratio', 'loop_native', 'synth_loop', 'synth_decay')
     def __init__(self, z: SFZone):
         self.pair    = z.pair                    # None or (idxL, idxR, b_start)
+        self.stereo  = bool(getattr(z, 'stereo', False)) and z.pair is not None
+        self.data_r  = None
+        self.offset_r = 0
         self.a_start = z.a_start
         self.frames  = max(0, z.a_end - z.a_start)
         self.rate    = z.rate
@@ -1422,8 +1434,10 @@ class MonoSample:
         self.synth_decay = None
 
     def key(self):
-        return (self.pair[0], self.pair[1], self.a_start, self.frames) \
-            if self.pair else (-1, -1, self.a_start, self.frames)
+        # The stereo flag is part of the identity: the same pair rendered as one
+        # mono mix and as two channels are different pool contents.
+        return (self.pair[0], self.pair[1], self.a_start, self.frames, self.stereo) \
+            if self.pair else (-1, -1, self.a_start, self.frames, False)
 
     def render(self, sf: SF2):
         if self.data is not None:
@@ -1433,8 +1447,12 @@ class MonoSample:
             la = sf.read_frames(self.a_start, n)
             ra = sf.read_frames(self.pair[2], n)
             m  = min(len(la), len(ra))
-            self.data = bytes((((la[i] + ra[i]) >> 1) >> 8) + 128 & 0xFF
-                              for i in range(m))
+            if self.stereo:
+                self.data   = bytes(((la[i] >> 8) + 128) & 0xFF for i in range(m))
+                self.data_r = bytes(((ra[i] >> 8) + 128) & 0xFF for i in range(m))
+            else:
+                self.data = bytes((((la[i] + ra[i]) >> 1) >> 8) + 128 & 0xFF
+                                  for i in range(m))
         else:
             la = sf.read_frames(self.a_start, n)
             self.data = bytes(((s >> 8) + 128) & 0xFF for s in la)
@@ -1509,6 +1527,12 @@ class Patch:
             'vibrato_rate':        0,
             'vibrato_waveform':    0xFF,         # no override
         }
+        # Stereo pair (item 90): channel 2 is its own pool span, same length and
+        # geometry — only an Ixmp patch can say so, which is why a stereo
+        # canonical is emitted as a patch too (see build_ixmp).
+        if self.ms.stereo and self.ms.data_r:
+            d['channels'] = {'mode': IXMP_CHAN_DISCRETE, 'flags': 0,
+                             'ptrs': [self.ms.offset_r]}
         # Per-patch overrides — emitted ONLY when they differ from the canonical
         # zone (whose envelopes/filter live in the base instrument record, which the
         # patch falls through to when a block is absent). This is what gives SF2
@@ -1727,7 +1751,8 @@ def _split_layer_velocity_filter(items: list, trig: dict) -> list:
 
 
 def build_presets(sf: SF2, slot_keys: list, triggers: dict, perc_force,
-                  registry: dict, max_layers: int, trim: bool = False) -> dict:
+                  registry: dict, max_layers: int, trim: bool = False,
+                  keep_stereo: bool = False) -> dict:
     """For each preset (inst_key), partition its SF2 zones into disjoint layers
     and build one normal TaudInstrument per layer (`trim` keeps only the patches
     this song triggers — see _build_layer_instrument).
@@ -1742,7 +1767,7 @@ def build_presets(sf: SF2, slot_keys: list, triggers: dict, perc_force,
             presets[ik] = ('(missing preset)', [])
             continue
         name, zones = res
-        zones = merge_stereo_zones(zones, sf.shdrs)
+        zones = merge_stereo_zones(zones, sf.shdrs, keep_stereo)
         trig = triggers.get(ik, {})
         layer_items, dropped = _partition_layers(zones, registry, max_layers)
         if dropped:
@@ -2187,6 +2212,17 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
     for ms in pool:
         ms.render(sf)
 
+    def _rescale_right(ms, transform):
+        """Apply the same length-changing transform to a stereo sample's right
+        channel and clamp it to the left channel's length — the two spans share
+        one set of loop points and one sample_length, so they must stay exactly
+        frame-aligned however the fitting below reshapes them."""
+        if not ms.data_r:
+            return
+        r = transform(ms.data_r)
+        n = len(ms.data)
+        ms.data_r = r[:n] if len(r) >= n else r + bytes([0x80]) * (n - len(r))
+
     # Per-sample u16 cap. A sample over the 65535-frame limit is shrunk one of two
     # ways (see the SF2 long-sample section above): downsample the whole thing when
     # that keeps the rate >= 32 kHz; otherwise resample to the 32 kHz floor, keep the
@@ -2210,6 +2246,7 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
             fitted rate stays >= 32 kHz, or as the fall-back for a looped sample whose
             loop sits past the cap at 32 kHz (only fit-to-cap keeps that far loop)."""
             ms.data   = resample_linear(ms.data, r_fit)
+            _rescale_right(ms, lambda d: resample_linear(d, r_fit))
             ms.ratio *= len(ms.data) / native_len
 
         def _synth_path(decay=True):
@@ -2226,6 +2263,9 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
             ms.data   = resampled
             body, ls, le = _synth_sustain_loop(ms.data, SAMPLE_LEN_LIMIT, SF2_LOOP_HINT)
             ms.data        = body
+            # The synth loop only truncates and picks loop points, so the right
+            # channel takes the same resample and the same cut.
+            _rescale_right(ms, lambda d: resample_linear(d, r32))
             ms.synth_loop  = (ls, le)
             ms.synth_decay = SF2_SYNTH_DECAY_SEC if decay else None
             return ls, le, len(body)
@@ -2248,6 +2288,7 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
             resampled = resample_linear(ms.data, r32)
             ms.ratio *= len(resampled) / native_len
             ms.data   = resampled[:SAMPLE_LEN_LIMIT]
+            _rescale_right(ms, lambda d: resample_linear(d, r32)[:SAMPLE_LEN_LIMIT])
             vprint(f"  info: '{ms.name}' {native_len} frames > 64K cap, long & looped; "
                    f"32 kHz, kept first {len(ms.data)} frames (loop_end {le32})")
         elif force_synth_loop:
@@ -2291,7 +2332,7 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
 
     # Global 8 MB pool cap. Resamples every sample down equally; synthesized loop
     # points ride the same ratio so the loop stays valid in the shrunken data.
-    total = sum(len(ms.data) for ms in pool)
+    total = sum(len(ms.data) + len(ms.data_r or b'') for ms in pool)
     if total > SAMPLEBIN_SIZE:
         g = SAMPLEBIN_SIZE / total
         vprint(f"  info: sample pool overflow ({total} bytes); "
@@ -2299,6 +2340,7 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
         for ms in pool:
             old = len(ms.data)
             ms.data = resample_linear(ms.data, g)
+            _rescale_right(ms, lambda d: resample_linear(d, g))
             ms.ratio *= len(ms.data) / old
             if ms.synth_loop is not None:
                 le = min(len(ms.data) - 1, round(ms.synth_loop[1] * g))
@@ -2308,16 +2350,29 @@ def build_sample_inst_bin(sf: SF2, pool: list, layer_insts: list, meta_records: 
     sample_bin = bytearray(SAMPLEBIN_SIZE)
     pos = 0
     for ms in pool:
+        # A stereo sample needs room for BOTH spans; if only one fits it falls
+        # back to mono rather than pointing channel 2 at someone else's bytes.
+        need = len(ms.data) * (2 if ms.data_r else 1)
+        if ms.data_r and pos + need > SAMPLEBIN_SIZE:
+            vprint(f"  warning: pool full, '{ms.name}' falls back to mono")
+            ms.data_r = None
+            ms.stereo = False
         n = min(len(ms.data), SAMPLEBIN_SIZE - pos)
         if n < len(ms.data):
             vprint(f"  warning: pool full, truncating '{ms.name}'")
             ms.data = ms.data[:n]
+            if ms.data_r:
+                ms.data_r = ms.data_r[:n]
             if ms.synth_loop is not None:        # keep the synthesized loop inside the data
                 le = min(n - 1, ms.synth_loop[1])
                 ms.synth_loop = (max(0, min(le - 2, ms.synth_loop[0])), le)
         sample_bin[pos:pos+n] = ms.data
         ms.offset = pos
         pos += n
+        if ms.data_r:
+            sample_bin[pos:pos+n] = ms.data_r[:n]
+            ms.offset_r = pos
+            pos += n
     vprint(f"  sample pool: {len(pool)} sample(s), {pos} bytes")
 
     inst_bin = bytearray(INSTBIN_SIZE)
@@ -3371,8 +3426,12 @@ def build_ixmp(layer_insts: list, bpm0: int, args) -> dict:
         # fallback, e.g. a closed hi-hat firing under the open hi-hat). The thin canonical
         # patch carries the same sample + rect and defers envelopes to the base, so a note
         # that DOES match the canonical plays identically.
+        # A STEREO canonical must be emitted even for a standalone instrument:
+        # the base record has no room for channel 2, so without a patch the note
+        # would play the left channel alone (item 90).
         emitted = ti.patches if ti.is_meta_layer else \
-                  [p for p in ti.patches if p is not ti.canonical]
+                  [p for p in ti.patches
+                   if p is not ti.canonical or (p.ms.stereo and p.ms.data_r)]
         pl = [p.to_ixmp_dict(ti.canonical, bpm0, args.fadeout) for p in emitted]
         if pl:
             ixmp[ti.slot] = pl
@@ -3594,6 +3653,12 @@ def main():
                          'of muffling the whole sample down to fit — trading the '
                          'genuine sustain loop for full bandwidth. Pass this flag '
                          'to keep the genuine loop (and accept the muffling)')
+    ap.add_argument('--stereo-samples', action='store_true',
+                    help='Keep SF2 stereo sample pairs as genuine STEREO samples '
+                         '(two pool spans joined by an Ixmp stereo patch) instead '
+                         'of mixing them down to mono. Doubles the pool cost of '
+                         'every stereo instrument, so a large bank may end up '
+                         'resampled harder to fit the 8 MB budget')
     ap.add_argument('--no-project-data', action='store_true',
                     help='Omit the Project Data section — NOTE: this also '
                          'omits Ixmp, collapsing every instrument to its '
@@ -3781,7 +3846,8 @@ def run_single(args) -> None:
 
     registry = {}
     presets = build_presets(sf, slot_keys, triggers, args.perc_force_mapping,
-                            registry, args.max_layers, args.trim_unused_patches)
+                            registry, args.max_layers, args.trim_unused_patches,
+                            getattr(args, 'stereo_samples', False))
     layer_insts, meta_records, slot_name, note_slot = allocate_slots(
         presets, slot_keys)
 
@@ -3828,7 +3894,8 @@ def run_directory(args) -> None:
     # Phase 2: build the one shared instrument set for the whole union.
     registry = {}
     presets = build_presets(sf, slot_keys, triggers, args.perc_force_mapping,
-                            registry, args.max_layers, args.trim_unused_patches)
+                            registry, args.max_layers, args.trim_unused_patches,
+                            getattr(args, 'stereo_samples', False))
     layer_insts, meta_records, slot_name, note_slot = allocate_slots(
         presets, slot_keys)
 

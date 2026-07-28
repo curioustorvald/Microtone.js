@@ -45,10 +45,24 @@ export const CUE_EMPTY_V1 = 0xfff;
 
 export const CAPTURE_SIGNATURE = "Microtone.js  "; // 14 bytes, space-padded
 
-// Ixmp variable-length patch record: version byte (0b x00Pfpvi) + 30 common
-// bytes + optional blocks, always in on-wire order x, v, p, f, P.
+// Ixmp variable-length patch record: version byte (0b x0sPfpvi) + 30 common
+// bytes + optional blocks, always in on-wire order x, v, p, f, P, s.
 // (taud.mjs:340-345, terranmon.txt:3502-3508)
-export function ixmpPatchLen(ver) {
+//
+// The 's' (multi-channel) block is the ONLY one whose size is not fixed by the
+// version byte — it carries one u32 sample pointer per EXTRA channel — so the
+// length walk needs the bytes, not just the version. It is emitted last, which
+// keeps every earlier block at the offset a pre-stereo reader expects.
+
+/** Bytes of an 's' block whose channel byte is `chanByte` (0b cccc mmmm). */
+export function ixmpChanBlockLen(chanByte) {
+  return 4 + 4 * ((chanByte & 0xff) >>> 4); // count/mode u8 + u24 flags + u32 per extra channel
+}
+
+/** Offset of a patch's 's' channel byte relative to the record start, or -1
+ *  when the record carries no 's' block. */
+export function ixmpChanByteOffset(ver) {
+  if ((ver & 0x20) === 0) return -1;
   return (
     31 +
     ((ver & 0x80) ? 15 : 0) + // x: u32 flags1 + u32 flags2 + u16 fadeout + u16 cutoff + u16 reson + u8 atten
@@ -57,4 +71,27 @@ export function ixmpPatchLen(ver) {
     ((ver & 0x08) ? 54 : 0) + // f: filter envelope
     ((ver & 0x10) ? 54 : 0)   // P: pitch envelope
   );
+}
+
+/** Channels a patch record at `bytes[o]` plays (1 when it carries no 's' block). */
+export function ixmpChanCount(bytes, o = 0) {
+  const so = ixmpChanByteOffset(bytes[o] & 0xff);
+  return so < 0 ? 1 : ((bytes[o + so] ?? 0) >>> 4) + 1;
+}
+
+/** Total bytes of the patch record starting at `bytes[o]`. */
+export function ixmpPatchLen(bytes, o = 0) {
+  const ver = bytes[o] & 0xff;
+  const so = ixmpChanByteOffset(ver);
+  if (so < 0) {
+    return (
+      31 +
+      ((ver & 0x80) ? 15 : 0) +
+      ((ver & 0x02) ? 54 : 0) +
+      ((ver & 0x04) ? 54 : 0) +
+      ((ver & 0x08) ? 54 : 0) +
+      ((ver & 0x10) ? 54 : 0)
+    );
+  }
+  return so + ixmpChanBlockLen(bytes[o + so] ?? 0);
 }

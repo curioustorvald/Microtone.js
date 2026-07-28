@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Stereo samples smoke: Lab channels, commit, Samples view, patch editor (item 90)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- Real time needed (AudioContext + the Lab's audition). Run:
+         python3 tools/test-server.py &   # repo server + /hang on :8932
+         chromium --headless=new --autoplay-policy=no-user-gesture-required \
+           --dump-dom --timeout=45000 \
+           http://localhost:8932/test/browser/stereo-smoke.html -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, name) => log(`${name}: ${cond ? "ok" : "FAIL"}`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const waitFor = async (fn, ms = 15000) => {
+      const t0 = Date.now();
+      for (;;) {
+        const v = fn();
+        if (v) return v;
+        if (Date.now() - t0 > ms) throw new Error("waitFor timeout");
+        await sleep(50);
+      }
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone && w.__microtone.store.doc ? w : null;
+        });
+        const store = win.__microtone.store;
+        const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+        const { isStereoSample, sampleSpans } = await win.eval('import("/src/doc/document.js")');
+        const { patchIsStereo } = await win.eval('import("/src/engine/inst.js")');
+
+        // A deterministic STEREO take: 0.5 s @ 32 kHz, the right channel a
+        // different tone from the left so a downmix or a crossed channel shows.
+        const rate = 32000, n = rate / 2;
+        const chL = new win.Float32Array(n);
+        const chR = new win.Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          chL[i] = 0.8 * Math.sin((2 * Math.PI * 220 * i) / rate);
+          chR[i] = 0.4 * Math.sin((2 * Math.PI * 330 * i) / rate);
+        }
+
+        const before = win.eval("__microtone.store.doc.toBytes()");
+        const censusBefore = store.doc.sampleList().length;
+
+        // ── Lab on a stereo take ─────────────────────────────────────────────
+        const pLab = openSampleLab(store, { data: [chL, chR], rate, name: "stereo take" });
+        const dlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const lab = dlg.__lab;
+        ok(lab.state().channels === 2 && lab.state().len === n, "t1 lab opens on a stereo take");
+        ok(dlg.querySelector(".lab-chans").textContent.includes("Mono"),
+          "t1b the channel button offers the fold to mono");
+
+        // t2: ranged ops hit BOTH channels
+        lab.setSelection(0, 1000);
+        lab.tool("silence");
+        const [sl, sr] = lab.buffers();
+        ok(sl.slice(0, 1000).every((v) => v === 0) && sr.slice(0, 1000).every((v) => v === 0),
+          "t2 silence applies to both channels");
+        ok(sl[2000] !== 0 && sr[2000] !== 0, "t2b outside the selection is untouched");
+        lab.undo();
+
+        // t3: normalise is LINKED — the quieter channel keeps its ratio
+        const peak = (b) => b.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        const ratio0 = peak(lab.buffers()[1]) / peak(lab.buffers()[0]);
+        lab.clearSelection();
+        lab.tool("normalise");
+        const [nl, nr] = lab.buffers();
+        ok(Math.abs(peak(nl) - 1) < 0.01, "t3 loudest channel reaches full scale");
+        ok(Math.abs(peak(nr) / peak(nl) - ratio0) < 0.01, "t3b the stereo balance survives");
+        lab.undo();
+
+        // t4: crop keeps both channels the same length
+        lab.setSelection(1000, 5000);
+        lab.tool("crop");
+        ok(lab.state().len === 4000 && lab.buffers().every((b) => b.length === 4000),
+          "t4 crop keeps the channels aligned");
+        lab.undo();
+
+        // t5: the mono/stereo toggle both ways, undoably
+        lab.setChannelCount(1);
+        ok(lab.state().channels === 1, "t5 fold to mono");
+        const folded = lab.buffer()[100];
+        ok(Math.abs(folded - (chL[100] + chR[100]) / 2) < 1e-6, "t5b mono is the average");
+        lab.undo();
+        ok(lab.state().channels === 2, "t5c undo brings the pair back");
+
+        // ── commit ───────────────────────────────────────────────────────────
+        lab.commit();
+        const res = await pLab;
+        ok(res && res.count === 1, "t6 commit imported one instrument");
+        const census = store.doc.sampleList();
+        ok(census.length === censusBefore + 1, "t6b ONE new census entry for the pair");
+        const entry = census.find((e) => isStereoSample(e));
+        ok(entry && sampleSpans(entry).length === 2, "t6c the entry carries two spans");
+        const patches = store.doc.instruments[res.firstSlot].extraPatches ?? [];
+        ok(patches.length === 1 && patchIsStereo(patches[0]),
+          "t6d the instrument got a full-range stereo Ixmp patch");
+        ok(patches[0].chanPtrs[0] !== patches[0].samplePtr, "t6e channel 2 is its own span");
+
+        // The two pooled channels differ (a downmix or a crossed write would show).
+        const bin = store.doc.sampleBin;
+        const [l, r] = sampleSpans(entry);
+        let diff = 0;
+        for (let i = 0; i < entry.len; i++) if (bin[l.ptr + i] !== bin[r.ptr + i]) diff++;
+        ok(diff > entry.len * 0.5, `t6f the pooled channels differ (${diff}/${entry.len})`);
+
+        // ── it plays, and it plays in stereo ─────────────────────────────────
+        await win.__microtone.ensureAudio?.();
+        const audio = store.audio;
+        if (audio) {
+          audio.jamNote(0, 0, 0x5000, res.firstSlot);
+          await sleep(300);
+          audio.jamStop(0);
+          ok(true, "t7 jamming the stereo instrument did not throw");
+        } else {
+          log("t7 audio unavailable — skipped");
+        }
+
+        // ── Samples view shows the pair ──────────────────────────────────────
+        const samplesView = win.__microtone.samplesView;
+        samplesView.show();
+        await sleep(200);
+        const stRows = [...samplesView.listEl.querySelectorAll(".smp-tag")];
+        ok(stRows.length === 1, `t8 the Samples list tags one stereo sample (got ${stRows.length})`);
+        const selIdx = samplesView.list.findIndex((e) => isStereoSample(e));
+        samplesView.selected = selIdx;
+        samplesView.refresh();
+        ok(samplesView.info.textContent.includes("stereo"),
+          "t8b the info line says stereo");
+        const stereoH = parseFloat(samplesView.canvas.style.height);
+        const monoIdx = samplesView.list.findIndex((e) => !isStereoSample(e));
+        samplesView.selected = monoIdx;
+        samplesView.refresh();
+        const monoH = parseFloat(samplesView.canvas.style.height);
+        ok(Math.abs(stereoH - monoH * 2) < 0.5,
+          `t8c the canvas is one full lane per channel (mono ${monoH}, stereo ${stereoH})`);
+        samplesView.hide();
+
+        // ── the DSP editor and the paint canvas grow a lane per channel ──────
+        const { openSampleDspEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
+        const pDsp = openSampleDspEditor(store, entry);
+        const dspDlg = await waitFor(() => win.document.querySelector(".sample-editor"));
+        const dspH = parseFloat(dspDlg.querySelector("canvas").style.height);
+        ok(Math.abs(dspH - 400) < 0.5, `t11 DSP editor draws two 200px lanes (got ${dspH})`);
+        [...dspDlg.querySelectorAll(".modal-buttons button")].at(-1).click(); // Cancel
+        await pDsp;
+
+        const { paintEditSample } = await win.eval('import("/src/ui/popups/waveformpaint.js")');
+        win.confirm = () => true; // the long-sample warning would block headless
+        const preL = Array.from(bin.subarray(l.ptr, l.ptr + 32));
+        const preR = Array.from(bin.subarray(r.ptr, r.ptr + 32));
+        const pPaint = paintEditSample(store, entry);
+        const paintDlg = await waitFor(() => win.document.querySelector(".wavepaint-modal"));
+        const pc = paintDlg.querySelector(".wave-paint");
+        ok(pc.height === 400, `t12 paint canvas is one lane per channel (got ${pc.height})`);
+        // Draw across the LOWER lane only — channel 2 must change, channel 1 must not.
+        const pr = pc.getBoundingClientRect();
+        const yLower = pr.top + pr.height * 0.85;
+        const pev = (type, frac) => pc.dispatchEvent(new win.PointerEvent(type, {
+          bubbles: true, pointerId: 3, clientX: pr.left + pr.width * frac, clientY: yLower,
+        }));
+        pev("pointerdown", 0.0); pev("pointermove", 0.02); pev("pointerup", 0.02);
+        paintDlg.querySelector(".wave-ok").click();
+        await pPaint;
+        const postL = Array.from(bin.subarray(l.ptr, l.ptr + 32));
+        const postR = Array.from(bin.subarray(r.ptr, r.ptr + 32));
+        ok(postL.join() === preL.join(), "t12b painting the R lane leaves L alone");
+        ok(postR.join() !== preR.join(), "t12c painting the R lane edits R");
+        store.undo.undo();
+        ok(Array.from(bin.subarray(r.ptr, r.ptr + 32)).join() === preR.join(),
+          "t12d the paint edit undoes");
+
+        // ── the patch editor round-trips the 's' block ───────────────────────
+        const { writePatchesBlob, parsePatchesBlob } = await win.eval('import("/src/engine/inst.js")');
+        const blob = writePatchesBlob(patches);
+        const back = parsePatchesBlob(blob);
+        ok(back.length === 1 && patchIsStereo(back[0]) &&
+           back[0].chanPtrs[0] === patches[0].chanPtrs[0], "t9 's' block round-trips in the app");
+
+        // ── one undo step, byte-exact ────────────────────────────────────────
+        store.undo.undo();
+        const after = win.eval("__microtone.store.doc.toBytes()");
+        ok(after.length === before.length && after.every((v, i) => v === before[i]),
+          "t10 the whole stereo import undoes byte-exactly");
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

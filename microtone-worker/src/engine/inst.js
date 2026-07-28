@@ -20,6 +20,12 @@ function makeEnv(defaultValue) {
  * absent (null env / hasExtra=false) defers to the base TaudInst.
  * Sentinels: defaultPan 0xFF, defaultNoteVolume 0, vibratoWaveform 0xFF all
  * mean "inherit the base instrument's value".
+ *
+ * The 's' block (hasChanBlock) makes the patch MULTI-CHANNEL: every channel is
+ * a separate pool span sharing this record's length / loop / rate geometry,
+ * with `chanPtrs` holding the pointers for channels 2..chanCount (channel 1 is
+ * samplePtr). Only stereo (chanCount 2) is played today; the format's
+ * quadraphonic/ambisonic cases are TODO #998.
  */
 export function makeInstPatch(fields) {
   return {
@@ -35,12 +41,31 @@ export function makeInstPatch(fields) {
     pitchEnv: null, pitchEnvLoop: 0, pitchEnvSustain: 0,
     hasExtra: false, fadeoutStep: 0, filterSfMode: false,
     extraCutoff: 0xff, extraResonance: 0xff, extraInitialAttenOctet: 0,
+    hasChanBlock: false, chanCount: 1, chanMode: CHAN_MODE_DISCRETE,
+    chanFlags: 0, chanPtrs: [],
     ...fields,
   };
 }
 
+/** 's' block channel modes (low nibble of the count/mode byte). */
+export const CHAN_MODE_DISCRETE = 0; // XY stereo, 4-track quad — one channel per speaker feed
+export const CHAN_MODE_MATRIX = 1;   // M/S stereo, ambisonic B-format — decoded before panning
+
 export function patchSampleLoopSustain(patch) {
   return (patch.loopMode & 0x04) !== 0;
+}
+
+/** Every pool span the patch plays, channel order: [samplePtr, ...chanPtrs]. */
+export function patchChannelPtrs(patch) {
+  return patch.hasChanBlock && patch.chanCount > 1
+    ? [patch.samplePtr, ...patch.chanPtrs.slice(0, patch.chanCount - 1)]
+    : [patch.samplePtr];
+}
+
+/** True when the patch plays exactly two channels (the only multi-channel case
+ *  the mixer renders today). */
+export function patchIsStereo(patch) {
+  return patch.hasChanBlock && patch.chanCount === 2 && patch.chanPtrs.length >= 1;
 }
 
 /**
@@ -91,6 +116,21 @@ export function parsePatchesBlob(bytes) {
     if ((ver & 0x04) !== 0) { const e = readEnv(); if (e === null) break outer; panEnv = e.arr; panLoop = e.loop; panSus = e.sus; }
     if ((ver & 0x08) !== 0) { const e = readEnv(); if (e === null) break outer; filEnv = e.arr; filLoop = e.loop; filSus = e.sus; }
     if ((ver & 0x10) !== 0) { const e = readEnv(); if (e === null) break outer; pitEnv = e.arr; pitLoop = e.loop; pitSus = e.sus; }
+    // 's' block LAST (terranmon.txt Ixmp Note 6): u8 count/mode + u24 flags +
+    // one u32 sample pointer per EXTRA channel.
+    let hasChanBlock = false, chanCount = 1, chanMode = CHAN_MODE_DISCRETE;
+    let chanFlags = 0, chanPtrs = [];
+    if ((ver & 0x20) !== 0) {
+      if (p + 4 > bytes.length) break;
+      const cb = u8(p);
+      chanCount = (cb >>> 4) + 1;
+      chanMode = cb & 0x0f;
+      chanFlags = u8(p + 1) | (u8(p + 2) << 8) | (u8(p + 3) << 16);
+      if (p + 4 + 4 * (chanCount - 1) > bytes.length) break;
+      for (let k = 0; k < chanCount - 1; k++) chanPtrs.push(u32(p + 4 + 4 * k));
+      hasChanBlock = true;
+      p += 4 + 4 * (chanCount - 1);
+    }
     patches.push(makeInstPatch({
       pitchStart: u16(o + 1),
       pitchEnd: u16(o + 3),
@@ -117,6 +157,7 @@ export function parsePatchesBlob(bytes) {
       pitchEnv: pitEnv, pitchEnvLoop: pitLoop, pitchEnvSustain: pitSus,
       hasExtra, fadeoutStep, filterSfMode,
       extraCutoff, extraResonance, extraInitialAttenOctet: extraAttenOctet,
+      hasChanBlock, chanCount, chanMode, chanFlags, chanPtrs,
     }));
     o = p;
   }
@@ -125,9 +166,9 @@ export function parsePatchesBlob(bytes) {
 
 /**
  * Serialise patch objects back to the flat wire blob — the exact byte-inverse
- * of parsePatchesBlob (blocks emitted in on-wire order x, v, p, f, P). Shared
- * by the engine capture path (getInstrumentPatches) and the document layer's
- * Ixmp patch editor.
+ * of parsePatchesBlob (blocks emitted in on-wire order x, v, p, f, P, s).
+ * Shared by the engine capture path (getInstrumentPatches) and the document
+ * layer's Ixmp patch editor.
  */
 export function writePatchesBlob(patches) {
   const out = [];
@@ -145,6 +186,7 @@ export function writePatchesBlob(patches) {
     if (p.panEnv !== null) ver |= 0x04;
     if (p.filterEnv !== null) ver |= 0x08;
     if (p.pitchEnv !== null) ver |= 0x10;
+    if (p.hasChanBlock) ver |= 0x20;
     w8(ver);
     w16(p.pitchStart); w16(p.pitchEnd);
     w8(p.volumeStart); w8(p.volumeEnd);
@@ -163,6 +205,12 @@ export function writePatchesBlob(patches) {
     if (p.panEnv !== null) wEnv(p.panEnv, p.panEnvLoop, p.panEnvSustain);
     if (p.filterEnv !== null) wEnv(p.filterEnv, p.filterEnvLoop, p.filterEnvSustain);
     if (p.pitchEnv !== null) wEnv(p.pitchEnv, p.pitchEnvLoop, p.pitchEnvSustain);
+    if (p.hasChanBlock) {
+      const extra = Math.max(0, Math.min(15, p.chanCount - 1));
+      w8(((extra & 0x0f) << 4) | (p.chanMode & 0x0f));
+      w8(p.chanFlags); w8(p.chanFlags >>> 8); w8(p.chanFlags >>> 16);
+      for (let k = 0; k < extra; k++) w32(p.chanPtrs[k] ?? 0);
+    }
   }
   return Uint8Array.from(out);
 }

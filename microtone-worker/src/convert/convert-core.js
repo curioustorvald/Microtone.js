@@ -106,15 +106,19 @@ except SystemExit as e:
  *  diagnostics through the status channel (the import progress popup).
  *  `rpb` (MIDI only) pins midi2taud's rows-per-beat grid axis (one of
  *  2/4/8/16/32/64 — argparse choices); null/"auto" leaves it auto-picked.
+ *  `stereoSamples` (MIDI only, item 90.1) opts IN to keeping SF2 stereo sample
+ *  pairs as stereo — double the pool bytes per stereo instrument.
  *  `trimPatches` (MIDI only, item 75) opts IN to dropping the Ixmp patches the
  *  song never triggers — off by default, so an imported bank keeps each preset's
  *  full zone map and Housekeeping ("Cleanup instrument patches") decides later.
  *  Worth turning on when the untrimmed pool overflows the converter's 8 MB
  *  budget: that path resamples EVERY sample down, costing quality song-wide. */
-export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null, trimPatches = false }) {
+export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null,
+                            trimPatches = false, stereoSamples = false }) {
   if (!isMidi) return [inPath, outPath, "-v"];
   const argv = [inPath, sf2Path, outPath, "-v"];
   if (rpb != null && rpb !== "auto") argv.push("--rpb", String(rpb));
   if (trimPatches) argv.push("--trim-unused-patches");
+  if (stereoSamples) argv.push("--stereo-samples");
   return argv;
 }

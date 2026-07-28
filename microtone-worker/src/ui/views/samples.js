@@ -6,7 +6,11 @@
 import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
+import { sampleSpans, isStereoSample } from "../../doc/document.js";
 import { t } from "../i18n.js";
+
+/** Waveform canvas height PER CHANNEL (px). */
+const WAVE_LANE_H = 220;
 
 export class SamplesView {
   constructor(store, host, callbacks = {}) {
@@ -100,9 +104,11 @@ export class SamplesView {
     const [{ openSampleLab }, { u8ToFloat }] = await Promise.all([
       import("../popups/samplelab.js"), import("../../doc/wavelab.js"),
     ]);
-    const bytes = this.store.doc.sampleBin.subarray(s.ptr, s.ptr + s.len);
+    // Every channel travels: a stereo pooled sample opens as a stereo take.
+    const chans = sampleSpans(s).map((sp) =>
+      u8ToFloat(this.store.doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)));
     const res = await openSampleLab(this.store, {
-      data: u8ToFloat(bytes),
+      data: chans,
       rate: s.rate,
       name: unescapeName(s.name) || `sample ${s.index}`,
       sourceLabel: t("smp.labSource", { idx: s.index }),
@@ -124,6 +130,7 @@ export class SamplesView {
         `<span class="dot"></span>` +
         `<span class="idx">${String(i).padStart(3, "0")}</span>` +
         `<span class="name">${escape(unescapeName(s.name) || "(unnamed)")}</span>` +
+        (isStereoSample(s) ? `<span class="smp-tag">${escape(t("smp.stereoTag"))}</span>` : "") +
         `<span class="dim">${(s.len / 1024).toFixed(1)}K</span>`;
       row.addEventListener("click", () => { this.selected = i; this.refresh(); });
       this.listEl.appendChild(row);
@@ -150,7 +157,9 @@ export class SamplesView {
     const loopModes = [t("smp.noLoop"), t("smp.loopForward"), t("smp.loopPingpong"), t("smp.loopOneshot")];
     this.info.innerHTML =
       `<b>${escape(unescapeName(s.name) || escape(t("smp.namePlaceholder")))}</b> · ptr 0x${s.ptr.toString(16).toUpperCase()} · ` +
-      `${escape(t("smp.infoBytes", { n: s.len }))} · ${s.rate} Hz@C4 · ${escape(loopModes[s.loopMode & 3])}` +
+      `${escape(t("smp.infoBytes", { n: s.len }))}${isStereoSample(s) ? " ×2" : ""} · ` +
+      `${escape(t(isStereoSample(s) ? "smp.stereo" : "smp.mono"))} · ` +
+      `${s.rate} Hz@C4 · ${escape(loopModes[s.loopMode & 3])}` +
       `${(s.loopMode & 3) !== 0 ? ` [${s.loopStart}..${s.loopEnd}]` : ""}` +
       `${(s.loopMode & 4) !== 0 ? ` · ${escape(t("smp.infoSustain"))}` : ""}` +
       ` · ${escape(t("smp.infoUsedBy", { list: s.users.map((u) => "$" + hex2(u)).join(" ") }))}`;
@@ -175,7 +184,10 @@ export class SamplesView {
     const doc = this.store.doc;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(100, this.right.clientWidth - 20);
-    const h = 220;
+    // One FULL lane per channel: a stereo sample gets a canvas twice as tall
+    // rather than two half-height lanes — the view has the room, and squeezing
+    // them would cost exactly the amplitude detail the display is for.
+    const h = WAVE_LANE_H * (s ? sampleSpans(s).length : 1);
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
     this.canvas.style.width = w + "px";
@@ -207,8 +219,8 @@ export class SamplesView {
       }
     }
     const funkEnd = funkMask ? Math.min(s.loopEnd, s.loopStart + funkMask.length * 8) : 0;
-    const byteAt = (p) => {
-      let v = bin[s.ptr + p];
+    const byteAt = (p, base = s.ptr) => {
+      let v = bin[base + p];
       let flipped = false;
       if (funkMask && p >= s.loopStart && p < funkEnd) {
         const k = p - s.loopStart;
@@ -218,40 +230,61 @@ export class SamplesView {
     };
 
     // Bars anchored to the centre line (taut style): value 128 sits at the
-    // middle, each bar filled from the baseline out to its sample value.
-    const baseY = h / 2;
-    const yOf = (v) => (h * (255 - v)) / 255;
-    ctx.fillStyle = C.waveMid ?? C.dim;
-    ctx.fillRect(0, Math.round(baseY), w, 1);
+    // middle, each bar filled from the baseline out to its sample value. A
+    // stereo sample (item 90) draws one lane per channel, stacked, sharing the
+    // loop shading and the play cursors — it is one sample, seen twice.
+    const spans = sampleSpans(s);
+    const laneH = h / spans.length;
+    spans.forEach((span, li) => {
+      const top0 = li * laneH;
+      const baseY = top0 + laneH / 2;
+      const yOf = (v) => top0 + (laneH * (255 - v)) / 255;
+      ctx.fillStyle = C.waveMid ?? C.dim;
+      ctx.fillRect(0, Math.round(baseY), w, 1);
+      const at = (i) => byteAt(i, span.ptr);
 
-    if (s.len <= w) {
-      const rectW = Math.max(1, Math.ceil(w / s.len));
-      for (let i = 0; i < s.len; i++) {
-        const { v, flipped } = byteAt(i);
-        const yv = yOf(v);
-        const top = Math.min(baseY, yv);
-        ctx.fillStyle = flipped ? C.waveFunk : C.wave;
-        ctx.fillRect(Math.floor((i * w) / s.len), top, rectW, Math.max(1, Math.abs(baseY - yv)));
-      }
-    } else {
-      for (let col = 0; col < w; col++) {
-        const start = Math.floor((col * s.len) / w);
-        const end = Math.min(s.len, Math.floor(((col + 1) * s.len) / w));
-        if (end <= start) continue;
-        const step = Math.max(1, ((end - start) / 8) | 0);
-        let mn = 255, mx = 0, anyFlip = false;
-        for (let p = start; p < end; p += step) {
-          const { v, flipped } = byteAt(p);
-          if (v < mn) mn = v;
-          if (v > mx) mx = v;
-          if (flipped) anyFlip = true;
+      if (s.len <= w) {
+        const rectW = Math.max(1, Math.ceil(w / s.len));
+        for (let i = 0; i < s.len; i++) {
+          const { v, flipped } = at(i);
+          const yv = yOf(v);
+          const top = Math.min(baseY, yv);
+          ctx.fillStyle = flipped ? C.waveFunk : C.wave;
+          ctx.fillRect(Math.floor((i * w) / s.len), top, rectW, Math.max(1, Math.abs(baseY - yv)));
         }
-        const yTop = Math.min(baseY, yOf(mx));
-        const yBot = Math.max(baseY, yOf(mn));
-        ctx.fillStyle = anyFlip ? C.waveFunk : C.wave;
-        ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
+      } else {
+        for (let col = 0; col < w; col++) {
+          const start = Math.floor((col * s.len) / w);
+          const end = Math.min(s.len, Math.floor(((col + 1) * s.len) / w));
+          if (end <= start) continue;
+          const step = Math.max(1, ((end - start) / 8) | 0);
+          let mn = 255, mx = 0, anyFlip = false;
+          for (let p = start; p < end; p += step) {
+            const { v, flipped } = at(p);
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+            if (flipped) anyFlip = true;
+          }
+          const yTop = Math.min(baseY, yOf(mx));
+          const yBot = Math.max(baseY, yOf(mn));
+          ctx.fillStyle = anyFlip ? C.waveFunk : C.wave;
+          ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
+        }
       }
-    }
+      if (spans.length > 1) {
+        ctx.fillStyle = C.fg2 ?? C.fg;
+        ctx.globalAlpha = 0.85;
+        ctx.font = "10px sans-serif";
+        ctx.fillText(t(li === 0 ? "lab.chanL" : "lab.chanR"), 3, top0 + 11);
+        ctx.globalAlpha = 1;
+        if (li > 0) {
+          ctx.fillStyle = C.dim;
+          ctx.globalAlpha = 0.6;
+          ctx.fillRect(0, Math.round(top0), w, 1);
+          ctx.globalAlpha = 1;
+        }
+      }
+    });
 
     // live play-position cursors — vertical bars, matching the envelope
     // graph's playback cursor style

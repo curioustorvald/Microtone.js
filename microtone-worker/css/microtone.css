@@ -604,6 +604,15 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .side-row.live .dot { background: var(--meter); box-shadow: 0 0 6px var(--meter); }
 .side-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Stereo marker on a sample row (item 90) — a quiet chip, not a shout. */
+.side-row .smp-tag {
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  padding: 0 3px;
+  border: 1px solid var(--dim);
+  border-radius: 2px;
+  color: var(--accent2, var(--accent));
+}
 .badge-sm { color: var(--accent-2); font-size: 0.75rem; }
 .side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }
 .detail-info { margin-bottom: 0.6rem; color: var(--dim); font-size: 0.9rem; }
@@ -878,6 +887,8 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 /* ── import-instruments popup ── */
 .import-modal { max-width: 560px; }
 .import-bar { display: flex; gap: 0.5rem; align-items: baseline; margin: 0.4rem 0; }
+/* Import options row (SF2 mono/stereo, item 90.1). */
+.import-opt { display: flex; align-items: center; gap: 0.35rem; margin: 0.4rem 0 0; }
 .import-bar .import-tally { margin-left: auto; color: var(--dim); font-size: 0.85rem; }
 .import-bar .import-filter {
   background: var(--panel-2);

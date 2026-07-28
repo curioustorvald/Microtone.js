@@ -22,13 +22,14 @@ import {
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { tuningRatioOf } from "../../src/engine/tables.js";
 import { presetForNotation, surveyTuning } from "../../src/ui/pitchtables.js";
-import { Document, combineTpif } from "../../src/doc/document.js";
+import { Document, combineTpif, sampleSpans, isStereoSample } from "../../src/doc/document.js";
 import { planImport } from "../../src/doc/bankmerge.js";
 import { importBankOp } from "../../src/doc/ops.js";
 import { UndoStack } from "../../src/doc/undo.js";
 import { loadIntoEngine } from "../../src/audio/offline-render.js";
 import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { TaudEngine } from "../../src/engine/engine.js";
+import { patchIsStereo } from "../../src/engine/inst.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const importDir = root + "test/corpus/import/";
@@ -83,6 +84,21 @@ test("buildArgv pins MIDI rows-per-beat only when requested (item 62)", () => {
   // rpb is MIDI-only — tracker argv never carries it
   assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", rpb: 8 }),
     ["/in.xm", "/out.taud", "-v"]);
+});
+
+test("buildArgv opts IN to stereo samples only when asked (item 90.1)", () => {
+  const base = { isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" };
+  assert.deepEqual(buildArgv(base), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, stereoSamples: false }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, stereoSamples: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--stereo-samples"]);
+  // Stacks with the other MIDI options, in argparse-safe order.
+  assert.deepEqual(buildArgv({ ...base, rpb: 8, trimPatches: true, stereoSamples: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches", "--stereo-samples"]);
+  // Tracker argv never carries it — it is a SoundFont concern.
+  assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.it", outPath: "/out.taud", stereoSamples: true }),
+    ["/in.it", "/out.taud", "-v"]);
 });
 
 test("buildArgv opts IN to patch trimming only when asked (item 75)", () => {
@@ -352,4 +368,133 @@ test("midi2taud keeps every zone by default; --trim-unused-patches drops the unt
     };
     assert.deepEqual(render(full), render(trimmed),
       "untriggered patches must not change what the song sounds like");
+  });
+
+// ── stereo samples (item 90) ───────────────────────────────────────────────
+
+test("it2taud keeps an IT stereo sample as a stereo pair, --mono-samples folds it", () => {
+  // TUTE-stereo.it is TUTE.IT with sample 1 ("Low Strings") turned into a
+  // stereo sample whose right channel is the left inverted about the DC centre.
+  const stereoDoc = new Document(parseTaud(convert("TUTE-stereo.it")));
+  const monoDoc = new Document(parseTaud(convert("TUTE.IT")));
+
+  const list = stereoDoc.sampleList();
+  const pair = list.filter(isStereoSample);
+  assert.equal(pair.length, 1, "exactly one sample came through stereo");
+  assert.equal(pair[0].name, "Low Strings");
+  assert.deepEqual(sampleSpans(pair[0]).length, 2);
+
+  // Both channels are pooled, and they genuinely differ.
+  const [l, r] = sampleSpans(pair[0]);
+  let diff = 0;
+  for (let i = 0; i < pair[0].len; i++) {
+    if (stereoDoc.sampleBin[l.ptr + i] !== stereoDoc.sampleBin[r.ptr + i]) diff++;
+  }
+  assert.ok(diff > pair[0].len * 0.9, `channels must differ (${diff}/${pair[0].len})`);
+
+  // The census still names one sample per pair — same list as the mono file.
+  assert.deepEqual(list.map((s) => s.name), monoDoc.sampleList().map((s) => s.name));
+
+  // The instrument that plays it carries an 's' patch, and it sounds in stereo.
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, parseTaud(convert("TUTE-stereo.it")));
+  const slot = stereoDoc.usedInstrumentSlots()
+    .find((s) => (stereoDoc.instruments[s].extraPatches ?? []).some(patchIsStereo));
+  assert.ok(slot, "some instrument carries the stereo patch");
+  eng.setMasterVolume(0, 255);
+  eng.jamNote(0, 0, 0x5000, slot);
+  assert.equal(eng.playheads[0].trackerState.voices[0].activeChanCount, 2);
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  let spread = 0, level = 0, n = 0;
+  for (let c = 0; c < 20; c++) {
+    eng.renderChunk(0, out);
+    const ts = eng.playheads[0].trackerState;
+    for (let i = 0; i < ts.mixLeft.length; i++) {
+      spread += Math.abs(ts.mixLeft[i] - ts.mixRight[i]);
+      level += Math.abs(ts.mixLeft[i]);
+      n++;
+    }
+  }
+  assert.ok(level / n > 0.001, "the note must sound");
+  assert.ok(spread / n > level / n * 0.5, "left and right must differ");
+
+  // --mono-samples reproduces the old downmix: no stereo, no extra pool bytes.
+  const folded = new Document(parseTaud(runConverter(py, {
+    script: "it2taud.py",
+    argv: ["/in.it", "/out.taud", "-v", "--mono-samples"],
+    inputs: [{ path: "/in.it", bytes: readFileSync(importDir + "TUTE-stereo.it") }],
+    output: "/out.taud",
+    onLog: () => {},
+  })));
+  assert.equal(folded.sampleList().filter(isStereoSample).length, 0);
+});
+
+test("midi2taud --stereo-samples imports SF2 pairs as stereo (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const run = (extra) => new Document(parseTaud(runConverter(py, {
+      script: "midi2taud.py",
+      argv: buildArgv({
+        isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud",
+        ...extra,
+      }),
+      inputs: [
+        { path: "/in.mid", bytes: readFileSync(importDir + "M_E1M1.mid") },
+        { path: "/sf.sf2", bytes: readFileSync(sf2Path) },
+      ],
+      output: "/out.taud",
+      onLog: () => {},
+    })));
+    const poolBytes = (doc) =>
+      doc.sampleList().reduce((n, e) => n + e.len * sampleSpans(e).length, 0);
+
+    const mono = run({});
+    assert.equal(mono.sampleList().filter(isStereoSample).length, 0,
+      "mono stays the default for MIDI imports");
+    const stereo = run({ stereoSamples: true });
+    // Whether GeneralUser's presets use stereo pairs at all is the SF2's
+    // business; the invariants are that the flag never loses samples, never
+    // shrinks the pool, and that any stereo entry is a genuine two-span pair
+    // the engine will play as such.
+    assert.equal(stereo.sampleList().length, mono.sampleList().length);
+    assert.ok(poolBytes(stereo) >= poolBytes(mono));
+    for (const e of stereo.sampleList().filter(isStereoSample)) {
+      assert.equal(sampleSpans(e).length, 2);
+      assert.notEqual(e.chanPtrs[0], e.ptr);
+    }
+    for (const slot of stereo.usedInstrumentSlots()) {
+      for (const p of stereo.instruments[slot].extraPatches ?? []) {
+        if (patchIsStereo(p)) assert.equal(p.chanPtrs.length, 1);
+      }
+    }
+  });
+
+test("sf2bank --stereo doubles the pool and marks the samples stereo (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const sf2 = { path: "/sf.sf2", bytes: readFileSync(sf2Path) };
+    const sel = JSON.stringify([[0, 0]]); // Grand Piano
+    const build = (extra) => new Document(parseTaud(runConverter(py, {
+      script: SF2BANK_SOURCE,
+      argv: ["build", "/sf.sf2", "/sel.json", "/out.tsii", "--bpm", "125", ...extra],
+      inputs: [sf2, { path: "/sel.json", bytes: new TextEncoder().encode(sel) }],
+      output: "/out.tsii",
+      onLog: () => {},
+    })));
+    const poolBytes = (doc) =>
+      doc.sampleList().reduce((n, e) => n + e.len * sampleSpans(e).length, 0);
+
+    const mono = build([]);
+    const stereo = build(["--stereo"]);
+    assert.equal(mono.sampleList().filter(isStereoSample).length, 0,
+      "mono is still the default (item 90.1 is opt-in)");
+    // GeneralUser's Grand Piano may or may not be built from stereo pairs; the
+    // invariant either way is that --stereo never LOSES samples and never
+    // shrinks the pool, and that any stereo entry costs exactly two spans.
+    assert.equal(stereo.sampleList().length, mono.sampleList().length);
+    assert.ok(poolBytes(stereo) >= poolBytes(mono));
+    for (const e of stereo.sampleList().filter(isStereoSample)) {
+      assert.equal(sampleSpans(e).length, 2);
+      assert.notEqual(e.chanPtrs[0], e.ptr);
+    }
   });

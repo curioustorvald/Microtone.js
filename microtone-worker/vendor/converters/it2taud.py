@@ -55,11 +55,12 @@ from taud_common import (
     J_SEMI_TABLE,
     d_arg_to_col, resample_linear, rescale_offset_effects_per_slot,
     encode_cue, deduplicate_patterns, finalize_cue_sheet, set_cue_instruction,
-    normalise_sample, encode_song_entry, nearest_minifloat, compress_blob,
+    normalise_sample, normalise_sample_channels,
+    encode_song_entry, nearest_minifloat, compress_blob,
     CUE_INST_NOP, CUE_INST_HALT, cue_instruction_len,
     cue_instruction_halt_at,
     build_project_data, detect_subsongs,
-    IXMP_PAN_NO_OVERRIDE,
+    IXMP_PAN_NO_OVERRIDE, IXMP_CHAN_DISCRETE,
 )
 
 
@@ -348,10 +349,15 @@ class ITSample:
                  'c5_speed', 'length', 'loop_beg', 'loop_end',
                  'sus_beg', 'sus_end', 'smp_point',
                  'has_loop', 'is_16bit', 'is_stereo', 'is_compressed',
-                 'is_signed', 'sample_data',
+                 'is_signed', 'sample_data', 'sample_data_r',
                  'av_speed', 'av_depth', 'av_sweep', 'av_wave')
 
-def parse_samples(data: bytes, h: ITHeader, decompress: bool) -> list:
+def parse_samples(data: bytes, h: ITHeader, decompress: bool,
+                  keep_stereo: bool = True) -> list:
+    """`keep_stereo` (the default) keeps an IT stereo sample's two channels
+    apart in `sample_data` / `sample_data_r`; the Taud side pools them as two
+    spans joined by an Ixmp 's' patch. With it off they are downmixed to mono
+    the way every pre-2026-07 conversion did."""
     samples = []
     # IT2.15 compression is signaled PER-SAMPLE via cvt bit 2 (0x04), not globally
     # via the file's cwt. Reference: OpenMPT ITTools.cpp, libxmp it_load.c.
@@ -392,6 +398,7 @@ def parse_samples(data: bytes, h: ITHeader, decompress: bool) -> list:
         s.is_compressed = bool(s.flags & IT_SMP_COMPRESSED)
         s.is_signed    = bool(s.cvt & 0x01)
         s.sample_data  = b''
+        s.sample_data_r = b''
 
         has_data = bool(s.flags & IT_SMP_ASSOC) and s.length > 0
         if has_data:
@@ -403,8 +410,12 @@ def parse_samples(data: bytes, h: ITHeader, decompress: bool) -> list:
                         is_it215 = bool(s.cvt & 0x04)
                         raw = it214_decompress(data, s.smp_point, s.length,
                                                s.is_16bit, is_it215, s.is_stereo)
-                        s.sample_data = normalise_sample(raw, True,
-                                                          s.is_16bit, s.is_stereo, s.name)
+                        chans = normalise_sample_channels(raw, True, s.is_16bit,
+                                                          s.is_stereo and keep_stereo, s.name)
+                        if not keep_stereo and s.is_stereo:
+                            chans = [normalise_sample(raw, True, s.is_16bit, True, s.name)]
+                        s.sample_data = chans[0]
+                        s.sample_data_r = chans[1] if len(chans) > 1 else b''
                         s.length = len(s.sample_data)
                         s.loop_beg = min(s.loop_beg, s.length)
                         s.loop_end = min(s.loop_end, s.length)
@@ -419,8 +430,15 @@ def parse_samples(data: bytes, h: ITHeader, decompress: bool) -> list:
                     s.sample_data = bytes(min(s.length, 256))
                 else:
                     raw = data[s.smp_point : s.smp_point + byte_len]
-                    s.sample_data = normalise_sample(raw, s.is_signed,
-                                                      s.is_16bit, s.is_stereo, s.name)
+                    if s.is_stereo and not keep_stereo:
+                        s.sample_data = normalise_sample(raw, s.is_signed,
+                                                          s.is_16bit, True, s.name)
+                        s.sample_data_r = b''
+                    else:
+                        chans = normalise_sample_channels(raw, s.is_signed,
+                                                          s.is_16bit, s.is_stereo, s.name)
+                        s.sample_data = chans[0]
+                        s.sample_data_r = chans[1] if len(chans) > 1 else b''
                     s.length    = len(s.sample_data)
                     s.loop_beg  = min(s.loop_beg, s.length)
                     s.loop_end  = min(s.loop_end,  s.length)
@@ -1144,7 +1162,55 @@ def _it_note_to_taud(note: int, clamp_low: bool = False, clamp_high: bool = Fals
     return max(0x0020, min(0xFFFF, val))
 
 
-def _build_it_ixmp_patches(inst, samples, extras_offsets) -> list:
+def _it_patch_fields(s):
+    """Per-sample Ixmp patch fields for IT sample `s` — loop/sustain encoding
+    and the default volume / pan / auto-vibrato that mirror what the
+    use_instruments inst-record path (build_sample_inst_bin_it) would store, so
+    a patch on this sample behaves exactly like the base record would.
+    Returns (loop_start, loop_end, loop_mode, default_pan, dnv,
+             vib_speed, vib_depth, vib_rate, vib_wave)."""
+    if s.flags & IT_SMP_SUS_LOOP:
+        ls = min(s.sus_beg, 65535); le = min(s.sus_end, 65535)
+        sustain_bit = 0x4
+        pingpong = bool(s.flags & IT_SMP_PINGPONG_SUS)
+        has_loop = True
+    elif s.has_loop:
+        ls = min(s.loop_beg, 65535); le = min(s.loop_end, 65535)
+        sustain_bit = 0x0
+        pingpong = bool(s.flags & IT_SMP_PINGPONG)
+        has_loop = True
+    else:
+        ls = 0; le = 0
+        sustain_bit = 0x0
+        pingpong = False
+        has_loop = False
+    loop_mode = (2 if (has_loop and pingpong) else (1 if has_loop else 0)) | sustain_bit
+
+    smp_vol  = min(getattr(s, 'vol', 64), 64)
+    dnv      = min(255, round(smp_vol * 255 / 64))
+    smp_dfp  = getattr(s, 'dfp', 0)
+    default_pan = (min(255, max(0, round((smp_dfp & 0x7F) * 255 / 64)))
+                   if (smp_dfp & 0x80) else IXMP_PAN_NO_OVERRIDE)
+    return (ls, le, loop_mode, default_pan, dnv,
+            min(255, round(getattr(s, 'av_speed', 0) * 255 / 64)),
+            min(255, round(getattr(s, 'av_depth', 0) * 255 / 64)),
+            getattr(s, 'av_sweep', 0) & 0xFF,
+            getattr(s, 'av_wave',  0) & 0x07)
+
+
+def _build_it_stereo_patch(s, sample_ptr, sample_ptr_r) -> list:
+    """One full-range stereo patch for a sample the base record can only play as
+    its left channel (sample mode, where no keyboard table exists). Covers the
+    whole pitch/velocity space, so it always wins the trigger lookup."""
+    (ls, le, loop_mode, default_pan, dnv,
+     vs, vd, vr, vw) = _it_patch_fields(s)
+    patches = []
+    _emit_patch(patches, 0, 119, sample_ptr, s, ls, le, loop_mode, default_pan, dnv,
+                vs, vd, vr, vw, sample_ptr_r)
+    return patches
+
+
+def _build_it_ixmp_patches(inst, samples, extras_offsets, extras_offsets_r=None) -> list:
     """For one IT instrument, return a list of Ixmp patch dicts covering every
     keyboard cell that maps to a NON-canonical sample. The canonical sample is
     served by the base instrument record so no patch is emitted for it (the
@@ -1158,11 +1224,18 @@ def _build_it_ixmp_patches(inst, samples, extras_offsets) -> list:
     kbd = getattr(inst, 'keyboard', None)
     if not kbd:
         return []
+    extras_offsets_r = extras_offsets_r or {}
+    # A STEREO canonical sample cannot be expressed by the base record (only an
+    # Ixmp patch carries the 's' block), so it is treated as non-canonical here
+    # and gets patches over its own keyboard runs.
+    canon_stereo = (1 <= canonical <= len(samples)
+                    and samples[canonical - 1] is not None
+                    and ('it_smp', canonical - 1) in extras_offsets_r)
     # Distinct non-canonical samples referenced.
     distinct = []
     seen = set()
     for kb_smp in kbd:
-        if kb_smp == 0 or kb_smp == canonical:
+        if kb_smp == 0 or (kb_smp == canonical and not canon_stereo):
             continue
         if kb_smp not in seen and 1 <= kb_smp <= len(samples) and samples[kb_smp - 1] is not None:
             seen.add(kb_smp); distinct.append(kb_smp)
@@ -1178,37 +1251,10 @@ def _build_it_ixmp_patches(inst, samples, extras_offsets) -> list:
         sample_ptr = extras_offsets.get(('it_smp', si))
         if sample_ptr is None:
             continue   # not in the pool — bin overflow or corrupt source
+        sample_ptr_r = extras_offsets_r.get(('it_smp', si))
 
-        # Per-sample loop / sustain encoding (mirrors build_sample_inst_bin_it).
-        if s.flags & IT_SMP_SUS_LOOP:
-            ls = min(s.sus_beg, 65535); le = min(s.sus_end, 65535)
-            sustain_bit = 0x4
-            pingpong = bool(s.flags & IT_SMP_PINGPONG_SUS)
-            has_loop = True
-        elif s.has_loop:
-            ls = min(s.loop_beg, 65535); le = min(s.loop_end, 65535)
-            sustain_bit = 0x0
-            pingpong = bool(s.flags & IT_SMP_PINGPONG)
-            has_loop = True
-        else:
-            ls = 0; le = 0
-            sustain_bit = 0x0
-            pingpong = False
-            has_loop = False
-        loop_mode = (2 if (has_loop and pingpong) else (1 if has_loop else 0)) | sustain_bit
-
-        # Per-sample default volume / pan / auto-vibrato — mirrors the
-        # use_instruments inst-record path so behaviour is identical when the
-        # patch sample matches what the base instrument would have stored.
-        smp_vol  = min(getattr(s, 'vol', 64), 64)
-        dnv      = min(255, round(smp_vol * 255 / 64))
-        smp_dfp  = getattr(s, 'dfp', 0)
-        default_pan = (min(255, max(0, round((smp_dfp & 0x7F) * 255 / 64)))
-                       if (smp_dfp & 0x80) else IXMP_PAN_NO_OVERRIDE)
-        vib_speed_taud = min(255, round(getattr(s, 'av_speed', 0) * 255 / 64))
-        vib_depth_taud = min(255, round(getattr(s, 'av_depth', 0) * 255 / 64))
-        vib_rate_taud  = getattr(s, 'av_sweep', 0) & 0xFF
-        vib_wave_taud  = getattr(s, 'av_wave',  0) & 0x07
+        (ls, le, loop_mode, default_pan, dnv,
+         vib_speed_taud, vib_depth_taud, vib_rate_taud, vib_wave_taud) = _it_patch_fields(s)
 
         # Find contiguous IT-note ranges where the keyboard points at this sample.
         run_start = None
@@ -1220,19 +1266,23 @@ def _build_it_ixmp_patches(inst, samples, extras_offsets) -> list:
                 if run_start is not None:
                     _emit_patch(patches, run_start, n - 1, sample_ptr, s,
                                 ls, le, loop_mode, default_pan, dnv,
-                                vib_speed_taud, vib_depth_taud, vib_rate_taud, vib_wave_taud)
+                                vib_speed_taud, vib_depth_taud, vib_rate_taud, vib_wave_taud,
+                                sample_ptr_r)
                     run_start = None
         if run_start is not None:
             _emit_patch(patches, run_start, 119, sample_ptr, s,
                         ls, le, loop_mode, default_pan, dnv,
-                        vib_speed_taud, vib_depth_taud, vib_rate_taud, vib_wave_taud)
+                        vib_speed_taud, vib_depth_taud, vib_rate_taud, vib_wave_taud,
+                        sample_ptr_r)
     return patches
 
 
 def _emit_patch(patches, it_lo, it_hi, sample_ptr, s,
                 ls, le, loop_mode, default_pan, dnv,
-                vib_speed, vib_depth, vib_rate, vib_wave):
-    """Append one patch dict covering IT-note range [it_lo, it_hi] inclusive."""
+                vib_speed, vib_depth, vib_rate, vib_wave, sample_ptr_r=None):
+    """Append one patch dict covering IT-note range [it_lo, it_hi] inclusive.
+    `sample_ptr_r` makes it a STEREO patch (Ixmp 's'): channel 2's pool span,
+    same length and geometry as channel 1."""
     taud_lo = _it_note_to_taud(it_lo, clamp_low=(it_lo == 0))
     taud_hi = _it_note_to_taud(it_hi, clamp_high=(it_hi == 119))
     patches.append({
@@ -1255,6 +1305,8 @@ def _emit_patch(patches, it_lo, it_hi, sample_ptr, s,
         'vibrato_depth':       vib_depth,
         'vibrato_rate':        vib_rate,
         'vibrato_waveform':    vib_wave,
+        **({'channels': {'mode': IXMP_CHAN_DISCRETE, 'flags': 0,
+                         'ptrs': [sample_ptr_r]}} if sample_ptr_r is not None else {}),
     })
 
 
@@ -1280,6 +1332,13 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
 
     def _scale_sample(s, r):
         s.sample_data = resample_linear(s.sample_data, r)
+        if getattr(s, 'sample_data_r', b''):
+            # The pair must stay frame-aligned: resample channel 2 by the same
+            # ratio and clamp it to channel 1's length (rounding can differ by 1).
+            r2 = resample_linear(s.sample_data_r, r)
+            n = len(s.sample_data)
+            s.sample_data_r = (r2[:n] if len(r2) >= n
+                               else r2 + bytes([0x80]) * (n - len(r2)))
         s.length      = len(s.sample_data)
         s.loop_beg    = max(0, int(s.loop_beg * r))
         s.loop_end    = max(0, min(int(s.loop_end * r), s.length))
@@ -1288,7 +1347,8 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
         s.c5_speed    = max(1, int(s.c5_speed * r))
 
     # ── Pass 1: global pool-overflow resample (8 MB cap) ────────────────────
-    total = sum(len(s.sample_data) for _, s in pcm_list)
+    total = sum(len(s.sample_data) + len(getattr(s, 'sample_data_r', b''))
+                for _, s in pcm_list)
     global_ratio = 1.0
     if total > SAMPLEBIN_SIZE:
         global_ratio = SAMPLEBIN_SIZE / total
@@ -1338,11 +1398,15 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
     # follow (it dedupes instrument records by (ptr,len), sorts by ptr, and
     # matches SNam[i+1] positionally — see taut.js buildSampleIndex).
     written    = {}     # id(sample) -> pool offset already written
+    written_r  = {}     # id(sample) -> channel-2 pool offset (stereo samples only)
+    offsets_r  = {}     # slot idx -> channel-2 pool offset
     pool_order = []     # distinct sample objects, in pool (ascending-offset) order
     for idx, s in pcm_list:
         shared = written.get(id(s))
         if shared is not None:
             offsets[idx] = shared
+            if id(s) in written_r:
+                offsets_r[idx] = written_r[id(s)]
             continue
         n = min(len(s.sample_data), SAMPLEBIN_SIZE - pos)
         if n <= 0:
@@ -1358,6 +1422,20 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
             s.loop_end = min(s.loop_end, n)
             s.sus_end  = min(s.sus_end,  n)
         pos += n
+        # Channel 2 of a stereo sample: its own span, same length, written
+        # right after channel 1 so the pair stays adjacent in the pool. If it
+        # cannot fit, the sample degrades to mono rather than to garbage.
+        right = getattr(s, 'sample_data_r', b'')
+        if right:
+            nr = min(n, SAMPLEBIN_SIZE - pos)
+            if nr < n:
+                vprint(f"  warning: sample bin full, '{s.name}' falls back to mono")
+                s.sample_data_r = b''
+            else:
+                sample_bin[pos:pos+nr] = right[:nr]
+                written_r[id(s)] = pos
+                offsets_r[idx] = pos
+                pos += nr
 
     # 256-byte instrument layout (terranmon.txt:2001+).
     INST_STRIDE = 256
@@ -1539,7 +1617,7 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
 
         vprint(f"  instrument[{taud_idx}] '{s.name}' ptr:{ptr} c5spd:{s.c5_speed}")
 
-    return bytes(sample_bin) + bytes(inst_bin), offsets, ratio, pool_order
+    return bytes(sample_bin) + bytes(inst_bin), offsets, ratio, pool_order, offsets_r
 
 
 # ── Pattern builder ───────────────────────────────────────────────────────────
@@ -2097,10 +2175,14 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
         for key in extras_keys:
             proxy.append(samples[key[1]])
 
-        sampleinst_raw, bin_offsets, sample_ratio, pool_order = build_sample_inst_bin_it(proxy, instr_data_by_slot)
-        # Map ('it_smp', si) → sample-bin offset.
+        sampleinst_raw, bin_offsets, sample_ratio, pool_order, bin_offsets_r = build_sample_inst_bin_it(proxy, instr_data_by_slot)
+        # Map ('it_smp', si) → sample-bin offset (and channel 2's, when the
+        # sample is stereo — the Ixmp patch needs both pointers).
         extras_offsets = {key: bin_offsets.get(extras_base + j, 0)
                           for j, key in enumerate(extras_keys)}
+        extras_offsets_r = {key: bin_offsets_r[extras_base + j]
+                            for j, key in enumerate(extras_keys)
+                            if (extras_base + j) in bin_offsets_r}
         # Also include each canonical sample at its taud-slot offset so the patch
         # builder can reuse them when an instrument's keyboard cell references the
         # canonical sample at a non-canonical note range.
@@ -2115,6 +2197,8 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
                 # Look up the pool offset for the canonical via the proxy slot.
                 if taud_slot in bin_offsets:
                     extras_offsets[('it_smp', si)] = bin_offsets[taud_slot]
+                    if taud_slot in bin_offsets_r:
+                        extras_offsets_r[('it_smp', si)] = bin_offsets_r[taud_slot]
     else:
         # Samples referenced directly; proxy is samples list (0-based, slot 0 unused).
         # No instruments in the file → no multi-sample mapping → no Ixmp patches.
@@ -2124,8 +2208,9 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
             for i, s in enumerate(samples)
             if s is not None
         }
-        sampleinst_raw, bin_offsets, sample_ratio, pool_order = build_sample_inst_bin_it(proxy)
+        sampleinst_raw, bin_offsets, sample_ratio, pool_order, bin_offsets_r = build_sample_inst_bin_it(proxy)
         extras_offsets = {}
+        extras_offsets_r = {}
 
     assert len(sampleinst_raw) == SAMPLEINST_SIZE
 
@@ -2202,12 +2287,25 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
                     if inst is None: continue
                     taud_slot = ii + 1
                     if taud_slot >= 256: continue
-                    patches = _build_it_ixmp_patches(inst, samples, extras_offsets)
+                    patches = _build_it_ixmp_patches(inst, samples, extras_offsets,
+                                                     extras_offsets_r)
                     if patches:
                         ixmp_patches[taud_slot] = patches
-                if ixmp_patches:
-                    vprint(f"  ixmp: {sum(len(p) for p in ixmp_patches.values())} "
-                           f"patches across {len(ixmp_patches)} instruments")
+            elif bin_offsets_r:
+                # Sample mode: no keyboard table, so the only patches needed are
+                # the ones that carry a STEREO sample's second channel — one
+                # full-range patch per stereo slot (item 90).
+                for slot, ptr_r in bin_offsets_r.items():
+                    if not (1 <= slot < 256):
+                        continue
+                    smp = samples[slot - 1] if slot - 1 < len(samples) else None
+                    if smp is None or not smp.sample_data:
+                        continue
+                    ixmp_patches[slot] = _build_it_stereo_patch(
+                        smp, bin_offsets.get(slot, 0), ptr_r)
+            if ixmp_patches:
+                vprint(f"  ixmp: {sum(len(p) for p in ixmp_patches.values())} "
+                       f"patches across {len(ixmp_patches)} instruments")
 
             pd_kwargs.update(project_name=h.title,
                              instrument_names=inst_names,
@@ -2256,6 +2354,10 @@ def main():
     ap.add_argument('--no-project-data', action='store_true',
                     help='Omit the optional Project Data section '
                          '(song / instrument / sample names)')
+    ap.add_argument('--mono-samples', action='store_true',
+                    help='Downmix stereo IT samples to mono instead of keeping '
+                         'both channels (a stereo sample costs twice the pool '
+                         'bytes and needs an Ixmp stereo patch)')
     args = ap.parse_args()
     set_verbose(args.verbose)
 
@@ -2270,7 +2372,8 @@ def main():
     vprint(f"  flags: linear={h.linear_slides} use_inst={h.use_instruments} "
            f"link_gef={h.link_gef}")
 
-    samples     = parse_samples(data, h, decompress=not args.no_decompress)
+    samples     = parse_samples(data, h, decompress=not args.no_decompress,
+                                keep_stereo=not args.mono_samples)
     instruments = parse_instruments(data, h) if h.use_instruments else []
     patterns_rows = parse_patterns(data, h)
 

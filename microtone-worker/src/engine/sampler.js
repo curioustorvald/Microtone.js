@@ -29,10 +29,14 @@ export function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 /**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
  * instrument's funk-repeat mask. Caller wraps loop regions first.
+ * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
+ * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
+ * for its right channel (both channels share the funk mask and geometry).
  */
-export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax) {
+export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
+                                basePtr = voice.activeSamplePtr) {
   const i = Math.min(Math.max(idx, 0), sampleLen - 1);
-  let b = eng.sampleBin[Math.min(voice.activeSamplePtr + i, binMax)];
+  let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
   if (inst.funkMask !== null && inst.sampleLoopEnd > inst.sampleLoopStart) {
     const ls = inst.sampleLoopStart;
     if (i >= ls && i < inst.sampleLoopEnd && inst.funkBit(i - ls)) b = b ^ 0xff;
@@ -40,34 +44,30 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax) {
   return (b - 127.5) / 127.5;
 }
 
-export function fetchTrackerSample(eng, voice, inst, interpMode) {
-  if (inst.index === 0) return 0.0;
-
-  const sampleLen = Math.max(voice.activeSampleLength, 1);
-  const loopStart = voice.activeSampleLoopStart;
-  const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
-  const binMax = SAMPLE_BIN_TOTAL - 1;
-
+/**
+ * Interpolate ONE channel at the voice's current position WITHOUT advancing it.
+ * `basePtr` selects the channel's pool span and `st` its DPCM counter (the
+ * Voice itself for channel 1, voice.right for a stereo right channel).
+ */
+function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st) {
   const i0 = Math.min(Math.max(Math.trunc(voice.samplePos), 0), sampleLen - 1);
   const frac = voice.samplePos - i0;
 
-  let sample;
   switch (interpMode) {
     case INTERP_DEFAULT: {
       let acc = 0.0;
       for (let j = -SINC_WIDTH; j <= SINC_WIDTH; j++) {
         const coeff = sincTap(frac, j);
-        if (coeff !== 0.0) acc += readSamplePoint(eng, voice, inst, i0 + j, sampleLen, binMax) * coeff;
+        if (coeff !== 0.0) acc += readSamplePoint(eng, voice, inst, i0 + j, sampleLen, binMax, basePtr) * coeff;
       }
-      sample = acc;
-      break;
+      return acc;
     }
     case INTERP_SNES: {
       // SNES BRR 4-tap gaussian with the int16 mid-sum overflow "chirp" preserved.
-      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax) * 32767.0);
-      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax) * 32767.0);
-      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax) * 32767.0);
-      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax) * 32767.0);
+      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr) * 32767.0);
+      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr) * 32767.0);
+      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr) * 32767.0);
+      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr) * 32767.0);
       const offset = Math.min(Math.max(Math.trunc(frac * 256.0), 0), 255);
       let out = (SNES_GAUSS[0xff - offset] * oldest) >> 10;
       out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;
@@ -75,33 +75,65 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
       out = (out << 16) >> 16; // int16 wrap (the hardware overflow)
       out += (SNES_GAUSS[offset] * news) >> 10;
       out = Math.min(Math.max(out, -32768), 32767);
-      sample = (out >> 1) / 16384.0;
-      break;
+      return (out >> 1) / 16384.0;
     }
     case INTERP_NES_DPCM: {
       // NES 2A03 DMC 1-bit sigma-delta simulation (±2 slew on a 7-bit counter).
-      const target = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax);
+      const target = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr);
       const targetLevel = Math.min(Math.max(Math.trunc((target + 1.0) * 63.5), 0), 127);
-      if (targetLevel > voice.nesDpcmCounter && voice.nesDpcmCounter <= 125) {
-        voice.nesDpcmCounter += 2;
-      } else if (targetLevel < voice.nesDpcmCounter && voice.nesDpcmCounter >= 2) {
-        voice.nesDpcmCounter -= 2;
+      if (targetLevel > st.nesDpcmCounter && st.nesDpcmCounter <= 125) {
+        st.nesDpcmCounter += 2;
+      } else if (targetLevel < st.nesDpcmCounter && st.nesDpcmCounter >= 2) {
+        st.nesDpcmCounter -= 2;
       }
-      sample = (voice.nesDpcmCounter - 63.5) / 63.5;
-      break;
+      return (st.nesDpcmCounter - 63.5) / 63.5;
     }
     case INTERP_NONE:
     case INTERP_A500:
     case INTERP_A1200:
     default:
       // Paula-style ZOH; aliasing removed by the post-mix Amiga LPFs.
-      sample = readSamplePoint(eng, voice, inst, i0, sampleLen, binMax);
-      break;
+      return readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr);
   }
+}
+
+/**
+ * Fetch BOTH channels of a stereo voice at one position, then advance once —
+ * the pair is one sample of one voice, so pitch, loop wrapping and the
+ * sample-end ramp are shared. Writes [ch1, ch2] into `out` (a length-2 array
+ * the mixer recycles). Channel meaning is the patch's chanMode: discrete L,R
+ * or matrix M,S (the mixer decodes).
+ */
+export function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
+  if (inst.index === 0) { out[0] = 0.0; out[1] = 0.0; return out; }
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const binMax = SAMPLE_BIN_TOTAL - 1;
+  out[0] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeSamplePtr, voice);
+  out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeChanPtr2, voice.right);
+  if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
+  return out;
+}
+
+export function fetchTrackerSample(eng, voice, inst, interpMode) {
+  if (inst.index === 0) return 0.0;
+
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const binMax = SAMPLE_BIN_TOTAL - 1;
+  const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+    voice.activeSamplePtr, voice);
 
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
+  advanceSamplePos(voice, sampleLen);
+  return sample;
+}
 
+/** Step samplePos by the playback rate and apply the loop/end rules. */
+function advanceSamplePos(voice, sampleLen) {
+  const loopStart = voice.activeSampleLoopStart;
+  const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
   if (voice.forward) {
     voice.samplePos += voice.playbackRate;
     // Sustain bit set + key-off ⇒ escape the loop (loopMode 0 semantics).
@@ -131,7 +163,6 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
     voice.samplePos -= voice.playbackRate;
     if (voice.samplePos < loopStart) { voice.samplePos = loopStart; voice.forward = true; }
   }
-  return sample;
 }
 
 /** Engage the MilkyTracker-style sample-end ramp (no-op if already ramping). */

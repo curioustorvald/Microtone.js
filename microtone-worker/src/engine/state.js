@@ -338,6 +338,8 @@ export class Playhead {
       it.filterCutoffCached = -1; it.filterResonanceCached = -1;
       it.currentCutoff = 0xff; it.currentResonance = 0xff;
       it.nesDpcmCounter = 63;
+      it.right.reset();
+      it.activeChanCount = 1; it.activeChanMode = 0; it.activeChanPtr2 = 0;
     }
     ts.backgroundVoices.length = 0;
     // Funk masks + notefx 5/6 overrides are per-instrument runtime state — clear

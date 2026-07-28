@@ -7,6 +7,7 @@
 
 import { parseTaud } from "../../format/taud-parse.js";
 import { SAMPLEBIN_SIZE } from "../../format/taud-const.js";
+import { sampleSpans } from "../../doc/document.js";
 import { Document } from "../../doc/document.js";
 import { bankInventory, planImport } from "../../doc/bankmerge.js";
 import { importBankOp } from "../../doc/ops.js";
@@ -53,7 +54,9 @@ export async function showImportInstruments(store) {
   const destUsed = new Set(store.doc.usedInstrumentSlots());
   let freeLow = 0;
   for (let s = 1; s <= 255; s++) if (!destUsed.has(s)) freeLow++;
-  const poolUsed = store.doc.sampleList().reduce((n, e) => n + e.len, 0);
+  // A stereo sample occupies one span per channel (item 90).
+  const poolUsed = store.doc.sampleList()
+    .reduce((n, e) => n + e.len * sampleSpans(e).length, 0);
 
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
@@ -186,6 +189,16 @@ export function importFromSf2(store, fileName, sf2Bytes) {
     list.append(el("div", "import-row dim", "reading presets…"));
 
     const statusEl = el("p", "dim", "");
+    // Item 90.1: SF2 instruments built from stereo sample pairs can come in as
+    // genuine stereo (two pool spans + an Ixmp stereo patch) or be mixed down
+    // to mono as they always were. Mono is the default because stereo doubles
+    // the pool cost of every such instrument.
+    const stereoLab = document.createElement("label");
+    stereoLab.className = "import-opt";
+    const stereoBox = document.createElement("input");
+    stereoBox.type = "checkbox";
+    stereoLab.title = t("import.sf2StereoTitle");
+    stereoLab.append(stereoBox, document.createTextNode(" " + t("import.sf2Stereo")));
     const errEl = el("p", "import-error", "");
     errEl.hidden = true;
     const btnRow = document.createElement("div");
@@ -195,7 +208,7 @@ export function importFromSf2(store, fileName, sf2Bytes) {
     const cancelBtn = el("button", "", t("common.cancel"));
     btnRow.append(okBtn, cancelBtn);
 
-    dlg.append(h, bar, list, statusEl, errEl, btnRow);
+    dlg.append(h, bar, list, stereoLab, statusEl, errEl, btnRow);
     document.body.appendChild(dlg);
     const finish = (result) => { dlg.close(); dlg.remove(); resolve(result); };
     cancelBtn.addEventListener("click", (e) => { e.preventDefault(); finish(null); });
@@ -258,7 +271,8 @@ export function importFromSf2(store, fileName, sf2Bytes) {
       errEl.hidden = true;
       try {
         const bpm = store.doc.songs[store.songIndex ?? 0]?.bpm ?? 125;
-        const tsii = await buildSf2Bank(sf2Bytes, selection, { bpm, onStatus: status });
+        const tsii = await buildSf2Bank(sf2Bytes, selection,
+          { bpm, stereo: stereoBox.checked, onStatus: status });
         const src = new Document(parseTaud(tsii));
         const topLevel = src.usedInstrumentSlots().filter((s) => s <= 255);
         const plan = planImport(store.doc, src, topLevel);

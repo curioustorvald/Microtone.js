@@ -4,6 +4,20 @@
 // the Hz@C4 rate that keeps its original pitch.
 
 async function decodeMono(fileBytes, contextRate) {
+  const { channels, srcSeconds } = await decodeChannels(fileBytes, contextRate);
+  const n = channels[0].length;
+  const mono = new Float32Array(n);
+  for (const d of channels) for (let i = 0; i < n; i++) mono[i] += d[i];
+  if (channels.length > 1) {
+    for (let i = 0; i < n; i++) mono[i] /= channels.length;
+  }
+  return { mono, srcSeconds };
+}
+
+/** Decode to per-channel float buffers, keeping at most `maxChannels` of them
+ *  (a >2-channel file is folded to its first two — Taud plays stereo, and
+ *  surround is TODO #998). */
+async function decodeChannels(fileBytes, contextRate, maxChannels = 2) {
   const AC = globalThis.OfflineAudioContext || globalThis.webkitOfflineAudioContext;
   if (!AC) throw new Error("no OfflineAudioContext — can't decode audio here");
   // decodeAudioData resamples to the context rate (spec behaviour), so the
@@ -11,29 +25,31 @@ async function decodeMono(fileBytes, contextRate) {
   const ctx = new AC(1, 1, contextRate);
   const buf = await ctx.decodeAudioData(
     fileBytes.buffer.slice(fileBytes.byteOffset, fileBytes.byteOffset + fileBytes.byteLength));
-  const n = buf.length;
-  const mono = new Float32Array(n);
-  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-    const d = buf.getChannelData(ch);
-    for (let i = 0; i < n; i++) mono[i] += d[i];
-  }
-  if (buf.numberOfChannels > 1) {
-    for (let i = 0; i < n; i++) mono[i] /= buf.numberOfChannels;
-  }
-  return { mono, srcSeconds: n / buf.sampleRate };
+  const keep = Math.max(1, Math.min(maxChannels, buf.numberOfChannels));
+  const channels = [];
+  for (let ch = 0; ch < keep; ch++) channels.push(Float32Array.from(buf.getChannelData(ch)));
+  return { channels, srcChannels: buf.numberOfChannels, srcSeconds: buf.length / buf.sampleRate };
 }
 
 /**
- * Float decode for the Sample Lab (item 83): full-length mono at `rate`
- * (default 48 kHz — above the 32 kHz taud ceiling, so nothing is thrown away
- * before the user has cropped/chopped; the Lab's Kaiser resampler has the
- * final say at commit time). No length budget here — length changes are the
- * Lab's whole point.
- * @returns {data: Float32Array, rate: number, seconds: number}
+ * Float decode for the Sample Lab (item 83): full-length at `rate` (default
+ * 48 kHz — above the 32 kHz taud ceiling, so nothing is thrown away before the
+ * user has cropped/chopped; the Lab's Kaiser resampler has the final say at
+ * commit time). No length budget here — length changes are the Lab's whole
+ * point.
+ *
+ * `stereo` (default true) keeps a stereo file's channels apart so the Lab
+ * opens on a stereo take (item 90); `data` is always channel 1, so callers
+ * that only understand mono still work, and `channels` carries the rest.
+ * @returns {data, channels, srcChannels, rate, seconds}
  */
-export async function decodeAudioToFloat(fileBytes, { rate = 48000 } = {}) {
-  const { mono, srcSeconds } = await decodeMono(fileBytes, rate);
-  return { data: mono, rate, seconds: srcSeconds };
+export async function decodeAudioToFloat(fileBytes, { rate = 48000, stereo = true } = {}) {
+  if (!stereo) {
+    const { mono, srcSeconds } = await decodeMono(fileBytes, rate);
+    return { data: mono, channels: [mono], srcChannels: 1, rate, seconds: srcSeconds };
+  }
+  const { channels, srcChannels, srcSeconds } = await decodeChannels(fileBytes, rate);
+  return { data: channels[0], channels, srcChannels, rate, seconds: srcSeconds };
 }
 
 /**

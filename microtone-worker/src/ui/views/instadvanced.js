@@ -256,7 +256,8 @@ export class AdvancedZoneEditor {
       this.listRows.push({ el: row, idx: i });
     };
     patches.forEach((p, i) => {
-      mkRow(i, this.sampleLabel(p.samplePtr, p.sampleLength),
+      mkRow(i, this.sampleLabel(p.samplePtr, p.sampleLength) +
+        (p.hasChanBlock && p.chanCount > 1 ? ` [${t("smp.stereoTag")}]` : ""),
         `${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)} · ${p.volumeStart}‥${p.volumeEnd}`,
         this.overlapsEarlier(patches, i));
     });
@@ -493,6 +494,13 @@ export class AdvancedZoneEditor {
         q.playStart = 0;
         q.loopStart = e.loopStart; q.loopEnd = e.loopEnd;
         q.loopMode = (q.loopMode & ~0x03) | (e.loopMode & 0x03);
+        // Binding follows the sample's own channel layout (item 90): a stereo
+        // census entry brings its 's' block, a mono one drops it.
+        const extra = e.chanPtrs ?? [];
+        q.hasChanBlock = extra.length > 0;
+        q.chanCount = 1 + extra.length;
+        q.chanMode = e.chanMode ?? 0;
+        q.chanPtrs = [...extra];
       }, { census: true });
     }, t("adv.bindTitle")));
     this.row(smp,
@@ -510,6 +518,44 @@ export class AdvancedZoneEditor {
       this.num(t("smp.loopEnd"), p.loopEnd, 0, 0xffff, (v) => this._field("loopEnd", v)),
       this.chk(t("smp.sustain").trim(), (p.loopMode & 0x04) !== 0,
         (on) => this._field("loopMode", on ? p.loopMode | 0x04 : p.loopMode & ~0x04)));
+
+    // Channels (Ixmp 's' block, item 90). Channel 2 is another pool span of
+    // the SAME length — the geometry above describes both — so the picker only
+    // offers same-length samples.
+    const chanRow = this.row(smp,
+      this.chk(t("adv.stereo"), p.hasChanBlock && p.chanCount > 1, (on) => {
+        this._edit((ps) => {
+          const q = ps[this.selIdx];
+          if (!q) return;
+          if (on) {
+            const alt = this._census.find((e) => e.len === q.sampleLength && e.ptr !== q.samplePtr);
+            q.hasChanBlock = true;
+            q.chanCount = 2;
+            q.chanMode = 0;
+            q.chanPtrs = [alt ? alt.ptr : q.samplePtr];
+          } else {
+            q.hasChanBlock = false;
+            q.chanCount = 1;
+            q.chanPtrs = [];
+          }
+        }, { census: true });
+      }, t("adv.stereoTitle")));
+    if (p.hasChanBlock && p.chanCount > 1) {
+      const cur2 = String(p.chanPtrs[0] ?? 0);
+      const opts2 = this._census
+        .filter((e) => e.len === p.sampleLength)
+        .map((e) => [String(e.ptr), `${String(e.index).padStart(2, "0")} ${this.sampleLabel(e.ptr, e.len)}`]);
+      if (!opts2.some(([v]) => v === cur2)) {
+        opts2.unshift([cur2, `$${(p.chanPtrs[0] ?? 0).toString(16).toUpperCase()}`]);
+      }
+      chanRow.append(
+        this.sel(t("adv.chan2"), cur2, opts2,
+          (v) => this._edit((ps) => { ps[this.selIdx].chanPtrs = [Number(v) >>> 0]; }, { census: true }),
+          t("adv.chan2Title")),
+        this.sel(t("adv.chanMode"), String(p.chanMode ?? 0),
+          [["0", t("adv.chanModeDiscrete")], ["1", t("adv.chanModeMatrix")]],
+          (v) => this._field("chanMode", Number(v) & 0x0f), t("adv.chanModeTitle")));
+    }
 
     // Per-patch overrides (sentinels defer to the base instrument)
     const ov = this.group(host, t("adv.overridesGroup"));

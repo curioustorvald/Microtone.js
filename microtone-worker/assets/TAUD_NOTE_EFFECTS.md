@@ -1147,13 +1147,49 @@ The crucial bug fix relative to ST3: the loop-counter decrement **MUST** happen 
 
 **Implementation.** On tick `$x`, the engine **MUST** set `output_volume = 0` but **MUST** leave `base_volume` unchanged. If `$x ≥ speed`, the cut **MUST NOT** fire. If `$x == 0`, the command **MUST** be ignored. The engine **MUST** set the `note_was_cut` flag so that a later Q retrigger on the same row is suppressed.
 
-## S $Dx00 — Note delay for $x ticks
+## S $Dxny — Note delay for $x ticks, then note action $n after $y ticks
 
-**Plain.** Delays the triggering of the note (and any co-row instrument, offset, and volume event) until tick `$x`. Until then, any currently playing note continues.
+**Plain.** Delays the triggering of the note (and any co-row instrument, offset, and volume event) until tick `$x`. Until then, any currently playing note continues. If `$y` is nonzero, following action will be triggered after `$y` ticks after note triggering.
 
-**Compatibility.** ST3 `SDx` maps directly. ProTracker `EDx` also maps directly. `SD0` plays the note normally on tick 0. If `$x ≥ speed`, the note **MUST NOT** play on this row and **MUST NOT** carry over to the next row. Some trackers allow playback of "malformed" note delays (`$x` greater than current tick speed); Taud **MUST** discard those notes. If such note events have been encountered during conversion, they **MUST** be corrected by the converter.
+|`$n`|Action|
+|---|---|
+|0|Note off|
+|1|Note cut|
+|2|Note continue|
+|3|Note fade|
+|4|Key lift|
 
-**Implementation.** On row parse, the engine **MUST** defer the note-trigger event (including sample selection, volume, offset, and any volume-column effect) until tick `$x`. On tick `$x`, the engine **MUST** execute the deferred trigger. When combined with pattern delay (S $Ex00), the deferred trigger **MUST** re-fire at the start of each row repetition — matching ST3's `kRowDelayWithNoteDelay` behaviour. If `$x` is greater than the current tick speed, the note **MUST** be discarded (see compatibility notes above).
+Expressed in timeline, this effect does (assuming nonzero `$x` and `$y`):
+
+|Ticks|Action|
+|---|---|
+|0|Nothing|
+|`$x`|Note triggers|
+|`$x`+`$y`|Note action specified as `$n`|
+
+If `$y` is zero:
+
+|Ticks|Action|
+|---|---|
+|0|Nothing|
+|`$x`|Note triggers|
+
+If `$x` is zero:
+
+|Ticks|Action|
+|---|---|
+|0|Note triggers|
+|`$y`|Note action specified as `$n`|
+
+If both are zero:
+
+|Ticks|Action|
+|---|---|
+|0|Note triggers|
+
+**Compatibility.** ST3 `SDx` maps directly. ProTracker `EDx` also maps directly. FastTracker `Kxx` maps to `S D00xx`. OpenMPT `:xy` maps to `S Dx1y`. `S D0**` plays the note normally on tick 0. If `$x ≥ speed`, the note **MUST NOT** play on this row and **MUST NOT** carry over to the next row. Some trackers allow playback of "malformed" note delays (`$x` greater than current tick speed); Taud **MUST** discard those notes. If such note events have been encountered during conversion, they **MUST** be corrected by the converter.
+
+**Implementation.** On row parse, the engine **MUST** defer the note-trigger event (including sample selection, volume, offset, and any volume-column effect) until tick `$x`. On tick `$x`, the engine **MUST** execute the deferred trigger. When combined with pattern delay (S $Ex00), the deferred trigger **MUST** re-fire at the start of each row repetition — matching ST3's `kRowDelayWithNoteDelay` behaviour. If `$x` is greater than the current tick speed, the note **MUST** be discarded (see compatibility notes above). If `$x + $y` is greater than the current tick speed, the action `$n` will be discarded.
 
 ## S $Ex00 — Pattern delay for $x row-repeats
 

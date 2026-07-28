@@ -14,12 +14,50 @@ import {
   AMIGA_A500_A0, AMIGA_A500_B1,
   AMIGA_LED_A1, AMIGA_LED_A2, AMIGA_LED_B1, AMIGA_LED_B2,
 } from "./tables.js";
-import { fetchTrackerSample, advanceVolumeRamp } from "./sampler.js";
+import { fetchTrackerSample, fetchTrackerSampleStereo, advanceVolumeRamp } from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
+import { CHAN_MODE_MATRIX } from "./inst.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
 import { applyTrackerTick } from "./tick.js";
 
 const fround = Math.fround;
+
+/** Scratch pair for fetchTrackerSampleStereo — one voice is mixed at a time. */
+const stereoPair = [0.0, 0.0];
+
+/**
+ * One voice's contribution as a [left, right] PAIR, before pan and gain.
+ * Mono voices put the same sample on both sides, which is what makes the
+ * stereo path a strict generalisation: a stereo sample whose channels are
+ * identical mixes bit-for-bit like the mono sample it was made from.
+ *
+ * Channel mode 0 (discrete) is the sample's own L,R. Mode 1 (matrix) holds
+ * M,S and decodes L = M+S, R = M−S — the inverse of the M=(L+R)/2,
+ * S=(L−R)/2 encoding. The decode happens BEFORE the filter and the voice FX
+ * so those act on speaker feeds (the filter is linear so its result is the
+ * same either way; the bitcrusher/overdrive are not, and crushing a speaker
+ * feed is the sane reading). Surround/spatial modes get their own rules with
+ * TODO #998 — anything not stereo-shaped stays mono here.
+ */
+function renderVoicePair(eng, voice, inst, interpMode, out) {
+  if (voice.activeChanCount !== 2) {
+    const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
+      fetchTrackerSample(eng, voice, inst, interpMode)));
+    out[0] = s;
+    out[1] = s;
+    return out;
+  }
+  fetchTrackerSampleStereo(eng, voice, inst, interpMode, out);
+  let c0 = out[0], c1 = out[1];
+  if (voice.activeChanMode === CHAN_MODE_MATRIX) {
+    const m = c0, s = c1;
+    c0 = m + s;
+    c1 = m - s;
+  }
+  out[0] = applyTaudVoiceFx(voice, applyVoiceFilter(voice, c0));
+  out[1] = applyTaudVoiceFx(voice, applyVoiceFilter(voice, c1, voice.right), voice.right);
+  return out;
+}
 
 /** urand: (xorshift32() & 0xFFFFFF) / 16777216 — exact in Float32. */
 function urand(eng) {
@@ -124,8 +162,11 @@ export function generateTrackerAudio(eng, playhead, out) {
         continue;
       }
       const voiceInst = eng.instruments[voice.instrumentId];
-      const s = applyTaudVoiceFx(voice,
-        applyVoiceFilter(voice, fetchTrackerSample(eng, voice, voiceInst, ts.interpolationMode)));
+      renderVoicePair(eng, voice, voiceInst, ts.interpolationMode, stereoPair);
+      const sL = stereoPair[0];
+      const sR = stereoPair[1];
+      // Soundscope shows the mono sum — a stereo voice is still one voice.
+      const sScope = voice.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
       const instGv = voiceInst.instGlobalVolume / 255.0;
       const swingScale = 1.0 + voice.randomVolBias / 255.0;
       // Per-sample envelope smoothing.
@@ -159,10 +200,10 @@ export function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
-      voice.scopeBuffer[voice.scopeWritePos] = s * perVoiceGain * rampGain;
+      voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
-      mixL += s * vol * lGain * rampGain;
-      mixR += s * vol * rGain * rampGain;
+      mixL += sL * vol * lGain * rampGain;
+      mixR += sR * vol * rGain * rampGain;
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -173,8 +214,9 @@ export function generateTrackerAudio(eng, playhead, out) {
       const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
       if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
-      const s = applyTaudVoiceFx(bg,
-        applyVoiceFilter(bg, fetchTrackerSample(eng, bg, bgInst, ts.interpolationMode)));
+      renderVoicePair(eng, bg, bgInst, ts.interpolationMode, stereoPair);
+      const sL = stereoPair[0];
+      const sR = stereoPair[1];
       const instGv = bgInst.instGlobalVolume / 255.0;
       const swingScale = 1.0 + bg.randomVolBias / 255.0;
       bg.envVolMix += bg.envVolStep;
@@ -204,8 +246,8 @@ export function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
-      mixL += s * vol * lGain * rampGain;
-      mixR += s * vol * rGain * rampGain;
+      mixL += sL * vol * lGain * rampGain;
+      mixR += sR * vol * rGain * rampGain;
     }
 
     // Amiga interpolation modes: post-mix LPF chain.

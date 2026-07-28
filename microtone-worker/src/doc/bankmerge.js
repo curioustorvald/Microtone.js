@@ -12,10 +12,12 @@
 //     SNam rebuilds by sample identity (ptr:len) AFTER apply so the name
 //     order always matches the post-merge sampleList() census.
 
-import { SAMPLEBIN_SIZE, ixmpPatchLen } from "../format/taud-const.js";
+import { SAMPLEBIN_SIZE, ixmpPatchLen, ixmpChanByteOffset } from "../format/taud-const.js";
 import {
   parsePatchesBlob, TaudInst, buildMetaRecord, makeMetaLayer, META_MAX_LAYERS,
+  patchChannelPtrs, makeInstPatch, writePatchesBlob, CHAN_MODE_DISCRETE,
 } from "../engine/inst.js";
+import { sampleSpans } from "./document.js";
 
 const sampleKey = (ptr, len) => `${ptr}:${len}`;
 
@@ -94,7 +96,10 @@ export function bankInventory(srcDoc) {
     const keys = new Set();
     if (!inst.isMeta && inst.sampleLength > 0) keys.add(sampleKey(inst.samplePtr, inst.sampleLength));
     for (const p of inst.extraPatches ?? []) {
-      if (p.sampleLength > 0) keys.add(sampleKey(p.samplePtr, p.sampleLength));
+      // Both channels of a stereo patch cost pool bytes.
+      if (p.sampleLength > 0) {
+        for (const ptr of patchChannelPtrs(p)) keys.add(sampleKey(ptr, p.sampleLength));
+      }
     }
     let sampleBytes = 0;
     for (const k of keys) sampleBytes += Number(k.split(":")[1]);
@@ -113,6 +118,7 @@ export function bankInventory(srcDoc) {
 // [ptr, ptr+len) intervals of every census sample.
 function freeExtents(census) {
   const ivs = census
+    .flatMap(sampleSpans) // a stereo entry occupies its extra channels' spans too
     .map((e) => [e.ptr, Math.min(e.ptr + e.len, SAMPLEBIN_SIZE)])
     .sort((a, b) => a[0] - b[0]);
   const free = [];
@@ -200,7 +206,11 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
     const inst = srcDoc.instruments[srcSlot];
     if (!inst.isMeta && inst.sampleLength > 0) wantKeys.push([inst.samplePtr, inst.sampleLength]);
     for (const p of inst.extraPatches ?? []) {
-      if (p.sampleLength > 0) wantKeys.push([p.samplePtr, p.sampleLength]);
+      if (p.sampleLength > 0) {
+        // Each channel of a stereo patch is its own pool span and travels with
+        // the patch (they dedupe independently — identical channels collapse).
+        for (const ptr of patchChannelPtrs(p)) wantKeys.push([ptr, p.sampleLength]);
+      }
     }
   }
   for (const [ptr, len] of wantKeys) {
@@ -276,18 +286,27 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
         ixmpBlob = Uint8Array.from(entry.blob);
         ixmpCount = entry.count;
         let o = 0;
+        const remapPtrAt = (at, pLen) => {
+          const pPtr = (ixmpBlob[at] | (ixmpBlob[at + 1] << 8) | (ixmpBlob[at + 2] << 16)) +
+                       ixmpBlob[at + 3] * 0x1000000;
+          const ptr = sampleMap.get(sampleKey(pPtr, pLen)) ?? pPtr;
+          ixmpBlob[at] = ptr & 0xff;
+          ixmpBlob[at + 1] = (ptr >>> 8) & 0xff;
+          ixmpBlob[at + 2] = (ptr >>> 16) & 0xff;
+          ixmpBlob[at + 3] = (ptr >>> 24) & 0xff;
+        };
         while (o + 31 <= ixmpBlob.length) {
-          const len = ixmpPatchLen(ixmpBlob[o]);
+          const len = ixmpPatchLen(ixmpBlob, o);
           if (o + len > ixmpBlob.length) break;
           const pLen = ixmpBlob[o + 11] | (ixmpBlob[o + 12] << 8);
           if (pLen > 0) {
-            const pPtr = (ixmpBlob[o + 7] | (ixmpBlob[o + 8] << 8) | (ixmpBlob[o + 9] << 16)) +
-                         ixmpBlob[o + 10] * 0x1000000;
-            const ptr = sampleMap.get(sampleKey(pPtr, pLen)) ?? pPtr;
-            ixmpBlob[o + 7] = ptr & 0xff;
-            ixmpBlob[o + 8] = (ptr >>> 8) & 0xff;
-            ixmpBlob[o + 9] = (ptr >>> 16) & 0xff;
-            ixmpBlob[o + 10] = (ptr >>> 24) & 0xff;
+            remapPtrAt(o + 7, pLen);
+            // 's' block: every extra channel pointer moves with its own span.
+            const so = ixmpChanByteOffset(ixmpBlob[o]);
+            if (so >= 0) {
+              const extra = (ixmpBlob[o + so] ?? 0) >>> 4;
+              for (let k = 0; k < extra; k++) remapPtrAt(o + so + 4 + 4 * k, pLen);
+            }
           }
           o += len;
         }
@@ -371,11 +390,17 @@ export function planSampleImport(destDoc, item) {
 
 /**
  * The N-sample generalisation (item 84 — the Sample Lab's chopper lands every
- * kept chunk in ONE undo step): `items` is [{nameBytes, pcm, rate, loop}].
+ * kept chunk in ONE undo step): `items` is [{nameBytes, pcm, rate, loop, pcmR}].
  * Each item becomes its own instrument (free $01–$FF slots ascending, in item
  * order); PCM dedupes against the pool AND within the batch; INam/SNam names
  * land per item (a deduped span keeps its existing name; for a batch-internal
  * dupe the first item's name wins). Same plan shape, same importBankOp.
+ *
+ * `pcmR` (same length as `pcm`) makes the item STEREO (item 90): the right
+ * channel takes its own pool span and the instrument gets a single full-range
+ * Ixmp patch carrying the 's' block. The base record still points at the LEFT
+ * channel, so a reader that ignores the patch plays the left channel rather
+ * than nothing.
  */
 export function planMultiSampleImport(destDoc, items) {
   if (destDoc.sampleInstImage === null) {
@@ -386,6 +411,9 @@ export function planMultiSampleImport(destDoc, items) {
     if (!it.pcm || it.pcm.length === 0) return { error: "The decoded sample is empty." };
     if (it.pcm.length > 0xffff) {
       return { error: `Sample too long: ${it.pcm.length} bytes (65535 max) — resample it first.` };
+    }
+    if (it.pcmR && it.pcmR.length !== it.pcm.length) {
+      return { error: "Stereo channels must be the same length." };
     }
   }
 
@@ -408,51 +436,73 @@ export function planMultiSampleImport(destDoc, items) {
   const extents = freeExtents(destCensus);
   const samples = [];
   const ptrs = [];
+  const ptrsR = [];
   let newSampleBytes = 0, dedupedSamples = 0;
-  for (const it of items) {
-    let ptr = null;
+  // Place one channel's bytes: reuse an identical span if the pool (or this
+  // batch) already holds one, else first-fit a free extent. `nameBytes` is
+  // only carried by the FIRST channel — an extra channel is not a named sample.
+  const placeChannel = (pcm, nameBytes) => {
     for (const e of destCensus) {
-      if (e.len === it.pcm.length && bytesEqual(destPool.subarray(e.ptr, e.ptr + e.len), it.pcm)) {
-        ptr = e.ptr; // identical content already pooled — reuse it
+      if (e.len === pcm.length && bytesEqual(destPool.subarray(e.ptr, e.ptr + e.len), pcm)) {
         dedupedSamples++;
-        break;
+        return { ptr: e.ptr };
       }
     }
-    if (ptr === null) {
-      for (const ns of samples) {
-        if (bytesEqual(ns.bytes, it.pcm)) { ptr = ns.ptr; dedupedSamples++; break; }
-      }
+    for (const ns of samples) {
+      if (bytesEqual(ns.bytes, pcm)) { dedupedSamples++; return { ptr: ns.ptr }; }
     }
-    if (ptr === null) {
-      const ext = extents.find((x) => x.len >= it.pcm.length);
-      if (!ext) {
-        return { error: `Sample pool full: needs ${it.pcm.length} more bytes and no free extent is large enough.` };
-      }
-      ptr = ext.ptr;
-      ext.ptr += it.pcm.length;
-      ext.len -= it.pcm.length;
-      samples.push({ ptr, bytes: Uint8Array.from(it.pcm), srcKeys: [], nameBytes: it.nameBytes ?? new Uint8Array(0) });
-      newSampleBytes += it.pcm.length;
+    const ext = extents.find((x) => x.len >= pcm.length);
+    if (!ext) {
+      return { error: `Sample pool full: needs ${pcm.length} more bytes and no free extent is large enough.` };
     }
-    ptrs.push(ptr);
+    const ptr = ext.ptr;
+    ext.ptr += pcm.length;
+    ext.len -= pcm.length;
+    samples.push({ ptr, bytes: Uint8Array.from(pcm), srcKeys: [], nameBytes: nameBytes ?? new Uint8Array(0) });
+    newSampleBytes += pcm.length;
+    return { ptr };
+  };
+  for (const it of items) {
+    const left = placeChannel(it.pcm, it.nameBytes);
+    if (left.error) return { error: left.error };
+    ptrs.push(left.ptr);
+    if (it.pcmR) {
+      const right = placeChannel(it.pcmR, new Uint8Array(0));
+      if (right.error) return { error: right.error };
+      ptrsR.push(right.ptr);
+    } else {
+      ptrsR.push(null);
+    }
   }
 
-  const insts = items.map((it, i) => ({
-    srcSlot: -(i + 1), // unique synthetic keys so slotMap can't collide
-    destSlot: slots[i],
-    topLevel: true,
-    record: buildFreshInstRecord({
-      samplePtr: ptrs[i],
-      sampleLength: it.pcm.length,
-      samplingRate: Math.max(1, Math.min(0xffff, Math.round(it.rate) || 0)),
-      // Optional forward loop over the whole sample — a painted single-cycle
-      // waveform (item 53) needs it to sustain as a tone.
-      sampleLoopEnd: it.loop ? it.pcm.length : 0,
-      loopMode: it.loop ? 1 : 0,
-    }),
-    ixmpBlob: null,
-    ixmpCount: 0,
-  }));
+  const insts = items.map((it, i) => {
+    const len = it.pcm.length;
+    const rate = Math.max(1, Math.min(0xffff, Math.round(it.rate) || 0));
+    // Optional forward loop over the whole sample — a painted single-cycle
+    // waveform (item 53) needs it to sustain as a tone.
+    const loopEnd = it.loop ? len : 0;
+    const loopMode = it.loop ? 1 : 0;
+    const stereo = ptrsR[i] !== null;
+    return {
+      srcSlot: -(i + 1), // unique synthetic keys so slotMap can't collide
+      destSlot: slots[i],
+      topLevel: true,
+      record: buildFreshInstRecord({
+        samplePtr: ptrs[i], sampleLength: len, samplingRate: rate,
+        sampleLoopEnd: loopEnd, loopMode,
+      }),
+      ixmpBlob: stereo
+        ? writePatchesBlob([makeInstPatch({
+            pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+            samplePtr: ptrs[i], sampleLength: len, playStart: 0,
+            loopStart: 0, loopEnd, samplingRate: rate, loopMode,
+            hasChanBlock: true, chanCount: 2, chanMode: CHAN_MODE_DISCRETE,
+            chanPtrs: [ptrsR[i]],
+          })])
+        : null,
+      ixmpCount: stereo ? 1 : 0,
+    };
+  });
 
   // INam: splice each instrument name in by slot.
   const destInamPayload = sectionPayload(destDoc, "INam");
@@ -507,14 +557,29 @@ export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new 
     return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
   }
 
+  const rate = Math.max(1, Math.min(0xffff, Math.round(sample.rate) || 0));
   const record = buildFreshInstRecord({
     samplePtr: sample.ptr,
     sampleLength: sample.len,
-    samplingRate: Math.max(1, Math.min(0xffff, Math.round(sample.rate) || 0)),
+    samplingRate: rate,
     sampleLoopStart: sample.loopStart & 0xffff,
     sampleLoopEnd: sample.loopEnd & 0xffff,
     loopMode: sample.loopMode & 0x17,
   });
+  // A stereo sample only sounds as a pair through an Ixmp 's' patch, so the
+  // fresh instrument gets the same full-range patch the importer builds.
+  const stereo = (sample.chanPtrs?.length ?? 0) > 0;
+  const ixmpBlob = stereo
+    ? writePatchesBlob([makeInstPatch({
+        pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+        samplePtr: sample.ptr, sampleLength: sample.len, playStart: 0,
+        loopStart: sample.loopStart & 0xffff, loopEnd: sample.loopEnd & 0xffff,
+        samplingRate: rate, loopMode: sample.loopMode & 0x07,
+        hasChanBlock: true, chanCount: 1 + sample.chanPtrs.length,
+        chanMode: sample.chanMode ?? CHAN_MODE_DISCRETE,
+        chanPtrs: [...sample.chanPtrs],
+      })])
+    : null;
 
   // INam: splice the instrument name in by slot. SNam untouched — the pooled
   // sample set (and hence the census order) does not change.
@@ -528,7 +593,7 @@ export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new 
   }
 
   return {
-    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob: null, ixmpCount: 0 }],
+    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob, ixmpCount: stereo ? 1 : 0 }],
     samples: [],
     inamPayload,
     snamNames: new Map(),
