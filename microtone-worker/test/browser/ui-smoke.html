@@ -42,9 +42,12 @@
         win.document.getElementById("brandBtn").click();
         const aboutDlg = win.document.querySelector("dialog.about-modal");
         const aboutOk = !!aboutDlg && aboutDlg.textContent.includes("Special thanks");
+        // item 95: the patch notes deep-link into the docs viewer
+        const patchLink = aboutDlg?.querySelector('a[href="docs.html#patchnotes"]');
+        const patchLinkOk = !!patchLink && patchLink.target === "_blank";
         aboutDlg?.querySelector(".modal-buttons button")?.click();
         const aboutClosed = !win.document.querySelector("dialog.about-modal");
-        log(`About popup opens + closes: ${aboutOk && aboutClosed ? "ok" : "FAIL"}`);
+        log(`About popup opens + closes (patch-notes link ${patchLinkOk}): ${aboutOk && patchLinkOk && aboutClosed ? "ok" : "FAIL"}`);
 
         // ── mute/solo keys (navigate mode; taut M/N semantics) ──
         store.record = false;

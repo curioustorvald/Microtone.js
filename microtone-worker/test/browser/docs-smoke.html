@@ -23,8 +23,9 @@
         }
         const manualOk = /User Manual/i.test(doc.querySelector("#content h1")?.textContent || "");
         const tocDocs = [...doc.querySelectorAll(".toc-doc")].map((b) => b.textContent);
-        const twoDocs = tocDocs.includes("User Manual") && tocDocs.includes("Note Effects");
-        log(`manual default + doc switcher: ${manualOk && twoDocs}`);
+        const twoDocs = tocDocs.includes("User Manual") && tocDocs.includes("Note Effects") &&
+          tocDocs.includes("Patch Notes");
+        log(`manual default + doc switcher (${tocDocs.join(" / ")}): ${manualOk && twoDocs}`);
 
         // in-content links: hash anchors navigate same-tab (no target), the
         // rest carry target=_blank; an in-doc anchor stays on the manual and
@@ -60,6 +61,17 @@
         const hasCode = !!doc.querySelector("#content pre code");
         log(`note effects render: h1=${effectsOk} tocHeadings=${headingLinks} table=${hasTable} code=${hasCode}`);
 
+        // patch notes (item 95): reachable by its deep-link hash, dated h2s
+        win.location.hash = "#patchnotes";
+        for (let i = 0; i < 80; i++) {
+          if (/Patch Notes/i.test(doc.querySelector("#content h1")?.textContent || "")) break;
+          await sleep(100);
+        }
+        const patchOk = /Patch Notes/i.test(doc.querySelector("#content h1")?.textContent || "");
+        const dates = [...doc.querySelectorAll("#content h2")].map((h) => h.textContent.trim());
+        const datesOk = dates.length > 5 && dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+        log(`patch notes render: h1=${patchOk} dated sections=${dates.length} allDated=${datesOk}`);
+
         // TOC heading link scrolls (id target exists)
         const firstLink = doc.querySelector(".toc-headings a[data-slug]");
         const target = doc.getElementById(firstLink.dataset.slug);
@@ -72,7 +84,8 @@
         log(`anchor target + theme toggle: anchor=${anchorOk} theme=${themeOk}`);
 
         const pass = manualOk && twoDocs && hashSameTab && extNewTab && inDocOk && linkSwitchOk &&
-          effectsOk && headingLinks > 10 && hasTable && hasCode && anchorOk && themeOk;
+          effectsOk && headingLinks > 10 && hasTable && hasCode && patchOk && datesOk &&
+          anchorOk && themeOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

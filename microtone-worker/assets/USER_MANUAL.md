@@ -10,7 +10,8 @@ port of the TSVM Taud engine — a ScreamTracker 3-lineage tracker extended with
 
 > Press **?** in the app (or the **?** button in the top bar) at any time for a
 > compact keyboard reference. The full effect-command specification lives in
-> the **Note Effects** document in the sidebar.
+> the **Note Effects** document in the sidebar, and what changed in each build
+> is listed under **Patch Notes** (also linked from the About popup).
 
 ## Introduction
 

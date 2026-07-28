@@ -109,6 +109,7 @@ export default {
   "about.thanks": "Special thanks",
   "about.thanksEmpty": "Donors and sponsors will be listed here — thank you for supporting the project!",
   "about.docs": "Documentation",
+  "about.patchNotes": "Patch notes",
 
   // ── files view ──
   "files.save": "Save",

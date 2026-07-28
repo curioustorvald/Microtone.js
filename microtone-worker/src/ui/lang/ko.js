@@ -106,6 +106,7 @@ export default {
   "about.thanks": "특별히 감사드립니다",
   "about.thanksEmpty": "후원자와 스폰서가 이곳에 실립니다 — 프로젝트를 지원해 주셔서 감사합니다!",
   "about.docs": "문서",
+  "about.patchNotes": "패치 노트",
 
   // ── files view ──
   "files.save": "저장",

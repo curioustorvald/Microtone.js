@@ -93,3 +93,19 @@ test("renders the real USER_MANUAL.md without throwing + builds a TOC", () => {
   assert.ok(toc.every((e) => e.slug && e.text && (e.level === 2 || e.level === 3)));
   assert.equal(new Set(toc.map((e) => e.slug)).size, toc.length, "manual slugs unique");
 });
+
+// Item 95: the patch notes are a plain assets/*.md served by the same viewer.
+// The invariants worth pinning are the ones a future append can break: every
+// section is a bare ISO date, and the newest one comes first.
+test("PATCH_NOTES.md: dated sections, newest first, renders + TOCs", () => {
+  const md = readFileSync(fileURLToPath(new URL("../../assets/PATCH_NOTES.md", import.meta.url)), "utf8");
+  const html = renderMarkdown(md);
+  assert.match(html, /<h1 id="patch-notes">Patch Notes<\/h1>/);
+  const toc = extractToc(md);
+  assert.ok(toc.length > 5, "one TOC entry per dated section");
+  assert.ok(toc.every((e) => e.level === 2 && /^\d{4}-\d{2}-\d{2}$/.test(e.text)),
+    "every section heading is a bare ISO date");
+  assert.equal(new Set(toc.map((e) => e.slug)).size, toc.length, "dates are unique");
+  const dates = toc.map((e) => e.text);
+  assert.deepEqual(dates, [...dates].sort().reverse(), "newest section first");
+});
