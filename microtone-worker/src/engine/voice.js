@@ -282,11 +282,14 @@ export class Voice {
     this.retrigVolMod = 0;
     this.retrigActive = false;
 
-    // Note delay (S$Dx).
+    // Note delay (S$Dx) + its optional post-trigger action (S$Dxny, item 94;
+    // JS-only so far — TSVM has no `n`/`y` handling yet, only `x`).
     this.noteDelayTick = -1;
     this.delayedNote = 0;
     this.delayedInst = 0;
     this.delayedVol = -1;
+    this.noteActionTick = -1; // absolute tick-in-row for the S$Dxny follow-up ($x+$y)
+    this.delayedAction = -1;  // the $n value (0..4), or -1 = none scheduled
 
     // Note cut (S$Cx).
     this.cutAtTick = -1;

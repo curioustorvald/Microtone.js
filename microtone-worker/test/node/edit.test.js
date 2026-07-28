@@ -7,7 +7,7 @@ import {
   volPanOp, volPanArg, volPanStep, fineSigned, fineValue,
   SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
 } from "../../src/ui/edit.js";
-import { volToStr, panToStr } from "../../src/ui/notenames.js";
+import { volToStr, panToStr, rangeToStr } from "../../src/ui/notenames.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -417,4 +417,13 @@ test("volToStr/panToStr: symbol + argument, fine shows its magnitude", () => {
   assert.equal(panToStr(0x03, 2), "˂03", "pan slide left tick");
   assert.equal(panToStr(0x20 | 0x03, 3), "+03");
   assert.equal(panToStr(0x03, 3), "−03");
+});
+
+test("rangeToStr: open bounds collapse to ~note / note~ / whole range (item 91)", () => {
+  assert.equal(rangeToStr(0x0020, MIDDLE_C), "~C-4", "sentinel low bound (0x0020)");
+  assert.equal(rangeToStr(0x0000, MIDDLE_C), "~C-4", "sentinel low bound (0x0000)");
+  assert.equal(rangeToStr(MIDDLE_C, 0xffff), "C-4~", "sentinel high bound");
+  assert.equal(rangeToStr(0x0020, 0xffff), "whole range");
+  assert.equal(rangeToStr(0x0000, 0xffff), "whole range");
+  assert.equal(rangeToStr(MIDDLE_C, MIDDLE_C + 4096), "C-4‥C-5", "both bounds real notes");
 });

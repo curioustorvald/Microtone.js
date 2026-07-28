@@ -182,6 +182,36 @@
         const roleToggleOk = hasPresent && claimed && released;
         log(`pitch env present toggle: has=${hasPresent} claimed=${claimed} released=${released} (${roleToggleOk ? "ok" : "FAIL"})`);
 
+        // Item 92: all four envelope tabs share ONE "{label}: present/absent"
+        // detail-info header format, with "present" alone carrying --accent
+        // (class env-present); "absent" stays plain.
+        const envTabs = [
+          ["env0", "Vol env"], ["env1", "Pan env"], ["pitch", "Pitch env"], ["filter", "Filter env"],
+        ];
+        const envFormatLog = [];
+        let envFormatOk = true;
+        for (const [tabId, label] of envTabs) {
+          iv.tab = tabId;
+          iv.renderPanel();
+          const findPresentChk = () => [...iv.panel.querySelectorAll("label")]
+            .find((l) => /Envelope present/.test(l.textContent))?.querySelector("input");
+          let c = findPresentChk();
+          if (!c.checked) { c.checked = true; fire(c, "change"); iv.renderPanel(); }
+          const headOn = iv.panel.querySelector(".detail-info");
+          const bOn = headOn?.querySelector("b");
+          const onOk = headOn?.textContent.startsWith(`${label}: `) &&
+            bOn?.classList.contains("env-present") && /present/i.test(bOn.textContent ?? "");
+          c = findPresentChk();
+          c.checked = false; fire(c, "change"); iv.renderPanel();
+          const headOff = iv.panel.querySelector(".detail-info");
+          const bOff = headOff?.querySelector("b");
+          const offOk = headOff?.textContent.startsWith(`${label}: `) &&
+            !bOff?.classList.contains("env-present") && /absent/i.test(bOff?.textContent ?? "");
+          envFormatLog.push(`${tabId}:${onOk ? "on-ok" : "on-FAIL"}/${offOk ? "off-ok" : "off-FAIL"}`);
+          envFormatOk = envFormatOk && onOk && offOk;
+        }
+        log(`item92 env header format: ${envFormatLog.join(" ")} (${envFormatOk ? "ok" : "FAIL"})`);
+
         // Notation-aware entry: a 5-TET project (NOT a 12-TET superset) → a jam
         // key snaps to a 5-TET degree, and the note differs from plain 12-EDO.
         const p5 = presetForNotation(50);
@@ -210,7 +240,7 @@
         }
 
         const pass = labelsOk && swingOk && sepOk && panSwOk && ppcOk && useDefOk && cutOk && resOk &&
-          nnaOk && detOk && logOk && roleToggleOk && notOk && nameOk;
+          nnaOk && detOk && logOk && roleToggleOk && envFormatOk && notOk && nameOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

@@ -20,7 +20,7 @@ import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
-import { hex2, noteToStr } from "../notenames.js";
+import { hex2, rangeToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { annHex2, annFilter, annFadeout, annSfCutoff, annSfReso } from "../units.js";
@@ -788,19 +788,16 @@ export class InstrumentsView {
 
   renderEnv(inst, tabDef) {
     const env = inst[tabDef.key];
-    const present = envPresent(inst[tabDef.loopKey]);
+    // Pitch/Filter "present" is whether THIS tab currently holds the role
+    // (tabDef.roleActive) — the raw loop-key P bit belongs to whichever
+    // physical slot resolved to the tab, which may be the OTHER role.
+    const present = tabDef.role ? tabDef.roleActive : envPresent(inst[tabDef.loopKey]);
     const head = document.createElement("div");
     head.className = "detail-info";
     const label = t(tabDef.labelKey);
-    if (tabDef.role) {
-      head.innerHTML = tabDef.roleActive
-        ? t("inst.envHeaderActive", { label })
-        : t("inst.envHeaderRoleNone", { label,
-            what: t(tabDef.role === "filter" ? "inst.envAddFilter" : "inst.envAddPitch") });
-    } else {
-      head.innerHTML = t("inst.envHeaderState", { label,
-        state: t(present ? "inst.envStatePresent" : "inst.envStateAbsent") });
-    }
+    const stateWord = escape(t(present ? "inst.envStatePresent" : "inst.envStateAbsent"));
+    const state = present ? `<b class="env-present">${stateWord}</b>` : `<b>${stateWord}</b>`;
+    head.innerHTML = t("inst.envHeaderState", { label, state });
     this.panel.appendChild(head);
 
     const canvas = document.createElement("canvas");
@@ -1239,7 +1236,7 @@ export class InstrumentsView {
         // A stereo zone (Ixmp 's') is tagged, since two zones that look alike
         // on the map can differ by costing twice the pool bytes.
         const tag = p.hasChanBlock && p.chanCount > 1 ? ` ${t("smp.stereoTag")}` : "";
-        ctx.fillText(`${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)}${tag}`, x + 2, y + 11);
+        ctx.fillText(`${rangeToStr(p.pitchStart, p.pitchEnd)}${tag}`, x + 2, y + 11);
       }
     });
   }
@@ -1258,7 +1255,7 @@ export class InstrumentsView {
       const nameTd = `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ` +
         `${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>`;
       tr.innerHTML = `<td>${i}</td>${nameTd}<td class="mixCell"></td><td class="detCell"></td>` +
-        `<td>${noteToStr(l.pitchStart)}‥${noteToStr(l.pitchEnd)}</td>` +
+        `<td>${escape(rangeToStr(l.pitchStart, l.pitchEnd))}</td>` +
         `<td>${l.volStart}‥${l.volEnd}</td><td class="advCell"></td>`;
 
       // Layer children are not list-selectable (item 59), so this is their only

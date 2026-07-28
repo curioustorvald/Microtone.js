@@ -48,13 +48,11 @@ const pfWrap = new Int32Array(2);
 export const pfIdxBox = new Int32Array(1);
 export const pfTimeBox = new Float64Array(1);
 
-/**
- * "Key Lift" (instrument flag bit 5): MIDI-exact key release — jump the volume
- * envelope playhead straight to the sustain-end node on key-off so the release
- * nodes play immediately. Reads the ACTIVE (patch-or-base) envelope.
- */
-export function applyKeyLift(voice, inst) {
-  if (!inst.nnaKeyLift) return;
+/** Jump the volume envelope playhead straight to the sustain-end node, so the
+ *  release nodes play immediately instead of walking the remaining pre-sustain
+ *  nodes first. The shared core of applyKeyLift (gated) and forceKeyLift
+ *  (unconditional). Reads the ACTIVE (patch-or-base) envelope. */
+function jumpToSustainEnd(voice) {
   const sus = voice.activeVolEnvSustain;
   if (((sus >>> 5) & 1) === 0) return;
   const susEnd = sus & 0x1f;
@@ -62,6 +60,26 @@ export function applyKeyLift(voice, inst) {
   voice.envIndex = susEnd;
   voice.envTimeSec = 0.0;
   voice.envVolume = Math.min(Math.max(voice.activeVolEnv[susEnd].value / 63.0, 0.0), 1.0);
+}
+
+/**
+ * "Key Lift" (instrument flag bit 5): MIDI-exact key release — jump the volume
+ * envelope playhead straight to the sustain-end node on key-off so the release
+ * nodes play immediately. Applies wherever key-off is delivered: pattern
+ * KEY_OFF (0x0001), the NNA ghost spawned on a new note, DCA Note Off, and
+ * past-note S $71 (terranmon.txt instrument-flag byte 186).
+ */
+export function applyKeyLift(voice, inst) {
+  if (!inst.nnaKeyLift) return;
+  jumpToSustainEnd(voice);
+}
+
+/** S $Dxny's $n=4 "Key lift" follow-up action (item 94): forces the same
+ *  sustain-end jump as applyKeyLift but bypasses the instrument's own Key
+ *  Lift flag — a per-note override, same spirit as S $73..$76's per-voice
+ *  NNA override. Distinct from $n=0 "Note off", which respects the flag. */
+export function forceKeyLift(voice) {
+  jumpToSustainEnd(voice);
 }
 
 /** Volume + pan envelope advance (once per tick). */

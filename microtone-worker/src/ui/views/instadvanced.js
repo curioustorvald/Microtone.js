@@ -18,7 +18,7 @@ import { encodeNameTable } from "../../doc/cleanup.js";
 import { envPresent } from "../../engine/envelope.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
-import { noteToStr, hex4 } from "../notenames.js";
+import { noteToStr, rangeToStr, hex4 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { annFadeout, annFilter, annSfCutoff, annSfReso } from "../units.js";
@@ -258,7 +258,7 @@ export class AdvancedZoneEditor {
     patches.forEach((p, i) => {
       mkRow(i, this.sampleLabel(p.samplePtr, p.sampleLength) +
         (p.hasChanBlock && p.chanCount > 1 ? ` [${t("smp.stereoTag")}]` : ""),
-        `${noteToStr(p.pitchStart)}‥${noteToStr(p.pitchEnd)} · ${p.volumeStart}‥${p.volumeEnd}`,
+        `${rangeToStr(p.pitchStart, p.pitchEnd)} · ${p.volumeStart}‥${p.volumeEnd}`,
         this.overlapsEarlier(patches, i));
     });
     mkRow(patches.length,

@@ -12,6 +12,22 @@ import { applyKeyLift } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
 
+/** S $Dxny (item 94): schedule the $n follow-up action at absolute tick
+ *  $x+$y within the row (independent of whichever note-event branch deferred
+ *  the trigger by $x, or fired it immediately when $x is 0). No-op unless
+ *  $y is nonzero — a zero $y never carries an action (TAUD_NOTE_EFFECTS.md
+ *  "S $Dxny" table: "If $y is zero" has no action row). A schedule past the
+ *  row's tick count self-discards: tick.js only fires on an exact tickInRow
+ *  match, and row entry unconditionally resets noteActionTick to -1 before
+ *  the next row's ticks can reach it — the same trick sDelayTick relies on. */
+function scheduleDxnyAction(voice, row, delayTick) {
+  if (row.effect !== EffectOp.OP_S || ((row.effectArg >>> 12) & 0xf) !== 0xd) return;
+  const y = row.effectArg & 0xf;
+  if (y === 0) return;
+  voice.noteActionTick = delayTick + y;
+  voice.delayedAction = (row.effectArg >>> 4) & 0xf;
+}
+
 export function applyTrackerRow(eng, ts, playhead) {
   const cue = eng.cueSheet[ts.cuePos];
   // Reset row-scope state before scanning channels.
@@ -76,6 +92,8 @@ export function applyTrackerRow(eng, ts, playhead) {
     // Reset per-row transient state.
     voice.cutAtTick = -1;
     voice.noteDelayTick = -1;
+    voice.noteActionTick = -1;
+    voice.delayedAction = -1;
     voice.slideMode = 0;
     voice.slideArg = 0;
     voice.arpActive = false;
@@ -131,6 +149,7 @@ export function applyTrackerRow(eng, ts, playhead) {
         voice.keyOff = true;
         applyKeyLift(voice, eng.instruments[voice.instrumentId]);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0002) {
       if (sDelayTick > 0) {
         voice.noteDelayTick = sDelayTick; voice.delayedNote = 0x0002;
@@ -139,6 +158,7 @@ export function applyTrackerRow(eng, ts, playhead) {
         voice.active = false;
         cutLayerChildren(ts, vi);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0004) {
       // Fast note-fade (SF2 exclusiveClass choke).
       if (sDelayTick > 0) {
@@ -147,6 +167,7 @@ export function applyTrackerRow(eng, ts, playhead) {
       } else {
         startFastFade(voice, playhead);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0003) {
       // IT-style note fade: fadeout without sustain release.
       if (sDelayTick > 0) {
@@ -155,6 +176,7 @@ export function applyTrackerRow(eng, ts, playhead) {
       } else {
         voice.noteFading = true;
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note >= 0x0005 && note <= 0x000f) {
       // reserved sentinel range, no engine handler
     } else if (note >= 0x0010 && note <= 0x001f) {
@@ -179,11 +201,13 @@ export function applyTrackerRow(eng, ts, playhead) {
         voice.delayedInst = row.instrment;
         // Only a SEL_SET vol cell is an override on the deferred trigger.
         voice.delayedVol = row.volumeEff === 0 ? row.volume : -1;
+        scheduleDxnyAction(voice, row, sDelayTick);
       } else {
         applyDuplicateCheck(eng, ts, vi, row.instrment, note);
         maybeSpawnBackgroundForNNA(eng, ts, voice, vi);
         const trigVol = row.volumeEff === 0 ? row.volume : -1;
         triggerMetaOrNote(eng, ts, voice, vi, note, row.instrment, trigVol);
+        scheduleDxnyAction(voice, row, sDelayTick);
       }
     }
 

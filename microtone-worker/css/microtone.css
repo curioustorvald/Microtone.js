@@ -617,6 +617,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }
 .detail-info { margin-bottom: 0.6rem; color: var(--dim); font-size: 0.9rem; }
 .detail-info b { color: var(--fg); }
+.detail-info b.env-present { color: var(--accent); }
 .wave-canvas {
   background: var(--panel);
   border: 1px solid var(--border);

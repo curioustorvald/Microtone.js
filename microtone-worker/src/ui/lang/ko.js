@@ -58,6 +58,7 @@ export default {
   "meta.detune": "디튠",
   "meta.pitchRange": "음역",
   "meta.vel": "세기",
+  "range.whole": "전체 범위",
   "status.noFile": "파일 없음",
   "status.hint": "파일을 열거나 가져와서 시작하세요 · F7: 파일 탭",
   "status.hint.timeline": "방향키: 이동 · Space: 녹음 · Enter: 재생 · M/N: 음소거/솔로 · Ctrl+C/V: 복사/붙여넣기",
@@ -413,14 +414,9 @@ export default {
   // ── instrument editor: envelope-tab header text ──
   "inst.envPitch": "피치 엔벨로프",
   "inst.envFilter": "필터 엔벨로프",
-  "inst.envHeaderActive": "{label} — 그래프의 노드를 드래그하거나 아래 컨트롤을 사용하세요",
-  "inst.envHeaderState": "{label}: <b>{state}</b> — 그래프의 노드를 드래그하거나 아래 컨트롤을 사용하세요",
-  "inst.envHeaderRoleNone": "{label}: <b>없음</b> — 노드를 드래그(또는 노드 추가)하여 {what}를 추가하세요",
-  "inst.envHeaderClaimed": "{label} — 노드를 드래그하여 편집",
+  "inst.envHeaderState": "{label}: {state} — 그래프의 노드를 드래그하거나 아래 컨트롤을 사용하세요",
   "inst.envStatePresent": "있음",
   "inst.envStateAbsent": "없음",
-  "inst.envAddFilter": "필터 컷오프 모듈레이션 엔벨로프",
-  "inst.envAddPitch": "피치 벤드 엔벨로프",
 
   // ── instrument editor: General tab ──
   "inst.grpVolume": "볼륨",

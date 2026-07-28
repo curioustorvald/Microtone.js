@@ -18,7 +18,9 @@
 import { TaudEngine } from "../engine/engine.js";
 import { SAMPLING_RATE, TRACKER_CHUNK } from "../engine/constants.js";
 import { CMD, MSG, SNAP_INTERRUPT_MASK, SNAP_FLOATS } from "./protocol.js";
-import { applyAudioCommand, funkMaskBuffer, fillSnapshotInto } from "./engine-commands.js";
+import {
+  applyAudioCommand, isTransportReset, funkMaskBuffer, fillSnapshotInto,
+} from "./engine-commands.js";
 import {
   audioRingViews, AR_MASK, AR_WRITE, AR_READ, AR_STATE, AR_EPOCH, AR_FLUSH_POS,
 } from "../audio/audio-ring.js";
@@ -95,7 +97,16 @@ class TaudProcessor extends AudioWorkletProcessor {
     if (this.audioRing) return; // consume mode: no engine commands routed here
 
     const eng = this.engine;
-    if (applyAudioCommand(eng, m)) return;
+    if (applyAudioCommand(eng, m)) {
+      // Transport reset (play/seek/stop): drop the local look-ahead ring's
+      // buffered tail, or a block rendered against the OLD tracker state
+      // leaks into the new playback (item 96) — render.worker.js's
+      // flushRing/AR_EPOCH does the same job for the Tier 2 SAB path; this
+      // mode never had the equivalent, since applyAudioCommand only touches
+      // `eng`, not the processor's own ring pointers.
+      if (isTransportReset(m.t)) this.flushRing();
+      return;
+    }
     switch (m.t) {
       case CMD.INIT:
         if (m.snapshotIntervalMs) {
@@ -116,6 +127,14 @@ class TaudProcessor extends AudioWorkletProcessor {
         this.sabI32 = new Int32Array(m.sab, SNAP_FLOATS * 4, 1);
         break;
     }
+  }
+
+  /** Discard whatever look-ahead audio is still queued (not yet read out) —
+   *  it was rendered against the tracker state from BEFORE this transport
+   *  reset. renderAndPlay re-fills from the current (already-reset) engine
+   *  state starting exactly at the read cursor, so nothing is left to leak. */
+  flushRing() {
+    this.ringReadPos = this.ringWrite;
   }
 
   renderIntoRing() {

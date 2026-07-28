@@ -12,7 +12,9 @@ import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
 import { envPoint, buildMetaRecord, makeMetaLayer } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
-import { advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox } from "../../src/engine/envelope.js";
+import {
+  advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox, applyKeyLift, forceKeyLift,
+} from "../../src/engine/envelope.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine } from "../../src/audio/offline-render.js";
 
@@ -78,6 +80,85 @@ test("S$Dx note delay fires on a FRESH channel (stale-inst re-bind)", () => {
   // The stale-inst bug zeroed playbackRate via instruments[0].samplingRate == 0.
   assert.ok(Math.abs(v.playbackRate - 1.0) < 1e-12, `playbackRate ${v.playbackRate} must be 1.0`);
   assert.ok(v.samplePos > 0, "sample must be advancing on the trigger tick");
+});
+
+// item 94: S$Dxny's $n follow-up action, fired $y ticks after the (deferred or
+// immediate) trigger — the half of S$Dxny neither engine implemented before
+// (Kotlin's applySEffect literally no-ops case 0xD; only the row-level "delay
+// to tick $x" existed). One tick-fire event happens per elapsed samplesPerTick
+// (= SAMPLING_RATE·2.5/bpm = 640 samples here); tick index k's event lands at
+// cumulative sample count (k+1)·640 (see mixer.js generateTrackerAudio).
+test("S$Dxny schedules the $n action at tick $x+$y (note cut 2 ticks after a delayed trigger)", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; } // vol/pan no-op
+  pat[0] = 0x00; pat[1] = 0x50;  // note 0x5000
+  pat[2] = 1;                    // inst 1
+  pat[5] = 0x1c;                 // OP_S
+  pat[6] = 0x12; pat[7] = 0xd1;  // arg 0xD112 → S$D 1 1 2: delay 1, action 1 (note cut), 2 ticks later
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125);
+  eng.setTickRate(0, 6);
+  eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+
+  renderSamples(eng, 1024); // < tick1's 1280-sample fire point — still nothing
+  assert.equal(v.active, false, "voice must not sound before the delay tick");
+
+  renderSamples(eng, 512); // cumulative 1536: past tick1 (1280), before tick3 (2560)
+  assert.equal(v.active, true, "delayed trigger fired");
+  assert.equal(v.noteActionTick, 3, "action scheduled at x+y = 1+2");
+
+  renderSamples(eng, 1536); // cumulative 3072: past tick3 (2560)
+  assert.equal(v.active, false, "the $n=1 (note cut) follow-up action fired");
+  assert.equal(v.noteActionTick, -1, "consumed, not re-armed");
+});
+
+test("S$Dxny: a zero $y schedules no action at all", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;
+  pat[5] = 0x1c; pat[6] = 0x10; pat[7] = 0xd1; // arg 0xD110: delay 1, n=1, y=0
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+
+  renderSamples(eng, 1536); // past the delayed trigger (tick1 @1280)
+  assert.equal(v.active, true, "delayed trigger still fires");
+  assert.equal(v.noteActionTick, -1, "y=0 never arms a follow-up action");
+
+  renderSamples(eng, 3200); // well past where a stray action could have fired
+  assert.equal(v.active, true, "nothing came along to cut it");
+});
+
+test("applyKeyLift respects the instrument's Key-Lift flag; forceKeyLift (S$Dxny n=4) bypasses it", () => {
+  const sustainWord = (1 << 8) | 3 | 0x20; // enable, start=1, end=3
+  const makeVoice = () => { const v = new Voice(); v.activeVolEnvSustain = sustainWord; return v; };
+
+  const vOff = makeVoice();
+  applyKeyLift(vOff, { nnaKeyLift: false });
+  assert.equal(vOff.envIndex, 0, "flag OFF: applyKeyLift (S$Dxny n=0 / '===') is a no-op");
+
+  const vOn = makeVoice();
+  applyKeyLift(vOn, { nnaKeyLift: true });
+  assert.equal(vOn.envIndex, 3, "flag ON: applyKeyLift jumps to the sustain-end node");
+
+  const vForced = makeVoice();
+  forceKeyLift(vForced);
+  assert.equal(vForced.envIndex, 3, "forceKeyLift jumps regardless of the instrument's flag");
 });
 
 test("advancePfRole SKIPS zero-duration nodes; seedPfRole settles past them", () => {

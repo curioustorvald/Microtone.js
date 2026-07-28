@@ -5,6 +5,7 @@
 
 import { MIDDLE_C } from "../engine/constants.js";
 import { volPanOp, volPanArg } from "./edit.js";
+import { t } from "./i18n.js";
 
 const NAMES = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"];
 const SEMI = 4096 / 12;
@@ -31,6 +32,24 @@ export function noteCentsOff(note) {
   const rel = note - MIDDLE_C;
   const semis = Math.round(rel / SEMI);
   return Math.round(((rel - semis * SEMI) / SEMI) * 100);
+}
+
+// terranmon.txt:3041 — 0x0000..0x001F are reserved sentinels, so the lowest
+// PLAYABLE note is 0x0020; a zone/layer authored against either boundary
+// means "no lower bound". 0xFFFF is the note-range upper sentinel.
+const RANGE_LO_SENTINELS = new Set([0x0000, 0x0020]);
+const RANGE_HI_SENTINEL = 0xffff;
+
+/** Note-range text for Ixmp zones / meta layers / Advanced Edit: collapses an
+ *  open lower/upper bound into "~note" / "note~", both bounds into a
+ *  translated "whole range", otherwise the plain "lo‥hi" pair. */
+export function rangeToStr(lo, hi) {
+  const openLo = RANGE_LO_SENTINELS.has(lo);
+  const openHi = hi === RANGE_HI_SENTINEL;
+  if (openLo && openHi) return t("range.whole");
+  if (openLo) return "~" + noteToStr(hi);
+  if (openHi) return noteToStr(lo) + "~";
+  return noteToStr(lo) + "‥" + noteToStr(hi);
 }
 
 export function hex2(v) { return v.toString(16).toUpperCase().padStart(2, "0"); }

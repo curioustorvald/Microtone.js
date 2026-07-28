@@ -1318,11 +1318,14 @@ class Voice {
     this.retrigVolMod = 0;
     this.retrigActive = false;
 
-    // Note delay (S$Dx).
+    // Note delay (S$Dx) + its optional post-trigger action (S$Dxny, item 94;
+    // JS-only so far — TSVM has no `n`/`y` handling yet, only `x`).
     this.noteDelayTick = -1;
     this.delayedNote = 0;
     this.delayedInst = 0;
     this.delayedVol = -1;
+    this.noteActionTick = -1; // absolute tick-in-row for the S$Dxny follow-up ($x+$y)
+    this.delayedAction = -1;  // the $n value (0..4), or -1 = none scheduled
 
     // Note cut (S$Cx).
     this.cutAtTick = -1;
@@ -2141,13 +2144,11 @@ const pfWrap = new Int32Array(2);
 const pfIdxBox = new Int32Array(1);
 const pfTimeBox = new Float64Array(1);
 
-/**
- * "Key Lift" (instrument flag bit 5): MIDI-exact key release — jump the volume
- * envelope playhead straight to the sustain-end node on key-off so the release
- * nodes play immediately. Reads the ACTIVE (patch-or-base) envelope.
- */
-function applyKeyLift(voice, inst) {
-  if (!inst.nnaKeyLift) return;
+/** Jump the volume envelope playhead straight to the sustain-end node, so the
+ *  release nodes play immediately instead of walking the remaining pre-sustain
+ *  nodes first. The shared core of applyKeyLift (gated) and forceKeyLift
+ *  (unconditional). Reads the ACTIVE (patch-or-base) envelope. */
+function jumpToSustainEnd(voice) {
   const sus = voice.activeVolEnvSustain;
   if (((sus >>> 5) & 1) === 0) return;
   const susEnd = sus & 0x1f;
@@ -2155,6 +2156,26 @@ function applyKeyLift(voice, inst) {
   voice.envIndex = susEnd;
   voice.envTimeSec = 0.0;
   voice.envVolume = Math.min(Math.max(voice.activeVolEnv[susEnd].value / 63.0, 0.0), 1.0);
+}
+
+/**
+ * "Key Lift" (instrument flag bit 5): MIDI-exact key release — jump the volume
+ * envelope playhead straight to the sustain-end node on key-off so the release
+ * nodes play immediately. Applies wherever key-off is delivered: pattern
+ * KEY_OFF (0x0001), the NNA ghost spawned on a new note, DCA Note Off, and
+ * past-note S $71 (terranmon.txt instrument-flag byte 186).
+ */
+function applyKeyLift(voice, inst) {
+  if (!inst.nnaKeyLift) return;
+  jumpToSustainEnd(voice);
+}
+
+/** S $Dxny's $n=4 "Key lift" follow-up action (item 94): forces the same
+ *  sustain-end jump as applyKeyLift but bypasses the instrument's own Key
+ *  Lift flag — a per-note override, same spirit as S $73..$76's per-voice
+ *  NNA override. Distinct from $n=0 "Note off", which respects the flag. */
+function forceKeyLift(voice) {
+  jumpToSustainEnd(voice);
 }
 
 /** Volume + pan envelope advance (once per tick). */
@@ -3441,6 +3462,22 @@ function applyRetrigVolMod(vol, x) {
 
 
 
+/** S $Dxny (item 94): schedule the $n follow-up action at absolute tick
+ *  $x+$y within the row (independent of whichever note-event branch deferred
+ *  the trigger by $x, or fired it immediately when $x is 0). No-op unless
+ *  $y is nonzero — a zero $y never carries an action (TAUD_NOTE_EFFECTS.md
+ *  "S $Dxny" table: "If $y is zero" has no action row). A schedule past the
+ *  row's tick count self-discards: tick.js only fires on an exact tickInRow
+ *  match, and row entry unconditionally resets noteActionTick to -1 before
+ *  the next row's ticks can reach it — the same trick sDelayTick relies on. */
+function scheduleDxnyAction(voice, row, delayTick) {
+  if (row.effect !== EffectOp.OP_S || ((row.effectArg >>> 12) & 0xf) !== 0xd) return;
+  const y = row.effectArg & 0xf;
+  if (y === 0) return;
+  voice.noteActionTick = delayTick + y;
+  voice.delayedAction = (row.effectArg >>> 4) & 0xf;
+}
+
 function applyTrackerRow(eng, ts, playhead) {
   const cue = eng.cueSheet[ts.cuePos];
   // Reset row-scope state before scanning channels.
@@ -3505,6 +3542,8 @@ function applyTrackerRow(eng, ts, playhead) {
     // Reset per-row transient state.
     voice.cutAtTick = -1;
     voice.noteDelayTick = -1;
+    voice.noteActionTick = -1;
+    voice.delayedAction = -1;
     voice.slideMode = 0;
     voice.slideArg = 0;
     voice.arpActive = false;
@@ -3560,6 +3599,7 @@ function applyTrackerRow(eng, ts, playhead) {
         voice.keyOff = true;
         applyKeyLift(voice, eng.instruments[voice.instrumentId]);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0002) {
       if (sDelayTick > 0) {
         voice.noteDelayTick = sDelayTick; voice.delayedNote = 0x0002;
@@ -3568,6 +3608,7 @@ function applyTrackerRow(eng, ts, playhead) {
         voice.active = false;
         cutLayerChildren(ts, vi);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0004) {
       // Fast note-fade (SF2 exclusiveClass choke).
       if (sDelayTick > 0) {
@@ -3576,6 +3617,7 @@ function applyTrackerRow(eng, ts, playhead) {
       } else {
         startFastFade(voice, playhead);
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0003) {
       // IT-style note fade: fadeout without sustain release.
       if (sDelayTick > 0) {
@@ -3584,6 +3626,7 @@ function applyTrackerRow(eng, ts, playhead) {
       } else {
         voice.noteFading = true;
       }
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note >= 0x0005 && note <= 0x000f) {
       // reserved sentinel range, no engine handler
     } else if (note >= 0x0010 && note <= 0x001f) {
@@ -3608,11 +3651,13 @@ function applyTrackerRow(eng, ts, playhead) {
         voice.delayedInst = row.instrment;
         // Only a SEL_SET vol cell is an override on the deferred trigger.
         voice.delayedVol = row.volumeEff === 0 ? row.volume : -1;
+        scheduleDxnyAction(voice, row, sDelayTick);
       } else {
         applyDuplicateCheck(eng, ts, vi, row.instrment, note);
         maybeSpawnBackgroundForNNA(eng, ts, voice, vi);
         const trigVol = row.volumeEff === 0 ? row.volume : -1;
         triggerMetaOrNote(eng, ts, voice, vi, note, row.instrment, trigVol);
+        scheduleDxnyAction(voice, row, sDelayTick);
       }
     }
 
@@ -3775,7 +3820,7 @@ function applyTrackerTick(eng, ts, playhead) {
   const spt = SAMPLING_RATE * tickSec;
   for (let vi = 0; vi < ts.voices.length; vi++) {
     const voice = ts.voices[vi];
-    if (!voice.active && voice.noteDelayTick < 0) continue;
+    if (!voice.active && voice.noteDelayTick < 0 && voice.noteActionTick < 0) continue;
     let inst = eng.instruments[voice.instrumentId];
 
     // Note cut: zero noteVolume/rowVolume, leave channelVolume alone.
@@ -3810,6 +3855,32 @@ function applyTrackerTick(eng, ts, playhead) {
       }
       voice.noteDelayTick = -1;
       // Re-bind: triggerNote may have swapped in a new instrument (see header note).
+      inst = eng.instruments[voice.instrumentId];
+    }
+
+    // S$Dxny follow-up action — fires $y ticks after the (possibly deferred)
+    // trigger, independent of whether that trigger left the voice active.
+    if (voice.noteActionTick === ts.tickInRow) {
+      switch (voice.delayedAction) {
+        case 0: // Note off
+          voice.keyOff = true;
+          applyKeyLift(voice, eng.instruments[voice.instrumentId]);
+          break;
+        case 1: // Note cut
+          voice.active = false;
+          cutLayerChildren(ts, vi);
+          break;
+        case 2: // Note continue — no-op.
+          break;
+        case 3: // Note fade
+          voice.noteFading = true;
+          break;
+        case 4: // Key lift — forced, bypasses the instrument's own flag.
+          voice.keyOff = true;
+          forceKeyLift(voice);
+          break;
+      }
+      voice.noteActionTick = -1;
       inst = eng.instruments[voice.instrumentId];
     }
 
@@ -5241,7 +5312,16 @@ class TaudProcessor extends AudioWorkletProcessor {
     if (this.audioRing) return; // consume mode: no engine commands routed here
 
     const eng = this.engine;
-    if (applyAudioCommand(eng, m)) return;
+    if (applyAudioCommand(eng, m)) {
+      // Transport reset (play/seek/stop): drop the local look-ahead ring's
+      // buffered tail, or a block rendered against the OLD tracker state
+      // leaks into the new playback (item 96) — render.worker.js's
+      // flushRing/AR_EPOCH does the same job for the Tier 2 SAB path; this
+      // mode never had the equivalent, since applyAudioCommand only touches
+      // `eng`, not the processor's own ring pointers.
+      if (isTransportReset(m.t)) this.flushRing();
+      return;
+    }
     switch (m.t) {
       case CMD.INIT:
         if (m.snapshotIntervalMs) {
@@ -5262,6 +5342,14 @@ class TaudProcessor extends AudioWorkletProcessor {
         this.sabI32 = new Int32Array(m.sab, SNAP_FLOATS * 4, 1);
         break;
     }
+  }
+
+  /** Discard whatever look-ahead audio is still queued (not yet read out) —
+   *  it was rendered against the tracker state from BEFORE this transport
+   *  reset. renderAndPlay re-fills from the current (already-reset) engine
+   *  state starting exactly at the read cursor, so nothing is left to leak. */
+  flushRing() {
+    this.ringReadPos = this.ringWrite;
   }
 
   renderIntoRing() {

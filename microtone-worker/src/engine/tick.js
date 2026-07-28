@@ -14,7 +14,7 @@ import { computePlaybackRate, startFastFade } from "./sampler.js";
 import { refreshVoiceFilter } from "./filter.js";
 import {
   advanceEnvelope, advancePitchEnvelope, advanceFilterEnvelope,
-  advanceAutoVibrato, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox,
+  advanceAutoVibrato, applyKeyLift, forceKeyLift, seedPfRole, pfIdxBox, pfTimeBox,
 } from "./envelope.js";
 import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA, cutLayerChildren,
@@ -28,7 +28,7 @@ export function applyTrackerTick(eng, ts, playhead) {
   const spt = SAMPLING_RATE * tickSec;
   for (let vi = 0; vi < ts.voices.length; vi++) {
     const voice = ts.voices[vi];
-    if (!voice.active && voice.noteDelayTick < 0) continue;
+    if (!voice.active && voice.noteDelayTick < 0 && voice.noteActionTick < 0) continue;
     let inst = eng.instruments[voice.instrumentId];
 
     // Note cut: zero noteVolume/rowVolume, leave channelVolume alone.
@@ -63,6 +63,32 @@ export function applyTrackerTick(eng, ts, playhead) {
       }
       voice.noteDelayTick = -1;
       // Re-bind: triggerNote may have swapped in a new instrument (see header note).
+      inst = eng.instruments[voice.instrumentId];
+    }
+
+    // S$Dxny follow-up action — fires $y ticks after the (possibly deferred)
+    // trigger, independent of whether that trigger left the voice active.
+    if (voice.noteActionTick === ts.tickInRow) {
+      switch (voice.delayedAction) {
+        case 0: // Note off
+          voice.keyOff = true;
+          applyKeyLift(voice, eng.instruments[voice.instrumentId]);
+          break;
+        case 1: // Note cut
+          voice.active = false;
+          cutLayerChildren(ts, vi);
+          break;
+        case 2: // Note continue — no-op.
+          break;
+        case 3: // Note fade
+          voice.noteFading = true;
+          break;
+        case 4: // Key lift — forced, bypasses the instrument's own flag.
+          voice.keyOff = true;
+          forceKeyLift(voice);
+          break;
+      }
+      voice.noteActionTick = -1;
       inst = eng.instruments[voice.instrumentId];
     }
 

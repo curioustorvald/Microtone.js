@@ -61,6 +61,7 @@ export default {
   "meta.detune": "detune",
   "meta.pitchRange": "pitch range",
   "meta.vel": "vel",
+  "range.whole": "whole range",
   "status.noFile": "no file",
   "status.hint": "Open or import a file to begin · F7 for the File tab",
   "status.hint.timeline": "arrows move · Space record · Enter play · M/N mute/solo · Ctrl+C/V copy/paste",
@@ -413,17 +414,14 @@ export default {
   "inst.tabLayers": "Layers",
 
   // ── instrument editor: envelope-tab header text ──
-  // {label} is the tab name (Vol env / Pitch env / …); {state}/{what} slot in.
+  // {label} is the tab name (Vol env / Pitch env / …); {state} is a <b> tag
+  // built in JS (present/absent) so its colour can key off the value (item 92:
+  // all four envelope tabs share this one format).
   "inst.envPitch": "Pitch env",
   "inst.envFilter": "Filter env",
-  "inst.envHeaderActive": "{label} — drag nodes on the graph, or use the controls below",
-  "inst.envHeaderState": "{label}: <b>{state}</b> — drag nodes on the graph, or use the controls below",
-  "inst.envHeaderRoleNone": "{label}: <b>none</b> — drag a node (or press Add node) to add {what}",
-  "inst.envHeaderClaimed": "{label} — drag nodes to edit",
+  "inst.envHeaderState": "{label}: {state} — drag nodes on the graph, or use the controls below",
   "inst.envStatePresent": "present",
   "inst.envStateAbsent": "absent",
-  "inst.envAddFilter": "a filter-cutoff modulation envelope",
-  "inst.envAddPitch": "a pitch-bend envelope",
 
   // ── instrument editor: General tab ──
   "inst.grpVolume": "Volume",
