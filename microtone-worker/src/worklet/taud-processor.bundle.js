@@ -1132,6 +1132,17 @@ class Voice {
     // -1 for live foreground voices; 0..NUM_VOICES-1 = source channel for background ghosts.
     this.sourceChannel = -1;
 
+    // ── Stem-export taps (item 93; JS-only, never read by the DSP) ──
+    // Index into inst.extraPatches of the Ixmp patch this trigger resolved to,
+    // -1 = the base record. Lets the exporter put each drum of a percussion
+    // instrument on its own track.
+    this.activePatchIndex = -1;
+    // Memoised stem routing: stemKey is the (displayInst, instrumentId,
+    // activePatchIndex) triple the exporter last resolved, stemIndex its answer.
+    // Declared here so the Voice shape stays monomorphic.
+    this.stemKey = -1;
+    this.stemIndex = -1;
+
     // ── Metainstrument layering ──
     this.isLayerChild = false;
     this.layerRelDetune = 0;
@@ -1700,6 +1711,7 @@ class Playhead {
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
       it.displayInst = 0;
+      it.activePatchIndex = -1; // stem tap, cleared with the rest of "what's playing"
       it.samplePos = 0.0;
       it.playbackRate = 1.0;
       it.forward = true;
@@ -2395,6 +2407,10 @@ function advanceAutoVibrato(voice, inst) {
  * vibratoWaveform 0xFF defer to the base instrument.
  */
 function applyActiveSample(voice, inst, patch) {
+  // Stem-export tap (item 93): which patch sounded. indexOf runs once per
+  // trigger over a handful of patches; nothing in the DSP reads it back.
+  voice.activePatchIndex =
+    patch === null || inst.extraPatches === null ? -1 : inst.extraPatches.indexOf(patch);
   if (patch === null) {
     voice.activeSamplePtr = inst.samplePtr;
     voice.activeSampleLength = inst.sampleLength;
@@ -2605,6 +2621,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
+    child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
     child.layerRelDetune = lk.detune - l0.detune;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
     child.channelVolume = voice.channelVolume;
@@ -2801,6 +2818,7 @@ function ghostVoice(src, channel) {
   v.active = true;
   v.fader = src.fader;
   v.instrumentId = src.instrumentId;
+  v.displayInst = src.displayInst;       // export/display tap: the ghost is still "that" instrument
   v.samplePos = src.samplePos;
   v.playbackRate = src.playbackRate;
   v.forward = src.forward;
@@ -2883,6 +2901,7 @@ function ghostVoice(src, channel) {
   v.activeVibratoDepth = src.activeVibratoDepth;
   v.activeVibratoRate = src.activeVibratoRate;
   v.activeVibratoWaveform = src.activeVibratoWaveform;
+  v.activePatchIndex = src.activePatchIndex; // stem tap: the ghost keeps the patch it sounded
   // A ghost of a stereo note keeps playing BOTH channels, with its own copy of
   // the second channel's filter/crusher history (same rule as the voice's own).
   v.activeChanCount = src.activeChanCount;
@@ -4315,6 +4334,8 @@ function generateTrackerAudio(eng, playhead, out) {
 
   // Jam mode mixes voices without advancing rows/cues.
   const advancing = playhead.isPlaying;
+  // Stem-export tap (item 93) — null on every playback path. See TaudEngine.stemBus.
+  const stems = eng.stemBus;
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -4347,7 +4368,8 @@ function generateTrackerAudio(eng, playhead, out) {
     let mixR = 0.0;
     const gvol = playhead.globalVolume / 255.0;
     const mvol = playhead.mixingVolume / 255.0;
-    for (const voice of ts.voices) {
+    for (let vi = 0; vi < ts.voices.length; vi++) {
+      const voice = ts.voices[vi];
       if (!voice.active || voice.fader === 255) {
         // Keep the soundscope flat between notes / while muted.
         voice.scopeBuffer[voice.scopeWritePos] = 0;
@@ -4395,6 +4417,7 @@ function generateTrackerAudio(eng, playhead, out) {
       }
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
+      if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
       mixL += sL * vol * lGain * rampGain;
       mixR += sR * vol * rGain * rampGain;
     }
@@ -4438,6 +4461,11 @@ function generateTrackerAudio(eng, playhead, out) {
         if (bg.rampOutSamples === 0) bg.active = false;
       } else {
         rampGain = 1.0;
+      }
+      // Ghosts and layer children belong to the stem of the channel that spawned them.
+      if (stems !== null) {
+        const sBg = bg.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
+        stems.add(bg, bg.sourceChannel, n, sBg * vol * rampGain);
       }
       mixL += sL * vol * lGain * rampGain;
       mixR += sR * vol * rGain * rampGain;
@@ -4546,6 +4574,11 @@ class TaudEngine {
     // Dither state (pcm32fToPcm8): per-adapter xorshift32 + error history.
     this.xorshift32 = makeXorshift32();
     this.ditherError = new Float32Array(4); // [L0, L1, R0, R1]
+    // Stem-export tap (item 93; JS-only, no Kotlin counterpart). null on every
+    // normal path — playback and the WAV export never set it. When non-null the
+    // mixer hands each voice's PRE-PAN mono contribution to `add()`; nothing
+    // else about the render changes, so the main output stays bit-identical.
+    this.stemBus = null;
   }
 
   channelCount() { return this.is64ChannelMode ? MAX_VOICES : NUM_VOICES; }

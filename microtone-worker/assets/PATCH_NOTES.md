@@ -6,6 +6,9 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-07-29
 
+- **Export stems.** *File ▸ Export stems…* renders the song into one 24-bit 48 kHz mono WAV per track and hands back a single ZIP. A filename prefix is required; the tracks arrive as `<prefix>_01_<name>.wav`, named after the instrument or the channel they came from.
+- Two arrangements. **Per instrument** (the default) gives one track per instrument as it appears in the pattern, and splits a percussion instrument further into one track per kit piece — kicks, snares, toms and hats separately, while a drum layered from several sub-instruments stays on one track. **Per voice** gives one track per channel, with note-off ghosts and layered notes following the channel that spawned them.
+- Stem tracks are dry: every volume is baked in, panning is not, so a hard-panned part arrives at full level and you re-pan it in your DAW. Nothing is dithered — 24 bits sit far below the engine's own noise floor. Export WAV is unchanged, still 16-bit stereo.
 - **Note-delay command upgraded.** `S $Dxny` used to define only its first half (delay the trigger to tick `$x`); the follow-up action is now specified and implemented. Tick `$x`+`$y` applies note off (`$n=0`), note cut (`1`), note continue (`2`), note fade (`3`) or key lift (`4`). Key lift here is a forced jump to the end of the sustain loop — it works even on instruments whose own Key-Lift flag is clear, in the same spirit as the per-voice NNA overrides.
 - **Instrument pitch ranges read properly.** A zone whose lower or upper bound is open now shows as `~C-5` or `C-5~`, and a fully open one as *whole range*, instead of the raw sentinel note. This applies to the Zones trigger overlay, the Meta Layers table and the Advanced Edit patch list.
 - **Envelope tabs share one header.** All four envelope tabs (Volume, Pan, Pitch, Filter) now report *present* / *absent* the same way, with *present* in the accent colour.

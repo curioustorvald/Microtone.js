@@ -96,6 +96,17 @@ export class Voice {
     // -1 for live foreground voices; 0..NUM_VOICES-1 = source channel for background ghosts.
     this.sourceChannel = -1;
 
+    // ── Stem-export taps (item 93; JS-only, never read by the DSP) ──
+    // Index into inst.extraPatches of the Ixmp patch this trigger resolved to,
+    // -1 = the base record. Lets the exporter put each drum of a percussion
+    // instrument on its own track.
+    this.activePatchIndex = -1;
+    // Memoised stem routing: stemKey is the (displayInst, instrumentId,
+    // activePatchIndex) triple the exporter last resolved, stemIndex its answer.
+    // Declared here so the Voice shape stays monomorphic.
+    this.stemKey = -1;
+    this.stemIndex = -1;
+
     // ── Metainstrument layering ──
     this.isLayerChild = false;
     this.layerRelDetune = 0;

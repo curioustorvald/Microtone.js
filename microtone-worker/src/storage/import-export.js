@@ -12,7 +12,12 @@ export function pickFile(accept = ".taud,.tsii,.tpif") {
 }
 
 export function download(bytes, name) {
-  const blob = new Blob([bytes], { type: "application/octet-stream" });
+  downloadBlob(new Blob([bytes], { type: "application/octet-stream" }), name);
+}
+
+/** Download an already-built Blob. Large exports (the stem ZIP) assemble their
+ *  Blob from chunks so the bytes are never copied a second time. */
+export function downloadBlob(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

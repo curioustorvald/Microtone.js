@@ -136,6 +136,17 @@ export default {
   "files.wavCap": "최대 길이 (초)",
   "files.render": "렌더",
   "files.wavRendering": "WAV 렌더링 중…",
+  "files.exportStems": "스템 내보내기…",
+  "files.stemsTitle": "스템 내보내기 (오프라인 렌더)",
+  "files.stemsBody": "트랙마다 24비트 48 kHz 모노 WAV 한 개를 만들어 ZIP으로 묶습니다. 트랙은 드라이 신호입니다: 음량은 모두 반영되지만 패닝은 반영되지 않습니다.",
+  "files.stemsPrefix": "파일 이름 접두사",
+  "files.stemsMode": "구성 방식",
+  "files.stemsPerInst": "악기별 (타악기는 악기 조각별로 분리)",
+  "files.stemsPerVoice": "보이스별 (채널마다 한 트랙)",
+  "files.stemsNeedPrefix": "파일 이름 접두사를 입력해야 합니다.",
+  "files.stemsRendering": "스템 렌더링 중…",
+  "files.stemsPacking": "트랙 {n}개 압축 중…",
+  "files.stemsEmpty": "처음 {n}초 동안 소리가 없어 내보낼 트랙이 없습니다.",
 
   // ── song rename ──
   "song.renameTitle": "곡 {n} 이름 바꾸기",

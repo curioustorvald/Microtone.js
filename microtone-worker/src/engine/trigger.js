@@ -19,6 +19,10 @@ import { random } from "./rng.js";
  * vibratoWaveform 0xFF defer to the base instrument.
  */
 export function applyActiveSample(voice, inst, patch) {
+  // Stem-export tap (item 93): which patch sounded. indexOf runs once per
+  // trigger over a handful of patches; nothing in the DSP reads it back.
+  voice.activePatchIndex =
+    patch === null || inst.extraPatches === null ? -1 : inst.extraPatches.indexOf(patch);
   if (patch === null) {
     voice.activeSamplePtr = inst.samplePtr;
     voice.activeSampleLength = inst.sampleLength;
@@ -229,6 +233,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
+    child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
     child.layerRelDetune = lk.detune - l0.detune;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
     child.channelVolume = voice.channelVolume;
@@ -425,6 +430,7 @@ export function ghostVoice(src, channel) {
   v.active = true;
   v.fader = src.fader;
   v.instrumentId = src.instrumentId;
+  v.displayInst = src.displayInst;       // export/display tap: the ghost is still "that" instrument
   v.samplePos = src.samplePos;
   v.playbackRate = src.playbackRate;
   v.forward = src.forward;
@@ -507,6 +513,7 @@ export function ghostVoice(src, channel) {
   v.activeVibratoDepth = src.activeVibratoDepth;
   v.activeVibratoRate = src.activeVibratoRate;
   v.activeVibratoWaveform = src.activeVibratoWaveform;
+  v.activePatchIndex = src.activePatchIndex; // stem tap: the ghost keeps the patch it sounded
   // A ghost of a stereo note keeps playing BOTH channels, with its own copy of
   // the second channel's filter/crusher history (same rule as the voice's own).
   v.activeChanCount = src.activeChanCount;

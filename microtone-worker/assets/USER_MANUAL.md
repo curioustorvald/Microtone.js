@@ -591,6 +591,10 @@ should use **Export** to keep your work.
 - **Import MIDI…** — convert a MIDI file and save the result straight into OPFS.
 - **Export ⬇** — download the project as a `.taud` file.
 - **Export WAV…** — render the current song offline through the same engine to a 16-bit stereo WAV at 48 kHz. Set a maximum length (songs that never HALT stop at the cap).
+- **Export stems…** — render the song into one 24-bit 48 kHz mono WAV per track, delivered as a single ZIP. A filename prefix is required; tracks come out as `<prefix>_01_<name>.wav`. Choose how they are arranged:
+  - **Per instrument** (default) — one track per instrument as it appears in the pattern. A percussion instrument is split further, one track per kit piece, so kicks, snares and hats arrive separately; a drum layered from several sub-instruments stays on one track.
+  - **Per voice** — one track per channel. Note-off ghosts and layered notes follow the channel that spawned them.
+- Stem tracks are **dry**: every volume is baked in (note and channel volume, envelopes, fadeout, instrument volume, song global/mixing/master volume) but panning is not, so a hard-panned part arrives at full level and you re-pan it in your DAW. Because panning is left out, the tracks do not sum back to the stereo mix, and the Amiga post-mix filter (a mix-stage effect) is not applied to them. Nothing is dithered — 24 bits sit well below the engine's own noise floor.
 
 ## Importing music
 

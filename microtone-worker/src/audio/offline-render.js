@@ -125,27 +125,29 @@ export async function renderSongAsync(eng, seconds, { onProgress = null, signal 
   };
 }
 
-/** Linear-resample interleaved stereo Float32 from srcRate to dstRate. */
-function resampleStereoF32(f32, srcRate, dstRate) {
+/** Linear-resample interleaved Float32 (any channel count) srcRate → dstRate.
+ *  Shared by the stereo WAV export and the mono stem export (item 93). */
+export function resampleF32(f32, channels, srcRate, dstRate) {
   if (srcRate === dstRate) return f32;
-  const srcFrames = f32.length / 2;
+  const srcFrames = f32.length / channels;
   const dstFrames = Math.floor((srcFrames * dstRate) / srcRate);
-  const out = new Float32Array(dstFrames * 2);
+  const out = new Float32Array(dstFrames * channels);
   const step = srcRate / dstRate;
   for (let n = 0; n < dstFrames; n++) {
     const pos = n * step;
     const i0 = Math.floor(pos);
     const frac = pos - i0;
     const i1 = Math.min(i0 + 1, srcFrames - 1);
-    out[n * 2] = f32[i0 * 2] * (1 - frac) + f32[i1 * 2] * frac;
-    out[n * 2 + 1] = f32[i0 * 2 + 1] * (1 - frac) + f32[i1 * 2 + 1] * frac;
+    for (let c = 0; c < channels; c++) {
+      out[n * channels + c] = f32[i0 * channels + c] * (1 - frac) + f32[i1 * channels + c] * frac;
+    }
   }
   return out;
 }
 
 /** Encode a rendered f32 mix bus (32 kHz) as a 16-bit stereo WAV at `outRate`. */
 function encodeWav(f32, outRate) {
-  const pcm = resampleStereoF32(f32, SAMPLING_RATE, outRate);
+  const pcm = resampleF32(f32, 2, SAMPLING_RATE, outRate);
   const numSamples = pcm.length; // interleaved stereo samples
   const dataBytes = numSamples * 2;
   const buf = new ArrayBuffer(44 + dataBytes);

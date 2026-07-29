@@ -139,6 +139,17 @@ export default {
   "files.wavCap": "Max seconds",
   "files.render": "Render",
   "files.wavRendering": "Rendering WAV…",
+  "files.exportStems": "Export stems…",
+  "files.stemsTitle": "Export stems (offline render)",
+  "files.stemsBody": "One 24-bit 48 kHz mono WAV per track, zipped. Tracks are dry: every volume is baked in, panning is not.",
+  "files.stemsPrefix": "Filename prefix",
+  "files.stemsMode": "Arrangement",
+  "files.stemsPerInst": "Per instrument (drums split per kit piece)",
+  "files.stemsPerVoice": "Per voice (one track per channel)",
+  "files.stemsNeedPrefix": "A filename prefix is required.",
+  "files.stemsRendering": "Rendering stems…",
+  "files.stemsPacking": "Packing {n} tracks…",
+  "files.stemsEmpty": "Nothing sounded in the first {n} s — no tracks to export.",
 
   // ── song rename ──
   "song.renameTitle": "Rename song {n}",

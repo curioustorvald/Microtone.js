@@ -56,6 +56,11 @@ export class TaudEngine {
     // Dither state (pcm32fToPcm8): per-adapter xorshift32 + error history.
     this.xorshift32 = makeXorshift32();
     this.ditherError = new Float32Array(4); // [L0, L1, R0, R1]
+    // Stem-export tap (item 93; JS-only, no Kotlin counterpart). null on every
+    // normal path — playback and the WAV export never set it. When non-null the
+    // mixer hands each voice's PRE-PAN mono contribution to `add()`; nothing
+    // else about the render changes, so the main output stays bit-identical.
+    this.stemBus = null;
   }
 
   channelCount() { return this.is64ChannelMode ? MAX_VOICES : NUM_VOICES; }

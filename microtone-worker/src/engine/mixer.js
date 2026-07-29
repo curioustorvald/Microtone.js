@@ -122,6 +122,8 @@ export function generateTrackerAudio(eng, playhead, out) {
 
   // Jam mode mixes voices without advancing rows/cues.
   const advancing = playhead.isPlaying;
+  // Stem-export tap (item 93) — null on every playback path. See TaudEngine.stemBus.
+  const stems = eng.stemBus;
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -154,7 +156,8 @@ export function generateTrackerAudio(eng, playhead, out) {
     let mixR = 0.0;
     const gvol = playhead.globalVolume / 255.0;
     const mvol = playhead.mixingVolume / 255.0;
-    for (const voice of ts.voices) {
+    for (let vi = 0; vi < ts.voices.length; vi++) {
+      const voice = ts.voices[vi];
       if (!voice.active || voice.fader === 255) {
         // Keep the soundscope flat between notes / while muted.
         voice.scopeBuffer[voice.scopeWritePos] = 0;
@@ -202,6 +205,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       }
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
+      if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
       mixL += sL * vol * lGain * rampGain;
       mixR += sR * vol * rGain * rampGain;
     }
@@ -245,6 +249,11 @@ export function generateTrackerAudio(eng, playhead, out) {
         if (bg.rampOutSamples === 0) bg.active = false;
       } else {
         rampGain = 1.0;
+      }
+      // Ghosts and layer children belong to the stem of the channel that spawned them.
+      if (stems !== null) {
+        const sBg = bg.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
+        stems.add(bg, bg.sourceChannel, n, sBg * vol * rampGain);
       }
       mixL += sL * vol * lGain * rampGain;
       mixR += sR * vol * rGain * rampGain;

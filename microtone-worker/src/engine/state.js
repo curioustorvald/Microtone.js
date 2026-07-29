@@ -319,6 +319,7 @@ export class Playhead {
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
       it.displayInst = 0;
+      it.activePatchIndex = -1; // stem tap, cleared with the rest of "what's playing"
       it.samplePos = 0.0;
       it.playbackRate = 1.0;
       it.forward = true;

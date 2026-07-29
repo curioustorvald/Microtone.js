@@ -4,10 +4,13 @@
 // doc-scoped buttons and the song list only appear once a project is loaded.
 
 import * as opfs from "../../storage/opfs.js";
-import { pickFile, download } from "../../storage/import-export.js";
+import { pickFile, download, downloadBlob } from "../../storage/import-export.js";
 import { converterFor, CONVERT_ACCEPT } from "../../convert/convert.js";
 import { showModal } from "../widgets/modal.js";
 import { renderToWavAsync } from "../../audio/offline-render.js";
+import {
+  renderStemsAsync, labelStems, encodeWav24Mono, stemFileName, sanitiseName, StemZip,
+} from "../../audio/stem-export.js";
 import { showProgress } from "../popups/progress.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
@@ -43,9 +46,10 @@ export class FilesView {
     });
     const exportBtn = mkBtn(t("files.export"), () => this.export());
     const wavBtn = mkBtn(t("files.exportWav"), () => this.exportWav());
+    const stemsBtn = mkBtn(t("files.exportStems"), () => this.exportStems());
     // doc-scoped actions grey out until something is loaded
-    for (const b of [saveBtn, saveAsBtn, exportBtn, wavBtn]) b.disabled = !doc;
-    bar.append(saveBtn, saveAsBtn, importBtn, importMidiBtn, exportBtn, wavBtn);
+    for (const b of [saveBtn, saveAsBtn, exportBtn, wavBtn, stemsBtn]) b.disabled = !doc;
+    bar.append(saveBtn, saveAsBtn, importBtn, importMidiBtn, exportBtn, wavBtn, stemsBtn);
     this.root.appendChild(bar);
 
     if (!ok) {
@@ -195,6 +199,92 @@ export class FilesView {
     console.info(`WAV render: ${wav.seconds.toFixed(1)}s in ${(performance.now() - t0).toFixed(0)}ms (halted=${wav.halted})`);
     const base = (fileName ?? "untitled.taud").replace(/\.taud$/, "");
     download(wav.bytes, `${base}.wav`);
+  }
+
+  /**
+   * Offline-render the current song into one 24-bit 48 kHz mono WAV per track
+   * (item 93), zipped. Per-instrument splits a percussion kit into its pieces;
+   * per-voice gives one track per channel. Tracks are PRE-PAN: every volume is
+   * baked in, the pan law is not — you re-pan them in the DAW.
+   */
+  async exportStems() {
+    const { doc, fileName } = this.cb.currentDoc();
+    if (!doc) return;
+    const base = sanitiseName((fileName ?? "untitled.taud").replace(/\.taud$/, ""), "song");
+
+    let prefix = "";
+    let mode = "instrument";
+    let cap = 300;
+    for (;;) {
+      const result = await showModal({
+        title: t("files.stemsTitle"),
+        body: t("files.stemsBody"),
+        fields: [
+          { name: "prefix", label: t("files.stemsPrefix"), value: prefix || base },
+          {
+            name: "mode", label: t("files.stemsMode"), type: "select", value: mode,
+            options: [
+              { value: "instrument", label: t("files.stemsPerInst") },
+              { value: "voice", label: t("files.stemsPerVoice") },
+            ],
+          },
+          { name: "cap", label: t("files.wavCap"), type: "number", value: cap, min: 1, max: 3600 },
+        ],
+        okLabel: t("files.render"),
+      });
+      if (!result) return;
+      prefix = sanitiseName(result.prefix ?? "", "");
+      mode = result.mode === "voice" ? "voice" : "instrument";
+      cap = Math.min(Math.max(parseInt(result.cap || "300", 10), 1), 3600);
+      if (prefix) break;
+      // The prefix is the one mandatory option — ask again rather than guess.
+      await showModal({ title: t("files.stemsNeedPrefix"), okLabel: t("common.ok") });
+    }
+
+    const songIndex = this.cb.songIndex?.() ?? 0;
+    const progress = showProgress(t("files.stemsRendering"), { cancellable: true });
+    const t0 = performance.now();
+    let render;
+    try {
+      render = await renderStemsAsync(doc.toRenderable(songIndex), songIndex, cap, {
+        mode,
+        // The render is the long pole; leave the last 15% for encode + zip.
+        onProgress: (f) => progress.set(f * 0.85),
+        signal: progress.signal,
+      });
+    } catch (err) {
+      progress.fail(err.message ?? String(err));
+      console.error("Stem render failed:", err);
+      return;
+    }
+    if (render.aborted) { progress.done(); return; }
+    if (render.stems.length === 0) {
+      progress.fail(t("files.stemsEmpty", { n: render.seconds.toFixed(0) }));
+      return;
+    }
+
+    labelStems(render.stems, doc, mode);
+    const zip = new StemZip();
+    let chunks;
+    try {
+      for (let i = 0; i < render.stems.length; i++) {
+        const stem = render.stems[i];
+        zip.addFile(stemFileName(prefix, i + 1, stem.label), encodeWav24Mono(stem.buf));
+        stem.buf = null; // free each track as it lands in the archive
+        progress.set(0.85 + (0.15 * (i + 1)) / render.stems.length);
+        await new Promise((r) => setTimeout(r, 0)); // let the bar paint
+      }
+      chunks = zip.finish();
+    } catch (err) {
+      progress.fail(err.message ?? String(err));
+      console.error("Stem packing failed:", err);
+      return;
+    }
+    progress.done();
+    const bytes = chunks.reduce((a, c) => a + c.length, 0);
+    console.info(`Stems: ${render.stems.length} tracks, ${render.seconds.toFixed(1)}s, ` +
+      `${(bytes / 1048576).toFixed(1)} MiB in ${(performance.now() - t0).toFixed(0)}ms`);
+    downloadBlob(new Blob(chunks, { type: "application/zip" }), `${prefix}-stems.zip`);
   }
 }
 
