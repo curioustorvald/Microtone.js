@@ -561,6 +561,8 @@ on row parse (N):
 
 **Plain.** Slides the channel's persistent pan by `$xy` per non-first tick (or once on tick 0 for fine forms). Encoding is layered on D's structural skeleton, but the *direction* of each nibble follows the IT panning convention: the low nibble of the high byte slides **right**, the high nibble of the high byte slides **left**. Pan ranges over the full 8-bit space (`$00`..`$FF`, $80 centre); P writes the persistent `channel_pan` so the change persists across rows.
 
+In surround mode the pan runs right round the listener, so a slide WRAPS at the ends instead of clamping: sliding right past $1FF continues at $000. Where an interpolation has a target (effect `Z`), the path taken is the shorter of the two ways round; if the start and target directions are antipodal, the interpolation path **MUST** be clockwise.
+
 **Compatibility.** IT `Pxy` maps directly to Taud `P $xy00` (high byte = source argument byte, verbatim). ST3 has no native P. The four sub-forms are:
 
 - `P $0y00` — slide right by `$y` per non-first tick.
@@ -716,14 +718,6 @@ A tempo slide's memory slot is separate from the set-tempo path and is private t
 **Compatibility.** IT `Wxy` maps directly.
 
 **Implementation.** See effect D, apply to the global volume instead.
-
-## X $xx00 — Fine Set Panning
-
-**Plain.** **Unimplemented**. On IT, sets the panning position of the current channel, $00 being full-left and $FF being full-right.
-
-**Compatibility.** Convert to `S $80xx`.
-
-**Implementation.** Not applicable.
 
 ## Y $xxyy — Panbrello (panning vibrato) with speed $xx and depth $yy
 
@@ -1105,6 +1099,8 @@ Effect $7..$E applies to ordinary instruments. When used on a metainstrument, th
 
 **Plain.** Sets the channel pan to `$xx`, with $00 being full left and $FF being full right. $80 is centre. When this command and panning column's Set Pan are both present, this command takes precedence.
 
+In surround mode, the lower 9 bits encodes angle, $000 being left (0°), $080 being front (90°), $100 being right (180°), $180 being behind (270°), $1FF being almost left (~360°). The angle therefore runs CLOCKWISE seen from above, and its low 8 bits are exactly the stereo pan byte — `S $80xx` keeps its old meaning and lands on the front semicircle.
+
 **Compatibility.** IT `Xxx` maps directly. ST3 `S8x` uses a 4-bit value. Convert by nibble-repeat: ST3 `S83` → Taud `S $8033`. Panning column command `0.$xx` has the same semantics and is the preferred form when a pan column is available in the pattern. ProTracker `8xx` (fine pan) and `E8x` (coarse pan) both map into Taud's 8-bit pan — the ProTracker 8-bit form maps directly; the 4-bit form nibble-repeats.
 
 **Implementation.** Write `channel_pan = arg & $FF`. The pan value is applied at the mixer: `left_gain = (($FF − pan) × $100) >> 8`, `right_gain = (pan × $100) >> 8`, with both applied before the global volume stage.
@@ -1228,6 +1224,42 @@ on sample byte read during loop playback:
 ```
 
 `S $F000` **MUST** clear `funk_accumulator` but **MUST** leave `funk_mask` intact (the accumulated inversion pattern persists). **On every fresh note trigger**, `funk_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `funk_accumulator` and `funk_speed` **MUST** persist across notes. The `funk_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
+
+## Spatial panning effects
+
+Three commands are reserved specifically for spatial panning, enabled via song flags.
+
+The song's immutable `ss` flag picks the panning model: **stereo** (0), **planar** (1, panning all the way round the listener) or **spatial** (2, the whole sphere). It decides what the pan commands MEAN, so it is a property of the song rather than of playback: a stereo song ignores X / 4 / Z entirely and keeps `S $80xx` at eight bits, and a planar song keeps every source on the horizon.
+
+**Sound sources, not speaker feeds.** A conforming engine **MUST** treat a sounding voice in a surround model as a source at a direction, and render those sources into whatever channel layout the output needs; it **MUST NOT** define the panning in terms of one particular output format. A MULTI-CHANNEL sample (the Ixmp `s` block) is therefore not two speaker feeds but a rigid arrangement of sources aimed at the voice's direction, placed at the ITU angles for its channel count — ±30° for stereo, the BS.775 / BS.2051 angles for 4, 6 and 8 channels. The arrangement yaws and pitches WITH the source, so its width survives elevation.
+
+**Stereo output** (playback, and the stereo downmix of any surround export) **MUST** fold the rear semicircle onto the front one — two speakers cannot render front/back — and apply the ordinary equal-energy pan law to the folded angle. On the front arc this is exactly the stereo model's own law, so a song that uses nothing but ordinary pan sounds identical whichever model it declares. Elevation collapses the image toward the centre, reaching dead centre at ±90°, which is the only rule that stays continuous at the poles.
+
+### X $eeaa — Spherical panning by azimuth $aa and elevation $ee
+
+**Plain.** In spatial surround mode, this command positions a sound source using azimuth and elevation, where azimuth 0°..360° maps to $00..$FF. Elevation is stored as a signed 8-bit integer, where −128 represents −90° and +127 represents approximately +90°.
+
+**Compatibility.** Unique to Taud. On IT, this command is called "Fine Set Panning" and sets the panning position of the current channel, $00 being full-left and $FF being full-right. Convert to `S $80xx`.
+
+**Implementation.** The engine **MUST** ignore this command when the song's surround model is stereo (a converter that left an IT `Xxx` in place **MUST NOT** be rewarded with a pan change). Otherwise write the channel's spherical position: azimuth = `$aa × 2` in the 9-bit units of `S $8xxx` (so `$00` = left, `$40` = front, `$80` = right, `$C0` = behind), elevation = the signed `$ee`. A PLANAR song **MUST** force the elevation to zero. The position is channel state: it persists across rows and is inherited by NNA ghosts and metainstrument layer children.
+
+### 4 $eeaa — Set target for spherical panning slide
+
+**Plain.** In spatial surround mode, this command positions a sound source sliding target using azimuth and elevation, where azimuth 0°..360° maps to $00..$FF. Elevation is stored as a signed 8-bit integer, where −128 represents −90° and +127 represents approximately +90°. Use command `Z $0xxx` to initiate sliding.
+
+**Compatibility.** Unique to Taud.
+
+**Implementation.** Argument decoding is identical to X's, and the same stereo-model and planar-elevation rules apply. The target is CHANNEL state, not row state: it outlives the row that set it, so one `4` can serve many `Z` rows. Until a `4` is issued the target **MUST** equal the channel's own start position (front, $80, at song start), which makes a stray `Z` a no-op rather than a jump.
+
+### Z $0xxx — Start spherical panning slide
+
+**Plain.** Slides the spherical panning by speed `$xxx`. The speed rate is 1/16 of an azimuth unit per tick (see effect `X $eeaa`). `Z 0000` continues the slide by reusing the previously specified slide speed. If the start and target directions are identical, nothing **MUST** happen. If the start and target directions are antipodal, the interpolation path is implementation-defined.
+
+**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent. The effect has its own memory slot.
+
+**Implementation.** Convert the start and target azimuth/elevation to unit direction vectors. An implementation **MUST** interpolate the source position along the shortest great-circle path at constant angular velocity. Quaternion-based SLERP using minimal-rotation quaternions is the **RECOMMENDED** implementation.
+
+The slide is armed per row like every other tracker slide: it steps on each NON-FIRST tick of the row carrying the `Z`, and a row without one does not move the source. One step is `$xxx / 16` azimuth units of effect X (i.e. `$xxx / 8` of the 9-bit `S $8xxx` units), clamped so the source lands exactly on the target instead of overshooting; once there, further steps do nothing. The reference engine resolves the antipodal case CLOCKWISE, matching effect P.
 
 ## Volume column effects
 

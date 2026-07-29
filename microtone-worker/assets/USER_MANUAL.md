@@ -13,6 +13,13 @@ port of the TSVM Taud engine — a ScreamTracker 3-lineage tracker extended with
 > the **Note Effects** document in the sidebar, and what changed in each build
 > is listed under **Patch Notes** (also linked from the About popup).
 
+> Looking for the specifications rather than the manual? The sidebar also
+> carries the three Taud reference documents: **Engine Spec** (how playback
+> works — timing, envelopes, voices, filters, mixing), **File Format** (the
+> `.taud`, `.tsii` and `.tpif` byte layouts) and **Conversion Notes** (how
+> MOD, S3M, XM, IT, MON and MIDI files map onto Taud, and where they lose
+> something on the way).
+
 ## Introduction
 
 ### Tracker concepts
@@ -507,11 +514,72 @@ Per-song properties, applied live to playback:
 - **Global volume** and **Mixing volume** (0–255).
 - **Tone-slide mode** — Linear (4096-TET), Amiga period, or Linear frequency.
 - **Interpolation** — Fast sinc, None (ZOH), Amiga 500, Amiga 1200, SNES gaussian, NES DPCM.
+- **Panning model** — Stereo, Planar (360°) or Spatial (sphere); see [Surround panning](#surround-panning).
 - **Notation** — the display pitch table. Changing it only relabels notes; use **Retune…** to actually move them (see [Microtonality in depth](#microtonality-in-depth)).
 - **Tuning** — the concert pitch the whole song is played at (see below).
 
 Below, the songs table lets you rename, delete and add songs within the
 project; the top-bar selector switches between them.
+
+### Surround panning
+
+The **panning model** decides what the pan commands mean, so it belongs to the
+song rather than to playback:
+
+- **Stereo** — the classic left/right pan. Nothing changes.
+- **Planar (360°)** — sources pan all the way round you, on the horizon.
+- **Spatial (sphere)** — sources can also go above and below.
+
+In a surround song `S $8xxx` carries a **9-bit angle** instead of a pan byte:
+`$000` left, `$080` front, `$100` right, `$180` behind, running clockwise as
+seen from above. The low byte is the pan value you already know, so every
+ordinary pan lands on the front half of the circle and a song that uses nothing
+but ordinary pan sounds exactly as it did. Pan slides (P and the pan column)
+wrap round the circle instead of stopping at the ends.
+
+Three commands are yours only in a surround song:
+
+| Command | Meaning |
+|---|---|
+| **X** `$eeaa` | Place the source: `$aa` azimuth over the full turn (`$00` left, `$40` front, `$80` right, `$C0` behind), `$ee` signed elevation (`$00` ear level, `$40` = +45°, `$C0` = −45°). |
+| **4** `$eeaa` | Aim: where a slide should travel to, same argument format. It stays set until you change it. |
+| **Z** `$0xxx` | Slide there at `$xxx`/16 azimuth units per tick, along the shortest way round. Like every other slide it runs on the row that carries it, so repeat it while you want the source moving; `Z $0000` recalls the last speed. |
+
+A **stereo sample** in a surround song is placed as a pair of sources 30° either
+side of where the voice points — the ITU listening triangle — and the pair turns
+with the voice instead of being nailed to the speakers.
+
+**The panner.** Rather than working the angles out by hand, press **Panner…**
+on the Timeline or Patterns toolbox (it appears once the song is planar or
+spatial). It draws the circle from above — plus a side view for elevation on a
+spatial song — with a dot for every channel that is sounding, drawn where the
+engine actually has it, so a Z slide is visible while it runs. Drag the handle
+or type the numbers, then press one button to write the command into the cell
+under the cursor: **Place** writes X, **Target** writes 4, **Slide** writes Z at
+the speed in the box. Each button shows the exact command it will write, and
+each write is a normal undo step.
+
+**Watching it from the Timeline.** In a surround song each channel header's pan
+strip shows the source's *shadow* on the left–right line — height and depth
+collapse onto it, so a hard-left source 60° above you reads half-left, and one
+directly behind reads centre. Press **Radar** in the toolbox and every header
+expands into a small dial seen from above: the source goes round the circle by
+azimuth, elevation pulls it toward the middle (straight overhead is dead
+centre), a spatial song adds a height bar at the right, and a tick on the
+horizon line marks the same shadow the strip is showing. Press it again to
+collapse.
+
+On a **spatial** song the dots carry their height with them, in the panner and
+in the headers alike: a source grows as it rises above ear level and shrinks as
+it sinks below, and it casts a shadow from an imaginary light high up in front
+of you — pressed against the dot and sharp when the source is low, drifting
+below it and softening as it climbs. A dial drawn from above cannot otherwise
+tell you whether a source is over your head or under your feet.
+
+Playback and WAV export fold everything back to stereo: what is behind you
+mirrors onto the front (two speakers cannot do front and back), while left and
+right stay put, and height pulls the image toward the centre. Surround and
+ambisonic export files are still to come.
 
 ### Tuning
 
