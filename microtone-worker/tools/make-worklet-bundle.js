@@ -19,6 +19,7 @@ const FILES = [
   "src/engine/minifloat.js",
   "src/engine/rng.js",
   "src/engine/tables.js",
+  "src/engine/spatial.js",
   "src/engine/inst.js",
   "src/engine/voice.js",
   "src/engine/state.js",

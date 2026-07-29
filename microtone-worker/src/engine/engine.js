@@ -18,6 +18,7 @@ import { tuningRatioOf } from "./tables.js";
 import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
+import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth } from "./spatial.js";
 import { generateTrackerAudio } from "./mixer.js";
 import { triggerMetaOrNote, triggerNote } from "./trigger.js";
 import { reconstructDittoState } from "./row.js";
@@ -254,6 +255,28 @@ export class TaudEngine {
   }
   getTrackerMixerFlags(ph) { return this.playheads[ph].initialGlobalFlags; }
 
+  /**
+   * Song-immutable surround model (#998): 0 stereo, 1 planar (360° panning),
+   * 2 spatial. Anything but stereo mixes through the object bus.
+   */
+  setSurroundModel(ph, model) {
+    const p = this.playheads[ph];
+    p.surroundModel = model & 3;
+    p.trackerState.setSurroundModel(p.surroundModel, p.spatialRenderer);
+  }
+  getSurroundModel(ph) { return this.playheads[ph].surroundModel; }
+
+  /**
+   * Swap the render target the object bus feeds (#998.0). Null = the device's
+   * stereo monitor; an exporter installs e.g. an AmbisonicRenderer and reads
+   * `trackerState.spatial.data` after each chunk. No-op for a stereo song.
+   */
+  setSpatialRenderer(ph, renderer) {
+    const p = this.playheads[ph];
+    p.spatialRenderer = renderer;
+    p.trackerState.setSurroundModel(p.surroundModel, renderer);
+  }
+
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }
   setSongMixingVolume(ph, volume) { this.playheads[ph].mixingVolume = volume & 255; }
@@ -403,14 +426,29 @@ export class TaudEngine {
     return Math.min(Math.max(effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain, 0.0), 1.0);
   }
 
+  /** Pan as the stereo meters want it: a surround voice reports where the
+   *  monitor downmix puts it (rear positions fold onto the front arc). */
   getVoiceEffectivePan(ph, vi) {
     const v = this._voice(ph, vi);
     if (!v.active) return 128;
+    if (this.playheads[ph].surroundModel !== SURROUND_STEREO) {
+      return Math.round(foldAzimuthToPan(voiceAzimuth(v)));
+    }
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
       return Math.min(Math.max(v.channelPan + envPanRaw - 128, 0), 255);
     }
     return Math.min(Math.max(v.channelPan, 0), 255);
+  }
+
+  /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
+   *  Stereo songs report the pan byte's front-arc position. */
+  getVoiceSpatialAzimuth(ph, vi) {
+    const v = this._voice(ph, vi);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? v.channelPan : voiceAzimuth(v);
+  }
+  getVoiceSpatialElevation(ph, vi) {
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : this._voice(ph, vi).panElevation;
   }
 
   getVoiceActive(ph, vi) { return this._voice(ph, vi).active; }

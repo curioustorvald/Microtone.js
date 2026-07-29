@@ -109,3 +109,34 @@ test("PATCH_NOTES.md: dated sections, newest first, renders + TOCs", () => {
   const dates = toc.map((e) => e.text);
   assert.deepEqual(dates, [...dates].sort().reverse(), "newest section first");
 });
+
+// Item 997: the three Taud reference specifications. They are heavily
+// cross-linked, so the invariant worth pinning (beyond "renders at all") is
+// that every in-page anchor resolves to a heading this renderer actually emits
+// — a renamed section otherwise silently produces a dead link.
+for (const [file, h1] of [
+  ["TAUD_ENGINE_SPEC.md", "Taud Engine Specification"],
+  ["TAUD_FILE_FORMAT.md", "Taud File Format Specification"],
+  ["TAUD_CONVERSION_NOTES.md", "Taud Conversion Notes"],
+]) {
+  test(`renders ${file} + TOC + every in-page anchor resolves`, () => {
+    const md = readFileSync(fileURLToPath(new URL(`../../assets/${file}`, import.meta.url)), "utf8");
+    const html = renderMarkdown(md);
+    assert.ok(html.length > 10000);
+    assert.match(html, new RegExp(`<h1 id="[^"]+">${h1}</h1>`));
+    assert.match(html, /<table>/);
+
+    const toc = extractToc(md);
+    assert.ok(toc.length > 20, "TOC has many entries");
+    assert.ok(toc.every((e) => e.slug && e.text && (e.level === 2 || e.level === 3)));
+    assert.equal(new Set(toc.map((e) => e.slug)).size, toc.length, "slugs unique");
+
+    const ids = new Set();
+    for (const line of md.split("\n")) {
+      const h = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+      if (h) ids.add(slug(h[2]));
+    }
+    const dead = [...md.matchAll(/\]\(#([^)]+)\)/g)].map((m) => m[1]).filter((a) => !ids.has(a));
+    assert.deepEqual(dead, [], "no dead in-page anchors");
+  });
+}

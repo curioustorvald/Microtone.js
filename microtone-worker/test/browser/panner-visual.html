@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Spatial panner visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Switches the song to a surround model and leaves the Panner (#998.6)
+       open, a layout harness like chord-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/panner.png \
+           --timeout=15000 "http://localhost:8932/test/browser/panner-visual.html?theme=dark"
+       ?theme=light for the light theme, ?model=1 for a planar song (one dial,
+       no elevation row), ?play=1 to start playback so the live voice dots move,
+       ?radar=1 to expand the channel headers instead of opening the popup. -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store } = win.__microtone;
+      for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      const { setSongScalarOp } = await win.eval('import("/src/doc/ops.js")');
+      store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel",
+        parseInt(params.get("model") ?? "2", 10)));
+      store.cursor = { row: 4, ch: 2, sub: 0, nib: 0 };
+      await sleep(60);
+      if (params.get("play")) {
+        // Needs --autoplay-policy=no-user-gesture-required to actually sound.
+        win.document.getElementById("playSong").click();
+        await sleep(1500);
+      }
+      if (params.get("radar")) {
+        // Header radars instead of the popup: scatter a few sources first so the
+        // dots are not all sitting at the default pan.
+        const { EffectOp } = await win.eval('import("/src/engine/tables.js")');
+        const { setCellOp } = await win.eval('import("/src/doc/ops.js")');
+        const args = [0x0000, 0x4030, 0xc080, 0x00c0];
+        for (let ch = 0; ch < 4; ch++) {
+          const pat = store.song.cues[0][ch] & 0x7fff;
+          if (pat === 0x7fff) continue;
+          store.undo.apply(setCellOp(store.songIndex, pat, 0,
+            { effect: EffectOp.OP_X, effectArg: args[ch] }));
+        }
+        win.document.getElementById("tbRadar").click();
+        return;
+      }
+      win.document.getElementById("tbPanner").click();
+      // Nudge the handle off the default so the dial reads as a position.
+      for (let i = 0; i < 60; i++) {
+        const dlg = win.document.querySelector("dialog.panner");
+        if (dlg?.__panner) { dlg.__panner.setAngles(320, 48); break; }
+        await sleep(50);
+      }
+    })();
+  </script>
+</body>
+</html>

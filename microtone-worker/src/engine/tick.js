@@ -20,6 +20,10 @@ import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA, cutLayerChildren,
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
+import { applyPanSet, applyPanSlide, stepTowardTarget } from "./spatial.js";
+
+/** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
+const spatialStep = new Float64Array(2);
 
 export function applyTrackerTick(eng, ts, playhead) {
   const tickSec = 2.5 / playhead.bpm;
@@ -160,12 +164,21 @@ export function applyTrackerTick(eng, ts, playhead) {
         voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir, 0, 0x3f);
       }
       if (voice.panColSlideRight !== 0) {
-        voice.channelPan = Math.min(voice.channelPan + voice.panColSlideRight, 0xff);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+        applyPanSlide(ts, voice, voice.panColSlideRight);
       }
       if (voice.panColSlideLeft !== 0) {
-        voice.channelPan = Math.max(voice.channelPan - voice.panColSlideLeft, 0);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+        applyPanSlide(ts, voice, -voice.panColSlideLeft);
+      }
+      // Spherical panning slide (Z, #998.2): one great-circle step per non-first
+      // tick, at $xxx/16 azimuth units — X's units, so /8 in the engine's.
+      if (voice.spatialSlideActive) {
+        stepTowardTarget(
+          voice.panAzimuth, voice.panElevation,
+          voice.spatialTargetAz, voice.spatialTargetEl,
+          voice.mem.z / 8, spatialStep,
+        );
+        applyPanSet(ts, voice, spatialStep[0]);
+        voice.panElevation = spatialStep[1];
       }
     }
 
@@ -365,6 +378,8 @@ export function applyTrackerTick(eng, ts, playhead) {
         bg.rowVolume = parent.rowVolume;
         bg.channelPan = parent.channelPan;
         bg.rowPan = parent.rowPan;
+        bg.panAzimuth = parent.panAzimuth;
+        bg.panElevation = parent.panElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];

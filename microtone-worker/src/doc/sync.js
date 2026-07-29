@@ -24,6 +24,7 @@ export class DocSync {
           bpm: s.bpm, tickRate: s.tickRate, globalFlags: s.globalFlags,
           globalVolume: s.globalVolume, mixingVolume: s.mixingVolume,
           tuningBaseNote: s.tuningBaseNote, tuningFreq: s.tuningFreq,
+          surroundModel: s.surroundModel,
           patterns: s.patterns.map((_, p) => this.doc.patternBytes(this.songIndex, p)),
           cues: s.cues,
         } : null),
@@ -89,6 +90,7 @@ export class DocSync {
       case "globalVolume": this.audio.setSongGlobalVolume(0, s.globalVolume); break;
       case "mixingVolume": this.audio.setSongMixingVolume(0, s.mixingVolume); break;
       case "globalFlags": this.audio.setTrackerMixerFlags(0, s.globalFlags); break;
+      case "surroundModel": this.audio.setSurroundModel(0, s.surroundModel); break;
       // Either tuning field retunes the whole song (item 77): push the pair.
       case "tuningBaseNote":
       case "tuningFreq":

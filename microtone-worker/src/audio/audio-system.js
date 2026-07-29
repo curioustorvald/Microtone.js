@@ -11,6 +11,7 @@ import {
   SNAP_CUE_POS, SNAP_ROW_INDEX, SNAP_BPM, SNAP_TICK_RATE, SNAP_FLAGS,
   SNAP_INTERRUPT_MASK, SNAP_CHANNEL_COUNT, SNAP_HEADER_SIZE,
   SNAP_V_ACTIVE, SNAP_V_EFF_VOL, SNAP_V_EFF_PAN, SNAP_V_NOTE, SNAP_V_INST,
+  SNAP_V_AZIMUTH, SNAP_V_ELEVATION,
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
@@ -210,6 +211,7 @@ export class AudioSystem {
     this.setTickRate(0, song.tickRate > 0 ? song.tickRate : 6);
     this.setTuning(0, song.tuningBaseNote, song.tuningFreq);
     this.setTrackerMixerFlags(0, song.globalFlags);
+    this.setSurroundModel(0, song.surroundModel ?? 0);
     this.setSongGlobalVolume(0, song.globalVolume);
     this.setSongMixingVolume(0, song.mixingVolume);
     this.setMasterVolume(0, 255);
@@ -234,6 +236,7 @@ export class AudioSystem {
   setMasterVolume(ph, volume) { this._post({ t: CMD.SET_MASTER_VOLUME, ph, volume }); }
   setMasterPan(ph, pan) { this._post({ t: CMD.SET_MASTER_PAN, ph, pan }); }
   setTrackerMixerFlags(ph, flags) { this._post({ t: CMD.SET_TRACKER_MIXER_FLAGS, ph, flags }); }
+  setSurroundModel(ph, model) { this._post({ t: CMD.SET_SURROUND_MODEL, ph, model }); }
   resetParams(ph = 0) { this._post({ t: CMD.RESET_PARAMS, ph }); }
   resetFunkState(ph = 0) { this._post({ t: CMD.RESET_FUNK_STATE, ph }); }
   jamNote(ph, voice, note, inst, audition = false) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst, audition }); }
@@ -314,4 +317,9 @@ export class AudioSystem {
   getVoiceEnvPitchTime(vi) { return this._v(vi, SNAP_V_ENV_PITCH_TIME); }
   getVoiceEnvFilterIndex(vi) { return this._v(vi, SNAP_V_ENV_FILTER_IDX); }
   getVoiceEnvFilterTime(vi) { return this._v(vi, SNAP_V_ENV_FILTER_TIME); }
+  /** #998: where the voice actually sits — 512-unit azimuth (0 left, 128 front,
+   *  clockwise) and signed elevation (128 units = 90°). A stereo song reports
+   *  its pan byte on the front arc and zero elevation. */
+  getVoiceAzimuth(vi) { return this._v(vi, SNAP_V_AZIMUTH); }
+  getVoiceElevation(vi) { return this._v(vi, SNAP_V_ELEVATION); }
 }

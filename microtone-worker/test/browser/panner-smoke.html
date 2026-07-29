@@ -1,0 +1,132 @@
+<!doctype html><meta charset="utf-8"><title>spatial panner + surround model (item 998.0-.2, .6)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Drives the REAL app: switch the song to a surround model in the Project view,
+// check the Panner button appears, open it, drag/set a position and write each
+// of the three commands into the cursor's cell — then undo the lot.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, timeline } = M;
+  const { EffectOp } = await import("../../src/engine/tables.js");
+  const { setSongScalarOp } = await import("../../src/doc/ops.js");
+
+  // ── 1. the button follows the song's surround model ──────────────────────
+  check(doc.getElementById("tbPanner").hidden, "Panner hidden for a stereo song");
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(60);
+  check(!doc.getElementById("tbPanner").hidden, "Panner appears once the song is spatial");
+  check(store.song.surroundModel === 2, "song carries the spatial model");
+
+  // ── 2. open it on a known cell ───────────────────────────────────────────
+  store.cursor = { row: 4, ch: 2, sub: 0, nib: 0 };
+  doc.getElementById("tbPanner").click();
+  let dlg = null;
+  for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.panner"); await sleep(30); }
+  check(!!dlg, "panner dialog opened");
+  if (!dlg) { log(fails ? `\n${fails} FAILED` : "\nALL PASS"); return; }
+  const api = dlg.__panner;
+  check(!!api, "panner exposes its test hook");
+  check(dlg.querySelectorAll("canvas.panner-dial").length === 2, "spatial song shows BOTH dials");
+  check(dlg.textContent.includes("channel 3"), "info line names the cursor's channel",
+    dlg.querySelector("p.dim")?.textContent);
+
+  const cellAt = (row, ch) => {
+    const save = store.cursor;
+    store.cursor = { row, ch, sub: 0, nib: 0 };
+    const c = timeline.cursorCell()?.cell;
+    store.cursor = save;
+    return c;
+  };
+
+  // ── 3. write X / 4 / Z from the dial ─────────────────────────────────────
+  api.setAngles(384, 64);            // behind, 45° up
+  api.place();
+  await sleep(40);
+  let cell = cellAt(4, 2);
+  check(cell.effect === EffectOp.OP_X && cell.effectArg === 0x40c0,
+    "Place writes X $40C0 (behind, +45°)", `$${cell.effectArg.toString(16)}`);
+
+  api.setAngles(256, 0);             // hard right, ear level
+  api.target();
+  await sleep(40);
+  cell = cellAt(4, 2);
+  check(cell.effect === EffectOp.OP_4 && cell.effectArg === 0x0080,
+    "Target writes 4 $0080 (right)", `$${cell.effectArg.toString(16)}`);
+
+  const zInput = dlg.querySelector(".panner-cmds input[type=text]");
+  zInput.value = "080";
+  zInput.dispatchEvent(new win.Event("input", { bubbles: true }));
+  api.slide();
+  await sleep(40);
+  cell = cellAt(4, 2);
+  check(cell.effect === EffectOp.OP_Z && cell.effectArg === 0x080,
+    "Slide writes Z $0080", `$${cell.effectArg.toString(16)}`);
+
+  // ── 4. a pointer drag on the top dial moves the source ───────────────────
+  const topCv = dlg.querySelectorAll("canvas.panner-dial")[0];
+  const r = topCv.getBoundingClientRect();
+  const pd = (type, x, y) => topCv.dispatchEvent(new win.PointerEvent(type, {
+    clientX: r.left + x, clientY: r.top + y, bubbles: true, pointerId: 1,
+  }));
+  pd("pointerdown", r.width / 2 + 80, r.height / 2); // due right of centre
+  pd("pointerup", r.width / 2 + 80, r.height / 2);
+  await sleep(40);
+  const azField = dlg.querySelector(".panner-fields input[type=number]");
+  check(Math.abs(parseFloat(azField.value) - 256) < 2, "dragging right of centre = azimuth 256 (right)",
+    azField.value);
+  api.place();
+  await sleep(40);
+  cell = cellAt(4, 2);
+  check((cell.effectArg & 0xff) === 0x80, "…and Place writes that azimuth", `$${cell.effectArg.toString(16)}`);
+
+  // ── 4b. the channel-header radar (#998.6) ────────────────────────────────
+  const { lateralProjection } = await import("../../src/engine/spatial.js");
+  const collapsedH = M.timeline.headerH();
+  check(!doc.getElementById("tbRadar").hidden, "Radar toggle appears for a surround song");
+  doc.getElementById("tbRadar").click();
+  await sleep(80);
+  check(M.timeline.radarOn(), "radar mode on");
+  check(M.timeline.headerH() > collapsedH, "header expands",
+    `${collapsedH} → ${M.timeline.headerH()}`);
+  // A y inside the OLD header band is still header now; just below the new one is row 0.
+  check(M.timeline.hitTest(200, collapsedH + 4) === null, "the expanded header swallows rows");
+  const firstRow = M.timeline.hitTest(200, M.timeline.headerH() + 4);
+  check(firstRow !== null && firstRow.row === Math.floor(M.timeline.scrollRow),
+    "row hit-testing follows the taller header", JSON.stringify(firstRow));
+  // The collapsed strip is the dot's shadow: hard left 60° up reads half-left.
+  check(Math.abs(lateralProjection(0, (60 / 90) * 128) + 0.5) < 1e-9,
+    "projection: hard left + 60° elevation = half-left");
+  doc.getElementById("tbRadar").click();
+  await sleep(80);
+  check(!M.timeline.radarOn() && M.timeline.headerH() === collapsedH, "radar collapses again");
+
+  // ── 5. the popup leaves the document undoable ────────────────────────────
+  api.close();
+  await sleep(60);
+  check(!doc.querySelector("dialog.panner"), "dialog closes");
+  for (let i = 0; i < 6; i++) store.undo.undo();
+  await sleep(60);
+  cell = cellAt(4, 2);
+  check(cell.effect === 0 && cell.effectArg === 0, "undo walks every panner write back off the cell",
+    `${cell.effect}/${cell.effectArg}`);
+  check(store.song.surroundModel === 0, "…including the surround-model switch");
+  check(doc.getElementById("tbPanner").hidden, "Panner button hides again");
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

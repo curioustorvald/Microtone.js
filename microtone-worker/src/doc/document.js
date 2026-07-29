@@ -76,6 +76,8 @@ export class Song {
     this.tuningBaseNote = parsedSong.tuningBaseNote;
     this.tuningFreq = parsedSong.tuningFreq;
     this.globalFlags = parsedSong.globalFlags;
+    /** Surround model (#998): 0 stereo, 1 planar (360°), 2 spatial. */
+    this.surroundModel = parsedSong.surroundModel ?? 0;
     this.globalVolume = parsedSong.globalVolume;
     this.mixingVolume = parsedSong.mixingVolume;
     /** @type {TaudPlayData[][]} 64 cells per pattern */
@@ -452,6 +454,7 @@ export class Document {
         globalFlags: s.globalFlags,
         globalVolume: s.globalVolume,
         mixingVolume: s.mixingVolume,
+        surroundModel: s.surroundModel,
         // Null gaps (unmaterialised arbitrary-number patterns, item 48) serialise
         // as empty patterns — gzip compresses the sparsity.
         patterns: s.patterns.map((p) => (p ? encodePattern(p) : emptyPatternBytes())),
@@ -515,6 +518,11 @@ export class Document {
       songs: this.songs.map((song, i) => i === songIndex ? {
         bpm: s.bpm, tickRate: s.tickRate, globalFlags: s.globalFlags,
         globalVolume: s.globalVolume, mixingVolume: s.mixingVolume,
+        surroundModel: s.surroundModel,
+        // The declared tuning (item 77) belongs here too: without it an offline
+        // render falls back to the tracker default and every exported note is
+        // off against what playback just sounded.
+        tuningBaseNote: s.tuningBaseNote, tuningFreq: s.tuningFreq,
         patterns: s.patterns.map((_, p) => this.patternBytes(songIndex, p)),
         cues: s.cues,
       } : null),

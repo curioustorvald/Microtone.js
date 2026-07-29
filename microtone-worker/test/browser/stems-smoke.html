@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>stems smoke: File &gt; Export stems… (item 93)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- Onestop is a GM MIDI conversion: melodic metas + a percussion drum kit,
+       so both stem arrangements have something real to split. -->
+  <iframe id="app" src="../../index.html?load=test/corpus/Onestop.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    import { unzipSync } from "../../vendor/fflate.esm.js";
+
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    /** 24-bit mono WAV → {rate, bits, channels, frames, peak}. */
+    function readWav24(bytes) {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const info = {
+        riff: String.fromCharCode(...bytes.subarray(0, 4)),
+        wave: String.fromCharCode(...bytes.subarray(8, 12)),
+        format: dv.getUint16(20, true),
+        channels: dv.getUint16(22, true),
+        rate: dv.getUint32(24, true),
+        blockAlign: dv.getUint16(32, true),
+        bits: dv.getUint16(34, true),
+        dataBytes: dv.getUint32(40, true),
+      };
+      info.frames = info.dataBytes / 3;
+      let peak = 0;
+      for (let i = 0; i < info.frames; i++) {
+        const o = 44 + i * 3;
+        const u = bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16);
+        const v = u >= 0x800000 ? u - 0x1000000 : u;
+        if (Math.abs(v) > peak) peak = Math.abs(v);
+      }
+      info.peak = peak / 8388607;
+      return info;
+    }
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const { store } = win.__microtone;
+        log(`app loaded (${store.doc.songs[0].patterns.length} patterns)`);
+
+        // Capture the download instead of letting the browser take it.
+        let captured = null;
+        let capturedName = null;
+        const realCreate = win.URL.createObjectURL;
+        win.URL.createObjectURL = (blob) => { captured = blob; return "blob:stub"; };
+        const realClick = win.HTMLAnchorElement.prototype.click;
+        win.HTMLAnchorElement.prototype.click = function () { capturedName = this.download; };
+
+        win.document.querySelector('#tabs button[data-view="files"]').click();
+        await new Promise((r) => setTimeout(r, 300)); // refresh() is async
+        const filesHost = win.document.getElementById("filesHost");
+        const stemsBtn = [...filesHost.querySelectorAll(".files-bar button")]
+          .find((b) => /Export stems/.test(b.textContent));
+        log(`File tab has an Export stems… button: ${stemsBtn ? "ok" : "FAIL"}`);
+
+        /** Drive the export dialog; resolves once the zip has been "downloaded". */
+        const runExport = async (prefix, mode, cap) => {
+          captured = null; capturedName = null;
+          stemsBtn.click();
+          await new Promise((r) => setTimeout(r, 100));
+          const dlg = [...win.document.querySelectorAll("dialog.modal")].pop();
+          dlg.querySelector('input[name="prefix"]').value = prefix;
+          dlg.querySelector('select[name="mode"]').value = mode;
+          dlg.querySelector('input[name="cap"]').value = String(cap);
+          [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // Render
+          for (let i = 0; i < 600 && !captured; i++) await new Promise((r) => setTimeout(r, 100));
+          if (!captured) throw new Error("no download after 60 s");
+          const zip = new Uint8Array(await captured.arrayBuffer());
+          return { zip, files: unzipSync(zip), name: capturedName, type: captured.type };
+        };
+
+        // ── the mandatory prefix ──
+        stemsBtn.click();
+        await new Promise((r) => setTimeout(r, 100));
+        let dlg = [...win.document.querySelectorAll("dialog.modal")].pop();
+        dlg.querySelector('input[name="prefix"]').value = "   ";
+        [...dlg.querySelectorAll(".modal-buttons button")][0].click();
+        await new Promise((r) => setTimeout(r, 150));
+        const warn = [...win.document.querySelectorAll("dialog.modal")].pop();
+        const warnOk = warn && /prefix is required/.test(warn.textContent);
+        [...warn.querySelectorAll(".modal-buttons button")][0].click(); // OK → asks again
+        await new Promise((r) => setTimeout(r, 150));
+        dlg = [...win.document.querySelectorAll("dialog.modal")].pop();
+        const reaskOk = !!dlg.querySelector('input[name="prefix"]');
+        [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
+        await new Promise((r) => setTimeout(r, 100));
+        const closedOk = !win.document.querySelector("dialog.modal");
+        log(`empty prefix refused, re-asks, cancels out: ${warnOk && reaskOk && closedOk ? "ok" : "FAIL"}`);
+
+        // ── per-instrument (default): drums split per kit piece ──
+        const inst = await runExport("smoke", "instrument", 24); // long enough for several kit pieces
+        const instNames = Object.keys(inst.files).sort();
+        const nameShapeOk = instNames.every((n) => /^smoke_\d\d_I[0-9A-F]{2} .+\.wav$/.test(n));
+        const drumTracks = instNames.filter((n) => /Kick|Snare|Tom|Hat|Cymbal|Slap/.test(n));
+        log(`per-instrument: ${instNames.length} tracks, zip ${(inst.zip.length / 1048576).toFixed(1)} MiB, ` +
+            `name "${inst.name}" type "${inst.type}"`);
+        log(`  ${instNames.join(", ")}`);
+        const instOk = instNames.length > 1 && nameShapeOk && drumTracks.length > 1 &&
+          inst.name === "smoke-stems.zip" && inst.type === "application/zip";
+        log(`per-instrument export (drum kit split into ${drumTracks.length} pieces): ${instOk ? "ok" : "FAIL"}`);
+
+        // ── the audio format: 24-bit 48 kHz mono, audible, right length ──
+        const wavs = instNames.map((n) => readWav24(inst.files[n]));
+        const fmtOk = wavs.every((w) => w.riff === "RIFF" && w.wave === "WAVE" && w.format === 1 &&
+          w.channels === 1 && w.rate === 48000 && w.bits === 24 && w.blockAlign === 3);
+        const lenOk = wavs.every((w) => Math.abs(w.frames - 24 * 48000) <= 48000);
+        const audibleOk = wavs.every((w) => w.peak > 0);
+        log(`24-bit 48 kHz mono, ~24 s, all audible: ` +
+            `fmt=${fmtOk} len=${lenOk} (${wavs[0].frames} frames) audible=${audibleOk} ` +
+            `peaks ${wavs.map((w) => w.peak.toFixed(2)).join("/")}: ${fmtOk && lenOk && audibleOk ? "ok" : "FAIL"}`);
+
+        // ── per-voice: one track per channel ──
+        const voice = await runExport("smoke", "voice", 6);
+        const voiceNames = Object.keys(voice.files).sort();
+        const voiceShapeOk = voiceNames.every((n) => /^smoke_\d\d_Ch\d\d/.test(n));
+        const voiceFmtOk = voiceNames.every((n) => {
+          const w = readWav24(voice.files[n]);
+          return w.channels === 1 && w.rate === 48000 && w.bits === 24 && w.peak > 0;
+        });
+        log(`per-voice: ${voiceNames.length} tracks — ${voiceNames.join(", ")}`);
+        log(`per-voice export: ${voiceNames.length > 1 && voiceShapeOk && voiceFmtOk ? "ok" : "FAIL"}`);
+
+        // ── the document is untouched by an export ──
+        const cleanOk = store.doc.dirty === false && store.undo.undoStack.length === 0;
+        log(`export leaves the project clean (no ops, not dirty): ${cleanOk ? "ok" : "FAIL"}`);
+
+        win.URL.createObjectURL = realCreate;
+        win.HTMLAnchorElement.prototype.click = realClick;
+        log(out.some((l) => /FAIL/.test(l)) ? "SOME LEGS FAILED" : "ALL PASS");
+      } catch (err) {
+        log("EXCEPTION: " + (err?.stack ?? err));
+      }
+    })();
+  </script>
+</body>
+</html>

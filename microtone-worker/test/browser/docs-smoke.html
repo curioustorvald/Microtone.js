@@ -61,6 +61,28 @@
         const hasCode = !!doc.querySelector("#content pre code");
         log(`note effects render: h1=${effectsOk} tocHeadings=${headingLinks} table=${hasTable} code=${hasCode}`);
 
+        // item 997: the three Taud reference specs, each reached from the switcher
+        let specsOk = true;
+        for (const [title, h1re] of [
+          ["Engine Spec", /Taud Engine Specification/i],
+          ["File Format", /Taud File Format Specification/i],
+          ["Conversion Notes", /Taud Conversion Notes/i],
+        ]) {
+          [...doc.querySelectorAll(".toc-doc")].find((b) => b.textContent === title).click();
+          for (let i = 0; i < 80; i++) {
+            if (h1re.test(doc.querySelector("#content h1")?.textContent || "")) break;
+            await sleep(100);
+          }
+          const h1Ok = h1re.test(doc.querySelector("#content h1")?.textContent || "");
+          const tocOk = doc.querySelectorAll(".toc-headings a").length > 10;
+          const tableOk = !!doc.querySelector("#content table");
+          // every in-content anchor must land on a heading this doc actually emits
+          const anchors = [...doc.querySelectorAll("#content a[href^='#']")];
+          const liveAnchors = anchors.every((a) => !!doc.getElementById(a.getAttribute("href").slice(1)));
+          log(`${title}: h1=${h1Ok} toc=${tocOk} table=${tableOk} anchors=${anchors.length}/live=${liveAnchors}`);
+          specsOk = specsOk && h1Ok && tocOk && tableOk && liveAnchors;
+        }
+
         // patch notes (item 95): reachable by its deep-link hash, dated h2s
         win.location.hash = "#patchnotes";
         for (let i = 0; i < 80; i++) {
@@ -84,7 +106,7 @@
         log(`anchor target + theme toggle: anchor=${anchorOk} theme=${themeOk}`);
 
         const pass = manualOk && twoDocs && hashSameTab && extNewTab && inDocOk && linkSwitchOk &&
-          effectsOk && headingLinks > 10 && hasTable && hasCode && patchOk && datesOk &&
+          effectsOk && headingLinks > 10 && hasTable && hasCode && specsOk && patchOk && datesOk &&
           anchorOk && themeOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {

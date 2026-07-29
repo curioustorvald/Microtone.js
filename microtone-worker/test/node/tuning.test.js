@@ -26,6 +26,7 @@ import {
 import { TaudEngine } from "../../src/engine/engine.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine } from "../../src/audio/offline-render.js";
+import { Document } from "../../src/doc/document.js";
 
 const A4 = 0x5c00; // spec: "A4 (western default) is 0x5C00"
 const C9 = 0xa000; // spec: "C9 (tracker default) is 0xA000"
@@ -172,4 +173,28 @@ test("tuning scales the sounding rate by exactly the ratio", async () => {
     const want = concert * tuningRatioOf(base, freq);
     assert.ok(Math.abs(got - want) < 1e-12, `${base.toString(16)}@${freq}: ${got} vs ${want}`);
   }
+});
+
+test("an EXPORT sees the song's tuning, not the tracker default", async () => {
+  // toRenderable() is what WAV and stem export render from. It used to drop the
+  // tuning pair, so an exported file came out ~2 cents off what playback had
+  // just sounded (and much further off for a genuinely retuned song).
+  const doc = new Document(parseTaud(await readFile(new URL("../corpus/WHEN.taud", import.meta.url))));
+  doc.songs[0].tuningBaseNote = A4;
+  doc.songs[0].tuningFreq = 415; // baroque-ish, 101.27 cents down: audible, not subtle
+
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, doc.toRenderable(0), 0);
+  assert.equal(eng.getTuningRatio(0), tuningRatioOf(A4, 415));
+  assert.ok(Math.abs(cents(eng.getTuningRatio(0)) - -101.2706) < 1e-3);
+
+  // …and it reaches the sounding voice, not just the readback.
+  eng.jamNote(0, 0, 0x5000, 1);
+  const tuned = eng.playheads[0].trackerState.voices[0].playbackRate;
+  const plain = new TaudEngine();
+  loadIntoEngine(plain, doc.toRenderable(0), 0);
+  plain.setTuning(0, A4, 440);
+  plain.jamNote(0, 0, 0x5000, 1);
+  const concert = plain.playheads[0].trackerState.voices[0].playbackRate;
+  assert.ok(Math.abs(tuned - concert * tuningRatioOf(A4, 415)) < 1e-12);
 });

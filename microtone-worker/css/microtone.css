@@ -970,6 +970,17 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 
 /* ── sample editor modal ── */
 .sample-editor { max-width: 780px; }
+/* Spatial panner (#998.6) */
+.panner-dials { display: flex; gap: 0.8rem; justify-content: center; margin: 0.4rem 0; }
+.panner-dial { border: 1px solid var(--border); border-radius: 4px; cursor: crosshair; touch-action: none; }
+.panner-fields { display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap; margin: 0.2rem 0; }
+.panner-fields .modal-field { margin: 0.2rem 0; }
+.panner-fields input[type="number"] { width: 5rem; }
+.panner-read { margin-left: 0.5rem; font-size: 0.85rem; }
+.panner-cmds { display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0; }
+.panner-cmds .modal-field { margin: 0; }
+.panner-cmds input[type="text"] { width: 4rem; font-family: var(--mono, monospace); }
+
 .smp-canvas { display: block; margin: 0.4rem 0; cursor: ew-resize; border: 1px solid var(--border); border-radius: 4px; }
 .smp-fields, .smp-ops { display: flex; gap: 0.8rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0; }
 .smp-fields label { color: var(--dim); font-size: 0.85rem; }

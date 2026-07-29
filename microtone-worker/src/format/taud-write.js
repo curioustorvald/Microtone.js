@@ -89,7 +89,8 @@ export function writeTaud(doc) {
     pushU32(table, bins.patComp.length);
     pushU32(table, bins.cueComp.length);
     pushU16(table, bins.numCues); // num_cues (v2) — trailing empties trimmed
-    table.push(0, 0, 0, 0);           // reserved
+    table.push((song.surroundModel ?? 0) & 3); // immutable flags: `ss` surround model
+    table.push(0, 0, 0);              // reserved
     binOff += bins.patComp.length + bins.cueComp.length;
   });
 

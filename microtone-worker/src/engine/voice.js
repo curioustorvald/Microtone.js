@@ -28,6 +28,7 @@ export class MemorySlots {
     this.l = 0;
     this.n = 0;
     this.p = 0;
+    this.z = 0;         // Z (spherical panning slide speed, #998.2)
   }
 }
 
@@ -126,6 +127,17 @@ export class Voice {
     this.rowVolume = 63;
     this.channelPan = 0x80;
     this.rowPan = 32;
+
+    // ── Spatial position (#998) — used only when the song is planar/spatial.
+    // channelPan stays the legacy integer (and the UI's mirror); panAzimuth is
+    // the continuous 512-unit angle the mixer and the Z slide work in.
+    this.panAzimuth = 128.0;       // 0 = left, 128 = front, 256 = right
+    this.panElevation = 0.0;       // 128 units = 90°
+    this.spatialTargetAz = 128.0;  // effect 4
+    this.spatialTargetEl = 0.0;
+    this.spatialSlideActive = false; // armed by Z for the current row
+    // Mixer-side cache of the renderer gains: {az, el, chans, renderer, gains}.
+    this.spatial = null;
 
     // Anti-click volume ramp.
     this.currentMixVolume = 1.0;

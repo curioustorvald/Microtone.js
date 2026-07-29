@@ -12,6 +12,7 @@ import { t } from "./i18n.js";
 // Effect reference (TAUD_NOTE_EFFECTS.md digest): name + argument format.
 export const FX_INFO = {
   0x01: { l: "1", n: "Global flags", a: "$ff00 — bits0-1 tone-slide mode, bits2-4 interpolation" },
+  0x04: { l: "4", n: "Spatial slide target", a: "$eeaa — aim a Z slide: aa azimuth (00 left, 40 front, 80 right, C0 behind), ee elevation (signed) · surround songs only" },
   0x05: { l: "5", n: "Filter cutoff", a: "IT: $xx00 (00..FE) · SF: $xxxx cents · $FFFF = reset override" },
   0x06: { l: "6", n: "Filter resonance", a: "IT: $xx00 · SF: $xxxx centibels · $FFFF = reset override" },
   0x07: { l: "7", n: "Pattern ditto", a: "$llrr — copy the last ll rows rr times" },
@@ -35,12 +36,14 @@ export const FX_INFO = {
   0x19: { l: "P", n: "Pan slide", a: "$xy00 — x left / y right (IT convention)" },
   0x1a: { l: "Q", n: "Retrigger", a: "$0xyy — retrig every yy ticks, x = volume modifier" },
   0x1b: { l: "R", n: "Tremolo", a: "$xy00 — x speed, y depth" },
-  0x1c: { l: "S", n: "Special", a: "$Dx.. delay · $Cx.. cut@tick · $Bx.. loop · $8xx pan · $1x gliss · $3/4/5 waveforms · $6x/$Ex delays · $7x NNA/env · $Fx funk" },
+  0x1c: { l: "S", n: "Special", a: "$Dx.. delay · $Cx.. cut@tick · $Bx.. loop · $8xx pan ($8xxx = 9-bit angle in surround songs) · $1x gliss · $3/4/5 waveforms · $6x/$Ex delays · $7x NNA/env · $Fx funk" },
   0x1d: { l: "T", n: "Tempo", a: "$xx00 BPM=xx+25 · $FFxx BPM=xx+280 · $000y/$001y slide" },
   0x1e: { l: "U", n: "Fine vibrato", a: "$xy00 — x speed, y depth (finer than H)" },
   0x1f: { l: "V", n: "Global volume", a: "$xx00 — song global volume (00..FF)" },
   0x20: { l: "W", n: "Global vol slide", a: "$xy00 — fine/coarse like D, on global volume" },
+  0x21: { l: "X", n: "Spatial pan", a: "$eeaa — place the source: aa azimuth (00 left, 40 front, 80 right, C0 behind), ee elevation (signed, 80 = −90°) · surround songs only" },
   0x22: { l: "Y", n: "Panbrello", a: "$xy00 — x speed, y depth" },
+  0x23: { l: "Z", n: "Spatial pan slide", a: "$0xxx — slide toward the 4-command target at xxx/16 azimuth units per tick · $0000 recalls · surround songs only" },
 };
 
 export class CommandPalette {

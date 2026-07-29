@@ -17,6 +17,7 @@ import {
 import { fetchTrackerSample, fetchTrackerSampleStereo, advanceVolumeRamp } from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
 import { CHAN_MODE_MATRIX } from "./inst.js";
+import { spatialVoiceGains } from "./spatial.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
 import { applyTrackerTick } from "./tick.js";
 
@@ -36,8 +37,10 @@ const stereoPair = [0.0, 0.0];
  * S=(L−R)/2 encoding. The decode happens BEFORE the filter and the voice FX
  * so those act on speaker feeds (the filter is linear so its result is the
  * same either way; the bitcrusher/overdrive are not, and crushing a speaker
- * feed is the sane reading). Surround/spatial modes get their own rules with
- * TODO #998 — anything not stereo-shaped stays mono here.
+ * feed is the sane reading). In a surround song the pair is not a pair of
+ * speaker feeds at all — spatial.js places each channel as its own source at
+ * the ITU angle for the sample's channel count (#998.0). Anything not
+ * stereo-shaped stays mono here.
  */
 function renderVoicePair(eng, voice, inst, interpMode, out) {
   if (voice.activeChanCount !== 2) {
@@ -124,6 +127,10 @@ export function generateTrackerAudio(eng, playhead, out) {
   const advancing = playhead.isPlaying;
   // Stem-export tap (item 93) — null on every playback path. See TaudEngine.stemBus.
   const stems = eng.stemBus;
+  // Surround object bus (#998) — null for the stereo model, which keeps the
+  // plain mixL/mixR accumulators below and stays bit-exact against the JVM.
+  const spatial = ts.spatial;
+  if (spatial !== null) spatial.clear();
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -181,18 +188,22 @@ export function generateTrackerAudio(eng, playhead, out) {
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
       const globalGain = (gvol * mvol * playhead.masterVolume) / 255.0;
       const vol = perVoiceGain * globalGain;
-      let pan;
-      if (voice.hasPanEnv && voice.panEnvOn) {
-        let envPanRaw = Math.round(voice.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = voice.channelPan + envPanRaw - 128 + voice.randomPanBias;
-      } else {
-        pan = voice.channelPan + voice.randomPanBias;
+      let lGain = 0.0;
+      let rGain = 0.0;
+      if (spatial === null) {
+        let pan;
+        if (voice.hasPanEnv && voice.panEnvOn) {
+          let envPanRaw = Math.round(voice.envPan * 255.0);
+          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+          pan = voice.channelPan + envPanRaw - 128 + voice.randomPanBias;
+        } else {
+          pan = voice.channelPan + voice.randomPanBias;
+        }
+        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        // equal-energy pan law
+        lGain = Math.cos((Math.PI * pan) / 512.0);
+        rGain = Math.sin((Math.PI * pan) / 512.0);
       }
-      pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-      // equal-energy pan law
-      const lGain = Math.cos((Math.PI * pan) / 512.0);
-      const rGain = Math.sin((Math.PI * pan) / 512.0);
       // Sample-end ramp-out.
       let rampGain;
       if (voice.rampOutSamples > 0) {
@@ -206,8 +217,18 @@ export function generateTrackerAudio(eng, playhead, out) {
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
       if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
-      mixL += sL * vol * lGain * rampGain;
-      mixR += sR * vol * rGain * rampGain;
+      if (spatial === null) {
+        mixL += sL * vol * lGain * rampGain;
+        mixR += sR * vol * rGain * rampGain;
+      } else {
+        // One positioned source per sample channel: a stereo sample is a pair
+        // of objects sitting ±30° apart, not two speaker feeds (#998.0).
+        const g = spatialVoiceGains(spatial, voice);
+        spatial.addSource(n, sL * vol, g, 0, rampGain);
+        if (voice.activeChanCount === 2) {
+          spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
+        }
+      }
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -230,17 +251,21 @@ export function generateTrackerAudio(eng, playhead, out) {
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
         playhead.masterVolume) / 255.0;
-      let pan;
-      if (bg.hasPanEnv && bg.panEnvOn) {
-        let envPanRaw = Math.round(bg.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = bg.channelPan + envPanRaw - 128 + bg.randomPanBias;
-      } else {
-        pan = bg.channelPan + bg.randomPanBias;
+      let lGain = 0.0;
+      let rGain = 0.0;
+      if (spatial === null) {
+        let pan;
+        if (bg.hasPanEnv && bg.panEnvOn) {
+          let envPanRaw = Math.round(bg.envPan * 255.0);
+          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+          pan = bg.channelPan + envPanRaw - 128 + bg.randomPanBias;
+        } else {
+          pan = bg.channelPan + bg.randomPanBias;
+        }
+        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        lGain = Math.cos((Math.PI * pan) / 512.0);
+        rGain = Math.sin((Math.PI * pan) / 512.0);
       }
-      pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-      const lGain = Math.cos((Math.PI * pan) / 512.0);
-      const rGain = Math.sin((Math.PI * pan) / 512.0);
       let rampGain;
       if (bg.rampOutSamples > 0) {
         rampGain = bg.rampOutGain;
@@ -255,8 +280,24 @@ export function generateTrackerAudio(eng, playhead, out) {
         const sBg = bg.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
         stems.add(bg, bg.sourceChannel, n, sBg * vol * rampGain);
       }
-      mixL += sL * vol * lGain * rampGain;
-      mixR += sR * vol * rGain * rampGain;
+      if (spatial === null) {
+        mixL += sL * vol * lGain * rampGain;
+        mixR += sR * vol * rGain * rampGain;
+      } else {
+        const g = spatialVoiceGains(spatial, bg);
+        spatial.addSource(n, sL * vol, g, 0, rampGain);
+        if (bg.activeChanCount === 2) {
+          spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
+        }
+      }
+    }
+
+    // Fold the object bus down to the device's pair — for the stereo renderer
+    // that IS the mix; another render target hands back its own monitor decode.
+    if (spatial !== null) {
+      const pair = spatial.stereoAt(n);
+      mixL = pair[0];
+      mixR = pair[1];
     }
 
     // Amiga interpolation modes: post-mix LPF chain.

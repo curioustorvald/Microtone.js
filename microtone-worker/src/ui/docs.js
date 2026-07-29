@@ -3,10 +3,13 @@
 // document's headings) and centred content (max-width 960px). Light/dark theme
 // matches the main app (shared `microtone-theme` localStorage + data-theme).
 //
-// Three documents, all fetched from assets/ and rendered live: the User Manual
-// (USER_MANUAL.md), the Note Effects reference (TAUD_NOTE_EFFECTS.md) and the
-// Patch Notes (PATCH_NOTES.md — item 95; kept up to date as TODO items land,
-// see CLAUDE.md "Patch notes").
+// Six documents, all fetched from assets/ and rendered live: the User Manual
+// (USER_MANUAL.md), the Note Effects reference (TAUD_NOTE_EFFECTS.md), the
+// three Taud reference specifications (item 997 — TAUD_ENGINE_SPEC.md,
+// TAUD_FILE_FORMAT.md, TAUD_CONVERSION_NOTES.md; these are the canonical texts,
+// mirrored into the TSVM tree which points at them instead of carrying its own
+// copy) and the Patch Notes (PATCH_NOTES.md — item 95; kept up to date as TODO
+// items land, see CLAUDE.md "Patch notes").
 
 import { renderMarkdown, extractToc } from "./markdown.js";
 
@@ -31,6 +34,9 @@ const fetchDoc = (path) => async () => {
 const DOCS = [
   { id: "manual", title: "User Manual", load: fetchDoc("assets/USER_MANUAL.md") },
   { id: "effects", title: "Note Effects", load: fetchDoc("assets/TAUD_NOTE_EFFECTS.md") },
+  { id: "engine", title: "Engine Spec", load: fetchDoc("assets/TAUD_ENGINE_SPEC.md") },
+  { id: "format", title: "File Format", load: fetchDoc("assets/TAUD_FILE_FORMAT.md") },
+  { id: "conversion", title: "Conversion Notes", load: fetchDoc("assets/TAUD_CONVERSION_NOTES.md") },
   { id: "patchnotes", title: "Patch Notes", load: fetchDoc("assets/PATCH_NOTES.md") },
 ];
 

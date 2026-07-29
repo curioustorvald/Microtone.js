@@ -244,9 +244,22 @@ export class ProjectView {
         [0, t("proj.interpFastSinc")], [1, t("proj.interpNone")], [2, t("proj.interpAmiga500")],
         [3, t("proj.interpAmiga1200")], [4, t("proj.interpSnes")], [5, t("proj.interpNes")],
       ], (v) => this.op("globalFlags", (song.globalFlags & ~0x1c) | (v << 2))),
+      // Surround model (#998) — the song's own `ss` flag, not a playback option:
+      // it decides what the pan commands MEAN, so switching it moves sources.
+      sel(t("proj.surroundModel"), song.surroundModel ?? 0, [
+        [0, t("proj.surroundStereo")], [1, t("proj.surroundPlanar")], [2, t("proj.surroundSpatial")],
+      ], (v) => this.op("surroundModel", v)),
       notationRow,
     );
     this.root.appendChild(grid);
+
+    const surroundHint = document.createElement("p");
+    surroundHint.className = "dim";
+    surroundHint.style.margin = "0.1rem 0 0.4rem";
+    surroundHint.style.fontSize = "0.8rem";
+    surroundHint.textContent = t("proj.surroundHint");
+    if ((song.surroundModel ?? 0) === 0) surroundHint.hidden = true;
+    this.root.appendChild(surroundHint);
 
     this.root.appendChild(this.buildTuning(song));
 

@@ -4,6 +4,9 @@
 // reference: taut.js VIEW_TIMELINE.
 
 import { PATTERN_EMPTY } from "../../engine/constants.js";
+import {
+  AZIMUTH_TURN, ELEVATION_QUARTER, SURROUND_SPATIAL, lateralProjection,
+} from "../../engine/spatial.js";
 import { hex2, hex4, fxToStr } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
@@ -18,11 +21,13 @@ import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
+import { paintSpatialDot } from "../spatialdot.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
 const CHAR_W = 7.9;
 const ROW_H = 16;
 const HEADER_H = 58;   // header: [voxnum·note+inst·patNum] / VU / pan / patName
+const RADAR_H = 44;    // extra height when the surround radar is expanded (#998.6)
 const GUTTER_W = 76;   // "cue:row | absrow"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 
@@ -95,7 +100,16 @@ export class TimelineView {
 
   invalidate() { this.needsRedraw = true; }
 
-  visibleRows() { return Math.floor((this.canvas.height / this.dpr - HEADER_H) / ROW_H); }
+  visibleRows() { return Math.floor((this.canvas.height / this.dpr - this.headerH()) / ROW_H); }
+
+  /** Header height — the surround radar (#998.6) expands it for every channel. */
+  headerH() { return HEADER_H + (this.radarOn() ? RADAR_H : 0); }
+
+  /** True when the song is planar/spatial AND the radar toggle is on. */
+  radarOn() {
+    return this.store.surroundMeters === true &&
+      (this.store.doc?.songs[this.store.songIndex]?.surroundModel ?? 0) !== 0;
+  }
   visibleChans() { return Math.floor((this.canvas.width / this.dpr - GUTTER_W) / COL_W); }
   maxScrollCh() {
     const chans = this.store.doc?.channelCount ?? 32;
@@ -123,6 +137,76 @@ export class TimelineView {
     this.invalidate();
   }
 
+  /**
+   * One channel's surround radar (#998.6): the horizon circle seen from above,
+   * front at the top, with the sounding voice as a dot. Elevation shrinks the
+   * radius (overhead = dead centre), which is what makes the pan strip above it
+   * the dot's own horizontal shadow. A spatial song also gets a height tick on
+   * the right edge.
+   */
+  paintChannelRadar(ctx, C, x, y, ch, audio, spatialSong) {
+    const r = (RADAR_H - 10) / 2;
+    const cx = x + (COL_W - 2) / 2;
+    const cy = y + RADAR_H / 2 - 3;
+    ctx.strokeStyle = C.border;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // front tick + centre (the listener)
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r - 2);
+    ctx.lineTo(cx, cy - r + 3);
+    ctx.stroke();
+    ctx.fillStyle = C.dim;
+    ctx.fillRect(cx - 1, cy - 1, 2, 2);
+    if (!audio || !audio.getVoiceActive(ch)) return;
+
+    const az = audio.getVoiceAzimuth(ch);
+    const el = audio.getVoiceElevation(ch);
+    const k = Math.cos((el * Math.PI) / (2 * ELEVATION_QUARTER));
+    const rad = ((az - 128) * 2 * Math.PI) / AZIMUTH_TURN;
+    const dx = Math.sin(rad) * k * r;
+    const dy = -Math.cos(rad) * k * r;
+    const vol = audio.getVoiceEffectiveVolume(ch);
+    ctx.strokeStyle = C.meterBg;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + dx, cy + dy);
+    ctx.stroke();
+    const dotR = 2 + 2.5 * Math.min(vol * 2, 1);
+    if (spatialSong) {
+      // Height cue (#998.6): the dot grows as it rises and casts a shadow that
+      // slides away from the light — the dial alone cannot tell up from down.
+      paintSpatialDot(ctx, cx + dx, cy + dy, el, r, dotR, C.accent2);
+    } else {
+      ctx.fillStyle = C.accent2;
+      ctx.beginPath();
+      ctx.arc(cx + dx, cy + dy, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // The dot's shadow on the left/right line — the same number the pan strip
+    // above is showing, so the two readings visibly belong together.
+    ctx.fillStyle = C.dim;
+    ctx.fillRect(cx + dx - 0.5, cy - 2, 1, 4);
+
+    if (spatialSong) {
+      // Height bar: centre line = ear level, up = above.
+      const bx = x + COL_W - 10;
+      const half = r;
+      ctx.strokeStyle = C.border;
+      ctx.beginPath();
+      ctx.moveTo(bx, cy - half);
+      ctx.lineTo(bx, cy + half);
+      ctx.moveTo(bx - 2, cy);
+      ctx.lineTo(bx + 2, cy);
+      ctx.stroke();
+      const ey = cy - (el / ELEVATION_QUARTER) * half;
+      ctx.fillStyle = C.accent2;
+      ctx.fillRect(bx - 3, ey - 1, 6, 2);
+    }
+  }
+
   /** Map absolute song row → {entry, rowInCue} via the song map. */
   locate(absRow) {
     const map = this.getMap();
@@ -143,7 +227,7 @@ export class TimelineView {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    if (y < HEADER_H) {
+    if (y < this.headerH()) {
       // channel header: click = mute toggle, Ctrl/⌘+click = solo toggle
       const ch = this.scrollCh + Math.floor((x - GUTTER_W) / COL_W);
       if (x >= GUTTER_W && ch >= this.scrollCh &&
@@ -362,8 +446,8 @@ export class TimelineView {
 
   /** Canvas-relative coords → {row, ch, sub, nib}, or null off-grid. */
   hitTest(x, y) {
-    if (y < HEADER_H) return null;
-    const row = Math.floor(this.scrollRow) + Math.floor((y - HEADER_H) / ROW_H);
+    if (y < this.headerH()) return null;
+    const row = Math.floor(this.scrollRow) + Math.floor((y - this.headerH()) / ROW_H);
     const colIdx = Math.floor((x - GUTTER_W) / COL_W);
     const ch = this.scrollCh + colIdx;
     const map = this.getMap();
@@ -614,12 +698,20 @@ export class TimelineView {
     //   lower: pattern name (C) — the rename display, alongside the number above
     const headPal = { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent };
     const NOTE_H = 15, UP_Y = 4, UP_MID = UP_Y + NOTE_H / 2; // upper row
-    const VU_Y = 23, PAN_Y = 32, NAME_Y = 49;                // meters + name row
+    const VU_Y = 23, PAN_Y = 32;                             // meters
+    // The radar (#998.6) slots in between the pan strip and the name row.
+    const radar = this.radarOn();
+    const headerH = this.headerH();
+    const RADAR_Y = 40;
+    const NAME_Y = 49 + (radar ? RADAR_H : 0);
+    const surroundModel = store.doc?.songs[store.songIndex]?.surroundModel ?? 0;
+    const surroundSong = surroundModel !== 0;
+    const spatialSong = surroundModel === SURROUND_SPATIAL;
     for (let i = 0; i < visCh; i++) {
       const ch = this.scrollCh + i;
       const x = GUTTER_W + i * COL_W;
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
-      ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
+      ctx.fillRect(x, 0, COL_W - 2, headerH - 2);
       const patNum = this.currentPatternFor(ch);
 
       // upper row: channel number (left) + current pattern number (right, amber)
@@ -651,12 +743,25 @@ export class TimelineView {
         ctx.fillStyle = C.meter;
         ctx.fillRect(barX, VU_Y, Math.round(barW * vol), 7);
       }
-      // pan
+      // pan — in a surround song the strip is the ORTHOGONAL PROJECTION of the
+      // source onto the left/right line, i.e. the shadow of the radar dot
+      // below: height and depth both collapse onto it, so a hard-left source
+      // 60° up reads half-left and one directly behind reads centre.
       ctx.fillStyle = C.meterBg;
       ctx.fillRect(barX, PAN_Y + 2, barW, 3);
-      const pan = audio ? audio.getVoiceEffectivePan(ch) / 255 : 0.5;
+      let pan = 0.5;
+      if (audio) {
+        pan = surroundSong
+          ? 0.5 + 0.5 * lateralProjection(audio.getVoiceAzimuth(ch), audio.getVoiceElevation(ch))
+          : audio.getVoiceEffectivePan(ch) / 255;
+      }
       ctx.fillStyle = C.accent2;
       ctx.fillRect(barX + pan * (barW - 3), PAN_Y, 3, 7);
+
+      // expanded radar: the source as it really sits, seen from above
+      if (radar) {
+        this.paintChannelRadar(ctx, C, x, RADAR_Y, ch, audio, spatialSong);
+      }
 
       // lower row: pattern name, centred + clipped to the column width
       if (patNum !== null && patNum !== PATTERN_EMPTY) {
@@ -678,7 +783,7 @@ export class TimelineView {
       if (store.voiceMutes[ch]) {
         ctx.globalAlpha = 0.6;
         ctx.fillStyle = C.bg;
-        ctx.fillRect(x, 0, COL_W - 2, HEADER_H - 2);
+        ctx.fillRect(x, 0, COL_W - 2, headerH - 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = C.fg2;
         ctx.textAlign = "center";
@@ -694,7 +799,7 @@ export class TimelineView {
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
       const absRow = top + r;
-      const y = HEADER_H + r * ROW_H;
+      const y = headerH + r * ROW_H;
       const loc = this.locate(absRow);
       if (!loc) continue;
       const { entry, rowInCue } = loc;
@@ -796,8 +901,8 @@ export class TimelineView {
     ctx.beginPath();
     ctx.moveTo(GUTTER_W - 4.5, 0);
     ctx.lineTo(GUTTER_W - 4.5, H);
-    ctx.moveTo(0, HEADER_H - 1.5);
-    ctx.lineTo(W, HEADER_H - 1.5);
+    ctx.moveTo(0, this.headerH() - 1.5);
+    ctx.lineTo(W, this.headerH() - 1.5);
     ctx.stroke();
   }
 }

@@ -513,6 +513,10 @@ store.on("songs", (payload) => {
   selectSong(payload?.select ?? store.songIndex);
 });
 store.on("doc", updateStatus); // keep the dirty dot in sync on doc-level edits
+// The Panner button appears with the song's surround model — which arrives on a
+// load ("doc") and can be switched in the Project view ("edit").
+store.on("doc", refreshToolbox);
+store.on("edit", refreshToolbox);
 
 // ── views ──
 const jam = new JamKeyboard(store);
@@ -543,6 +547,14 @@ const filesView = new FilesView(store, $("filesHost"), {
   renameSong: (i) => renameSongInteractive(i),
 });
 
+/** Toolbox buttons that depend on the document, not on the view. */
+function refreshToolbox() {
+  const surround = (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) !== 0;
+  $("tbPanner").hidden = !surround;
+  $("tbRadar").hidden = !surround;
+  $("tbRadar").textContent = t(store.surroundMeters ? "toolbox.radarOn" : "toolbox.radarOff");
+}
+
 function showView(name) {
   store.view = name;
   for (const btn of $("tabs").children) {
@@ -550,6 +562,7 @@ function showView(name) {
   }
   $("emptyState").hidden = !!store.doc || name === "files";
   $("toolbox").hidden = !(name === "timeline" || name === "pattern") || !store.doc;
+  refreshToolbox();
   $("timeline").hidden = name !== "timeline";
   $("cuesCanvas").hidden = name !== "cues";
   $("patternHost").hidden = name !== "pattern";
@@ -692,6 +705,25 @@ $("tbRaw").addEventListener("click", () => {
   timeline.invalidate();
   patternView.invalidate();
 });
+// Surround radar (#998.6): expands every Timeline channel header into a
+// top-down dial. Collapsed, the pan strip already shows that dial's horizontal
+// shadow, so the toggle is "show me the other axis", not a different reading.
+store.surroundMeters = false;
+$("tbRadar").addEventListener("click", () => {
+  store.surroundMeters = !store.surroundMeters;
+  $("tbRadar").textContent = t(store.surroundMeters ? "toolbox.radarOn" : "toolbox.radarOff");
+  $("tbRadar").classList.toggle("active", store.surroundMeters);
+  timeline.resize(); // the header got taller/shorter — row layout follows
+  timeline.invalidate();
+});
+// Spatial panner (#998.6) — only meaningful once the song declares a surround
+// model, so the button appears with it.
+$("tbPanner").addEventListener("click", async () => {
+  const { showPanner } = await import("./popups/panner.js");
+  await showPanner(store, cursorCellTarget());
+  timeline.invalidate();
+  patternView.invalidate();
+});
 // Quick instrument lookup toggle (persists per session).
 $("tbInstList").classList.toggle("active", instLookup.visible);
 $("tbInstList").addEventListener("click", () => {
@@ -745,13 +777,19 @@ onWheelCtl("spdCtl", (dir) => {
 });
 
 // ── contextual command palette (screen bottom) ──
-function editContext() {
-  if (!store.doc || !store.record) return null;
+/** The cell under the cursor in whichever grid view is showing, as
+ *  {sub, channel, rowLabel, cell, apply(fields)} — or null. Record mode is NOT
+ *  required here: the palette adds that rule, the Panner deliberately does not
+ *  (you place a source the same way you would run Retune). */
+function cursorCellTarget() {
+  if (!store.doc) return null;
   if (store.view === "timeline") {
     const target = timeline.cursorCell();
     if (!target) return null;
     return {
       sub: store.cursor.sub,
+      channel: store.cursor.ch,
+      rowLabel: String(store.cursor.row),
       cell: target.cell,
       apply: (fields) => store.undo.apply(
         setCellOp(store.songIndex, target.pat, target.rowInCue, fields)),
@@ -763,12 +801,18 @@ function editContext() {
     const row = patternView.cursor.row;
     return {
       sub: patternView.cursor.sub,
+      channel: patternView.cursor.ch ?? 0,
+      rowLabel: String(row),
       cell: pattern[row],
       apply: (fields) => store.undo.apply(
         setCellOp(store.songIndex, patternView.patIdx, row, fields)),
     };
   }
   return null;
+}
+
+function editContext() {
+  return store.record ? cursorCellTarget() : null;
 }
 const palette = new CommandPalette($("cmdPalette"), editContext);
 for (const topic of ["cursor", "edit", "view", "doc"]) {

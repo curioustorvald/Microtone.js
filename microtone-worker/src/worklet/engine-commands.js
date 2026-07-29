@@ -13,8 +13,10 @@ import {
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
+  SNAP_V_AZIMUTH, SNAP_V_ELEVATION,
   SNAP_VOICE_STRIDE,
 } from "./protocol.js";
+import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth } from "../engine/spatial.js";
 
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
@@ -45,6 +47,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.SET_MASTER_VOLUME: eng.setMasterVolume(m.ph, m.volume); return true;
     case CMD.SET_MASTER_PAN: eng.setMasterPan(m.ph, m.pan); return true;
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
+    case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;
@@ -103,6 +106,18 @@ export function fillSnapshotInto(eng, playhead, f) {
         pan = v.channelPan;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+      // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
+      // value — in a surround song that is where the monitor downmix puts the
+      // voice, which is what those meters are drawing.
+      if (ts.surroundModel !== SURROUND_STEREO) {
+        const az = voiceAzimuth(v);
+        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
+        f[o + SNAP_V_AZIMUTH] = az;
+        f[o + SNAP_V_ELEVATION] = v.panElevation;
+      } else {
+        f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
+        f[o + SNAP_V_ELEVATION] = 0;
+      }
       f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
       // Show the pattern-level instrument (a meta's slot), not the resolved
       // layer child; fall back to instrumentId before the first meta/plain trigger.
@@ -121,6 +136,7 @@ export function fillSnapshotInto(eng, playhead, f) {
     } else {
       for (let k = 1; k < SNAP_VOICE_STRIDE; k++) f[o + k] = 0;
       f[o + SNAP_V_EFF_PAN] = 128;
+      f[o + SNAP_V_AZIMUTH] = 128; // centre/front, matching EFF_PAN's rest value
       f[o + SNAP_V_SAMPLE_POS] = -1;
       f[o + SNAP_V_SAMPLE_PTR] = -1;
       f[o + SNAP_V_ENV_VOL_IDX] = -1;

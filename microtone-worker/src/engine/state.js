@@ -5,6 +5,7 @@ import {
   MAX_VOICES, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK, INTERP_DEFAULT,
 } from "./constants.js";
 import { Voice } from "./voice.js";
+import { SURROUND_STEREO, SpatialBus, StereoRenderer } from "./spatial.js";
 
 // ── PlayInstruction (4484-4494) — tagged objects ──
 export const INST_NOP = 0;
@@ -154,6 +155,12 @@ export class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Surround model (#998; song-immutable `ss` flag) + the object bus it mixes
+    // into. Null bus = the stereo model, which keeps the plain two-accumulator
+    // path untouched — see mixer.js.
+    this.surroundModel = SURROUND_STEREO;
+    this.spatial = null;
+
     // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
     // the playhead by setTuning, like toneMode/interpolationMode are from the
     // global-behaviour flags, so the per-sample path reads it off `ts` alone.
@@ -192,6 +199,19 @@ export class TrackerState {
     this.backgroundVoices = [];
   }
 
+  /**
+   * Install the song's surround model (#998). The stereo model keeps `spatial`
+   * null — the mixer's legacy two-accumulator path, untouched; anything else
+   * allocates the object bus for `renderer`, which is the device's
+   * StereoRenderer unless an exporter asked for a different render target.
+   */
+  setSurroundModel(model, renderer = null) {
+    this.surroundModel = model & 3;
+    this.spatial = this.surroundModel === SURROUND_STEREO
+      ? null
+      : new SpatialBus(renderer ?? new StereoRenderer(), TRACKER_CHUNK);
+  }
+
   drainInterrupts() {
     const m = this.pendingInterrupts;
     this.pendingInterrupts = 0;
@@ -226,6 +246,11 @@ export class Playhead {
     this.trackerState = new TrackerState();
     this.jamActive = false;
     this.initialGlobalFlags = 0;
+    // Song-immutable surround model + the render target it mixes through
+    // (#998). Null renderer = the device's stereo monitor; an exporter swaps in
+    // its own without the engine knowing which format asked.
+    this.surroundModel = SURROUND_STEREO;
+    this.spatialRenderer = null;
 
     this._isPlaying = false;
   }
@@ -283,6 +308,7 @@ export class Playhead {
     ts.pendingInterrupts = 0;
     ts.toneMode = this.initialGlobalFlags & 3;
     ts.interpolationMode = (this.initialGlobalFlags >>> 2) & 7;
+    ts.setSurroundModel(this.surroundModel, this.spatialRenderer);
     ts.ledFilterOn = false;
     ts.amigaLPStateL = 0.0; ts.amigaLPStateR = 0.0;
     ts.amigaLEDStateL.fill(0.0); ts.amigaLEDStateR.fill(0.0);
@@ -299,6 +325,12 @@ export class Playhead {
       it.envVolStep = 0.0;
       it.channelPan = 0x80;
       it.rowPan = 32;
+      it.panAzimuth = 128.0;
+      it.panElevation = 0.0;
+      it.spatialTargetAz = 128.0;
+      it.spatialTargetEl = 0.0;
+      it.spatialSlideActive = false;
+      it.spatial = null;
       it.glissandoOn = false;
       it.loopStartRow = 0;
       it.loopCount = 0;

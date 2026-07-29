@@ -12,6 +12,7 @@ import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { computePlaybackRate } from "./sampler.js";
 import { random } from "./rng.js";
+import { applyPanSet, applyPanSlide } from "./spatial.js";
 
 /**
  * Snapshot the sample-scope state for voice from the base instrument or a
@@ -239,6 +240,8 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     child.channelVolume = voice.channelVolume;
     child.channelPan = voice.channelPan;
     child.rowPan = voice.rowPan;
+    child.panAzimuth = voice.panAzimuth;
+    child.panElevation = voice.panElevation;
     ts.backgroundVoices.push(child);
   }
   capBackgroundVoices(ts);
@@ -306,15 +309,13 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
     if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
-      voice.channelPan = patchPan !== null ? patchPan : inst.defaultPan;
-      voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+      applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
     }
     // Pitch-pan separation.
     if (inst.pitchPanSeparation !== 0) {
       const noteDelta = (noteVal - inst.pitchPanCentre) / 4096.0;
       const panShift = Math.trunc(noteDelta * inst.pitchPanSeparation * 4.0);
-      voice.channelPan = clamp(voice.channelPan + panShift, 0, 255);
-      voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+      applyPanSlide(ts, voice, panShift);
     }
   }
   // Filter defaults (ACTIVE values; patch 'x' block overrides base inst).
@@ -439,6 +440,11 @@ export function ghostVoice(src, channel) {
   v.rowVolume = src.rowVolume;
   v.channelPan = src.channelPan;
   v.rowPan = src.rowPan;
+  // Spatial position travels with the ghost: it keeps sounding where it was.
+  v.panAzimuth = src.panAzimuth;
+  v.panElevation = src.panElevation;
+  v.spatialTargetAz = src.spatialTargetAz;
+  v.spatialTargetEl = src.spatialTargetEl;
   v.currentMixVolume = src.currentMixVolume;
   v.keyOff = src.keyOff;
   v.envIndex = src.envIndex;
@@ -586,26 +592,26 @@ export function applyVolColumn(voice, value, sel) {
   }
 }
 
-/** Pan column. S $80xx on the same row wins over the 6-bit SET here. */
-export function applyPanColumn(voice, value, sel) {
+/**
+ * Pan column. S $80xx on the same row wins over the 6-bit SET here.
+ *
+ * The 6-bit SET keeps its front-arc mapping in every surround model — the
+ * column has no room for a 360° angle, and S $8xxx / X are the commands that
+ * do. The slides, however, wrap with the rest of the pan machinery.
+ */
+export function applyPanColumn(ts, voice, value, sel) {
   const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
                     ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
   switch (sel) {
     case 0:
-      if (!rowHasS80) {
-        voice.channelPan = (value << 2) | (value >>> 4);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
-      }
+      if (!rowHasS80) applyPanSet(ts, voice, (value << 2) | (value >>> 4));
       break;
     case 1: voice.panColSlideRight = value; break;
     case 2: voice.panColSlideLeft = value; break;
     case 3: {
       if (value === 0) return;
       const mag = value & 0x1f;
-      voice.channelPan = (value & 0x20) !== 0
-        ? Math.min(voice.channelPan + mag, 0xff)
-        : Math.max(voice.channelPan - mag, 0);
-      voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+      applyPanSlide(ts, voice, (value & 0x20) !== 0 ? mag : -mag);
       break;
     }
   }

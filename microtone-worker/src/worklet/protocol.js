@@ -22,6 +22,7 @@ export const CMD = Object.freeze({
   SET_MASTER_VOLUME: "setMasterVolume",            // {ph, volume}
   SET_MASTER_PAN: "setMasterPan",                  // {ph, pan}
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
+  SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
@@ -74,10 +75,12 @@ export const SNAP_V_ENV_PITCH_IDX = 12;
 export const SNAP_V_ENV_PITCH_TIME = 13;
 export const SNAP_V_ENV_FILTER_IDX = 14;
 export const SNAP_V_ENV_FILTER_TIME = 15;
-export const SNAP_VOICE_STRIDE = 16;
+export const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
+export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
+export const SNAP_VOICE_STRIDE = 18;
 
 export const SNAP_MAX_VOICES = 64;
-export const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1032
+export const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1160
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the

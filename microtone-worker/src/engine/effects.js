@@ -10,6 +10,13 @@ import {
 } from "./tables.js";
 import { computePlaybackRate } from "./sampler.js";
 import { applyPastNoteAction } from "./trigger.js";
+import {
+  SURROUND_STEREO, SURROUND_SPATIAL,
+  applyPanSet, applyPanSlide, applyElevation, anglesFromSpatialArg,
+} from "./spatial.js";
+
+/** Scratch [azimuth, elevation] for the X / 4 argument decode. */
+const spatialArg = new Float64Array(2);
 
 /** Resolve a non-zero argument or recall from cohort memory. */
 export function resolveArg(arg, mem) { return arg !== 0 ? arg : mem; }
@@ -210,15 +217,14 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const hi = (arg >>> 8) & 0xff;
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
+      // In a surround song the pan runs right round the circle: the slide
+      // wraps where the stereo law clamps (TAUD_NOTE_EFFECTS.md, effect P).
       if (hi === 0xff || hi === 0xf0) {
-        voice.channelPan = Math.max(voice.channelPan - 0xf, 0);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, -0xf);
       } else if (hin === 0xf && lo !== 0) {
-        voice.channelPan = Math.min(voice.channelPan + lo, 0xff);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, lo);
       } else if (lo === 0xf && hin !== 0) {
-        voice.channelPan = Math.max(voice.channelPan - hin, 0);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, -hin);
       } else if (hin === 0 && lo !== 0) {
         voice.panColSlideRight = lo;
       } else if (lo === 0 && hin !== 0) {
@@ -312,6 +318,34 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.panbrelloActive = true;
       break;
     }
+    // ── Spatial panning (#998.2) — reserved for songs whose surround model
+    //    says so; a stereo song ignores all three (converters are required to
+    //    turn IT's X "fine set panning" into S $80xx instead).
+    case EffectOp.OP_X: {
+      // X $eeaa — place the source: azimuth $aa over the full turn, elevation
+      // $ee signed ($80 = −90°, $7F ≈ +90°).
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      anglesFromSpatialArg(rawArg, spatialArg);
+      applyPanSet(ts, voice, spatialArg[0]);
+      applyElevation(ts, voice, spatialArg[1]);
+      break;
+    }
+    case EffectOp.OP_4:
+      // 4 $eeaa — where a Z slide is heading. Channel state: it outlives the row.
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      anglesFromSpatialArg(rawArg, spatialArg);
+      voice.spatialTargetAz = spatialArg[0];
+      voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
+      break;
+    case EffectOp.OP_Z: {
+      // Z $0xxx — arm the slide for this row at $xxx/16 azimuth units per tick.
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      const raw = rawArg & 0xfff;
+      const arg = resolveArg(raw, voice.mem.z);
+      if (raw !== 0) voice.mem.z = arg;
+      if (arg !== 0) voice.spatialSlideActive = true;
+      break;
+    }
   }
 }
 
@@ -366,9 +400,10 @@ export function applySEffect(eng, ts, voice, vi, arg) {
       break;
     }
     case 0x8:
-      // S$80xx — full 8-bit pan.
-      voice.channelPan = arg & 0xff;
-      voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+      // S$80xx — full 8-bit pan. A surround song reads one bit more (#998.1):
+      // S$8xxx is a 9-bit angle, $000 left · $080 front · $100 right · $180
+      // behind, of which $000..$0FF are exactly the old pan bytes.
+      applyPanSet(ts, voice, arg & (ts.surroundModel === SURROUND_STEREO ? 0xff : 0x1ff));
       break;
     case 0xb:
       if (x === 0) voice.loopStartRow = ts.rowIndex;

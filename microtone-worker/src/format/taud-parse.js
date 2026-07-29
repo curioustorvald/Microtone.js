@@ -129,7 +129,7 @@ export function parseSMetSection(payload) {
  *   kind: 'taud'|'tsii'|'tpif', fmtVer, is64Channel, signature,
  *   sampleInstImage: Uint8Array(8650752)|null,   // decompressed; samples [0,8M) + inst records [8M,+256K)
  *   songs: [{ numVoices, numPats, bpm, tickRate, tuningBaseNote, tuningFreq,
- *             globalFlags, globalVolume, mixingVolume, numCuesStored,
+ *             globalFlags, globalVolume, mixingVolume, numCuesStored, surroundModel,
  *             patterns: Uint8Array(512)[],       // raw pattern images
  *             cues: Uint16Array(64)[] }],        // raw u16 channel words (pattern | sign bit)
  *   projSections: [{fourcc, payload: Uint8Array}],  // verbatim, in file order
@@ -213,6 +213,9 @@ export function parseTaud(file) {
       const patComp = u32(file, e + 18);
       const cueComp = u32(file, e + 22);
       const numCuesStored = u16(file, e + 26);
+      // Immutable song flags: `ss` = surround model (#998) — 0 stereo,
+      // 1 planar (360° panning), 2 spatial.
+      const surroundModel = file[e + 28] & 3;
 
       const patBin = decomp(file.subarray(songOffset, songOffset + patComp), numPats * PATTERN_SIZE);
       const patterns = [];
@@ -240,7 +243,7 @@ export function parseTaud(file) {
       songs.push({
         numVoices, numPats, bpm: bpmStored + 25, tickRate,
         tuningBaseNote, tuningFreq, globalFlags, globalVolume, mixingVolume,
-        numCuesStored, patterns, cues,
+        numCuesStored, surroundModel, patterns, cues,
       });
     }
   }

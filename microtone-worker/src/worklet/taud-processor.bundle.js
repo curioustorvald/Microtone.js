@@ -306,7 +306,7 @@ function lfoSample(pos, wave) {
 // ── Effect opcode constants (base-36 digit values; 1438-1472) ──
 const EffectOp = Object.freeze({
   OP_NONE: 0x00,
-  OP_1: 0x01, OP_5: 0x05, OP_6: 0x06, OP_7: 0x07, OP_8: 0x08, OP_9: 0x09,
+  OP_1: 0x01, OP_4: 0x04, OP_5: 0x05, OP_6: 0x06, OP_7: 0x07, OP_8: 0x08, OP_9: 0x09,
   OP_A: 0x0a, OP_B: 0x0b, OP_C: 0x0c, OP_D: 0x0d, OP_E: 0x0e, OP_F: 0x0f,
   OP_G: 0x10, OP_H: 0x11, OP_I: 0x12, OP_J: 0x13, OP_K: 0x14, OP_L: 0x15,
   OP_M: 0x16, OP_N: 0x17, OP_O: 0x18, OP_P: 0x19, OP_Q: 0x1a, OP_R: 0x1b,
@@ -433,6 +433,460 @@ function linearFreqSlideOnce(noteVal, slideArg) {
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// ══ src/engine/spatial.js ══
+// Surround and ambisonics core — TODO #998.0/.1/.2.
+//
+// The engine's spatial model is OBJECT-based: a sounding voice is a source with
+// a DIRECTION and a gain, and nothing in the mixer knows what the eventual
+// output format will be. A SpatialRenderer turns those objects into the
+// channels of a SpatialBus, so a file format is always a render TARGET, never
+// the thing the engine holds: playback installs StereoRenderer (the device is
+// stereo), and an export installs whatever the chosen format wants —
+// AmbisonicRenderer today, ITU speaker layouts when #998.5 lands — then
+// re-renders the song through the very same mixer.
+//
+// ── Units ──
+// Azimuth is the 9-bit angle of the extended `S $8xxx` command (#998.1): 512
+// units to a full turn, 0 = left (0°), 128 = front (90°), 256 = right (180°),
+// 384 = behind (270°), increasing CLOCKWISE seen from above. Its low 8 bits are
+// exactly the legacy pan byte, so pan $00 / $80 / $FF still mean left / centre
+// / right and every ordinary pan write lands on the front arc.
+// Elevation is effect X's signed byte: 128 units to 90°, −128 = below, +127 ≈
+// above. Both are kept as doubles — a Z slide (#998.2) moves continuously.
+//
+// Direction vectors use the AmbiX axes: +x front, +y left, +z up.
+//
+// This is not a port: the Kotlin engine has no surround yet, so this file IS
+// the reference implementation. Behaviour contract: TAUD_NOTE_EFFECTS.md
+// ("Spatial panning effects" + S $80xx), terranmon.txt (song flag `ss`).
+
+
+/** Song-immutable surround model (terranmon.txt song table, `ss` bits). */
+const SURROUND_STEREO = 0;
+const SURROUND_PLANAR = 1;   // 360° panning, horizontal only
+const SURROUND_SPATIAL = 2;  // full sphere
+
+/** Azimuth units in a full turn (the S $8xxx angle). */
+const AZIMUTH_TURN = 512;
+/** Elevation units in a quarter turn (effect X's signed byte). */
+const ELEVATION_QUARTER = 128;
+/** Widest multi-channel sample the placement table knows (terranmon.txt 's'). */
+const MAX_SAMPLE_CHANNELS = 8;
+
+const AZ_TO_RAD = (2 * Math.PI) / AZIMUTH_TURN;
+const EL_TO_RAD = Math.PI / 2 / ELEVATION_QUARTER;
+const AZ_PER_DEG = AZIMUTH_TURN / 360;
+/** Taud azimuth 128 is straight ahead — the ambisonic 0° — and runs the other way. */
+const AZ_FRONT = 128;
+
+/** Fold an azimuth into [0, 512). */
+function wrapAzimuth(a) {
+  const r = a % AZIMUTH_TURN;
+  return r < 0 ? r + AZIMUTH_TURN : r;
+}
+
+/**
+ * Fold a full-circle azimuth onto the legacy pan byte (0..255) by mirroring the
+ * rear arc onto the front one. Two speakers cannot render front/back, so a
+ * stereo downmix keeps the left/right axis and drops the other; the mapping is
+ * the identity on the front arc, which is what makes ordinary pan values behave
+ * identically in every surround model.
+ */
+function foldAzimuthToPan(az) {
+  const a = wrapAzimuth(az);
+  const p = a <= 256 ? a : AZIMUTH_TURN - a;
+  return p > 255 ? 255 : p;
+}
+
+/** Unit vector for (azimuth, elevation). */
+function directionFromAngles(az, el, out) {
+  const th = (AZ_FRONT - az) * AZ_TO_RAD;
+  const ph = el * EL_TO_RAD;
+  const cph = Math.cos(ph);
+  out[0] = cph * Math.cos(th);
+  out[1] = cph * Math.sin(th);
+  out[2] = Math.sin(ph);
+  return out;
+}
+
+/** (azimuth, elevation) of a unit vector — the inverse of directionFromAngles. */
+function anglesFromDirection(x, y, z, out) {
+  out[0] = wrapAzimuth(AZ_FRONT - Math.atan2(y, x) / AZ_TO_RAD);
+  out[1] = Math.asin(clamp(z, -1.0, 1.0)) / EL_TO_RAD;
+  return out;
+}
+
+const layoutOf = (...deg) => Float64Array.from(deg, (d) => d * AZ_PER_DEG);
+
+/**
+ * ITU-style placement of a MULTI-CHANNEL sample's channels (#998.0), as azimuth
+ * offsets from the source's own direction, in WAV channel order. Stereo is the
+ * ±30° "equilateral triangle" of BS.775; the surround sets are the BS.775 /
+ * BS.2051 angles. Only 1 and 2 are reachable today — the sampler plays at most
+ * two pool spans (terranmon.txt Ixmp note 8) — but the placement RULE is what
+ * #998.0 pins down, so the whole table lives here.
+ */
+const SAMPLE_CHANNEL_LAYOUT = Object.freeze({
+  1: layoutOf(0),
+  2: layoutOf(-30, 30),                            // L R
+  4: layoutOf(-30, 30, -110, 110),                 // L R Ls Rs
+  6: layoutOf(-30, 30, 0, 0, -110, 110),           // L R C LFE Ls Rs
+  8: layoutOf(-30, 30, 0, 0, -90, 90, -135, 135),  // L R C LFE Lss Rss Lrs Rrs
+});
+
+/**
+ * World (azimuth, elevation) of a sample channel sitting `localAz` off the
+ * source's own direction. The layout is a rigid body aimed at the source: it
+ * yaws AND pitches with it, so a stereo pair keeps its 60° width however high
+ * the source flies instead of collapsing at the poles the way a plain azimuth
+ * offset would.
+ */
+function sampleChannelAngles(az, el, localAz, out) {
+  if (localAz === 0) { out[0] = az; out[1] = el; return out; }
+  if (el === 0) { out[0] = az + localAz; out[1] = 0; return out; } // exact, and the common case
+  const psi = -localAz * AZ_TO_RAD; // layout offset is clockwise; ambisonic azimuth is not
+  const th = (AZ_FRONT - az) * AZ_TO_RAD;
+  const ph = el * EL_TO_RAD;
+  const cpsi = Math.cos(psi), spsi = Math.sin(psi);
+  const cph = Math.cos(ph), sph = Math.sin(ph);
+  const cth = Math.cos(th), sth = Math.sin(th);
+  return anglesFromDirection(
+    cpsi * cph * cth - spsi * sth,
+    cpsi * cph * sth + spsi * cth,
+    cpsi * sph,
+    out,
+  );
+}
+
+/**
+ * Orthogonal projection of a direction onto the listener's left–right axis:
+ * −1 hard left … 0 centre … +1 hard right. It is the SHADOW the source casts
+ * on that line — height and depth both collapse onto it, so a source overhead
+ * or directly behind reads centre, and a hard-left source 60° up reads
+ * half-left. The channel-header pan strip draws exactly this (#998.6), which
+ * is why it lines up with the radar dot above it.
+ *
+ * Not the same thing as the audible downmix position (foldAzimuthToPan mirrors
+ * the rear arc instead of foreshortening it) — this one is a POSITION display.
+ */
+function lateralProjection(az, el) {
+  const th = (AZ_FRONT - az) * AZ_TO_RAD;
+  return -Math.cos(el * EL_TO_RAD) * Math.sin(th);
+}
+
+/**
+ * Decode an X / 4 argument (`$eeaa`) into [azimuth, elevation]. The commands
+ * and any UI that writes them share this pair so the two encodings cannot
+ * drift: azimuth is a byte over the full turn (half the engine's resolution),
+ * elevation is signed.
+ */
+function anglesFromSpatialArg(arg, out) {
+  const ee = (arg >>> 8) & 0xff;
+  out[0] = (arg & 0xff) * 2;
+  out[1] = ee >= 0x80 ? ee - 256 : ee;
+  return out;
+}
+
+/** Encode (azimuth, elevation) back into an X / 4 argument. */
+function spatialArgFromAngles(az, el) {
+  const a = Math.round(wrapAzimuth(az) / 2) & 0xff;
+  const e = clamp(Math.round(el), -128, 127) & 0xff;
+  return (e << 8) | a;
+}
+
+const slerpA = new Float64Array(3);
+const slerpB = new Float64Array(3);
+
+/**
+ * One tick of a Z slide (#998.2): rotate (az, el) toward (tgtAz, tgtEl) along
+ * the great circle by at most `stepUnits` azimuth units, at constant angular
+ * velocity — the SLERP the spec RECOMMENDS. Identical directions do nothing;
+ * ANTIPODAL ones (where the great circle is undefined) take the CLOCKWISE path,
+ * matching effect P's rule. Writes [azimuth, elevation] into `out`.
+ */
+function stepTowardTarget(az, el, tgtAz, tgtEl, stepUnits, out) {
+  const a = directionFromAngles(az, el, slerpA);
+  const b = directionFromAngles(tgtAz, tgtEl, slerpB);
+  const dot = clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1.0, 1.0);
+  const omega = Math.acos(dot);
+  const step = stepUnits * AZ_TO_RAD;
+  if (!(omega > 1e-12) || step <= 0.0) { out[0] = az; out[1] = el; return out; }
+  if (step >= omega) { out[0] = wrapAzimuth(tgtAz); out[1] = tgtEl; return out; }
+
+  let vx, vy, vz;
+  if (omega > Math.PI - 1e-9) {
+    // Antipodal: pick the axis whose rotation makes the azimuth INCREASE, i.e.
+    // the part of −z perpendicular to the source (front → right → behind).
+    let kx = a[2] * a[0];
+    let ky = a[2] * a[1];
+    let kz = a[2] * a[2] - 1.0;
+    let len = Math.hypot(kx, ky, kz);
+    if (len < 1e-9) {
+      // Source is straight up or down: rotate through its own azimuth instead.
+      const th = (AZ_FRONT - az) * AZ_TO_RAD;
+      const hx = Math.cos(th), hy = Math.sin(th);
+      kx = -a[2] * hy;
+      ky = a[2] * hx;
+      kz = a[0] * hy - a[1] * hx;
+      len = Math.hypot(kx, ky, kz);
+    }
+    kx /= len; ky /= len; kz /= len;
+    // Rodrigues, with k ⟂ a so the k(k·a) term vanishes.
+    const c = Math.cos(step), s = Math.sin(step);
+    vx = a[0] * c + (ky * a[2] - kz * a[1]) * s;
+    vy = a[1] * c + (kz * a[0] - kx * a[2]) * s;
+    vz = a[2] * c + (kx * a[1] - ky * a[0]) * s;
+  } else {
+    const sinOmega = Math.sin(omega);
+    const c0 = Math.sin(omega - step) / sinOmega;
+    const c1 = Math.sin(step) / sinOmega;
+    vx = a[0] * c0 + b[0] * c1;
+    vy = a[1] * c0 + b[1] * c1;
+    vz = a[2] * c0 + b[2] * c1;
+  }
+  return anglesFromDirection(vx, vy, vz, out);
+}
+
+// ── Renderers ─────────────────────────────────────────────────────────────
+// A renderer answers one question — "what gain does a source at (az, el) get in
+// each of my channels?" — plus a monitoring stereo pair so any render target
+// can be auditioned on the device. Everything format-specific stops here.
+
+/**
+ * Stereo render target: the device path, and the stereo downmix every other
+ * format offers. Sources on the FRONT ARC hit exactly the legacy equal-energy
+ * pan law (same expression, same order of operations), so a song that only uses
+ * ordinary pan renders bit-for-bit like it does in stereo mode. Behind the
+ * listener the image folds back onto the front, and elevation collapses it
+ * toward the centre — at ±90° a source is dead centre, the only choice that
+ * stays continuous at the poles.
+ */
+class StereoRenderer {
+  constructor() {
+    this.numChannels = 2;
+    this.name = "stereo";
+  }
+
+  channelGains(az, el, out, off) {
+    const p = foldAzimuthToPan(az);
+    const pan = el === 0 ? p : 128 + (p - 128) * Math.cos(el * EL_TO_RAD);
+    out[off] = Math.cos((Math.PI * pan) / 512.0);
+    out[off + 1] = Math.sin((Math.PI * pan) / 512.0);
+  }
+
+  monitorStereo(data, frames, n, out) {
+    out[0] = data[n];
+    out[1] = data[frames + n];
+  }
+}
+
+/** ACN indices carried by an order-N basis; planar keeps the horizontal (|m| = l) set. */
+function acnChannelList(order, planar) {
+  const list = [];
+  for (let l = 0; l <= order; l++) {
+    for (let m = -l; m <= l; m++) {
+      if (!planar || Math.abs(m) === l) list.push(l * l + l + m);
+    }
+  }
+  return Int32Array.from(list);
+}
+
+const SQRT3 = Math.sqrt(3.0);
+const SQRT15 = Math.sqrt(15.0);
+const SQRT5_8 = Math.sqrt(5.0 / 8.0);
+const SQRT3_8 = Math.sqrt(3.0 / 8.0);
+
+/**
+ * Real spherical harmonics up to `order` (≤ 3) for one direction, SN3D
+ * normalised and ACN ordered — the AmbiX convention (#998.4's export format,
+ * and a perfectly good internal scene basis). Fills out[0 .. (order+1)²).
+ */
+function encodeSN3D(az, el, order, out) {
+  const th = (AZ_FRONT - az) * AZ_TO_RAD;
+  const ph = el * EL_TO_RAD;
+  const cph = Math.cos(ph);
+  const x = cph * Math.cos(th);
+  const y = cph * Math.sin(th);
+  const z = Math.sin(ph);
+
+  out[0] = 1.0;
+  if (order < 1) return out;
+  out[1] = y;
+  out[2] = z;
+  out[3] = x;
+  if (order < 2) return out;
+  out[4] = SQRT3 * x * y;
+  out[5] = SQRT3 * y * z;
+  out[6] = (3.0 * z * z - 1.0) * 0.5;
+  out[7] = SQRT3 * x * z;
+  out[8] = SQRT3 * (x * x - y * y) * 0.5;
+  if (order < 3) return out;
+  out[9] = SQRT5_8 * y * (3.0 * x * x - y * y);
+  out[10] = SQRT15 * x * y * z;
+  out[11] = SQRT3_8 * y * (5.0 * z * z - 1.0);
+  out[12] = z * (5.0 * z * z - 3.0) * 0.5;
+  out[13] = SQRT3_8 * x * (5.0 * z * z - 1.0);
+  out[14] = SQRT15 * z * (x * x - y * y) * 0.5;
+  out[15] = SQRT5_8 * x * (x * x - 3.0 * y * y);
+  return out;
+}
+
+/** Highest ambisonic order encodeSN3D implements. */
+const AMBISONIC_ORDER_MAX = 3;
+
+/**
+ * Ambisonic (scene-based) render target — the export basis for #998.4, and the
+ * proof that the mixer is format-agnostic: same voices, same objects, a
+ * different set of channels. `planar` drops the harmonics a horizontal-only
+ * song cannot excite (7 channels instead of 16 at order 3); an AmbiX writer
+ * zero-fills the missing ACNs.
+ */
+class AmbisonicRenderer {
+  constructor(order = AMBISONIC_ORDER_MAX, planar = false) {
+    this.order = Math.min(order, AMBISONIC_ORDER_MAX);
+    this.planar = planar;
+    this.acn = acnChannelList(this.order, planar);
+    this.numChannels = this.acn.length;
+    this.name = `ambisonic${planar ? "2d" : "3d"}-o${this.order}`;
+    this._sh = new Float64Array((this.order + 1) * (this.order + 1));
+  }
+
+  channelGains(az, el, out, off) {
+    const sh = encodeSN3D(az, el, this.order, this._sh);
+    const acn = this.acn;
+    for (let c = 0; c < acn.length; c++) out[off + c] = sh[acn[c]];
+  }
+
+  /** Coincident cardioid pair at ±90° — W ± Y, the classic FOA monitor decode. */
+  monitorStereo(data, frames, n, out) {
+    const w = data[n];
+    const yy = data[frames + n]; // ACN 1 is bus channel 1 in both bases
+    out[0] = 0.5 * (w + yy);
+    out[1] = 0.5 * (w - yy);
+  }
+}
+
+// ── Bus ───────────────────────────────────────────────────────────────────
+
+/**
+ * The channel bus a renderer writes into: channel-major, one chunk deep, and
+ * Float64 because the legacy stereo path accumulates in double locals — an
+ * export tap (or #998.3's downmix) reads `data` directly.
+ */
+class SpatialBus {
+  constructor(renderer, frames) {
+    this.renderer = renderer;
+    this.numChannels = renderer.numChannels;
+    this.frames = frames;
+    this.data = new Float64Array(this.numChannels * frames);
+    this.pair = new Float64Array(2);
+  }
+
+  clear() { this.data.fill(0.0); }
+
+  /**
+   * Accumulate one positioned source sample into frame `n`. The factor order
+   * matches the stereo path's `s * vol * gain * ramp` exactly — do not
+   * "simplify" it, that is what keeps a planar song bit-identical to stereo.
+   */
+  addSource(n, value, gains, off, ramp) {
+    const d = this.data;
+    const nc = this.numChannels;
+    const f = this.frames;
+    for (let c = 0; c < nc; c++) d[c * f + n] += (value * gains[off + c]) * ramp;
+  }
+
+  /** The device's stereo pair for frame `n`, as the renderer defines it. */
+  stereoAt(n) {
+    this.renderer.monitorStereo(this.data, this.frames, n, this.pair);
+    return this.pair;
+  }
+}
+
+// ── Per-voice spatial state ───────────────────────────────────────────────
+// Legacy pan writes funnel through applyPanSet / applyPanSlide so that the
+// stereo model keeps its exact arithmetic (clamped 0..255 integers) while the
+// surround models track the continuous azimuth that the mixer and the Z slide
+// actually use. `voice.channelPan` stays the integer mirror the UI reads.
+
+/** Channel-pan write: absolute. `pan` is the legacy byte, or a 9-bit angle. */
+function applyPanSet(ts, voice, pan) {
+  if (ts.surroundModel === SURROUND_STEREO) {
+    voice.channelPan = pan & 0xff;
+  } else {
+    voice.panAzimuth = wrapAzimuth(pan);
+    voice.channelPan = mirrorPanByte(voice.panAzimuth);
+  }
+  voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+}
+
+/** Channel-pan write: signed delta — clamped in stereo, wrapped in surround. */
+function applyPanSlide(ts, voice, delta) {
+  if (ts.surroundModel === SURROUND_STEREO) {
+    voice.channelPan = delta < 0
+      ? Math.max(voice.channelPan + delta, 0)
+      : Math.min(voice.channelPan + delta, 0xff);
+  } else {
+    voice.panAzimuth = wrapAzimuth(voice.panAzimuth + delta);
+    voice.channelPan = mirrorPanByte(voice.panAzimuth);
+  }
+  voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+}
+
+/** Elevation write (effect X / 4). Planar songs stay on the horizon. */
+function applyElevation(ts, voice, el) {
+  voice.panElevation = ts.surroundModel === SURROUND_SPATIAL ? el : 0.0;
+}
+
+/** The integer pan the UI and ghost copies see: the monitoring (folded) byte. */
+function mirrorPanByte(az) {
+  return Math.round(foldAzimuthToPan(az));
+}
+
+/**
+ * Effective azimuth of a voice: its own angle plus the pan envelope's offset
+ * and the instrument's random pan swing — the surround twin of the stereo
+ * path's pan sum, wrapping where that one clamps.
+ */
+function voiceAzimuth(voice) {
+  if (voice.hasPanEnv && voice.panEnvOn) {
+    let envPanRaw = Math.round(voice.envPan * 255.0);
+    envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+    return wrapAzimuth(voice.panAzimuth + envPanRaw - 128 + voice.randomPanBias);
+  }
+  return wrapAzimuth(voice.panAzimuth + voice.randomPanBias);
+}
+
+const angleScratch = new Float64Array(2);
+
+/**
+ * Renderer gains for every channel of `voice`, cached on the voice and
+ * recomputed only when the source actually moves (a direction changes at most
+ * once per tick, the mixer asks once per sample).
+ */
+function spatialVoiceGains(bus, voice) {
+  const nc = bus.numChannels;
+  const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
+  const chans = layout.length;
+  const az = voiceAzimuth(voice);
+  const el = voice.panElevation;
+  let sc = voice.spatial;
+  if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
+    sc = voice.spatial = {
+      az: NaN, el: NaN, chans: 0, renderer: null,
+      gains: new Float64Array(nc * MAX_SAMPLE_CHANNELS),
+    };
+  }
+  if (sc.az !== az || sc.el !== el || sc.chans !== chans || sc.renderer !== bus.renderer) {
+    for (let k = 0; k < chans; k++) {
+      sampleChannelAngles(az, el, layout[k], angleScratch);
+      bus.renderer.channelGains(angleScratch[0], angleScratch[1], sc.gains, k * nc);
+    }
+    sc.az = az; sc.el = el; sc.chans = chans; sc.renderer = bus.renderer;
+  }
+  return sc.gains;
 }
 
 // ══ src/engine/inst.js ══
@@ -1064,6 +1518,7 @@ class MemorySlots {
     this.l = 0;
     this.n = 0;
     this.p = 0;
+    this.z = 0;         // Z (spherical panning slide speed, #998.2)
   }
 }
 
@@ -1162,6 +1617,17 @@ class Voice {
     this.rowVolume = 63;
     this.channelPan = 0x80;
     this.rowPan = 32;
+
+    // ── Spatial position (#998) — used only when the song is planar/spatial.
+    // channelPan stays the legacy integer (and the UI's mirror); panAzimuth is
+    // the continuous 512-unit angle the mixer and the Z slide work in.
+    this.panAzimuth = 128.0;       // 0 = left, 128 = front, 256 = right
+    this.panElevation = 0.0;       // 128 units = 90°
+    this.spatialTargetAz = 128.0;  // effect 4
+    this.spatialTargetEl = 0.0;
+    this.spatialSlideActive = false; // armed by Z for the current row
+    // Mixer-side cache of the renderer gains: {az, el, chans, renderer, gains}.
+    this.spatial = null;
 
     // Anti-click volume ramp.
     this.currentMixVolume = 1.0;
@@ -1398,6 +1864,7 @@ class Voice {
 
 
 
+
 // ── PlayInstruction (4484-4494) — tagged objects ──
 const INST_NOP = 0;
 const INST_GOBACK = 1;
@@ -1546,6 +2013,12 @@ class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Surround model (#998; song-immutable `ss` flag) + the object bus it mixes
+    // into. Null bus = the stereo model, which keeps the plain two-accumulator
+    // path untouched — see mixer.js.
+    this.surroundModel = SURROUND_STEREO;
+    this.spatial = null;
+
     // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
     // the playhead by setTuning, like toneMode/interpolationMode are from the
     // global-behaviour flags, so the per-sample path reads it off `ts` alone.
@@ -1584,6 +2057,19 @@ class TrackerState {
     this.backgroundVoices = [];
   }
 
+  /**
+   * Install the song's surround model (#998). The stereo model keeps `spatial`
+   * null — the mixer's legacy two-accumulator path, untouched; anything else
+   * allocates the object bus for `renderer`, which is the device's
+   * StereoRenderer unless an exporter asked for a different render target.
+   */
+  setSurroundModel(model, renderer = null) {
+    this.surroundModel = model & 3;
+    this.spatial = this.surroundModel === SURROUND_STEREO
+      ? null
+      : new SpatialBus(renderer ?? new StereoRenderer(), TRACKER_CHUNK);
+  }
+
   drainInterrupts() {
     const m = this.pendingInterrupts;
     this.pendingInterrupts = 0;
@@ -1618,6 +2104,11 @@ class Playhead {
     this.trackerState = new TrackerState();
     this.jamActive = false;
     this.initialGlobalFlags = 0;
+    // Song-immutable surround model + the render target it mixes through
+    // (#998). Null renderer = the device's stereo monitor; an exporter swaps in
+    // its own without the engine knowing which format asked.
+    this.surroundModel = SURROUND_STEREO;
+    this.spatialRenderer = null;
 
     this._isPlaying = false;
   }
@@ -1675,6 +2166,7 @@ class Playhead {
     ts.pendingInterrupts = 0;
     ts.toneMode = this.initialGlobalFlags & 3;
     ts.interpolationMode = (this.initialGlobalFlags >>> 2) & 7;
+    ts.setSurroundModel(this.surroundModel, this.spatialRenderer);
     ts.ledFilterOn = false;
     ts.amigaLPStateL = 0.0; ts.amigaLPStateR = 0.0;
     ts.amigaLEDStateL.fill(0.0); ts.amigaLEDStateR.fill(0.0);
@@ -1691,6 +2183,12 @@ class Playhead {
       it.envVolStep = 0.0;
       it.channelPan = 0x80;
       it.rowPan = 32;
+      it.panAzimuth = 128.0;
+      it.panElevation = 0.0;
+      it.spatialTargetAz = 128.0;
+      it.spatialTargetEl = 0.0;
+      it.spatialSlideActive = false;
+      it.spatial = null;
       it.glissandoOn = false;
       it.loopStartRow = 0;
       it.loopCount = 0;
@@ -2401,6 +2899,7 @@ function advanceAutoVibrato(voice, inst) {
 
 
 
+
 /**
  * Snapshot the sample-scope state for voice from the base instrument or a
  * resolved Ixmp patch. Patch sentinels: defaultPan 0xFF, defaultNoteVolume 0,
@@ -2627,6 +3126,8 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.channelVolume = voice.channelVolume;
     child.channelPan = voice.channelPan;
     child.rowPan = voice.rowPan;
+    child.panAzimuth = voice.panAzimuth;
+    child.panElevation = voice.panElevation;
     ts.backgroundVoices.push(child);
   }
   capBackgroundVoices(ts);
@@ -2694,15 +3195,13 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
     if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
-      voice.channelPan = patchPan !== null ? patchPan : inst.defaultPan;
-      voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+      applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
     }
     // Pitch-pan separation.
     if (inst.pitchPanSeparation !== 0) {
       const noteDelta = (noteVal - inst.pitchPanCentre) / 4096.0;
       const panShift = Math.trunc(noteDelta * inst.pitchPanSeparation * 4.0);
-      voice.channelPan = clamp(voice.channelPan + panShift, 0, 255);
-      voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+      applyPanSlide(ts, voice, panShift);
     }
   }
   // Filter defaults (ACTIVE values; patch 'x' block overrides base inst).
@@ -2827,6 +3326,11 @@ function ghostVoice(src, channel) {
   v.rowVolume = src.rowVolume;
   v.channelPan = src.channelPan;
   v.rowPan = src.rowPan;
+  // Spatial position travels with the ghost: it keeps sounding where it was.
+  v.panAzimuth = src.panAzimuth;
+  v.panElevation = src.panElevation;
+  v.spatialTargetAz = src.spatialTargetAz;
+  v.spatialTargetEl = src.spatialTargetEl;
   v.currentMixVolume = src.currentMixVolume;
   v.keyOff = src.keyOff;
   v.envIndex = src.envIndex;
@@ -2974,26 +3478,26 @@ function applyVolColumn(voice, value, sel) {
   }
 }
 
-/** Pan column. S $80xx on the same row wins over the 6-bit SET here. */
-function applyPanColumn(voice, value, sel) {
+/**
+ * Pan column. S $80xx on the same row wins over the 6-bit SET here.
+ *
+ * The 6-bit SET keeps its front-arc mapping in every surround model — the
+ * column has no room for a 360° angle, and S $8xxx / X are the commands that
+ * do. The slides, however, wrap with the rest of the pan machinery.
+ */
+function applyPanColumn(ts, voice, value, sel) {
   const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
                     ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
   switch (sel) {
     case 0:
-      if (!rowHasS80) {
-        voice.channelPan = (value << 2) | (value >>> 4);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
-      }
+      if (!rowHasS80) applyPanSet(ts, voice, (value << 2) | (value >>> 4));
       break;
     case 1: voice.panColSlideRight = value; break;
     case 2: voice.panColSlideLeft = value; break;
     case 3: {
       if (value === 0) return;
       const mag = value & 0x1f;
-      voice.channelPan = (value & 0x20) !== 0
-        ? Math.min(voice.channelPan + mag, 0xff)
-        : Math.max(voice.channelPan - mag, 0);
-      voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+      applyPanSlide(ts, voice, (value & 0x20) !== 0 ? mag : -mag);
       break;
     }
   }
@@ -3008,6 +3512,10 @@ function applyPanColumn(voice, value, sel) {
 
 
 
+
+
+/** Scratch [azimuth, elevation] for the X / 4 argument decode. */
+const spatialArg = new Float64Array(2);
 
 /** Resolve a non-zero argument or recall from cohort memory. */
 function resolveArg(arg, mem) { return arg !== 0 ? arg : mem; }
@@ -3208,15 +3716,14 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const hi = (arg >>> 8) & 0xff;
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
+      // In a surround song the pan runs right round the circle: the slide
+      // wraps where the stereo law clamps (TAUD_NOTE_EFFECTS.md, effect P).
       if (hi === 0xff || hi === 0xf0) {
-        voice.channelPan = Math.max(voice.channelPan - 0xf, 0);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, -0xf);
       } else if (hin === 0xf && lo !== 0) {
-        voice.channelPan = Math.min(voice.channelPan + lo, 0xff);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, lo);
       } else if (lo === 0xf && hin !== 0) {
-        voice.channelPan = Math.max(voice.channelPan - hin, 0);
-        voice.rowPan = clamp(voice.channelPan >>> 2, 0, 63);
+        applyPanSlide(ts, voice, -hin);
       } else if (hin === 0 && lo !== 0) {
         voice.panColSlideRight = lo;
       } else if (lo === 0 && hin !== 0) {
@@ -3310,6 +3817,34 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.panbrelloActive = true;
       break;
     }
+    // ── Spatial panning (#998.2) — reserved for songs whose surround model
+    //    says so; a stereo song ignores all three (converters are required to
+    //    turn IT's X "fine set panning" into S $80xx instead).
+    case EffectOp.OP_X: {
+      // X $eeaa — place the source: azimuth $aa over the full turn, elevation
+      // $ee signed ($80 = −90°, $7F ≈ +90°).
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      anglesFromSpatialArg(rawArg, spatialArg);
+      applyPanSet(ts, voice, spatialArg[0]);
+      applyElevation(ts, voice, spatialArg[1]);
+      break;
+    }
+    case EffectOp.OP_4:
+      // 4 $eeaa — where a Z slide is heading. Channel state: it outlives the row.
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      anglesFromSpatialArg(rawArg, spatialArg);
+      voice.spatialTargetAz = spatialArg[0];
+      voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
+      break;
+    case EffectOp.OP_Z: {
+      // Z $0xxx — arm the slide for this row at $xxx/16 azimuth units per tick.
+      if (ts.surroundModel === SURROUND_STEREO) break;
+      const raw = rawArg & 0xfff;
+      const arg = resolveArg(raw, voice.mem.z);
+      if (raw !== 0) voice.mem.z = arg;
+      if (arg !== 0) voice.spatialSlideActive = true;
+      break;
+    }
   }
 }
 
@@ -3364,9 +3899,10 @@ function applySEffect(eng, ts, voice, vi, arg) {
       break;
     }
     case 0x8:
-      // S$80xx — full 8-bit pan.
-      voice.channelPan = arg & 0xff;
-      voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+      // S$80xx — full 8-bit pan. A surround song reads one bit more (#998.1):
+      // S$8xxx is a 9-bit angle, $000 left · $080 front · $100 right · $180
+      // behind, of which $000..$0FF are exactly the old pan bytes.
+      applyPanSet(ts, voice, arg & (ts.surroundModel === SURROUND_STEREO ? 0xff : 0x1ff));
       break;
     case 0xb:
       if (x === 0) voice.loopStartRow = ts.rowIndex;
@@ -3575,6 +4111,7 @@ function applyTrackerRow(eng, ts, playhead) {
     voice.wSlideDir = 0;
     voice.volColSlideUp = 0; voice.volColSlideDown = 0;
     voice.panColSlideRight = 0; voice.panColSlideLeft = 0;
+    voice.spatialSlideActive = false; // Z re-arms per row, like every other slide
     voice.nSlideDir = 0;
     voice.rowEffect = row.effect;
     voice.rowEffectArg = row.effectArg;
@@ -3682,7 +4219,7 @@ function applyTrackerRow(eng, ts, playhead) {
 
     // ── Volume / pan columns ──
     applyVolColumn(voice, row.volume, row.volumeEff);
-    applyPanColumn(voice, row.pan, row.panEff);
+    applyPanColumn(ts, voice, row.pan, row.panEff);
 
     // ── Effect column ──
     applyEffectRow(eng, ts, playhead, voice, vi, row.effect, row.effectArg);
@@ -3832,6 +4369,10 @@ function advanceRow(eng, ts, playhead) {
 
 
 
+
+/** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
+const spatialStep = new Float64Array(2);
+
 function applyTrackerTick(eng, ts, playhead) {
   const tickSec = 2.5 / playhead.bpm;
   // Samples-per-tick — used to spread the per-tick envVolume jump across the
@@ -3971,12 +4512,21 @@ function applyTrackerTick(eng, ts, playhead) {
         voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir, 0, 0x3f);
       }
       if (voice.panColSlideRight !== 0) {
-        voice.channelPan = Math.min(voice.channelPan + voice.panColSlideRight, 0xff);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+        applyPanSlide(ts, voice, voice.panColSlideRight);
       }
       if (voice.panColSlideLeft !== 0) {
-        voice.channelPan = Math.max(voice.channelPan - voice.panColSlideLeft, 0);
-        voice.rowPan = clamp(voice.channelPan >> 2, 0, 63);
+        applyPanSlide(ts, voice, -voice.panColSlideLeft);
+      }
+      // Spherical panning slide (Z, #998.2): one great-circle step per non-first
+      // tick, at $xxx/16 azimuth units — X's units, so /8 in the engine's.
+      if (voice.spatialSlideActive) {
+        stepTowardTarget(
+          voice.panAzimuth, voice.panElevation,
+          voice.spatialTargetAz, voice.spatialTargetEl,
+          voice.mem.z / 8, spatialStep,
+        );
+        applyPanSet(ts, voice, spatialStep[0]);
+        voice.panElevation = spatialStep[1];
       }
     }
 
@@ -4176,6 +4726,8 @@ function applyTrackerTick(eng, ts, playhead) {
         bg.rowVolume = parent.rowVolume;
         bg.channelPan = parent.channelPan;
         bg.rowPan = parent.rowPan;
+        bg.panAzimuth = parent.panAzimuth;
+        bg.panElevation = parent.panElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];
@@ -4232,6 +4784,7 @@ function applyTrackerTick(eng, ts, playhead) {
 
 
 
+
 const fround = Math.fround;
 
 /** Scratch pair for fetchTrackerSampleStereo — one voice is mixed at a time. */
@@ -4248,8 +4801,10 @@ const stereoPair = [0.0, 0.0];
  * S=(L−R)/2 encoding. The decode happens BEFORE the filter and the voice FX
  * so those act on speaker feeds (the filter is linear so its result is the
  * same either way; the bitcrusher/overdrive are not, and crushing a speaker
- * feed is the sane reading). Surround/spatial modes get their own rules with
- * TODO #998 — anything not stereo-shaped stays mono here.
+ * feed is the sane reading). In a surround song the pair is not a pair of
+ * speaker feeds at all — spatial.js places each channel as its own source at
+ * the ITU angle for the sample's channel count (#998.0). Anything not
+ * stereo-shaped stays mono here.
  */
 function renderVoicePair(eng, voice, inst, interpMode, out) {
   if (voice.activeChanCount !== 2) {
@@ -4336,6 +4891,10 @@ function generateTrackerAudio(eng, playhead, out) {
   const advancing = playhead.isPlaying;
   // Stem-export tap (item 93) — null on every playback path. See TaudEngine.stemBus.
   const stems = eng.stemBus;
+  // Surround object bus (#998) — null for the stereo model, which keeps the
+  // plain mixL/mixR accumulators below and stays bit-exact against the JVM.
+  const spatial = ts.spatial;
+  if (spatial !== null) spatial.clear();
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -4393,18 +4952,22 @@ function generateTrackerAudio(eng, playhead, out) {
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
       const globalGain = (gvol * mvol * playhead.masterVolume) / 255.0;
       const vol = perVoiceGain * globalGain;
-      let pan;
-      if (voice.hasPanEnv && voice.panEnvOn) {
-        let envPanRaw = Math.round(voice.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = voice.channelPan + envPanRaw - 128 + voice.randomPanBias;
-      } else {
-        pan = voice.channelPan + voice.randomPanBias;
+      let lGain = 0.0;
+      let rGain = 0.0;
+      if (spatial === null) {
+        let pan;
+        if (voice.hasPanEnv && voice.panEnvOn) {
+          let envPanRaw = Math.round(voice.envPan * 255.0);
+          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+          pan = voice.channelPan + envPanRaw - 128 + voice.randomPanBias;
+        } else {
+          pan = voice.channelPan + voice.randomPanBias;
+        }
+        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        // equal-energy pan law
+        lGain = Math.cos((Math.PI * pan) / 512.0);
+        rGain = Math.sin((Math.PI * pan) / 512.0);
       }
-      pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-      // equal-energy pan law
-      const lGain = Math.cos((Math.PI * pan) / 512.0);
-      const rGain = Math.sin((Math.PI * pan) / 512.0);
       // Sample-end ramp-out.
       let rampGain;
       if (voice.rampOutSamples > 0) {
@@ -4418,8 +4981,18 @@ function generateTrackerAudio(eng, playhead, out) {
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
       if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
-      mixL += sL * vol * lGain * rampGain;
-      mixR += sR * vol * rGain * rampGain;
+      if (spatial === null) {
+        mixL += sL * vol * lGain * rampGain;
+        mixR += sR * vol * rGain * rampGain;
+      } else {
+        // One positioned source per sample channel: a stereo sample is a pair
+        // of objects sitting ±30° apart, not two speaker feeds (#998.0).
+        const g = spatialVoiceGains(spatial, voice);
+        spatial.addSource(n, sL * vol, g, 0, rampGain);
+        if (voice.activeChanCount === 2) {
+          spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
+        }
+      }
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -4442,17 +5015,21 @@ function generateTrackerAudio(eng, playhead, out) {
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
         playhead.masterVolume) / 255.0;
-      let pan;
-      if (bg.hasPanEnv && bg.panEnvOn) {
-        let envPanRaw = Math.round(bg.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = bg.channelPan + envPanRaw - 128 + bg.randomPanBias;
-      } else {
-        pan = bg.channelPan + bg.randomPanBias;
+      let lGain = 0.0;
+      let rGain = 0.0;
+      if (spatial === null) {
+        let pan;
+        if (bg.hasPanEnv && bg.panEnvOn) {
+          let envPanRaw = Math.round(bg.envPan * 255.0);
+          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+          pan = bg.channelPan + envPanRaw - 128 + bg.randomPanBias;
+        } else {
+          pan = bg.channelPan + bg.randomPanBias;
+        }
+        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        lGain = Math.cos((Math.PI * pan) / 512.0);
+        rGain = Math.sin((Math.PI * pan) / 512.0);
       }
-      pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-      const lGain = Math.cos((Math.PI * pan) / 512.0);
-      const rGain = Math.sin((Math.PI * pan) / 512.0);
       let rampGain;
       if (bg.rampOutSamples > 0) {
         rampGain = bg.rampOutGain;
@@ -4467,8 +5044,24 @@ function generateTrackerAudio(eng, playhead, out) {
         const sBg = bg.activeChanCount === 2 ? (sL + sR) * 0.5 : sL;
         stems.add(bg, bg.sourceChannel, n, sBg * vol * rampGain);
       }
-      mixL += sL * vol * lGain * rampGain;
-      mixR += sR * vol * rGain * rampGain;
+      if (spatial === null) {
+        mixL += sL * vol * lGain * rampGain;
+        mixR += sR * vol * rGain * rampGain;
+      } else {
+        const g = spatialVoiceGains(spatial, bg);
+        spatial.addSource(n, sL * vol, g, 0, rampGain);
+        if (bg.activeChanCount === 2) {
+          spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
+        }
+      }
+    }
+
+    // Fold the object bus down to the device's pair — for the stereo renderer
+    // that IS the mix; another render target hands back its own monitor decode.
+    if (spatial !== null) {
+      const pair = spatial.stereoAt(n);
+      mixL = pair[0];
+      mixR = pair[1];
     }
 
     // Amiga interpolation modes: post-mix LPF chain.
@@ -4531,6 +5124,7 @@ function generateTrackerAudio(eng, playhead, out) {
 //    playback addresses the 8 MB pool directly (as the Kotlin engine does).
 //  - Voice-index clamps mirror the delegate exactly (readbacks clamp to
 //    NUM_VOICES-1; jamNote to MAX_VOICES-1).
+
 
 
 
@@ -4772,6 +5366,28 @@ class TaudEngine {
   }
   getTrackerMixerFlags(ph) { return this.playheads[ph].initialGlobalFlags; }
 
+  /**
+   * Song-immutable surround model (#998): 0 stereo, 1 planar (360° panning),
+   * 2 spatial. Anything but stereo mixes through the object bus.
+   */
+  setSurroundModel(ph, model) {
+    const p = this.playheads[ph];
+    p.surroundModel = model & 3;
+    p.trackerState.setSurroundModel(p.surroundModel, p.spatialRenderer);
+  }
+  getSurroundModel(ph) { return this.playheads[ph].surroundModel; }
+
+  /**
+   * Swap the render target the object bus feeds (#998.0). Null = the device's
+   * stereo monitor; an exporter installs e.g. an AmbisonicRenderer and reads
+   * `trackerState.spatial.data` after each chunk. No-op for a stereo song.
+   */
+  setSpatialRenderer(ph, renderer) {
+    const p = this.playheads[ph];
+    p.spatialRenderer = renderer;
+    p.trackerState.setSurroundModel(p.surroundModel, renderer);
+  }
+
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }
   setSongMixingVolume(ph, volume) { this.playheads[ph].mixingVolume = volume & 255; }
@@ -4921,14 +5537,29 @@ class TaudEngine {
     return Math.min(Math.max(effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain, 0.0), 1.0);
   }
 
+  /** Pan as the stereo meters want it: a surround voice reports where the
+   *  monitor downmix puts it (rear positions fold onto the front arc). */
   getVoiceEffectivePan(ph, vi) {
     const v = this._voice(ph, vi);
     if (!v.active) return 128;
+    if (this.playheads[ph].surroundModel !== SURROUND_STEREO) {
+      return Math.round(foldAzimuthToPan(voiceAzimuth(v)));
+    }
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
       return Math.min(Math.max(v.channelPan + envPanRaw - 128, 0), 255);
     }
     return Math.min(Math.max(v.channelPan, 0), 255);
+  }
+
+  /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
+   *  Stereo songs report the pan byte's front-arc position. */
+  getVoiceSpatialAzimuth(ph, vi) {
+    const v = this._voice(ph, vi);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? v.channelPan : voiceAzimuth(v);
+  }
+  getVoiceSpatialElevation(ph, vi) {
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : this._voice(ph, vi).panElevation;
   }
 
   getVoiceActive(ph, vi) { return this._voice(ph, vi).active; }
@@ -5024,6 +5655,7 @@ const CMD = Object.freeze({
   SET_MASTER_VOLUME: "setMasterVolume",            // {ph, volume}
   SET_MASTER_PAN: "setMasterPan",                  // {ph, pan}
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
+  SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
@@ -5076,10 +5708,12 @@ const SNAP_V_ENV_PITCH_IDX = 12;
 const SNAP_V_ENV_PITCH_TIME = 13;
 const SNAP_V_ENV_FILTER_IDX = 14;
 const SNAP_V_ENV_FILTER_TIME = 15;
-const SNAP_VOICE_STRIDE = 16;
+const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
+const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
+const SNAP_VOICE_STRIDE = 18;
 
 const SNAP_MAX_VOICES = 64;
-const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1032
+const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1160
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the
@@ -5135,6 +5769,7 @@ function audioRingViews(sab) {
 
 
 
+
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
  * Transport/reply commands (INIT, USE_SAB, USE_AUDIO_SAB, SNAPSHOT_RETURN,
@@ -5164,6 +5799,7 @@ function applyAudioCommand(eng, m) {
     case CMD.SET_MASTER_VOLUME: eng.setMasterVolume(m.ph, m.volume); return true;
     case CMD.SET_MASTER_PAN: eng.setMasterPan(m.ph, m.pan); return true;
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
+    case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;
@@ -5222,6 +5858,18 @@ function fillSnapshotInto(eng, playhead, f) {
         pan = v.channelPan;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+      // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
+      // value — in a surround song that is where the monitor downmix puts the
+      // voice, which is what those meters are drawing.
+      if (ts.surroundModel !== SURROUND_STEREO) {
+        const az = voiceAzimuth(v);
+        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
+        f[o + SNAP_V_AZIMUTH] = az;
+        f[o + SNAP_V_ELEVATION] = v.panElevation;
+      } else {
+        f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
+        f[o + SNAP_V_ELEVATION] = 0;
+      }
       f[o + SNAP_V_NOTE] = (v.renderPitch > 0 ? v.renderPitch : v.noteVal) & 0xffff;
       // Show the pattern-level instrument (a meta's slot), not the resolved
       // layer child; fall back to instrumentId before the first meta/plain trigger.
@@ -5240,6 +5888,7 @@ function fillSnapshotInto(eng, playhead, f) {
     } else {
       for (let k = 1; k < SNAP_VOICE_STRIDE; k++) f[o + k] = 0;
       f[o + SNAP_V_EFF_PAN] = 128;
+      f[o + SNAP_V_AZIMUTH] = 128; // centre/front, matching EFF_PAN's rest value
       f[o + SNAP_V_SAMPLE_POS] = -1;
       f[o + SNAP_V_SAMPLE_PTR] = -1;
       f[o + SNAP_V_ENV_VOL_IDX] = -1;
