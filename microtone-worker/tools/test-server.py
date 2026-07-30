@@ -32,6 +32,13 @@ PORT = next((int(a) for a in sys.argv[1:] if a.isdigit()), 8932 if ISOLATE else 
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # mimetypes only knows .webmanifest if the host has a recent /etc/mime.types;
+    # pin it so Chrome accepts the PWA manifest on every dev machine.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".webmanifest": "application/manifest+json",
+    }
+
     def end_headers(self):
         if ISOLATE:
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")

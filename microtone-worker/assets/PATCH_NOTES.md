@@ -4,12 +4,7 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
-## 2026-07-30
-
-- **Three new reference documents in the sidebar.** *Engine Spec* describes how playback actually works — timing, the 4096-TET pitch grid and tuning, envelopes, voice lifetimes and New Note Actions, the sampler and its interpolation modes, both filters, the mixing chain, the surround model and the 8-bit output stage. *File Format* is the complete `.taud` / `.tsii` / `.tpif` byte layout, down to every instrument-record field, envelope word and Project Data block. *Conversion Notes* explains what happens to a MOD, S3M, XM, IT, MON or MIDI file on its way into Taud, and what it loses on the way.
-  - These replace a long stretch of accumulated engineering notes with something written to be read: if you have ever wondered why a converted XM fades differently, why an envelope node with no duration behaves in two different ways, or what the pan column means once a song goes surround, that is now written down.
-
-## 2026-07-29
+## 2026-08-03
 
 - **Surround panning.** A song can now declare a **panning model** in the Project view: *Stereo* as before, *Planar* to pan all the way round the listener, or *Spatial* to place sources anywhere on the sphere. The model is a property of the song — it decides what the pan commands mean — and playback and WAV export fold the result back down to stereo, so you can write and hear it today.
   - In a surround song `S $8xxx` reads a 9-bit angle: `$000` left, `$080` front, `$100` right, `$180` behind. The low byte is the pan value you already know, so `S $8040` still means half-left, and pan slides now wrap round the circle instead of stopping at the ends.
@@ -26,7 +21,9 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 - **Instrument pitch ranges read properly.** A zone whose lower or upper bound is open now shows as `~C-5` or `C-5~`, and a fully open one as *whole range*, instead of the raw sentinel note. This applies to the Zones trigger overlay, the Meta Layers table and the Advanced Edit patch list.
 - **Envelope tabs share one header.** All four envelope tabs (Volume, Pan, Pitch, Filter) now report *present* / *absent* the same way, with *present* in the accent colour.
 - **Fixed: a moment of the old position played after seeking.** On hosts without cross-origin isolation — where the engine renders on the audio thread — the look-ahead buffer was never flushed when playback was started, stopped or moved, so audio rendered against the previous position played out first. It is now flushed on every transport change.
-
+- **Three new reference documents in the sidebar.** *Engine Spec* describes how playback actually works — timing, the 4096-TET pitch grid and tuning, envelopes, voice lifetimes and New Note Actions, the sampler and its interpolation modes, both filters, the mixing chain, the surround model and the 8-bit output stage. *File Format* is the complete `.taud` / `.tsii` / `.tpif` byte layout, down to every instrument-record field, envelope word and Project Data block. *Conversion Notes* explains what happens to a MOD, S3M, XM, IT, MON or MIDI file on its way into Taud, and what it loses on the way.
+  - These replace a long stretch of accumulated engineering notes with something written to be read: if you have ever wondered why a converted XM fades differently, why an envelope node with no duration behaves in two different ways, or what the pan column means once a song goes surround, that is now written down.
+  
 ## 2026-07-28
 
 - **Stereo samples.** An instrument can now carry a true stereo sample. Each channel goes through the existing equal-energy pan law on its own side, so a stereo sample whose channels are identical sounds exactly like the mono original. The Samples view shows one entry per pair with a full-height waveform lane per channel, and the Sample Lab, audio import and the mic recorder all work on channel lists.

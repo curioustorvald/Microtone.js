@@ -453,6 +453,9 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   margin-left: 0.5rem;
 }
 .modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+.panner {
+  min-width: 570px;
+}
 
 /* ── new-project modal ── */
 .np-modal { max-width: min(760px, 94vw); }
@@ -1084,8 +1087,17 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .rec-hint { font-size: 0.8rem; }
 
 /* ── About popup (brand click) ── */
-.about-modal { max-width: 460px; }
+/* The blurb is three paragraphs plus the support ask, so cap the height and
+   scroll rather than overflow a laptop viewport, and tighten the stack. */
+.about-modal { max-width: min(94vw, 540px); max-height: min(84vh, 46rem); overflow-y: auto; }
 .about-modal h3 { font-size: 1.3rem; }
+.about-modal p { margin: 0.55rem 0; text-align: justify; }
+/* Keep Close reachable when the text scrolls (short viewports). */
+.about-modal .modal-buttons {
+  position: sticky; bottom: 0;
+  margin-top: 0.6rem; padding: 0.5rem 0 0;
+  background: var(--panel);
+}
 .about-modal h4 {
   margin: 0.9rem 0 0.3rem;
   color: var(--accent);

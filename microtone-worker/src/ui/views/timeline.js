@@ -702,7 +702,7 @@ export class TimelineView {
     // The radar (#998.6) slots in between the pan strip and the name row.
     const radar = this.radarOn();
     const headerH = this.headerH();
-    const RADAR_Y = 40;
+    const RADAR_Y = 44;
     const NAME_Y = 49 + (radar ? RADAR_H : 0);
     const surroundModel = store.doc?.songs[store.songIndex]?.surroundModel ?? 0;
     const surroundSong = surroundModel !== 0;

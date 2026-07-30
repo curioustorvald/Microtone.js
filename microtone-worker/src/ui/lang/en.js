@@ -30,7 +30,7 @@ export default {
   "topbar.importMidiTitle": "Convert a MIDI file with a chosen soundfont",
   "topbar.audioOff": "audio off",
   "topbar.donate": "♥ Donate",
-  "topbar.donateTitle": "Support development via PayPal",
+  "topbar.donateTitle": "Support development on Ko-fi",
   "topbar.sponsor": "Sponsor",
   "topbar.sponsorTitle": "Become a GitHub Sponsor",
   "topbar.themeTitle": "Toggle dark/light theme",
@@ -109,8 +109,16 @@ export default {
   "lang.field": "Language",
 
   // ── about ──
-  "about.blurb": "A microtonal music tracker — runs entirely in your browser.",
+  // blurb3's spatial claims (headphone audition, ambisonic B-format export)
+  // track items 998.3–.5 and 998.7, and the same wording is mirrored in
+  // index.html's description/og:description and manifest.webmanifest. Keep all
+  // four in step with what actually ships.
+  "about.blurb1": "Microtone is a music tracker for the notes a piano cannot play. Every pitch sits on a grid of 4096 steps per octave, so 19-TET, 31-TET, Bohlen–Pierce, just intonation and the twelve lü are all first-class — written in their own notation, not as detuned semitones.",
+  "about.blurb2": "It runs entirely in your browser. No install, no account, no server: your projects stay in your machine's private storage, and module and MIDI conversion, SoundFont loading, sample editing and WAV export all happen on your own hardware.",
+  "about.blurb3": "Notes are placed, not just panned: each voice is a source at an angle and a height, auditioned over headphones as you write, and a finished song exports as ambisonic B-format as readily as stereo.",
   "about.license": "Microtone is free software distributed under the terms of the GNU General Public License version 3.",
+  "about.supportHead": "Keeping it free",
+  "about.support": "Microtone has no ads, no tracking, no accounts and no paid tier — and it is not going to grow any. It is written by one person in their spare time; donations and sponsorships cover the hosting and buy the hours that go into it.",
   "about.thanks": "Special thanks",
   "about.thanksEmpty": "Donors and sponsors will be listed here — thank you for supporting the project!",
   "about.docs": "Documentation",

@@ -20,7 +20,7 @@
 import { currentTheme, onThemeChange } from "./theme.js";
 
 /** Elevation of the imaginary key light, in degrees. */
-export const LIGHT_ELEVATION_DEG = 80;
+export const LIGHT_ELEVATION_DEG = 85;
 /** Its azimuth in Taud degrees (90° = front), i.e. shadows fall down-screen. */
 export const LIGHT_AZIMUTH_DEG = 90;
 
