@@ -270,3 +270,86 @@ test("the surround model round-trips through the song table", async () => {
   const plain = parseTaud(readFileSync(path));
   assert.deepEqual(parseTaud(writeTaud(plain)).songs[0].surroundModel, 0);
 });
+
+// ── the instrument's default position (#998) ─────────────────────────────
+// Record byte 177 doubles as the low byte of a 9-bit azimuth, byte 14's bit 5
+// is the ninth, and byte 254 is the elevation. The point of that layout is
+// backwards compatibility, so the tests check BOTH halves: a surround song must
+// read all three, and a stereo song must behave exactly as it did before.
+
+/** Engine whose instrument 1 declares a default position + "use default pan". */
+function makeInstPosEngine(model, { azimuth = 128, elevation = 0 } = {}) {
+  const eng = makeTestEngine(model);
+  for (let i = 0; i < 1000; i++) eng.sampleBin[i] = 128 + ((i % 100) - 50);
+  const rec = new Uint8Array(256);
+  const w16 = (o, v) => { rec[o] = v & 0xff; rec[o + 1] = (v >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec[14] = 1 | (azimuth >= 256 ? 0x20 : 0); // forward loop + azimuth bit 8
+  rec[17] = 0x80;                            // pan LOOP word bit 7 = "use default pan"
+  rec[21] = 0x3f;
+  rec[171] = 255;
+  rec[177] = azimuth & 0xff;
+  rec[196] = 255;
+  rec[254] = elevation & 0xff;
+  eng.uploadInstrument(1, rec);
+  return eng;
+}
+
+test("a surround song places a note at the instrument's own azimuth and elevation", () => {
+  const eng = makeInstPosEngine(SURROUND_SPATIAL, { azimuth: 384, elevation: 64 });
+  loadSong(eng, [{ row: 0, note: 0x5000, inst: 1 }]);
+  render(eng, 2);
+  const v = voice0(eng);
+  assert.equal(v.panAzimuth, 384, "behind the listener — the ninth bit must survive");
+  assert.equal(v.panElevation, 64, "+45°");
+  // The UI's meter still reads a folded byte, so the strip keeps meaning something.
+  assert.equal(v.channelPan, 128);
+});
+
+test("the ninth azimuth bit is what puts a default behind the listener", () => {
+  const front = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 0x80 });
+  loadSong(front, [{ row: 0, note: 0x5000, inst: 1 }]);
+  render(front, 2);
+  assert.equal(voice0(front).panAzimuth, 128, "bit clear = the front arc, as ever");
+
+  const behind = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 0x180 });
+  loadSong(behind, [{ row: 0, note: 0x5000, inst: 1 }]);
+  render(behind, 2);
+  assert.equal(voice0(behind).panAzimuth, 384, "bit set = the same angle, rear arc");
+});
+
+test("a planar song ignores the elevation, a stereo song ignores both", () => {
+  const planar = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 384, elevation: 64 });
+  loadSong(planar, [{ row: 0, note: 0x5000, inst: 1 }]);
+  render(planar, 2);
+  assert.equal(voice0(planar).panAzimuth, 384);
+  assert.equal(voice0(planar).panElevation, 0, "planar songs stay on the horizon");
+
+  // Stereo: byte 177 alone, exactly as before the spatial fields existed.
+  const stereo = makeInstPosEngine(SURROUND_STEREO, { azimuth: 0x180, elevation: 64 });
+  loadSong(stereo, [{ row: 0, note: 0x5000, inst: 1 }]);
+  render(stereo, 2);
+  assert.equal(voice0(stereo).channelPan, 0x80, "the pan byte, with no ninth bit");
+  assert.equal(voice0(stereo).panElevation, 0);
+});
+
+test("an old file sounds the same in a surround song as it did in stereo", () => {
+  // The compatibility claim in one line: bit 5 clear and byte 254 zero is every
+  // file written before this feature existed.
+  const rows = [{ row: 0, note: 0x5000, inst: 1 }, { row: 4, note: 0x5100, inst: 1 }];
+  const stereo = render(loadSong(makeInstPosEngine(SURROUND_STEREO, { azimuth: 0x30 }), rows), 30);
+  const planar = render(loadSong(makeInstPosEngine(SURROUND_PLANAR, { azimuth: 0x30 }), rows), 30);
+  assert.deepEqual(planar, stereo);
+});
+
+test("the record's spatial bits survive a load/read round-trip", () => {
+  const eng = makeInstPosEngine(SURROUND_SPATIAL, { azimuth: 0x1c0, elevation: -64 });
+  const inst = eng.instruments[1];
+  assert.equal(inst.defaultAzimuth, 0x1c0);
+  assert.equal(inst.defaultElevation, -64, "byte 254 is signed");
+  assert.equal(inst.getByte(14) & 0x20, 0x20, "bit 5 must not be masked away on read");
+  assert.equal(inst.getByte(254), 0xc0);
+  assert.equal(inst.isPercussion, false, "…and it must not be mistaken for the percussion bit");
+  // Byte 14's other meanings are untouched.
+  assert.equal(inst.loopMode & 0x03, 1);
+});

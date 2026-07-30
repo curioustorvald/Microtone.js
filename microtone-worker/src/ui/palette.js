@@ -64,9 +64,11 @@ export class CommandPalette {
     // The vol/pan buttons highlight by OPERATION, and a fine slide's direction
     // lives in the value's bit 5 — so the key tracks the op, not the selector
     // (and not the whole value, which would re-render on every digit typed).
-    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:` +
-      `${ctx.cell ? volPanOp(ctx.cell.volume, ctx.cell.volumeEff) : ""}:` +
-      `${ctx.cell ? volPanOp(ctx.cell.pan, ctx.cell.panEff) : ""}`;
+    const wide = ctx.wide === true;
+    const panVal = ctx.cell ? (wide ? ctx.cell.azimuth : ctx.cell.pan) : 0;
+    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:${wide}:` +
+      `${ctx.cell ? volPanOp(ctx.cell.volume, ctx.cell.volumeEff, false, wide) : ""}:` +
+      `${ctx.cell ? volPanOp(panVal, ctx.cell.panEff, true, wide) : ""}`;
     if (key === this.lastKey && !this.host.hidden) return; // avoid re-render churn
     this.lastKey = key;
     this.host.hidden = false;
@@ -113,8 +115,8 @@ export class CommandPalette {
       // and a fine slide seeds a magnitude of 1 rather than the $C0 no-op.
       case SUB_VOL: {
         label(t("pal.volColumn"));
-        const op = volPanOp(ctx.cell.volume, ctx.cell.volumeEff);
-        const pick = (o) => () => { const f = volPanSelect(false, o, ctx.cell); if (f) ctx.apply(f); };
+        const op = volPanOp(ctx.cell.volume, ctx.cell.volumeEff, false, wide);
+        const pick = (o) => () => { const f = volPanSelect(false, o, ctx.cell, wide); if (f) ctx.apply(f); };
         btn(t("pal.volSet"), t("pal.volSetTitle"), pick("set"), op === "set");
         btn(t("pal.slideUp"), t("pal.slideUpTitle"), pick("up"), op === "up");
         btn(t("pal.slideDn"), t("pal.slideDnTitle"), pick("down"), op === "down");
@@ -126,15 +128,16 @@ export class CommandPalette {
       }
       case SUB_PAN: {
         label(t("pal.panColumn"));
-        const op = volPanOp(ctx.cell.pan, ctx.cell.panEff);
-        const pick = (o) => () => { const f = volPanSelect(true, o, ctx.cell); if (f) ctx.apply(f); };
+        const op = volPanOp(panVal, ctx.cell.panEff, true, wide);
+        const pick = (o) => () => { const f = volPanSelect(true, o, ctx.cell, wide); if (f) ctx.apply(f); };
         btn(t("pal.panSet"), t("pal.panSetTitle"), pick("set"), op === "set");
         btn(t("pal.slideLeft"), t("pal.slideLeftTitle"), pick("down"), op === "down");
         btn(t("pal.slideRight"), t("pal.slideRightTitle"), pick("up"), op === "up");
         btn(t("pal.fineUp"), t("pal.panFineUpTitle"), pick("fineUp"), op === "fineUp");
         btn(t("pal.fineDn"), t("pal.panFineDnTitle"), pick("fineDown"), op === "fineDown");
-        btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply({ pan: 0, panEff: 3 }));
-        hint(t("pal.panHint"));
+        btn(t("pal.clear"), t("pal.noopTitle"), () => ctx.apply(
+          wide ? { azimuth: 0, elevation: 0, panEff: 3 } : { pan: 0, panEff: 3 }));
+        hint(t(wide ? "pal.panHintWide" : "pal.panHint"));
         break;
       }
       case SUB_FX_OP: {

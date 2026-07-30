@@ -11,6 +11,7 @@ import {
   TAUD_HEADER_SIZE, TAUD_SONG_ENTRY,
   SAMPLEINST_SIZE, SAMPLEBIN_SIZE,
   PATTERN_SIZE,
+  patternSizeFor,
   NUM_VOICES, MAX_VOICES, CUE_SIZE, CUE_SIZE_64, NUM_CUES, NUM_CUES_64,
   CUE_EMPTY, CUE_SIZE_V1, NUM_VOICES_V1, CUE_EMPTY_V1,
   ixmpPatchLen,
@@ -217,10 +218,13 @@ export function parseTaud(file) {
       // 1 planar (360° panning), 2 spatial.
       const surroundModel = file[e + 28] & 3;
 
-      const patBin = decomp(file.subarray(songOffset, songOffset + patComp), numPats * PATTERN_SIZE);
+      // Version 3 doubles the cell (and so the pattern image) — see the file
+      // format's §5.5. Everything else about a song is unchanged by it.
+      const patSize = patternSizeFor(fmtVer);
+      const patBin = decomp(file.subarray(songOffset, songOffset + patComp), numPats * patSize);
       const patterns = [];
       for (let p = 0; p < numPats; p++) {
-        patterns.push(patBin.subarray(p * PATTERN_SIZE, (p + 1) * PATTERN_SIZE));
+        patterns.push(patBin.subarray(p * patSize, (p + 1) * patSize));
       }
 
       const cueBin = decomp(file.subarray(songOffset + patComp, songOffset + patComp + cueComp));

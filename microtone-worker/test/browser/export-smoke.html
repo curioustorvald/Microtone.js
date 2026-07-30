@@ -1,0 +1,234 @@
+<!doctype html><meta charset="utf-8"><title>audio export dialog + surround targets (item 998.3-.6, .8)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Drives the REAL app: open the Export audio dialog from the Files view, check
+// what it offers for a stereo song and for a spatial one, render the surround
+// and ambisonic targets through the app's own module graph and parse the files
+// back, and exercise the binaural monitor toggle + the panner's dot filter.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+/** Minimal RIFF walker (the same one the node test uses). */
+function riffChunks(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const str = (o, n) => String.fromCharCode(...bytes.subarray(o, o + n));
+  if (str(0, 4) !== "RIFF" || str(8, 4) !== "WAVE") return null;
+  const map = new Map();
+  let o = 12;
+  while (o + 8 <= bytes.length) {
+    const id = str(o, 4);
+    const size = dv.getUint32(o + 4, true);
+    map.set(id, { offset: o + 8, size });
+    o += 8 + size + (size & 1);
+  }
+  return o === bytes.length ? map : null;
+}
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store } = M;
+  const { setSongScalarOp } = await import("../../src/doc/ops.js");
+
+  const openExport = async () => {
+    doc.querySelector('[data-view="files"]').click();
+    await sleep(120);
+    const btns = [...doc.querySelectorAll(".files-bar button")];
+    const wav = btns.find((b) => /audio|wav/i.test(b.textContent));
+    wav.click();
+    let dlg = null;
+    for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.export-audio"); await sleep(30); }
+    return dlg;
+  };
+
+  // ── 1. what a STEREO song is offered ─────────────────────────────────────
+  let dlg = await openExport();
+  check(!!dlg, "export dialog opens from the Files view");
+  if (!dlg) { log(`\n${fails} FAILED`); return; }
+  let api = dlg.__exportAudio;
+  check(!!api, "dialog exposes its test hook");
+  check(dlg.querySelectorAll(".export-card").length === 7, "seven targets offered",
+    String(dlg.querySelectorAll(".export-card").length));
+  check(dlg.querySelectorAll(".export-card svg.chandiagram").length === 7,
+    "every card carries its channel-configuration diagram");
+  check(api.state().format === "stereo", "a stereo song defaults to stereo", api.state().format);
+  check(!api.state().monitorShown, "no downmix choice for a stereo song (nothing to fold)");
+  // The cards are drawn from the layout tables: 5.1 has six speaker marks
+  // (five boxes + the LFE box) and the LFE is labelled.
+  const card51 = dlg.querySelector('.export-card[data-format="5.1"]');
+  check(card51.querySelectorAll("rect").length === 6, "5.1 diagram draws six channels",
+    String(card51.querySelectorAll("rect").length));
+  check(card51.textContent.includes("LFE"), "…with the LFE marked");
+  check(dlg.querySelector('.export-card[data-format="ambix3"]').textContent.includes("16 ch"),
+    "3rd-order card says 16 channels");
+  api.pick("5.1");
+  check(dlg.querySelector('.export-card[data-format="5.1"]').classList.contains("selected"),
+    "picking a card selects it");
+  check(!api.state().monitorShown, "…and a speaker target has no stereo-downmix choice");
+  api.cancel();
+  await sleep(60);
+  check(!doc.querySelector("dialog.export-audio"), "cancel closes it");
+
+  // ── 2. …and what a SPATIAL song is offered ───────────────────────────────
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(80);
+  dlg = await openExport();
+  api = dlg.__exportAudio;
+  check(api.state().format === "ambix3", "a spatial song defaults to B-format", api.state().format);
+  check(dlg.textContent.includes("native"), "the default target is labelled native");
+  api.pick("stereo");
+  check(api.state().monitorShown, "a surround song CAN choose its stereo downmix");
+  check(api.state().monitor === "binaural", "…and defaults to the binaural head");
+  api.cancel();
+  await sleep(60);
+
+  // ── 3. the binaural monitor toggle ───────────────────────────────────────
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(80);
+  const binBtn = doc.getElementById("tbBinaural");
+  check(!binBtn.hidden, "Binaural toggle appears for a surround song");
+  check(store.binaural === true, "monitoring defaults to the head model");
+  check(binBtn.classList.contains("active"), "…and the button shows it");
+  binBtn.click();
+  await sleep(40);
+  check(store.binaural === false && !binBtn.classList.contains("active"), "toggling turns it off");
+  check(store.audio ? store.audio.monitorMode === 0 : true, "the engine was told",
+    String(store.audio?.monitorMode));
+  binBtn.click();
+  await sleep(40);
+  check(store.binaural === true && (store.audio ? store.audio.monitorMode === 1 : true),
+    "…and back on");
+
+  // ── 4. the panner's "this channel only" (#998.8) ─────────────────────────
+  store.cursor = { row: 4, ch: 2, sub: 0, nib: 0 };
+  doc.getElementById("tbPanner").click();
+  let pan = null;
+  for (let i = 0; i < 100 && !pan; i++) { pan = doc.querySelector("dialog.panner"); await sleep(30); }
+  check(!!pan, "panner opens");
+  const box = pan.querySelector(".panner-opts input[type=checkbox]");
+  check(!!box && !box.checked, "the dot filter starts off (watch every channel)");
+  pan.__panner.onlyThis(true);
+  await sleep(40);
+  check(store.pannerOwnOnly === true, "the filter is remembered on the store");
+  pan.__panner.onlyThis(false);
+  await sleep(20);
+  check(store.pannerOwnOnly === false, "…and switches back");
+  pan.__panner.close();
+  await sleep(60);
+
+  // ── 4b. the instrument's default position (#998, base record) ────────────
+  doc.querySelector('[data-view="instruments"]').click();
+  await sleep(200);
+  const rowLabels = () => [...doc.querySelectorAll("#instrumentsHost .sl-label")].map((e) => e.textContent);
+  check(rowLabels().includes("Default azimuth"),
+    "a spatial song shows Default azimuth instead of Default pan");
+  check(rowLabels().includes("Default elevation"), "…and Default elevation");
+  check(!rowLabels().includes("Default pan"), "…and NOT the stereo pan row");
+  {
+    // Drive the azimuth spinner past 255: the ninth bit lives in another byte.
+    const idx = rowLabels().indexOf("Default azimuth");
+    const num = doc.querySelectorAll("#instrumentsHost .sl-num")[idx];
+    num.value = "384";
+    num.dispatchEvent(new win.Event("change", { bubbles: true }));
+    await sleep(60);
+    const inst = store.doc.instruments[M.instrumentsView?.selected ?? 1];
+    check(inst.defaultAzimuth === 384, "the spinner writes a 9-bit azimuth",
+      String(inst.defaultAzimuth));
+    check((inst.getByteNormal(14) & 0x20) !== 0 && inst.getByteNormal(177) === 0x80,
+      "…split across byte 14's bit 5 and byte 177",
+      `14=$${inst.getByteNormal(14).toString(16)} 177=$${inst.getByteNormal(177).toString(16)}`);
+    // …and it survives a save/load round-trip through the image.
+    const bytes = store.doc.toBytes();
+    const { parseTaud } = await import("../../src/format/taud-parse.js");
+    const { Document } = await import("../../src/doc/document.js");
+    const reloaded = new Document(parseTaud(bytes));
+    check(reloaded.instruments[M.instrumentsView?.selected ?? 1].defaultAzimuth === 384,
+      "…and round-trips through the file");
+    store.undo.undo();
+    await sleep(60);
+    check(store.doc.instruments[M.instrumentsView?.selected ?? 1].defaultAzimuth !== 384,
+      "…and undoes in one step");
+  }
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(80);
+
+  // ── 5. real renders, parsed back ─────────────────────────────────────────
+  const { renderMultichannelAsync } = await import("../../src/audio/surround-export.js");
+  const renderable = store.doc.toRenderable(store.songIndex);
+  const flat = (blocks) => {
+    const n = blocks.reduce((s, b) => s + b.length, 0);
+    const o = new Uint8Array(n);
+    let p = 0;
+    for (const b of blocks) { o.set(b, p); p += b.length; }
+    return o;
+  };
+
+  const r51 = await renderMultichannelAsync(renderable, store.songIndex, 1, {
+    format: "5.1", outRate: 48000, title: "smoke",
+  });
+  let bytes = flat(r51.blocks);
+  let chunks = riffChunks(bytes);
+  check(!!chunks, "5.1 export is a walkable RIFF file");
+  const dv = new DataView(bytes.buffer);
+  const fmtOff = chunks.get("fmt ").offset;
+  check(dv.getUint16(fmtOff, true) === 0xfffe, "…WAVE_FORMAT_EXTENSIBLE");
+  check(dv.getUint16(fmtOff + 2, true) === 6, "…six channels");
+  check(dv.getUint32(fmtOff + 20, true) === 0x3f, "…with the 5.1 channel mask");
+  check(chunks.has("chna") && chunks.has("axml"), "…and both ADM chunks");
+  check(chunks.get("data").size > 48000 * 18 * 0.9, "…about a second of audio",
+    String(chunks.get("data").size));
+
+  const rAmb = await renderMultichannelAsync(renderable, store.songIndex, 1, {
+    format: "ambix1", outRate: 48000, title: "smoke",
+  });
+  bytes = flat(rAmb.blocks);
+  chunks = riffChunks(bytes);
+  const xml = new TextDecoder().decode(
+    bytes.subarray(chunks.get("axml").offset, chunks.get("axml").offset + chunks.get("axml").size));
+  check(xml.includes('typeDefinition="HOA"') && xml.includes("<normalization>SN3D</normalization>"),
+    "AmbiX export declares HOA + SN3D in its ADM metadata");
+
+  // A downloadable Blob is what the Files view actually hands over.
+  const blob = new win.Blob(rAmb.blocks, { type: "audio/wav" });
+  check(blob.size === bytes.length, "the blob the browser downloads is the whole file",
+    `${blob.size} vs ${bytes.length}`);
+
+  // ── 5b. the head model actually runs in the WORKLET ──────────────────────
+  // Everything above proves the command reaches the audio system; this proves
+  // the audio thread survives it (an exception in monitorStereo is a dead
+  // output, and nothing else here would notice). Needs a resumed context, so
+  // run this page with --autoplay-policy=no-user-gesture-required.
+  if (store.audio?.context?.state === "running") {
+    store.audio.setCuePosition(0, 0);
+    store.audio.play(0);
+    await sleep(1500);
+    const rowA = store.audio.getTrackerRow ? store.audio.getTrackerRow(0) : store.audio.snapshot[1];
+    let voices = 0;
+    for (let ch = 0; ch < 32; ch++) if (store.audio.getVoiceActive(ch)) voices++;
+    check(rowA > 0, "spatial + binaural playback advances in the worklet", `row=${rowA}`);
+    check(voices > 0, "…with voices sounding", `${voices} voices`);
+    store.audio.stop(0);
+  } else {
+    log("SKIP worklet playback leg (no running audio context)");
+  }
+
+  // ── 6. undo leaves the project as it was ─────────────────────────────────
+  store.undo.undo();
+  await sleep(60);
+  check(store.song.surroundModel === 0, "the surround-model switch undoes");
+  check(doc.getElementById("tbBinaural").hidden, "…and the Binaural toggle hides with it");
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

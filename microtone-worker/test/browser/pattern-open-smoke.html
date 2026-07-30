@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>Patterns tab opens (narrow project) — regression guard</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// The smallest possible guard for the thing that broke: switching to the
+// Patterns tab must not throw. The pane class draws and hit-tests on its own,
+// so a helper added to the wrong class in that file is invisible until a human
+// clicks the tab — which is exactly how it escaped.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.message));
+
+  doc.querySelector('[data-view="pattern"]').click();
+  await sleep(300);
+  check(errs.length === 0, "Patterns tab opens without throwing", errs[0] ?? "");
+  check(doc.querySelectorAll("#patternHost canvas").length > 0, "…and paints a pane");
+  const pane = M.patternView.panes?.[0];
+  check(!!pane, "…which the view exposes");
+  check(pane?.cellChars() === 21, "…in the narrow cell layout", String(pane?.cellChars?.()));
+
+  // Every tab, in fact: a layout helper on the wrong class breaks exactly one.
+  for (const v of ["timeline", "cues", "samples", "instruments", "project", "files"]) {
+    doc.querySelector(`[data-view="${v}"]`).click();
+    await sleep(150);
+  }
+  check(errs.length === 0, "every other tab opens too", errs.join(" | "));
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

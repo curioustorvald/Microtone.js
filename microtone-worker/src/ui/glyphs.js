@@ -427,12 +427,15 @@ export function paintNoteCell(ctx, note, preset, x, y, charW, rowH, palette, raw
  * volume, panning and ditto-ghost variants differently).
  */
 export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palette) {
-  const op = volPanOp(value, sel);
+  const wide = palette.wide === true;
+  const digits = wide && isPan ? 3 : 2;
+  const op = volPanOp(value, sel, isPan, wide);
   const midY = y + rowH / 2;
-  if (op === "none") {
+  if (op === "none" && !(wide && isPan && palette.elevation)) {
     ctx.fillStyle = palette.dim;
     ctx.globalAlpha = 0.4;
-    ctx.fillText("···", x, midY);
+    // A wide panning column is symbol + elevation + azimuth: six dots, not three.
+    ctx.fillText(wide && isPan ? "······" : "···", x, midY);
     ctx.globalAlpha = 1;
     return;
   }
@@ -454,5 +457,24 @@ export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palet
     case "fineDown": ctx.fillText("−", x, midY); break;
     default: break; // "set" — a deliberate blank
   }
-  ctx.fillText(hex2(volPanArg(value, sel)), x + charW, midY);
+  // The wide panning column carries the ELEVATION between the symbol and the
+  // azimuth, in its own ink: the two numbers are different quantities and must
+  // not read as one six-digit field.
+  let argX = x + charW;
+  if (wide && isPan) {
+    const el = palette.elevation | 0;
+    ctx.fillStyle = el === 0 ? palette.dim : (palette.elevationInk ?? palette.ink);
+    if (el === 0) ctx.globalAlpha = 0.4;
+    ctx.fillText(el === 0 ? "··" : hex2(el & 0xff), argX, midY);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = palette.ink;
+    argX += 2 * charW;
+  }
+  const arg = volPanArg(value, sel, isPan, wide);
+  ctx.fillText(digits === 3 ? hex3(arg) : hex2(arg), argX, midY);
+}
+
+/** Three-digit hex, for the wide panning column's 9-bit azimuth. */
+function hex3(v) {
+  return (v & 0x1ff).toString(16).toUpperCase().padStart(3, "0");
 }

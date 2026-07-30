@@ -19,6 +19,8 @@ export class DocSync {
     this.audio.loadDocument(
       { // adapt Document → the parsed shape loadDocument expects
         is64Channel: this.doc.is64Channel,
+        // The cell layout has to reach the engine before the patterns do.
+        fmtVer: this.doc.fmtVer,
         sampleInstImage: this.doc.sampleInstImage,
         songs: this.doc.songs.map((s, i) => i === this.songIndex ? {
           bpm: s.bpm, tickRate: s.tickRate, globalFlags: s.globalFlags,
@@ -44,6 +46,12 @@ export class DocSync {
           break;
         case "cue":
           this.audio.uploadCue(tag.cue, this.doc.cueBytes(this.songIndex, tag.cue));
+          break;
+        case "format":
+          // The cell layout changed under the whole project (v2 → v3): the
+          // worklet must be told before it reads another pattern byte, so this
+          // is a full reload rather than a dirty set.
+          this.loadAll();
           break;
         case "resync":
           // A structural pattern remap (cleanup / renumber, item 60) rewrote

@@ -4,6 +4,7 @@
 
 import { TaudEngine } from "../engine/engine.js";
 import { TRACKER_CHUNK, SAMPLING_RATE, MAX_VOICES, NUM_VOICES } from "../engine/constants.js";
+import { MONITOR_BINAURAL } from "../engine/binaural.js";
 
 /** Load a parsed .taud (or Document-adapted) song into a fresh engine. */
 export function loadIntoEngine(eng, doc, songIndex = 0) {
@@ -11,6 +12,8 @@ export function loadIntoEngine(eng, doc, songIndex = 0) {
   if (!song) throw new Error("songIndex out of range");
 
   eng.set64ChannelMode(doc.is64Channel);
+  // Before any pattern upload: it decides how those bytes are read (§5.5).
+  eng.setCellFormat(doc.wideCells ?? (doc.fmtVer ?? 2) >= 3);
   if (doc.sampleInstImage) eng.uploadSampleInstBlob(doc.sampleInstImage);
 
   for (let p = 0; p < song.patterns.length; p++) eng.uploadPattern(p, song.patterns[p]);
@@ -174,12 +177,23 @@ function encodeWav(f32, outRate) {
   return new Uint8Array(buf);
 }
 
+/**
+ * Stereo downmix mode for the exports (#998.3). "fold" is the pan-law fold the
+ * device has always used; "binaural" runs the surround song through the head
+ * model, so an ordinary stereo file carries the height and front/back the
+ * composer heard. A stereo SONG has no object bus, so it ignores this.
+ */
+function applyMonitor(eng, monitor) {
+  if (monitor === "binaural") eng.setMonitorMode(0, MONITOR_BINAURAL);
+}
+
 /** Offline-render a Document's song to a 16-bit stereo WAV, resampled to
  *  `outRate` (default 48 kHz), taken from the pre-dither float mix bus (no
  *  dithering). Returns {bytes, seconds, halted}. */
-export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
+export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000, monitor = "fold") {
   const eng = new TaudEngine();
   loadIntoEngine(eng, docLike, songIndex);
+  applyMonitor(eng, monitor);
   const r = renderSong(eng, maxSeconds);
   return { bytes: encodeWav(r.f32, outRate), seconds: r.frames / SAMPLING_RATE, halted: r.halted };
 }
@@ -188,9 +202,11 @@ export function renderToWav(docLike, songIndex, maxSeconds, outRate = 48000) {
  *  paint (`onProgress(frac)`) and `signal` can cancel. Returns the same shape,
  *  plus `aborted`; `bytes` is null when aborted. */
 export async function renderToWavAsync(docLike, songIndex, maxSeconds,
-                                       { outRate = 48000, onProgress = null, signal = null } = {}) {
+                                       { outRate = 48000, onProgress = null, signal = null,
+                                         monitor = "fold" } = {}) {
   const eng = new TaudEngine();
   loadIntoEngine(eng, docLike, songIndex);
+  applyMonitor(eng, monitor);
   const r = await renderSongAsync(eng, maxSeconds, { onProgress, signal });
   if (r.aborted) return { bytes: null, seconds: r.frames / SAMPLING_RATE, halted: r.halted, aborted: true };
   return { bytes: encodeWav(r.f32, outRate), seconds: r.frames / SAMPLING_RATE, halted: r.halted, aborted: false };

@@ -3,10 +3,18 @@
 // (SEL_FINE-0 no-ops) — all-zero vol/pan bytes would be real "set volume 0"
 // commands, not blanks.
 
-import { PATTERN_SIZE } from "../format/taud-const.js";
+import { PATTERN_SIZE, PATTERN_SIZE_WIDE } from "../format/taud-const.js";
 
 /** A fully empty pattern image (the newProject/converter blank-cell shape). */
-export function emptyPatternBytes() {
+export function emptyPatternBytes(wide = false) {
+  // "Empty" is FINE-by-zero in both columns, whatever the cell's width — in the
+  // 8-byte cell that is 0xC0 in each column byte, in the wide cell it is 0x33
+  // in the shared selector byte (file format §5.5).
+  if (wide) {
+    const bytes = new Uint8Array(PATTERN_SIZE_WIDE);
+    for (let r = 0; r < 64; r++) bytes[r * 16 + 8] = 0x33;
+    return bytes;
+  }
   const bytes = new Uint8Array(PATTERN_SIZE);
   for (let r = 0; r < 64; r++) {
     bytes[r * 8 + 3] = 0xc0;

@@ -67,7 +67,18 @@ async function loadFile(file) {
   await ensureAudio();
   songIndex = 0;
   audio.loadDocument(doc, songIndex);
+  refreshBinaural();
 }
+
+/** #998.3: the head model is only meaningful for a surround song, so the
+ *  control appears with one. On by default, as in the editor — a fold cannot
+ *  render height, and this player is where someone LISTENS to a spatial song. */
+function refreshBinaural() {
+  const surround = (doc?.songs[songIndex]?.surroundModel ?? 0) !== 0;
+  $("binauralWrap").hidden = !surround;
+  audio.setMonitorMode(0, $("binaural").checked ? 1 : 0);
+}
+$("binaural").addEventListener("change", () => refreshBinaural());
 
 $("file").addEventListener("change", (e) => {
   if (e.target.files[0]) loadFile(e.target.files[0]);
@@ -85,6 +96,7 @@ $("song").addEventListener("change", async (e) => {
   songIndex = parseInt(e.target.value, 10);
   audio.stop(0);
   audio.loadDocument(doc, songIndex); // song switch re-uploads patterns/cues
+  refreshBinaural();                  // …and the next song may not be surround
 });
 
 $("play").addEventListener("click", async () => {

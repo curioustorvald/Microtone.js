@@ -250,13 +250,24 @@ Triggering a note **MUST**:
 - Seed the pitch and filter envelope playheads past any leading zero-duration nodes ([§7.3](#7-3-the-pitch-and-filter-walker)).
 - Reset the fadeout multiplier to 1, cancel any sample-end ramp, reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
 - Draw fresh volume- and pan-swing biases.
-- Apply default pan and pitch-pan separation, if the row carried an instrument byte.
+- Apply the instrument's default position and pitch-pan separation, if the row carried an instrument byte ([§5.3.1](#5-3-1-the-default-position)).
 - Reset the filter to the active defaults and clear its delay lines.
 - Seed the note volume: from the volume column's SET if present, otherwise from the instrument's default note volume if the row carried an instrument byte, otherwise leave it — a note-only retrigger inherits the channel's current note volume.
 - Clear the per-note overrides (`S $73`…`S $7E` NNA and envelope toggles).
 - Reset the vibrato, tremolo and panbrello LFO phases if their respective retrigger flags are set.
 
 Channel volume is **not** reset by a trigger. It belongs to the channel, not the note.
+
+#### 5.3.1 The default position
+
+The default pan is applied only when the pan envelope's LOOP word carries the `p` bit ("use default pan"). What it applies depends on the song's surround model:
+
+- **Stereo** — the instrument's pan byte (record 177), or the resolved patch's `default pan` when that is not the `0xFF` sentinel. Unchanged from the days before the spatial fields existed.
+- **Planar or spatial** — the instrument's default **position**: a 9-bit azimuth whose low byte is that same byte 177 and whose ninth bit is record byte 14's `A` flag, plus the signed elevation in record byte 254. A planar song forces the elevation to zero.
+
+A patch overrides the azimuth only, and only within the front arc: a patch record holds an 8-bit pan and no elevation and no ninth bit, so the instrument's height stands whichever pan wins. The pan ENVELOPE offsets the azimuth and leaves the elevation where it is.
+
+Because the ninth bit and the elevation live in bits that were previously unused and are read only in a surround song, a file written before they existed keeps its exact stereo behaviour, and its default pan lands on the front arc — which is what a pan byte has always meant.
 
 ### 5.4 Patch resolution
 
@@ -675,9 +686,19 @@ Identical directions do nothing. **Antipodal** directions, where the great circl
 
 ### 11.6 Ambisonic rendering
 
-The reference ambisonic renderer encodes to real spherical harmonics up to order 3, **SN3D normalised and ACN ordered** — the AmbiX convention. A `planar` variant keeps only the harmonics a horizontal-only song can excite (`|m| = l`), giving 7 channels at order 3 instead of 16; a writer emitting a full AmbiX file zero-fills the missing ACN channels.
+The reference ambisonic renderer encodes to real spherical harmonics up to order 3, **SN3D normalised and ACN ordered** — the AmbiX convention. A `planar` variant keeps only the **sectoral** harmonics (`|m| = l`), giving 7 channels at order 3 instead of 16.
+
+That variant is an internal scene basis, **not** a file layout: a written AmbiX file **MUST** carry the complete `(order + 1)²` set, encoded from the full basis. Zero-filling the channels the planar variant drops would be a different scene, because a horizontal song still excites the zonal harmonics — ACN 6 is `(3z² − 1) ÷ 2 = −½` at ear level, not zero.
 
 Its stereo monitor decode is the classic coincident cardioid pair at ±90°: `L = (W + Y) ÷ 2`, `R = (W − Y) ÷ 2`.
+
+### 11.7 Other render targets
+
+Everything below is a render *target* in the sense of §11: the same song, the same mixer, a different renderer. None of it changes what a file means, so an implementation **MAY** offer any subset — but where it offers one of these, these are the rules.
+
+**Speaker layouts.** Sources pan pairwise around the horizontal ring — constant power between the two speakers that bracket the azimuth, exact at every speaker — at the BS.775 / BS.2051 angles (±30° front pair, centre ahead, ±110° surrounds; 7.1 splits those into ±90° sides and ±135° rears). Elevation, which no such layout can reproduce, blends the source toward an even spread over the ring as it climbs, reaching fully diffuse at the poles: level-preserving and continuous, the n-speaker generalisation of the stereo fold's collapse toward the centre. The LFE channel receives **nothing**; there is no bass-management stage defined here.
+
+**Binaural monitoring.** An implementation **MAY** monitor a surround song through a head model so that elevation and front/back are audible on headphones — without it, composing a height is composing something the composer cannot hear. It is a *monitor*, not a rendering rule: the stereo output an implementation writes or plays by default is still the fold of §11.3, and nothing about a file depends on the head model chosen. The reference implementation pans the objects onto a fixed ring (planar) or sphere (spatial) of virtual speakers and applies a per-speaker head model to those feeds — a Woodworth interaural delay applied below ~1.1 kHz, a Brown & Duda head-shadow shelf, and a direction-dependent pinna notch and shelf — each speaker's feed scaled so that both ears together carry the same power the pan law would have given.
 
 ## 12. Output stage
 

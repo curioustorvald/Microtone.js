@@ -19,6 +19,7 @@ import {
 import { EffectOp } from "../../engine/tables.js";
 import { themeColors } from "../theme.js";
 import { paintSpatialDot } from "../spatialdot.js";
+import { azimuthLabel, elevationLabel } from "../units.js";
 import { t } from "../i18n.js";
 
 const DIAL = 210;        // dial canvas size (CSS px)
@@ -60,19 +61,8 @@ export function elevationOffset(el, out) {
   return out;
 }
 
-/** Human label for an azimuth: "90.0° front". */
-export function azimuthLabel(az) {
-  const deg = (wrapAzimuth(az) * 360) / AZIMUTH_TURN;
-  const names = ["dir.left", "dir.frontLeft", "dir.front", "dir.frontRight", "dir.right",
-    "dir.backRight", "dir.back", "dir.backLeft", "dir.left"];
-  return `${deg.toFixed(1)}° ${t(names[Math.round(deg / 45)])}`;
-}
-
-/** Human label for an elevation: "+45.0°". */
-export function elevationLabel(el) {
-  const deg = (el * 90) / ELEVATION_QUARTER;
-  return `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}°`;
-}
+// (azimuthLabel / elevationLabel live in ../units.js — the Instruments view's
+// default-position fields name the same directions.)
 
 // ── the popup ────────────────────────────────────────────────────────────
 
@@ -97,6 +87,13 @@ export function showPanner(store, target) {
       anglesFromSpatialArg(cell.effectArg, scratch);
       az = scratch[0];
       el = spatial ? scratch[1] : 0;
+    } else if (cell && store.doc?.wideCells && cell.panEff === 0 &&
+               (cell.azimuth !== 0 || cell.elevation !== 0)) {
+      // A wide cell can carry the position in its panning COLUMN — pick the
+      // handle up from there too, so reopening the dialog shows where the
+      // source already is however it was written.
+      az = cell.azimuth;
+      el = spatial ? cell.elevation : 0;
     } else if (cell && cell.effect === EffectOp.OP_Z && (cell.effectArg & 0xfff) !== 0) {
       zSpeed = cell.effectArg & 0xfff;
     }
@@ -164,6 +161,21 @@ export function showPanner(store, target) {
       cmds.appendChild(b);
       return b;
     };
+
+    // Format v3 (§5.5) gives the panning COLUMN the same reach as effect X — a
+    // 9-bit azimuth and a signed elevation — so a wide project can place the
+    // source without spending its effect slot at all. The button only exists
+    // where the column can hold a position.
+    const columnBtn = store.doc?.wideCells
+      ? mkBtn("panner.column", "panner.columnTitle", () => {
+        if (!target) return;
+        target.apply({
+          azimuth: Math.round(wrapAzimuth(az)) & 0x1ff,
+          elevation: spatial ? Math.max(-128, Math.min(127, Math.round(el))) : 0,
+          panEff: 0, // SET
+        });
+      })
+      : null;
     const placeBtn = mkBtn("panner.place", "panner.placeTitle",
       () => write(EffectOp.OP_X, spatialArgFromAngles(az, spatial ? el : 0)));
     const targetBtn = mkBtn("panner.target", "panner.targetTitle",
@@ -186,13 +198,32 @@ export function showPanner(store, target) {
     const slideBtn = mkBtn("panner.slide", "panner.slideTitle",
       () => write(EffectOp.OP_Z, zSpeed & 0xfff));
 
+    // ── view options (#998.8) ──
+    // A busy song puts a dot on every sounding channel, which is the point when
+    // you are watching and in the way when you are placing one source. The
+    // choice is remembered for the session, like the other view toggles.
+    const viewOpts = document.createElement("div");
+    viewOpts.className = "panner-opts";
+    const onlyLab = document.createElement("label");
+    const onlyBox = document.createElement("input");
+    onlyBox.type = "checkbox";
+    onlyBox.checked = store.pannerOwnOnly === true;
+    onlyBox.disabled = target === null; // nothing to single out in watch-only mode
+    onlyBox.addEventListener("change", () => {
+      store.pannerOwnOnly = onlyBox.checked;
+      refresh(false);
+    });
+    onlyLab.append(onlyBox, t("panner.onlyThis"));
+    onlyLab.title = t("panner.onlyThisTitle");
+    viewOpts.appendChild(onlyLab);
+
     const btnRow = document.createElement("div");
     btnRow.className = "modal-buttons";
     const closeBtn = document.createElement("button");
     closeBtn.textContent = t("common.close");
     btnRow.appendChild(closeBtn);
 
-    dlg.append(h, info, dials, fields, cmds, btnRow);
+    dlg.append(h, info, dials, fields, cmds, viewOpts, btnRow);
     document.body.appendChild(dlg);
 
     function write(effect, effectArg) {
@@ -328,7 +359,9 @@ export function showPanner(store, target) {
       ctx.font = "bold 10px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      const ownOnly = store.pannerOwnOnly === true && target !== null;
       for (let ch = 0; ch < Math.min(chans, MAX_VOICES); ch++) {
+        if (ownOnly && ch !== target.channel) continue;
         if (!audio.getVoiceActive(ch)) continue;
         const vol = audio.getVoiceEffectiveVolume(ch);
         if (vol <= 0.002) continue;
@@ -397,6 +430,11 @@ export function showPanner(store, target) {
       placeBtn.textContent = `${t("panner.place")}  X $${hex(arg, 4)}`;
       targetBtn.textContent = `${t("panner.target")}  4 $${hex(arg, 4)}`;
       slideBtn.textContent = `${t("panner.slide")}  Z $${hex(zSpeed & 0xfff, 4)}`;
+      if (columnBtn) {
+        const azi = Math.round(wrapAzimuth(az)) & 0x1ff;
+        const elv = (spatial ? Math.max(-128, Math.min(127, Math.round(el))) : 0) & 0xff;
+        columnBtn.textContent = `${t("panner.column")}  ${hex(elv, 2)} ${hex(azi, 3)}`;
+      }
       info.textContent = target
         ? t("panner.writesTo", { ch: target.channel + 1, row: target.rowLabel })
         : t("panner.watchOnly");
@@ -424,6 +462,7 @@ export function showPanner(store, target) {
     raf = requestAnimationFrame(tick);
     dlg.__panner = { // test hook: the smoke drives these instead of real drags
       setAngles: (a, e) => { az = wrapAzimuth(a); el = e; refresh(false); },
+      onlyThis: (on) => { onlyBox.checked = on; onlyBox.dispatchEvent(new Event("change")); },
       place: () => placeBtn.click(),
       target: () => targetBtn.click(),
       slide: () => slideBtn.click(),

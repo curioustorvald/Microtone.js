@@ -9,7 +9,7 @@ import {
   TAUD_VERSION, TAUD_XHDR_FLAG,
   TAUD_KIND_SAMPLEINST, TAUD_KIND_PATTERN,
   TAUD_HEADER_SIZE, TAUD_SONG_ENTRY,
-  PATTERN_SIZE, NUM_VOICES, MAX_VOICES, CUE_SIZE, CUE_SIZE_64,
+  PATTERN_SIZE, patternSizeFor, TAUD_VERSION_WIDE, NUM_VOICES, MAX_VOICES, CUE_SIZE, CUE_SIZE_64,
   CAPTURE_SIGNATURE,
 } from "./taud-const.js";
 import { comp } from "./compress.js";
@@ -31,7 +31,11 @@ export function writeTaud(doc) {
     doc.kind === "tsii" ? TAUD_KIND_SAMPLEINST :
     doc.kind === "tpif" ? TAUD_KIND_PATTERN : 0;
   const hasXhdr = doc.projSections.some((s) => s.fourcc === "xHDR");
-  const version = TAUD_VERSION | (hasXhdr ? TAUD_XHDR_FLAG : 0) | kindBits;
+  // A document that was READ as version 3 is written back as version 3: the
+  // wide cell is not something a writer may quietly drop (§5.5, no downgrade).
+  const fmtVer = doc.fmtVer >= TAUD_VERSION_WIDE ? TAUD_VERSION_WIDE : TAUD_VERSION;
+  const patSize = patternSizeFor(fmtVer);
+  const version = fmtVer | (hasXhdr ? TAUD_XHDR_FLAG : 0) | kindBits;
 
   // ── compress the big sections up front (offsets depend on their sizes) ──
   const imageComp =
@@ -42,8 +46,8 @@ export function writeTaud(doc) {
   const stride = doc.is64Channel ? CUE_SIZE_64 : CUE_SIZE;
   const chans = doc.is64Channel ? MAX_VOICES : NUM_VOICES;
   const songBins = songs.map((song) => {
-    const patBin = new Uint8Array(song.patterns.length * PATTERN_SIZE);
-    song.patterns.forEach((p, i) => patBin.set(p, i * PATTERN_SIZE));
+    const patBin = new Uint8Array(song.patterns.length * patSize);
+    song.patterns.forEach((p, i) => patBin.set(p, i * patSize));
     const fullBin = new Uint8Array(song.cues.length * stride);
     song.cues.forEach((words, c) => {
       for (let ch = 0; ch < chans; ch++) {

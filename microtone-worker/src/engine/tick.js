@@ -146,14 +146,14 @@ export function applyTrackerTick(eng, ts, playhead) {
 
     // Volume slides (D coarse on tick > 0).
     if (ts.tickInRow > 0 && voice.slideMode === 5) {
-      voice.noteVolume = clamp(voice.noteVolume + voice.slideArg, 0, 0x3f);
+      voice.noteVolume = clamp(voice.noteVolume + voice.slideArg * ts.volStep, 0, ts.volMax);
       voice.rowVolume = voice.noteVolume;
     }
 
     // Vol-col slides (selectors 1/2) + N coarse slide + pan-col slides.
     if (ts.tickInRow > 0) {
       if (voice.volColSlideUp !== 0) {
-        voice.noteVolume = Math.min(voice.noteVolume + voice.volColSlideUp, 0x3f);
+        voice.noteVolume = Math.min(voice.noteVolume + voice.volColSlideUp, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
       if (voice.volColSlideDown !== 0) {
@@ -161,7 +161,7 @@ export function applyTrackerTick(eng, ts, playhead) {
         voice.rowVolume = voice.noteVolume;
       }
       if (voice.nSlideDir !== 0) {
-        voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir, 0, 0x3f);
+        voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir * ts.volStep, 0, ts.volMax);
       }
       if (voice.panColSlideRight !== 0) {
         applyPanSlide(ts, voice, voice.panColSlideRight);
@@ -212,7 +212,7 @@ export function applyTrackerTick(eng, ts, playhead) {
     if (voice.tremoloActive) {
       const sine = lfoSample(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
-      voice.rowVolume = clamp(voice.noteVolume + volDelta, 0, 0x3f);
+      voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
       voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed * 4) & 0xff;
     }
 
@@ -262,7 +262,7 @@ export function applyTrackerTick(eng, ts, playhead) {
         voice.autoVibTicksSinceTrigger = 0;
         voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
         voice.right.reset();
-        voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod);
+        voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod, ts.volStep, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
     }

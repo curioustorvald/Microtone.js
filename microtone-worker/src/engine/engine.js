@@ -13,6 +13,7 @@
 import {
   SAMPLE_BIN_TOTAL, NUM_PATTERNS, NUM_CUES, NUM_VOICES, MAX_VOICES,
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
+  CELL_BYTES, CELL_BYTES_WIDE, PATTERN_BYTES, PATTERN_BYTES_WIDE,
 } from "./constants.js";
 import { tuningRatioOf } from "./tables.js";
 import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch } from "./inst.js";
@@ -50,6 +51,8 @@ export class TaudEngine {
     this.cueSheet = new Array(NUM_CUES);
     for (let i = 0; i < NUM_CUES; i++) this.cueSheet[i] = new PlayCue();
     this.is64ChannelMode = false;
+    // Format version 3's 16-byte pattern cell — a whole-file property.
+    this.wideCells = false;
     this.playheads = [
       new Playhead(this, 0), new Playhead(this, 1),
       new Playhead(this, 2), new Playhead(this, 3),
@@ -158,9 +161,27 @@ export class TaudEngine {
   /** Upload 512 bytes (64 rows × 8) defining pattern slot. */
   uploadPattern(slot, bytes) {
     const pat = this.patternFor(slot & 0x7fff);
-    const n = Math.min(512, bytes.length);
-    for (let i = 0; i < n; i++) pat[(i / 8) | 0].setByte(i % 8, bytes[i] & 0xff);
+    if (this.wideCells) {
+      const n = Math.min(PATTERN_BYTES_WIDE, bytes.length);
+      for (let i = 0; i < n; i++) {
+        pat[(i / CELL_BYTES_WIDE) | 0].setByteWide(i % CELL_BYTES_WIDE, bytes[i] & 0xff);
+      }
+      return;
+    }
+    const n = Math.min(PATTERN_BYTES, bytes.length);
+    for (let i = 0; i < n; i++) pat[(i / CELL_BYTES) | 0].setByte(i % CELL_BYTES, bytes[i] & 0xff);
   }
+
+  /**
+   * Select the file format's cell layout (version 3 = the wide cell). A
+   * whole-file property: patterns uploaded afterwards are read in this layout,
+   * and the volume columns' width follows it. Set it BEFORE uploading anything.
+   */
+  setCellFormat(wide) {
+    this.wideCells = !!wide;
+    for (const p of this.playheads) p.trackerState?.setCellFormat(this.wideCells);
+  }
+  getCellFormat() { return this.wideCells; }
 
   /** Upload one cue entry (64 bytes / 128 bytes in 64-channel mode). */
   uploadCue(idx, bytes) {
@@ -262,20 +283,34 @@ export class TaudEngine {
   setSurroundModel(ph, model) {
     const p = this.playheads[ph];
     p.surroundModel = model & 3;
-    p.trackerState.setSurroundModel(p.surroundModel, p.spatialRenderer);
+    p.applySurroundModel();
   }
   getSurroundModel(ph) { return this.playheads[ph].surroundModel; }
 
   /**
    * Swap the render target the object bus feeds (#998.0). Null = the device's
-   * stereo monitor; an exporter installs e.g. an AmbisonicRenderer and reads
-   * `trackerState.spatial.data` after each chunk. No-op for a stereo song.
+   * own monitor (see setMonitorMode); an exporter installs e.g. an
+   * AmbisonicRenderer and reads `trackerState.spatial.data` after each chunk.
+   * No-op for a stereo song.
    */
   setSpatialRenderer(ph, renderer) {
     const p = this.playheads[ph];
     p.spatialRenderer = renderer;
-    p.trackerState.setSurroundModel(p.surroundModel, renderer);
+    p.applySurroundModel();
   }
+
+  /**
+   * How the device monitors a surround song (#998.3): MONITOR_FOLD folds it
+   * onto the stereo pan law, MONITOR_BINAURAL renders it through a head model
+   * so elevation and front/back are audible on headphones. Ignored while an
+   * exporter's renderer is installed, and irrelevant to a stereo song.
+   */
+  setMonitorMode(ph, mode) {
+    const p = this.playheads[ph];
+    p.monitorMode = mode & 1;
+    p.applySurroundModel();
+  }
+  getMonitorMode(ph) { return this.playheads[ph].monitorMode; }
 
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }

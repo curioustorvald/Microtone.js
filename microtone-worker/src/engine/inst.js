@@ -278,7 +278,8 @@ export class TaudInst {
     this.samplePlayStart = 0;
     this.sampleLoopStart = 0;
     this.sampleLoopEnd = 0;
-    this.loopMode = 0;            // byte 14: bits 0-1 mode, bit 2 sustain, bit 4 percussion
+    this.loopMode = 0;            // byte 14: bits 0-1 mode, bit 2 sustain, bit 4 percussion,
+                                  //          bit 5 spatial azimuth MSB (#998)
     this.volEnvLoop = 0;          // bytes 15-16 (LOOP word)
     this.panEnvLoop = 0;          // bytes 17-18
     this.pfEnvLoop = 0;           // bytes 19-20
@@ -337,6 +338,21 @@ export class TaudInst {
     return this.metaRaw !== null
       ? (this.metaRaw[0] & 0x02) !== 0
       : (this.loopMode & 0x10) !== 0;
+  }
+  /**
+   * The instrument's default position as a 9-bit azimuth (#998): record byte
+   * 177 is its LOW byte and byte 14's bit 5 (`A`) the ninth — exactly the
+   * relationship `S $8xxx` has with the legacy pan byte, which is what makes
+   * this backwards compatible. An old file has bit 5 clear, so its pan lands on
+   * the front arc it always meant, and a stereo song reads byte 177 alone.
+   */
+  get defaultAzimuth() {
+    return ((this.loopMode & 0x20) !== 0 ? 256 : 0) | (this.defaultPan & 0xff);
+  }
+  /** Default elevation (#998), record byte 254, signed. Spatial songs only. */
+  get defaultElevation() {
+    const b = this.reserved[3] & 0xff; // byte 254 → reserved[254 − 251]
+    return b >= 0x80 ? b - 256 : b;
   }
   get nnaKeyLift() { return ((this.instrumentFlag >>> 5) & 1) !== 0; }
   /** 0=note off, 1=note cut, 2=continue, 3=note fade. */
@@ -490,7 +506,7 @@ export class TaudInst {
       case 11: return (this.sampleLoopStart >>> 8) & 0xff;
       case 12: return this.sampleLoopEnd & 0xff;
       case 13: return (this.sampleLoopEnd >>> 8) & 0xff;
-      case 14: return this.loopMode & 0x17;
+      case 14: return this.loopMode & 0x37;
       case 15: return this.volEnvLoop & 0xff;
       case 16: return (this.volEnvLoop >>> 8) & 0xff;
       case 17: return this.panEnvLoop & 0xff;
@@ -553,7 +569,7 @@ export class TaudInst {
       case 11: this.sampleLoopStart = (this.sampleLoopStart & 0x00ff) | (byte << 8); break;
       case 12: this.sampleLoopEnd = (this.sampleLoopEnd & 0xff00) | byte; break;
       case 13: this.sampleLoopEnd = (this.sampleLoopEnd & 0x00ff) | (byte << 8); break;
-      case 14: this.loopMode = byte & 0x17; break;
+      case 14: this.loopMode = byte & 0x37; break;
       case 15: this.volEnvLoop = (this.volEnvLoop & 0xff00) | byte; break;
       case 16: this.volEnvLoop = (this.volEnvLoop & 0x00ff) | (byte << 8); break;
       case 17: this.panEnvLoop = (this.panEnvLoop & 0xff00) | byte; break;

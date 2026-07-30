@@ -6,7 +6,7 @@ import { EffectOp, clamp } from "./tables.js";
 import { TaudPlayData, INST_GOBACK, INST_SKIP, INST_JUMP } from "./state.js";
 import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA,
-  cutLayerChildren, applyVolColumn, applyPanColumn,
+  cutLayerChildren, applyVolColumn, applyPanColumn, applyPanColumnWide,
 } from "./trigger.js";
 import { applyKeyLift } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
@@ -65,9 +65,12 @@ export function applyTrackerRow(eng, ts, playhead) {
       const srcRow = voice.dittoSourceStart + rel;
       const src = eng.patternRead(patIdx)[srcRow];
 
-      // Vol-/pan-column "no-op" sentinel is SEL_FINE (3) with value 0.
+      // Vol-/pan-column "no-op" sentinel is SEL_FINE (3) with value 0 — in a
+      // wide cell the pan column's "value" is the azimuth AND the elevation.
       const volIsSet = !(rawRow.volumeEff === 3 && rawRow.volume === 0);
-      const panIsSet = !(rawRow.panEff === 3 && rawRow.pan === 0);
+      const panIsSet = ts.wideCells
+        ? !(rawRow.panEff === 3 && rawRow.azimuth === 0 && rawRow.elevation === 0)
+        : !(rawRow.panEff === 3 && rawRow.pan === 0);
 
       const destOp = isArmer ? 0 : rawRow.effect;
       const destArg = isArmer ? 0 : rawRow.effectArg;
@@ -83,8 +86,15 @@ export function applyTrackerRow(eng, ts, playhead) {
       row.volumeEff = volIsSet ? rawRow.volumeEff : src.volumeEff;
       row.pan = panIsSet ? rawRow.pan : src.pan;
       row.panEff = panIsSet ? rawRow.panEff : src.panEff;
+      row.azimuth = panIsSet ? rawRow.azimuth : src.azimuth;
+      row.elevation = panIsSet ? rawRow.elevation : src.elevation;
       row.effect = effOp;
       row.effectArg = effArg;
+      // The second effect follows the first: a ditto that inherits one command
+      // inherits the pair the source row actually carried.
+      const dittoUsedSrc = destOp === 0 && effOp !== 0;
+      row.effect2 = dittoUsedSrc ? src.effect2 : rawRow.effect2;
+      row.effectArg2 = dittoUsedSrc ? src.effectArg2 : rawRow.effectArg2;
     } else {
       row = rawRow;
     }
@@ -139,7 +149,7 @@ export function applyTrackerRow(eng, ts, playhead) {
         const newInst = eng.instruments[voice.instrumentId];
         const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
         // applyActiveSample without retrigger (Schism csf_instrument_change).
-        applyInstrumentChange(eng, voice, newInst, newPatch);
+        applyInstrumentChange(eng, ts, voice, newInst, newPatch);
       }
     } else if (note === 0x0001) {
       // Key-off (sub-row delay via S$Dx defers it).
@@ -193,7 +203,7 @@ export function applyTrackerRow(eng, ts, playhead) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
-          applyInstrumentChange(eng, voice, newInst, newPatch);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -213,19 +223,25 @@ export function applyTrackerRow(eng, ts, playhead) {
     }
 
     // ── Volume / pan columns ──
-    applyVolColumn(voice, row.volume, row.volumeEff);
-    applyPanColumn(ts, voice, row.pan, row.panEff);
+    applyVolColumn(ts, voice, row.volume, row.volumeEff);
+    if (ts.wideCells) applyPanColumnWide(ts, voice, row);
+    else applyPanColumn(ts, voice, row.pan, row.panEff);
 
-    // ── Effect column ──
+    // ── Effect columns ──
+    // A wide cell carries two, applied in order, so the second lands last where
+    // both write the same channel state.
     applyEffectRow(eng, ts, playhead, voice, vi, row.effect, row.effectArg);
+    if (ts.wideCells && row.effect2 !== 0) {
+      applyEffectRow(eng, ts, playhead, voice, vi, row.effect2, row.effectArg2);
+    }
   }
 }
 
 // Shared "instrument byte without retrigger" path (no-note-inst and porta+inst rows).
 import { applyActiveSample, rowVolumeFromDefault } from "./trigger.js";
-function applyInstrumentChange(eng, voice, newInst, newPatch) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
   applyActiveSample(voice, newInst, newPatch);
-  const seedVol = rowVolumeFromDefault(newInst, newPatch);
+  const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
   voice.rowVolume = seedVol;
   voice.keyOff = false;

@@ -21,6 +21,7 @@ import { InstLookup } from "./instlookup.js";
 import { SUB_NOTE } from "./edit.js";
 import { CommandPalette } from "./palette.js";
 import { setCellOp } from "../doc/ops.js";
+import { emptyPatternBytes } from "../doc/patterntools.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showAbout } from "./popups/about.js";
@@ -75,6 +76,7 @@ async function ensureAudio({ resume = true } = {}) {
         document.body.appendChild(profileOverlay.el);
         audio.onProfile = (p) => profileOverlay.update(p);
       }
+      audio.setMonitorMode(0, store.binaural ? 1 : 0); // #998.3, survives reloads
       store.audio = audio;
     })();
   }
@@ -299,10 +301,14 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   const is64 = result.channels === 64;
   const chans = is64 ? 64 : 32;
   const projName = result.name || "untitled";
+  // A surround project is born in format version 3 — the wide cell (§5.5) is
+  // what makes its panning column able to say where a source is at all.
+  const surroundModel = result.surroundModel ?? 0;
+  const wide = surroundModel !== 0;
 
-  // Empty pattern: vol/pan bytes 0xC0 (SEL_FINE-0 no-op — converter convention).
-  const emptyPat = new Uint8Array(512);
-  for (let r = 0; r < 64; r++) { emptyPat[r * 8 + 3] = 0xc0; emptyPat[r * 8 + 4] = 0xc0; }
+  // Empty pattern: FINE-by-zero in both columns (the converter convention),
+  // which in the wide cell is one selector byte instead of two.
+  const emptyPat = emptyPatternBytes(wide);
   // Cue 0: one private pattern per channel (pattern n on channel n).
   const cue0 = new Uint16Array(64).fill(0x7fff);
   const patterns = [];
@@ -329,7 +335,7 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
 
   const parsedShape = {
     kind: "taud",
-    fmtVer: 2,
+    fmtVer: wide ? 3 : 2,
     is64Channel: is64,
     signature: "Microtone.js  ",
     sampleInstImage: fromBank ? fromBank.sampleInstImage : new Uint8Array(8650752),
@@ -343,6 +349,7 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
       globalFlags: 0,
       globalVolume: 0x80,
       mixingVolume: 0x80,
+      surroundModel,
       numCuesStored: 1,
       patterns,
       cues: [cue0],
@@ -537,6 +544,24 @@ const samplesView = new SamplesView(store, $("samplesHost"), {
 const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
 const projectView = new ProjectView(store, $("projectHost"), {
   renameSong: (i) => renameSongInteractive(i),
+  /**
+   * Save the upgraded project under a NEW name and continue working on that
+   * one (format v3, §5.5). The original file is left alone deliberately: the
+   * upgrade has no defined way back, so the version-2 copy stays readable by
+   * anything that reads version 2 — including the TSVM device.
+   */
+  saveCopyAs: async (name) => {
+    if (!(await opfs.available())) return; // nothing persists here; keep the edit in memory
+    let target = name;
+    for (let n = 2; (await opfs.list()).some((f) => f.name === target); n++) {
+      target = name.replace(/\.taud$/, `-${n}.taud`);
+    }
+    await opfs.write(target, store.doc.toBytes());
+    store.doc.dirty = false;
+    store.fileName = target;
+    store.emit("saved", target);
+    updateStatus();
+  },
 });
 const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
 const filesView = new FilesView(store, $("filesHost"), {
@@ -553,6 +578,9 @@ function refreshToolbox() {
   $("tbPanner").hidden = !surround;
   $("tbRadar").hidden = !surround;
   $("tbRadar").textContent = t(store.surroundMeters ? "toolbox.radarOn" : "toolbox.radarOff");
+  $("tbBinaural").hidden = !surround;
+  $("tbBinaural").textContent = t(store.binaural ? "toolbox.binauralOn" : "toolbox.binauralOff");
+  $("tbBinaural").classList.toggle("active", store.binaural);
 }
 
 function showView(name) {
@@ -716,6 +744,16 @@ $("tbRadar").addEventListener("click", () => {
   timeline.resize(); // the header got taller/shorter — row layout follows
   timeline.invalidate();
 });
+// Binaural monitoring (#998.3): the stereo fold cannot render height, and it
+// mirrors the rear arc onto the front, so a surround song is monitored through
+// a head model by DEFAULT — otherwise you would be authoring positions you
+// cannot hear. Turning it off is how you check the downmix everyone else gets.
+// (The default lives in the Store — audio bring-up reads it before this runs.)
+$("tbBinaural").addEventListener("click", () => {
+  store.binaural = !store.binaural;
+  store.audio?.setMonitorMode(0, store.binaural ? 1 : 0);
+  refreshToolbox();
+});
 // Spatial panner (#998.6) — only meaningful once the song declares a surround
 // model, so the button appears with it.
 $("tbPanner").addEventListener("click", async () => {
@@ -790,6 +828,7 @@ function cursorCellTarget() {
       sub: store.cursor.sub,
       channel: store.cursor.ch,
       rowLabel: String(store.cursor.row),
+      wide: store.doc.wideCells === true, // format v3's columns (§5.5)
       cell: target.cell,
       apply: (fields) => store.undo.apply(
         setCellOp(store.songIndex, target.pat, target.rowInCue, fields)),
@@ -803,6 +842,7 @@ function cursorCellTarget() {
       sub: patternView.cursor.sub,
       channel: patternView.cursor.ch ?? 0,
       rowLabel: String(row),
+      wide: store.doc.wideCells === true,
       cell: pattern[row],
       apply: (fields) => store.undo.apply(
         setCellOp(store.songIndex, patternView.patIdx, row, fields)),

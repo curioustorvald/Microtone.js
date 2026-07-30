@@ -20,6 +20,7 @@ const FILES = [
   "src/engine/rng.js",
   "src/engine/tables.js",
   "src/engine/spatial.js",
+  "src/engine/binaural.js",
   "src/engine/inst.js",
   "src/engine/voice.js",
   "src/engine/state.js",

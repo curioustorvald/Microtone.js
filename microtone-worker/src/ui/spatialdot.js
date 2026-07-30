@@ -5,7 +5,7 @@
 // A dial seen from above cannot show height on its own: the radius already
 // carries elevation (straight overhead collapses to the centre), which leaves
 // "up" and "down" indistinguishable. So the dot behaves like a real object
-// above a floor, lit from the front and high up — azimuth 90°, elevation 80°:
+// above a floor, lit from the front and high up (see the constants below):
 //
 //   * it GROWS as it rises and shrinks as it sinks;
 //   * its SHADOW slides away from the light (straight down the screen, since

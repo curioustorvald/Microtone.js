@@ -19,11 +19,23 @@ export const SUB_FX_ARG = 5;
 export const NUM_SUBS = 6;
 // vol/pan: [symbol][argument hi][argument lo]
 export const SUB_NIBBLES = [1, 2, 3, 3, 1, 4];
+// Format version 3's WIDE cell (file format §5.5) spends the extra room on the
+// panning column: [symbol][elevation hi][elevation lo][azimuth ×3]. The volume
+// column keeps its three positions — its value simply became a whole byte.
+export const SUB_NIBBLES_WIDE = [1, 2, 3, 6, 1, 4];
+
+/** Sub-column widths for the cell format in play. */
+export function subNibbles(wide) { return wide ? SUB_NIBBLES_WIDE : SUB_NIBBLES; }
 
 // ── shared cell layout (Timeline + Pattern views) ──
 // "♯C-4 01 v3F p20 A0F00": note glyphs 0-3, inst 5-6, vol 8-10, pan 12-14,
-// fx 16-20 → 21 chars per cell.
+// fx 16-20 → 21 chars per cell. The wide cell inserts three more characters in
+// the panning column: "♯C-4 01 vFF p40 180 A0F00" → 24.
 export const CELL_CHARS = 21;
+export const CELL_CHARS_WIDE = 24;
+
+/** Characters per cell for the format in play. */
+export function cellChars(wide) { return wide ? CELL_CHARS_WIDE : CELL_CHARS; }
 
 /**
  * Lookahead-scroll (item 42): given a cursor position, the current scroll
@@ -44,10 +56,18 @@ export function lookahead(pos, scroll, vis, maxScroll) {
 }
 
 /** Cursor sub-position walk order within one channel: [sub, nib] pairs. */
-export const SUB_POSITIONS = [];
-for (let sub = 0; sub < SUB_NIBBLES.length; sub++) {
-  for (let nib = 0; nib < SUB_NIBBLES[sub]; nib++) SUB_POSITIONS.push([sub, nib]);
+function buildPositions(nibbles) {
+  const out = [];
+  for (let sub = 0; sub < nibbles.length; sub++) {
+    for (let nib = 0; nib < nibbles[sub]; nib++) out.push([sub, nib]);
+  }
+  return out;
 }
+export const SUB_POSITIONS = buildPositions(SUB_NIBBLES);
+export const SUB_POSITIONS_WIDE = buildPositions(SUB_NIBBLES_WIDE);
+
+/** Walk order for the format in play. */
+export function subPositions(wide) { return wide ? SUB_POSITIONS_WIDE : SUB_POSITIONS; }
 
 /**
  * Is the given sub-column of `cell` empty — i.e. rendered as dots? Wheel-edit
@@ -63,7 +83,11 @@ export function subIsEmpty(sub, cell) {
     case SUB_NOTE: return cell.note < 0x20;
     case SUB_INST: return cell.instrment === 0;
     case SUB_VOL: return cell.volumeEff === 3 && cell.volume === 0;
-    case SUB_PAN: return cell.panEff === 3 && cell.pan === 0;
+    case SUB_PAN:
+      // A wide cell's panning column is the azimuth AND the elevation; either
+      // one carrying something makes the column non-empty (§5.5).
+      return cell.panEff === 3 && cell.pan === 0 &&
+             (cell.azimuth ?? 0) === 0 && (cell.elevation ?? 0) === 0;
     case SUB_FX_OP:
     case SUB_FX_ARG: return cell.effect === 0 && cell.effectArg === 0;
     default: return true;
@@ -71,14 +95,14 @@ export function subIsEmpty(sub, cell) {
 }
 
 /** Character offset + width of a sub-position inside the cell. */
-export function subCharPos(sub, nib) {
+export function subCharPos(sub, nib, wide = false) {
   switch (sub) {
     case SUB_NOTE: return [0, 4];         // 4 glyph slots
     case SUB_INST: return [5 + nib, 1];
     case SUB_VOL: return [8 + nib, 1];    // char 8 is the symbol cell
     case SUB_PAN: return [12 + nib, 1];   // char 12 is the symbol cell
-    case SUB_FX_OP: return [16, 1];
-    case SUB_FX_ARG: return [17 + nib, 1];
+    case SUB_FX_OP: return [(wide ? 19 : 16), 1];
+    case SUB_FX_ARG: return [(wide ? 20 : 17) + nib, 1];
     default: return [0, 1];
   }
 }
@@ -91,9 +115,29 @@ export const COL_NOTE = 0, COL_INST = 1, COL_VOL = 2, COL_PAN = 3, COL_FX = 4;
 export const ALL_COLS = [COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX];
 /** Raw cell byte offsets each logical column occupies. */
 export const COL_BYTES = [[0, 1], [2], [3], [4], [5, 6, 7]];
+/**
+ * The same thing for either format, as [offset, mask] pairs — the wide cell's
+ * byte 8 carries BOTH column selectors (and the azimuth's ninth bit), so a
+ * per-column copy has to work in bits there, not whole bytes.
+ */
+export function colByteMasks(wide) {
+  if (!wide) return COL_BYTES.map((bs) => bs.map((b) => [b, 0xff]));
+  return [
+    [[0, 0xff], [1, 0xff]],                       // note
+    [[2, 0xff]],                                  // instrument
+    [[3, 0xff], [8, 0x70]],                       // volume value + its selector
+    [[4, 0xff], [9, 0xff], [8, 0x8f]],            // azimuth low + elevation + A/selector
+    [[5, 0xff], [6, 0xff], [7, 0xff],             // effect 1…
+     [10, 0xff], [11, 0xff], [12, 0xff]],         // …and the effect 2 it carries
+  ];
+}
 /** Inclusive [startChar, endChar] span of each column within the cell (for the
  *  selection highlight); contiguous, covering all CELL_CHARS. */
 export const COL_CHAR_RANGE = [[0, 5], [5, 8], [8, 12], [12, 16], [16, 21]];
+export const COL_CHAR_RANGE_WIDE = [[0, 5], [5, 8], [8, 12], [12, 19], [19, 24]];
+
+/** Column spans for the format in play. */
+export function colCharRange(wide) { return wide ? COL_CHAR_RANGE_WIDE : COL_CHAR_RANGE; }
 
 /** Logical column of a sub-cursor position (fx-op and fx-arg → COL_FX). */
 export function subToCol(sub) { return sub <= COL_PAN ? sub : COL_FX; }
@@ -107,11 +151,13 @@ export function colsForSubs(subA, subB) {
 }
 
 /** Map a character offset within a cell to [sub, nib]. */
-export function charToSub(charX) {
+export function charToSub(charX, wide = false) {
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-  if (charX >= 17) return [SUB_FX_ARG, clamp(Math.floor(charX - 17), 0, 3)];
-  if (charX >= 16) return [SUB_FX_OP, 0];
-  if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 12), 0, 2)];
+  const fxOp = wide ? 19 : 16;
+  const panWidth = wide ? 6 : 3;
+  if (charX >= fxOp + 1) return [SUB_FX_ARG, clamp(Math.floor(charX - fxOp - 1), 0, 3)];
+  if (charX >= fxOp) return [SUB_FX_OP, 0];
+  if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 12), 0, panWidth - 1)];
   if (charX >= 8) return [SUB_VOL, clamp(Math.floor(charX - 8), 0, 2)];
   if (charX >= 5) return [SUB_INST, clamp(Math.floor(charX - 5), 0, 1)];
   return [SUB_NOTE, 0];
@@ -130,46 +176,74 @@ export function charToSub(charX) {
 // carries its sign; the engine's 20..3F halves never surface in the UI.
 const SEL_FINE = 3, FINE_DIR = 0x20, FINE_MAG = 0x1f;
 
-/** The operation a vol/pan byte encodes. */
-export function volPanOp(value, sel) {
-  if (sel !== SEL_FINE) return ["set", "up", "down"][sel] ?? "set";
-  if (value === 0) return "none";
-  return (value & FINE_DIR) !== 0 ? "fineUp" : "fineDown";
+/**
+ * What one column can hold, per format (file format §5.5). The narrow cell's
+ * six bits become a whole byte for volume and a NINE-bit azimuth for panning,
+ * and FINE's direction flag rides the top bit of whichever field it is — so
+ * every rule below is the same rule, read off this spec.
+ */
+export function colSpec(isPan, wide) {
+  if (!wide) return { max: 0x3f, dir: FINE_DIR, mag: FINE_MAG, digits: 2 };
+  if (!isPan) return { max: 0xff, dir: 0x80, mag: 0x7f, digits: 2 };
+  return { max: 0x1ff, dir: 0x100, mag: 0xff, digits: 3 };
 }
 
-/** The argument as DISPLAYED and TYPED: a fine slide's magnitude (00..1F), the
- *  plain 6-bit value (00..3F) for everything else. */
-export function volPanArg(value, sel) {
-  return sel === SEL_FINE ? (value & FINE_MAG) : (value & 0x3f);
+/** The operation a vol/pan byte encodes. */
+export function volPanOp(value, sel, isPan = false, wide = false) {
+  if (sel !== SEL_FINE) return ["set", "up", "down"][sel] ?? "set";
+  if (value === 0) return "none";
+  return (value & colSpec(isPan, wide).dir) !== 0 ? "fineUp" : "fineDown";
+}
+
+/** The argument as DISPLAYED and TYPED: a fine slide's magnitude, the plain
+ *  value for everything else. */
+export function volPanArg(value, sel, isPan = false, wide = false) {
+  const sp = colSpec(isPan, wide);
+  return sel === SEL_FINE ? (value & sp.mag) : (value & sp.max);
 }
 
 /** Signed one-shot delta a fine byte encodes (0 for any other selector). */
-export function fineSigned(value, sel) {
+export function fineSigned(value, sel, isPan = false, wide = false) {
   if (sel !== SEL_FINE) return 0;
-  const mag = value & FINE_MAG;
-  return (value & FINE_DIR) !== 0 ? mag : -mag;
+  const sp = colSpec(isPan, wide);
+  const mag = value & sp.mag;
+  return (value & sp.dir) !== 0 ? mag : -mag;
 }
 
 /** Byte value for a signed fine delta; 0 (the no-op sentinel) at zero. */
-export function fineValue(signed) {
-  const mag = Math.min(Math.abs(signed), FINE_MAG);
-  return mag === 0 ? 0 : (signed > 0 ? FINE_DIR | mag : mag);
+export function fineValue(signed, isPan = false, wide = false) {
+  const sp = colSpec(isPan, wide);
+  const mag = Math.min(Math.abs(signed), sp.mag);
+  return mag === 0 ? 0 : (signed > 0 ? sp.dir | mag : mag);
 }
 
-/** setCellOp fields naming whichever column `isPan` selects. */
-function vpFields(isPan, value, sel) {
-  return isPan ? { pan: value, panEff: sel } : { volume: value, volumeEff: sel };
+/** setCellOp fields naming whichever column `isPan` selects. In a wide cell the
+ *  panning column's value IS the azimuth — `pan` is the narrow cell's field. */
+function vpFields(isPan, value, sel, wide = false) {
+  if (!isPan) return { volume: value, volumeEff: sel };
+  return wide ? { azimuth: value, panEff: sel } : { pan: value, panEff: sel };
 }
 
 /** …wrapped as an interpretBracketKey action. */
-function vpFieldsFor(isPan, value, sel) { return { fields: vpFields(isPan, value, sel) }; }
+function vpFieldsFor(isPan, value, sel, wide = false) {
+  return { fields: vpFields(isPan, value, sel, wide) };
+}
 
 /** Read a cell's vol or pan column as {value, sel, arg, op, empty}. */
-export function volPanState(isPan, cell) {
-  const value = (isPan ? cell.pan : cell.volume) & 0x3f;
+export function volPanState(isPan, cell, wide = false) {
+  const sp = colSpec(isPan, wide);
+  const raw = isPan ? (wide ? cell.azimuth : cell.pan) : cell.volume;
+  const value = raw & sp.max;
   const sel = (isPan ? cell.panEff : cell.volumeEff) & 3;
-  return { value, sel, arg: volPanArg(value, sel), op: volPanOp(value, sel),
-           empty: sel === SEL_FINE && value === 0 };
+  return {
+    value, sel, wide,
+    arg: volPanArg(value, sel, isPan, wide),
+    op: volPanOp(value, sel, isPan, wide),
+    // "Empty" here is strictly the FINE-0 sentinel — what decides how the next
+    // typed digit is READ. Whether the COLUMN looks blank on screen is a wider
+    // question (a wide cell's elevation counts): that is subIsEmpty's job.
+    empty: sel === SEL_FINE && value === 0,
+  };
 }
 
 /**
@@ -182,51 +256,79 @@ export function volPanState(isPan, cell) {
  * Delete key, no less) would silence the note.
  * Returns setCellOp fields, or null when nothing changes.
  */
-export function volPanSelect(isPan, op, cell) {
-  const st = volPanState(isPan, cell);
+export function volPanSelect(isPan, op, cell, wide = false) {
+  const st = volPanState(isPan, cell, wide);
+  const sp = colSpec(isPan, wide);
   let value, sel;
   switch (op) {
     case "set": if (st.empty) return null; value = st.arg; sel = 0; break;
     case "up": value = st.arg; sel = 1; break;
     case "down": value = st.arg; sel = 2; break;
-    case "fineUp": value = FINE_DIR | Math.max(1, st.arg & FINE_MAG); sel = SEL_FINE; break;
-    case "fineDown": value = Math.max(1, st.arg & FINE_MAG); sel = SEL_FINE; break;
+    case "fineUp": value = sp.dir | Math.max(1, st.arg & sp.mag); sel = SEL_FINE; break;
+    case "fineDown": value = Math.max(1, st.arg & sp.mag); sel = SEL_FINE; break;
     case "none": value = 0; sel = SEL_FINE; break;
     default: return null;
   }
   if (value === st.value && sel === st.sel) return null;
-  return vpFields(isPan, value, sel);
+  return vpFields(isPan, value, sel, wide);
 }
 
 /**
- * Type hex digit `d` into argument nibble `nib` (1 = high, 2 = low) of the
- * vol/pan column. A fine slide's argument is 00..1F, so its high digit only
- * carries bit 4 (2..F all read as 1), and typing it down to zero clears the
- * cell exactly as the $C0 no-op sentinel would. An empty cell promotes to SET.
+ * Type hex digit `d` into argument nibble `nib` (1 = most significant) of the
+ * vol/pan column. A fine slide's magnitude is one bit narrower than the field
+ * it lives in, so its top digit is masked accordingly, and typing it down to
+ * zero clears the cell exactly as the no-op sentinel would. An empty cell
+ * promotes to SET.
  */
-export function volPanDigit(isPan, cell, nib, d) {
-  const st = volPanState(isPan, cell);
+export function volPanDigit(isPan, cell, nib, d, wide = false) {
+  const st = volPanState(isPan, cell, wide);
+  const sp = colSpec(isPan, wide);
+  const shift = (sp.digits - nib) * 4;       // nib 1 = the most significant digit
+  const place = (base, digit) => (base & ~(0xf << shift)) | ((digit & 0xf) << shift);
   if (st.sel === SEL_FINE && !st.empty) {
-    const mag = nib === 1 ? (((d & 1) << 4) | (st.arg & 0x0f)) : ((st.arg & 0x10) | d);
-    return vpFields(isPan, mag === 0 ? 0 : ((st.value & FINE_DIR) | mag), SEL_FINE);
+    const mag = place(st.arg, d) & sp.mag;
+    return vpFields(isPan, mag === 0 ? 0 : ((st.value & sp.dir) | mag), SEL_FINE, wide);
   }
   const sel = st.empty ? 0 : st.sel;
-  const value = nib === 1 ? (((d << 4) | (st.arg & 0x0f)) & 0x3f) : ((st.arg & 0x30) | d);
-  return vpFields(isPan, value, sel);
+  return vpFields(isPan, place(st.arg, d) & sp.max, sel, wide);
 }
 
 /** Wheel/step the column by `dir`: the signed delta for a fine slide (it never
  *  steps through zero — that direction is the symbol cell's business), the
  *  plain value otherwise. Null when nothing moves. */
-export function volPanStep(isPan, cell, dir) {
-  const st = volPanState(isPan, cell);
+export function volPanStep(isPan, cell, dir, wide = false) {
+  const st = volPanState(isPan, cell, wide);
+  const sp = colSpec(isPan, wide);
   if (st.sel === SEL_FINE) {
-    const signed = fineSigned(st.value, st.sel) + dir;
-    if (signed === 0 || Math.abs(signed) > FINE_MAG) return null;
-    return vpFields(isPan, fineValue(signed), SEL_FINE);
+    const signed = fineSigned(st.value, st.sel, isPan, wide) + dir;
+    if (signed === 0 || Math.abs(signed) > sp.mag) return null;
+    return vpFields(isPan, fineValue(signed, isPan, wide), SEL_FINE, wide);
   }
-  const value = Math.min(Math.max(st.value + dir, 0), 0x3f);
-  return value === st.value ? null : vpFields(isPan, value, st.sel);
+  const value = Math.min(Math.max(st.value + dir, 0), sp.max);
+  return value === st.value ? null : vpFields(isPan, value, st.sel, wide);
+}
+
+// ── the wide cell's elevation field (§5.5) ───────────────────────────────
+// Two digits of a SIGNED byte, sitting between the panning column's symbol and
+// its azimuth. It is a position, not an operation, so it has no selector of its
+// own: it is meaningful under SET and reserved under the slides.
+
+/** Type hex digit `d` into elevation nibble `nib` (0 = high, 1 = low). A height
+ *  typed into an untouched column promotes it to SET — otherwise the column
+ *  would carry a position under the FINE-0 sentinel, which the engine ignores. */
+export function elevationDigit(cell, nib, d) {
+  const cur = cell.elevation & 0xff;
+  const shift = nib === 0 ? 4 : 0;
+  const raw = ((cur & ~(0xf << shift)) | ((d & 0xf) << shift)) & 0xff;
+  const fields = { elevation: raw >= 0x80 ? raw - 0x100 : raw };
+  if (cell.panEff === 3 && (cell.azimuth & 0x1ff) === 0) fields.panEff = 0;
+  return fields;
+}
+
+/** Step the elevation by `dir`, clamped to the signed byte it lives in. */
+export function elevationStep(cell, dir) {
+  const v = Math.min(Math.max(cell.elevation + dir, -128), 127);
+  return v === cell.elevation ? null : { elevation: v };
 }
 
 /**
@@ -402,7 +504,8 @@ function base36Digit(key) {
  * @param ev   {code, key} from the KeyboardEvent
  * @param sub  cursor sub-column, nib nibble index within it
  * @param cell current TaudPlayData (read-only here)
- * @param ctx  {octave, currentInst, preset} — preset = active pitch table
+ * @param ctx  {octave, currentInst, preset, wideCells} — preset = active pitch
+ *             table; wideCells marks a format-v3 project
  * @returns null (unhandled) or an action:
  *   {fields, jamNote?, advanceRow?, advanceNib?} — fields go through setCellOp;
  *   advanceRow steps the cursor down (note entry / field completion),
@@ -410,6 +513,8 @@ function base36Digit(key) {
  */
 export function interpretEditKey(ev, sub, nib, cell, ctx) {
   const { code, key } = ev;
+
+  const wide = ctx.wideCells === true;
 
   if (sub === SUB_NOTE) {
     // Raw hex note entry — active whenever the note column shows raw hex words
@@ -461,6 +566,11 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
 
   if (sub === SUB_VOL || sub === SUB_PAN) {
     const isPan = sub === SUB_PAN;
+    // The wide cell's panning column is [symbol][elevation ×2][azimuth ×3]; the
+    // narrow one (and the volume column in both) is [symbol][value ×2].
+    const elevationNib = wide && isPan && nib >= 1 && nib <= 2;
+    const lastNib = (wide && isPan ? 5 : 2);
+
     // nib 0 — the symbol cell: pick the operation, then step onto its argument.
     if (nib === 0) {
       const op = volPanSymbolKey(isPan, code, key);
@@ -470,22 +580,30 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
         // the down-slide key above, and never a hex digit here.)
         const d = hexDigit(key);
         if (d < 0) return null;
-        return { fields: volPanDigit(isPan, cell, 1, d), advanceNib: true };
+        const fields = wide && isPan
+          ? elevationDigit(cell, 0, d)
+          : volPanDigit(isPan, cell, 1, d, wide);
+        return { fields, advanceNib: true };
       }
-      const fields = volPanSelect(isPan, op, cell);
+      const fields = volPanSelect(isPan, op, cell, wide);
       // A no-change selection still consumes the key (never jams a note).
       return fields ? { fields, advanceNib: true } : { consumed: true };
     }
-    // nib 1/2 — the two argument digits.
+
+    // Clear anywhere in the argument: the FINE-0 no-op sentinel, plus the
+    // elevation in a wide cell — the whole column goes back to saying nothing.
     if (isClearKey(code)) {
-      // clear: the SEL_FINE-0 no-op sentinel ($C0)
-      return { fields: isPan ? { pan: 0, panEff: 3 } : { volume: 0, volumeEff: 3 },
-               advanceRow: true };
+      const fields = isPan
+        ? (wide ? { azimuth: 0, elevation: 0, panEff: 3 } : { pan: 0, panEff: 3 })
+        : { volume: 0, volumeEff: 3 };
+      return { fields, advanceRow: true };
     }
     const d = hexDigit(key);
     if (d < 0) return null;
-    const fields = volPanDigit(isPan, cell, nib, d);
-    return nib === 1 ? { fields, advanceNib: true } : { fields, advanceRow: true };
+    const fields = elevationNib
+      ? elevationDigit(cell, nib - 1, d)
+      : volPanDigit(isPan, cell, wide && isPan ? nib - 2 : nib, d, wide);
+    return nib === lastNib ? { fields, advanceRow: true } : { fields, advanceNib: true };
   }
 
   if (sub === SUB_FX_OP) {

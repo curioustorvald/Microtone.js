@@ -11,6 +11,9 @@ export class Store {
     this.view = "timeline";
     this.fileName = null;
     this.follow = true;
+    /** #998.3: monitor surround songs through the binaural head model. Default
+     *  on — the stereo fold cannot render height at all. Stereo songs ignore it. */
+    this.binaural = true;
     this.cursor = { row: 0, ch: 0 }; // absolute song row + channel
     this.voiceMutes = new Array(64).fill(false); // per-channel mute (UI + engine)
     this._subs = new Map();

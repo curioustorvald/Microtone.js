@@ -17,7 +17,7 @@ import {
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES,
 } from "../worklet/protocol.js";
-import { MAX_VOICES, NUM_VOICES } from "../engine/constants.js";
+import { MAX_VOICES, NUM_VOICES, PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
 import { AR_SAB_BYTES } from "./audio-ring.js";
 
 const WORKLET_MODULE = new URL("../worklet/taud-processor.js", import.meta.url);
@@ -42,6 +42,8 @@ export class AudioSystem {
                                 // stale tail when a shorter song loads over it)
     this.engineTarget = null;   // where engine commands go: worklet port or the worker
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
+    this.wideCells = false; // format v3's 16-byte cell (set by loadDocument)
+    this.monitorMode = 0;   // #998.3 fold/binaural — re-sent on every song load
     this.profile = null;    // latest worklet profiler report (opt-in; null when off)
     this.onProfile = null;  // optional callback(profile) when a report arrives
   }
@@ -170,6 +172,9 @@ export class AudioSystem {
     if (!song) throw new Error("songIndex out of range");
 
     this._post({ t: CMD.SET_64CH, on: doc.is64Channel });
+    // Cell layout BEFORE any pattern upload — it decides how they are read.
+    this.wideCells = (doc.fmtVer ?? 2) >= 3;
+    this._post({ t: CMD.SET_CELL_FORMAT, wide: this.wideCells });
 
     if (doc.sampleInstImage) {
       const image = doc.sampleInstImage.slice().buffer;
@@ -178,10 +183,11 @@ export class AudioSystem {
 
     // Bulk pattern upload (one transfer).
     const nPats = song.patterns.length;
-    const blob = new Uint8Array(nPats * 512);
+    const patSize = this.wideCells ? PATTERN_BYTES_WIDE : PATTERN_BYTES;
+    const blob = new Uint8Array(nPats * patSize);
     const slots = new Array(nPats);
     for (let p = 0; p < nPats; p++) {
-      blob.set(song.patterns[p], p * 512);
+      blob.set(song.patterns[p], p * patSize);
       slots[p] = p;
     }
     this._post({ t: CMD.UPLOAD_PATTERNS, slots, blob: blob.buffer }, [blob.buffer]);
@@ -212,6 +218,7 @@ export class AudioSystem {
     this.setTuning(0, song.tuningBaseNote, song.tuningFreq);
     this.setTrackerMixerFlags(0, song.globalFlags);
     this.setSurroundModel(0, song.surroundModel ?? 0);
+    this.setMonitorMode(0, this.monitorMode); // survives a context rebuild
     this.setSongGlobalVolume(0, song.globalVolume);
     this.setSongMixingVolume(0, song.mixingVolume);
     this.setMasterVolume(0, 255);
@@ -237,6 +244,11 @@ export class AudioSystem {
   setMasterPan(ph, pan) { this._post({ t: CMD.SET_MASTER_PAN, ph, pan }); }
   setTrackerMixerFlags(ph, flags) { this._post({ t: CMD.SET_TRACKER_MIXER_FLAGS, ph, flags }); }
   setSurroundModel(ph, model) { this._post({ t: CMD.SET_SURROUND_MODEL, ph, model }); }
+  /** #998.3: 0 = stereo fold, 1 = binaural head model (surround songs only). */
+  setMonitorMode(ph, mode) {
+    if (ph === 0) this.monitorMode = mode;
+    this._post({ t: CMD.SET_MONITOR_MODE, ph, mode });
+  }
   resetParams(ph = 0) { this._post({ t: CMD.RESET_PARAMS, ph }); }
   resetFunkState(ph = 0) { this._post({ t: CMD.RESET_FUNK_STATE, ph }); }
   jamNote(ph, voice, note, inst, audition = false) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst, audition }); }

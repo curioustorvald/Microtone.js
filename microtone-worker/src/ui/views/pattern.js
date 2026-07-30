@@ -12,8 +12,9 @@ import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
-  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty, volPanStep,
+  subCharPos, charToSub, CELL_CHARS, lookahead,
+  colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty, volPanStep, elevationStep,
+  subPositions, CELL_CHARS_WIDE,
 } from "../edit.js";
 import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp, changeInstrumentOp } from "../../doc/ops.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -46,6 +47,13 @@ function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 // canvas. All the per-pattern editing lives here; the container routes the
 // shared toolbar/keyboard to whichever pane is active.
 class PatternPane {
+  /** The document's cell format — v3's wide cell changes the column layout
+   *  (§5.5). Every geometry read below goes through these, so one document
+   *  property drives the painter, the cursor walk and hit-testing alike. */
+  wide() { return this.store.doc?.wideCells === true; }
+  subPos() { return subPositions(this.wide()); }
+  cellChars() { return this.wide() ? CELL_CHARS_WIDE : CELL_CHARS; }
+
   constructor(container, index) {
     this.container = container;
     this.store = container.store;
@@ -222,9 +230,9 @@ class PatternPane {
   extendSelectionSub(dir) {
     this._ensureSel();
     const c = this.cursor;
-    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
-    idx = clampInt(idx + dir, 0, SUB_POSITIONS.length - 1);
-    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
+    idx = clampInt(idx + dir, 0, this.subPos().length - 1);
+    [c.sub, c.nib] = this.subPos()[idx];
     this.sel.row = c.row;
     this.sel.sub = c.sub;
     this.invalidate();
@@ -236,8 +244,8 @@ class PatternPane {
     const pattern = this.pattern();
     if (!b || !pattern) return false;
     const rows = b.r1 - b.r0 + 1;
-    const block = makeBlock(rows, 1);
-    for (let r = 0; r < rows; r++) blockCell(block, r, 0).set(cellToBytes(pattern[b.r0 + r]));
+    const block = makeBlock(rows, 1, this.wide());
+    for (let r = 0; r < rows; r++) blockCell(block, r, 0).set(cellToBytes(pattern[b.r0 + r], this.wide()));
     block.cols = this.selCols();
     this.store.clipboard = block;
     return true;
@@ -257,11 +265,11 @@ class PatternPane {
   }
 
   clearRegion(b, cols = ALL_COLS) {
-    const empty = emptyCellBytes();
+    const empty = emptyCellBytes(this.wide());
     const pattern = this.pattern();
     const writes = [];
     for (let r = b.r0; r <= b.r1; r++) {
-      writes.push({ pat: this.patIdx, row: r, bytes: overlayCols(cellToBytes(pattern[r]), empty, cols) });
+      writes.push({ pat: this.patIdx, row: r, bytes: overlayCols(cellToBytes(pattern[r], this.wide()), empty, cols, this.wide()) });
     }
     this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
     this.invalidate();
@@ -277,7 +285,7 @@ class PatternPane {
     for (let r = 0; r < block.rows; r++) {
       const row = start + r;
       if (row > 63) break;
-      writes.push({ pat: this.patIdx, row, bytes: overlayCols(cellToBytes(pattern[row]), blockCell(block, r, 0), cols) });
+      writes.push({ pat: this.patIdx, row, bytes: overlayCols(cellToBytes(pattern[row], this.wide()), blockCell(block, r, 0), cols, this.wide()) });
     }
     if (!writes.length) return false;
     this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
@@ -537,7 +545,7 @@ class PatternPane {
     const row = this.scrollRow + Math.floor(y / ROW_H);
     if (row < 0 || row > 63 || x < GUTTER_W) return null;
     const charX = (x - GUTTER_W - 4) / CHAR_W;
-    const [sub, nib] = charToSub(charX);
+    const [sub, nib] = charToSub(charX, this.wide());
     return { row: clampInt(row, 0, 63), sub, nib };
   }
 
@@ -558,9 +566,9 @@ class PatternPane {
   moveSubCursor(dir) {
     this.sel = null;
     const c = this.cursor;
-    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
-    idx = clampInt(idx + dir, 0, SUB_POSITIONS.length - 1);
-    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
+    idx = clampInt(idx + dir, 0, this.subPos().length - 1);
+    [c.sub, c.nib] = this.subPos()[idx];
     this.invalidate();
     this.store.emit("cursor");
   }
@@ -586,7 +594,8 @@ class PatternPane {
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, cell,
       { octave: this.jam.octave, currentInst: this.jam.currentInst, preset: this.store.pitchPreset,
-        rawHex: rawNoteView(this.store.rawNoteView, this.store.pitchPreset) });
+        rawHex: rawNoteView(this.store.rawNoteView, this.store.pitchPreset),
+        wideCells: this.store.doc?.wideCells === true });
     if (!action) return false;
     if (action.fields) {
       this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, c.row, action.fields));
@@ -630,8 +639,12 @@ class PatternPane {
       case SUB_INST: fields = { instrment: clampInt(cell.instrment + dir, 0, 255) }; break;
       // vol/pan: a fine slide steps its SIGNED delta (item 87), everything else
       // the plain value; neither ever steps into the no-op sentinel.
-      case SUB_VOL: fields = volPanStep(false, cell, dir); break;
-      case SUB_PAN: fields = volPanStep(true, cell, dir); break;
+      case SUB_VOL: fields = volPanStep(false, cell, dir, this.wide()); break;
+      case SUB_PAN:
+        fields = this.wide() && c.nib >= 1 && c.nib <= 2
+          ? elevationStep(cell, dir)
+          : volPanStep(true, cell, dir, this.wide());
+        break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
     }
@@ -729,16 +742,17 @@ class PatternPane {
       if (sb && row >= sb.r0 && row <= sb.r1) {
         ctx.fillStyle = C.sel;
         if (sb.colLo === 0 && sb.colHi === 4) {
-          ctx.fillRect(GUTTER_W, y, CELL_CHARS * CHAR_W + 8, ROW_H);
+          ctx.fillRect(GUTTER_W, y, this.cellChars() * CHAR_W + 8, ROW_H);
         } else {
-          const cs = COL_CHAR_RANGE[sb.colLo][0], ce = COL_CHAR_RANGE[sb.colHi][1];
+          const ccr = colCharRange(this.wide());
+          const cs = ccr[sb.colLo][0], ce = ccr[sb.colHi][1];
           ctx.fillRect(x0 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
         }
       }
       if (row === this.cursor.row) {
         ctx.fillStyle = C.cursor;
-        ctx.fillRect(GUTTER_W, y, CELL_CHARS * CHAR_W + 8, ROW_H);
-        const [cpos, cw] = subCharPos(this.cursor.sub, this.cursor.nib);
+        ctx.fillRect(GUTTER_W, y, this.cellChars() * CHAR_W + 8, ROW_H);
+        const [cpos, cw] = subCharPos(this.cursor.sub, this.cursor.nib, this.wide());
         // Amber record caret only on the active column; reference panes show
         // a plain cursor so it's clear which one edits will land in.
         ctx.fillStyle = (store.record && active) ? C.caret : C.cursor;
@@ -766,14 +780,16 @@ class PatternPane {
         : cell.instrment !== 0 ? C.accent2 : C.dim;
       ctx.fillText(instS, x0 + 5 * CHAR_W, y + ROW_H / 2);
       // vol/pan: symbol cell (vector ticks) + argument digits — item 87
+      const wide = this.wide();
       const vol = ghost?.vol ?? [cell.volume, cell.volumeEff];
       paintVolPanCell(ctx, vol[0], vol[1], false, x0 + 8 * CHAR_W, y, CHAR_W, ROW_H,
-        { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim });
-      const pan = ghost?.pan ?? [cell.pan, cell.panEff];
+        { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim, wide });
+      const pan = ghost?.pan ?? [wide ? cell.azimuth : cell.pan, cell.panEff];
       paintVolPanCell(ctx, pan[0], pan[1], true, x0 + 12 * CHAR_W, y, CHAR_W, ROW_H,
-        { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim });
+        { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim, wide,
+          elevation: wide ? cell.elevation : 0, elevationInk: C.accent2 });
       ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
-      ctx.fillText(fxS, x0 + 16 * CHAR_W, y + ROW_H / 2);
+      ctx.fillText(fxS, x0 + (wide ? 19 : 16) * CHAR_W, y + ROW_H / 2);
     }
 
     ctx.strokeStyle = C.border;

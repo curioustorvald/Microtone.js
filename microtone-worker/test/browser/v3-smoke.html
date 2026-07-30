@@ -1,0 +1,195 @@
+<!doctype html><meta charset="utf-8"><title>format v3 upgrade + new-project surround (item 999 stage 2)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Drives the REAL app through the one-way door: switching a version-2 project
+// to surround must explain itself, widen every pattern, keep the ORIGINAL file
+// untouched on disk, save the upgraded project under a new name, and still be
+// undoable inside the session.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, projectView } = M;
+  const opfs = await import("../../src/storage/opfs.js");
+
+  // Save the loaded project first, so the "original stays untouched" claim has
+  // something to be true about.
+  store.fileName = "v3smoke.taud";
+  await opfs.write("v3smoke.taud", store.doc.toBytes());
+  const originalBytes = await opfs.read("v3smoke.taud");
+  check((originalBytes[8] & 0x1f) === 2, "the original file is format version 2",
+    String(originalBytes[8] & 0x1f));
+  check(store.doc.wideCells === false, "…with narrow cells");
+  const patBefore = store.doc.patternBytes(0, 0);
+  check(patBefore.length === 512, "…512-byte pattern images");
+
+  // ── 1. the switch asks first, and cancelling changes nothing ─────────────
+  doc.querySelector('[data-view="project"]').click();
+  await sleep(150);
+  projectView.setSurroundModel(2);
+  let dlg = null;
+  for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.modal"); await sleep(30); }
+  check(!!dlg, "switching to spatial opens a dialog first");
+  check(/version 3/i.test(dlg.textContent), "…which names the format change",
+    dlg.querySelector("p")?.textContent?.slice(0, 60));
+  check(/v3smoke-surround\.taud/.test(dlg.textContent), "…and the copy it will write");
+  dlg.querySelectorAll("button")[1].click(); // Cancel
+  await sleep(120);
+  check(store.doc.wideCells === false, "cancelling leaves the project alone");
+  check((store.song.surroundModel ?? 0) === 0, "…and the model unchanged");
+
+  // ── 2. confirming upgrades the project ──────────────────────────────────
+  projectView.setSurroundModel(2);
+  dlg = null;
+  for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.modal"); await sleep(30); }
+  dlg.querySelectorAll("button")[0].click(); // Upgrade and continue
+  for (let i = 0; i < 100 && !store.doc.wideCells; i++) await sleep(30);
+  check(store.doc.wideCells === true, "the project is now wide-celled");
+  check(store.doc.fmtVer === 3, "…format version 3", String(store.doc.fmtVer));
+  check(store.song.surroundModel === 2, "…and spatial");
+  const patAfter = store.doc.patternBytes(0, 0);
+  check(patAfter.length === 1024, "…with 1024-byte pattern images", String(patAfter.length));
+
+  // The music survived: the first cell's note and instrument are where they were.
+  check(patAfter[0] === patBefore[0] && patAfter[1] === patBefore[1] && patAfter[2] === patBefore[2],
+    "note + instrument carried across the widening");
+
+  // ── 3. the copy is on disk and the original is untouched ────────────────
+  for (let i = 0; i < 100 && store.fileName === "v3smoke.taud"; i++) await sleep(30);
+  check(store.fileName === "v3smoke-surround.taud", "editing continues in the copy",
+    String(store.fileName));
+  const list = await opfs.list();
+  check(list.some((f) => f.name === "v3smoke-surround.taud"), "…which was written to storage");
+  const stillThere = await opfs.read("v3smoke.taud");
+  check(stillThere.length === originalBytes.length, "the original file is still there");
+  let same = true;
+  for (let i = 0; i < stillThere.length; i++) if (stillThere[i] !== originalBytes[i]) { same = false; break; }
+  check(same, "…byte for byte, as version 2");
+  const copy = await opfs.read("v3smoke-surround.taud");
+  check((copy[8] & 0x1f) === 3, "…and the copy declares version 3", String(copy[8] & 0x1f));
+
+  // ── 4. the engine was told before it read another pattern ───────────────
+  check(store.audio ? store.audio.wideCells === true : true, "the audio system switched layout",
+    String(store.audio?.wideCells));
+
+  // ── 5. one Ctrl+Z takes the whole thing back ────────────────────────────
+  store.undo.undo();
+  await sleep(80);
+  check(store.doc.wideCells === false, "undo narrows the project again");
+  check((store.song.surroundModel ?? 0) === 0, "…and clears the surround model");
+  check(store.doc.patternBytes(0, 0).length === 512, "…restoring 512-byte patterns");
+  let restored = true;
+  const now = store.doc.patternBytes(0, 0);
+  for (let i = 0; i < 512; i++) if (now[i] !== patBefore[i]) { restored = false; break; }
+  check(restored, "…byte for byte");
+
+  // ── 6. a new SURROUND project is born wide ──────────────────────────────
+  store.doc.dirty = false; // skip the discard confirm
+  const npBtn = doc.getElementById("newBtn");
+  npBtn.click();
+  let np = null;
+  for (let i = 0; i < 100 && !np; i++) { np = doc.querySelector("dialog.np-modal"); await sleep(30); }
+  check(!!np, "New Project opens");
+  const panChips = np.querySelectorAll("[data-pan]");
+  check(panChips.length === 3, "…offering stereo / planar / spatial", String(panChips.length));
+  panChips[2].click(); // Spatial
+  await sleep(30);
+  check(/version 3/i.test(np.querySelector('[data-f="panhint"]').textContent),
+    "…and warning about the format before creating anything");
+  np.querySelector(".np-ok").click();
+  for (let i = 0; i < 100 && !store.doc?.wideCells; i++) await sleep(30);
+  check(store.doc.wideCells === true, "the new project is wide-celled from birth");
+  check(store.doc.fmtVer === 3 && store.song.surroundModel === 2, "…v3 + spatial",
+    `${store.doc.fmtVer}/${store.song.surroundModel}`);
+  check(store.doc.patternBytes(0, 0)[8] === 0x33, "…with FINE-by-zero empty cells",
+    "$" + store.doc.patternBytes(0, 0)[8].toString(16));
+
+  // ── 7. the wide columns are really editable (stage 3) ───────────────────
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(150);
+  store.record = true;
+  store.cursor = { row: 0, ch: 0, sub: 2, nib: 1 }; // volume, first digit
+  const press = (k, code) => win.dispatchEvent(new win.KeyboardEvent("keydown",
+    { key: k, code: code ?? ("Key" + k.toUpperCase()), bubbles: true }));
+  // Typing the LAST digit of a column advances the cursor to the next row, so
+  // hold on to the cell being edited rather than re-reading through the cursor.
+  const held = () => M.timeline.cursorCell()?.cell;
+  let edited = held();
+
+  press("f"); press("f");
+  await sleep(60);
+  check(edited?.volume === 0xff, "an 8-bit volume can be typed", String(edited?.volume));
+  check(edited?.volumeEff === 0, "…as a SET");
+
+  // Panning column: [symbol][elevation ×2][azimuth ×3]
+  store.cursor = { row: 0, ch: 0, sub: 3, nib: 1 };
+  edited = held();
+  press("c"); press("0");           // elevation C0 = -64
+  await sleep(40);
+  check(edited?.elevation === -64, "the elevation digits are a signed byte",
+    String(edited?.elevation));
+  store.cursor = { row: 0, ch: 0, sub: 3, nib: 3 };
+  press("1", "Digit1"); press("8", "Digit8"); press("0", "Digit0"); // azimuth 180 = behind
+  await sleep(40);
+  check(edited?.azimuth === 0x180, "…and the azimuth is nine bits",
+    "$" + edited?.azimuth?.toString(16));
+  check(edited?.panEff === 0, "…written as a SET");
+
+  // The cursor walks all seventeen sub-positions of a wide cell.
+  const E = await import("../../src/ui/edit.js");
+  check(E.subPositions(true).length === 17, "the wide cell has 17 cursor stops");
+  check(M.timeline.colW() > 21 * 8, "…and the channel column grew to fit them",
+    String(M.timeline.colW()));
+
+  // ── 7b. the Patterns view draws a wide project ──────────────────────────
+  // (The pane class does its own drawing and hit-testing, so it needs the
+  // format helpers in its OWN scope — a v3 project crashed the tab without it.)
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.message));
+  doc.querySelector('[data-view="pattern"]').click();
+  await sleep(250);
+  check(errs.length === 0, "the Patterns tab opens on a wide project", errs[0] ?? "");
+  check(doc.querySelectorAll("#patternHost canvas").length > 0, "…and paints a pane");
+  const pane = M.patternView.panes?.[0];
+  check(pane ? pane.cellChars() === 24 : false, "…with the wide cell layout",
+    String(pane?.cellChars?.()));
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(120);
+
+  // The panner can write that same position into the COLUMN.
+  store.cursor = { row: 1, ch: 0, sub: 0, nib: 0 };
+  doc.getElementById("tbPanner").click();
+  let pan2 = null;
+  for (let i = 0; i < 100 && !pan2; i++) { pan2 = doc.querySelector("dialog.panner"); await sleep(30); }
+  check(!!pan2, "the panner opens on a wide project");
+  const colBtn = [...pan2.querySelectorAll("button")].find((b) => /^Column/.test(b.textContent));
+  check(!!colBtn, "…and offers a Column button", colBtn?.textContent);
+  pan2.__panner.setAngles(256, 32);
+  colBtn.click();
+  await sleep(60);
+  pan2.__panner.close();
+  await sleep(40);
+  store.cursor = { row: 1, ch: 0, sub: 0, nib: 0 };
+  const c2 = held();
+  check(c2?.azimuth === 256 && c2?.panEff === 0, "…which writes the panning column",
+    `${c2?.azimuth}/${c2?.panEff}`);
+  check(c2?.effect === 0, "…leaving the effect slot free");
+
+  await opfs.remove("v3smoke.taud").catch(() => {});
+  await opfs.remove("v3smoke-surround.taud").catch(() => {});
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

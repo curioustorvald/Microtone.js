@@ -441,6 +441,10 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   padding: 1rem 1.4rem;
   min-width: 320px;
 }
+/* Form dialogs built by widgets/modal.js: prose sets their width, so cap it at
+   a readable measure rather than letting one long paragraph span the viewport. */
+.modal-text { max-width: min(560px, 94vw); }
+.modal-text p { margin: 0.4rem 0 0.8rem; line-height: 1.45; text-align: justify }
 .modal::backdrop { background: rgba(0, 0, 0, 0.55); }
 .modal h3 { margin-top: 0; }
 .modal-field { display: block; margin: 0.6rem 0; color: var(--dim); }
@@ -454,7 +458,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 }
 .modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
 .panner {
-  min-width: 570px;
+  min-width: 648px;
 }
 
 /* ── new-project modal ── */
@@ -983,6 +987,29 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .panner-cmds { display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0; }
 .panner-cmds .modal-field { margin: 0; }
 .panner-cmds input[type="text"] { width: 4rem; font-family: var(--mono, monospace); }
+.panner-opts { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin: 0.1rem 0 0.3rem; }
+.panner-opts label { color: var(--dim); font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; }
+
+/* Audio export dialog (#998.4) */
+/* Wide enough for all seven targets in one row — a wrapped last card reads as
+   a second, lesser group. */
+.export-audio { max-width: min(920px, 94vw); }
+.export-cards { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.export-card {
+  display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+  width: 110px; padding: 0.4rem 0.3rem 0.5rem; cursor: pointer;
+  background: var(--panel-2); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 6px; font: inherit;
+}
+.export-card:hover { color: var(--fg); border-color: var(--accent-2); }
+.export-card.selected { color: var(--fg); border-color: var(--accent); background: var(--panel); box-shadow: inset 0 0 0 1px var(--accent); }
+.export-card .chandiagram { display: block; }
+.export-card-name { font-size: 0.82rem; font-weight: 600; text-align: center; line-height: 1.15; }
+.export-card-sub { font-size: 0.72rem; opacity: 0.8; text-align: center; }
+.export-opts { display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0 0.2rem; }
+.export-opts .modal-field { margin: 0.2rem 0; }
+.export-opts input[type="number"] { width: 5rem; }
+.export-hint { font-size: 0.8rem; margin: 0.15rem 0; }
 
 .smp-canvas { display: block; margin: 0.4rem 0; cursor: ew-resize; border: 1px solid var(--border); border-radius: 4px; }
 .smp-fields, .smp-ops { display: flex; gap: 0.8rem; align-items: baseline; flex-wrap: wrap; margin: 0.4rem 0; }
@@ -1089,7 +1116,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 /* ── About popup (brand click) ── */
 /* The blurb is three paragraphs plus the support ask, so cap the height and
    scroll rather than overflow a laptop viewport, and tighten the stack. */
-.about-modal { max-width: min(94vw, 540px); max-height: min(84vh, 46rem); overflow-y: auto; }
+.about-modal { max-width: min(94vw, 600px); max-height: min(84vh, 46rem); overflow-y: auto; }
 .about-modal h3 { font-size: 1.3rem; }
 .about-modal p { margin: 0.55rem 0; text-align: justify; }
 /* Keep Close reachable when the text scrolls (short viewports). */

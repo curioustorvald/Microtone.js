@@ -181,9 +181,10 @@ export function startFastFade(voice, playhead) {
   voice.activeFadeoutStep = Math.min(Math.max(Math.round(1024.0 / ticks), 1), 0xfff);
 }
 
-/** Per-sample volume-ramp tick toward (rowVolume/63)·(channelVolume/63). */
-export function advanceVolumeRamp(voice) {
-  const target = (voice.rowVolume / 63.0) * (voice.channelVolume / 63.0);
+/** Per-sample volume-ramp tick toward (rowVolume/max)·(channelVolume/max).
+ *  `div` is the volume column's ceiling: 63 as ever, 255 for a wide cell. */
+export function advanceVolumeRamp(voice, div = 63.0) {
+  const target = (voice.rowVolume / div) * (voice.channelVolume / div);
   if (voice.snapMixVolume) {
     voice.currentMixVolume = target;
     voice.volRampSamples = 0;

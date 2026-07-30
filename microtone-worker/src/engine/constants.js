@@ -74,6 +74,23 @@ export const CUE_BYTES_64 = MAX_VOICES * 2; // 128 bytes / cue (64-ch)
 export const NUM_PATTERNS = 0x7fff;
 export const PATTERN_EMPTY = 0x7fff;
 
+// ── Cell layouts (file format version) ──
+// Versions 1-2 carry an 8-byte pattern cell; version 3 — the surround format —
+// carries 16, which is what buys the 8-bit volume column, the spherical panning
+// column and a second effect. It is a whole-FILE property, so the engine holds
+// one flag and every pattern in it is the same width.
+export const ROWS_PER_PATTERN = 64;
+export const CELL_BYTES = 8;
+export const CELL_BYTES_WIDE = 16;
+export const PATTERN_BYTES = ROWS_PER_PATTERN * CELL_BYTES;          // 512
+export const PATTERN_BYTES_WIDE = ROWS_PER_PATTERN * CELL_BYTES_WIDE; // 1024
+
+/** Volume ceiling per cell format: 6-bit columns, or v3's 8-bit ones. */
+export const VOLUME_MAX = 0x3f;
+export const VOLUME_MAX_WIDE = 0xff;
+/** What a 6-bit-derived delta (a nibble slide, a tremolo depth) is worth. */
+export const VOLUME_STEP_WIDE = 4;
+
 // Interpolation modes (TAUD_NOTE_EFFECTS.md §1, bits 2-4 of global behaviour flags).
 export const INTERP_DEFAULT = 0;
 export const INTERP_NONE = 1;

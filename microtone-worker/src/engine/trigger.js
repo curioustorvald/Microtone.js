@@ -12,7 +12,9 @@ import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { computePlaybackRate } from "./sampler.js";
 import { random } from "./rng.js";
-import { applyPanSet, applyPanSlide } from "./spatial.js";
+import {
+  applyPanSet, applyPanSlide, applyElevation, SURROUND_STEREO, SURROUND_SPATIAL,
+} from "./spatial.js";
 
 /**
  * Snapshot the sample-scope state for voice from the base instrument or a
@@ -150,11 +152,14 @@ export function resolveActiveEnvelopes(voice, inst, patch) {
   }
 }
 
-/** Trigger-time noteVolume seed from Default Note Volume (byte 196; 0 = legacy 0x3F). */
-export function rowVolumeFromDefault(inst, patch = null) {
+/** Trigger-time noteVolume seed from Default Note Volume (byte 196; 0 = legacy
+ *  full volume). The record's field is 8-bit: a 6-bit column narrows it, a wide
+ *  cell's 8-bit volume state takes it as it stands. */
+export function rowVolumeFromDefault(inst, patch = null, volMax = 0x3f) {
   const patchDnv = patch !== null && patch.defaultNoteVolume !== 0 ? patch.defaultNoteVolume : null;
   const dnv = patchDnv !== null ? patchDnv : inst.defaultNoteVolume;
-  return dnv === 0 ? 0x3f : Math.trunc((dnv * 63 + 127) / 255);
+  if (dnv === 0) return volMax;
+  return volMax === 0xff ? dnv : Math.trunc((dnv * 63 + 127) / 255);
 }
 
 /** Cap backgroundVoices to MAX_BG_VOICES, preferring to evict the oldest NON-layer ghost. */
@@ -208,7 +213,10 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     voice.isLayerChild = false;
     return;
   }
-  const seedVol = rowVolOverride >= 0 && rowVolOverride <= 0x3f ? rowVolOverride : 0x3f;
+  // Layer gating is an INSTRUMENT-side rectangle, so the axis is 6-bit whatever
+  // the column's width: narrow a wide cell's volume to it.
+  const gateVol = ts.wideCells ? rowVolOverride >> 2 : rowVolOverride;
+  const seedVol = gateVol >= 0 && gateVol <= 0x3f ? gateVol : 0x3f;
   let layers = inst.resolveMetaLayers(noteVal, seedVol);
   // STRICT layering: drop layers whose patches don't cover the note (the gating
   // bbox is loose; strict converters emit each layer's canonical into its patches).
@@ -251,10 +259,13 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
+  // The velocity rectangle is instrument data and stays 6-bit in every format,
+  // so a wide cell's 8-bit volume is narrowed for the lookup (255 → 63).
+  const narrow = (v) => clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
   let seedVolForLookup;
-  if (volOverride >= 0) seedVolForLookup = clamp(volOverride, 0, 0x3f);
+  if (volOverride >= 0) seedVolForLookup = narrow(volOverride);
   else if (instId !== 0) seedVolForLookup = rowVolumeFromDefault(inst, null);
-  else seedVolForLookup = clamp(voice.noteVolume, 0, 0x3f);
+  else seedVolForLookup = narrow(voice.noteVolume);
   const patch = inst.resolvePatch(noteVal, seedVolForLookup);
   applyActiveSample(voice, inst, patch);
   voice.tonePortaTarget = -1; // fresh note trigger cancels any running porta
@@ -309,7 +320,17 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
     if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
-      applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
+      if (ts.surroundModel === SURROUND_STEREO) {
+        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
+      } else {
+        // Surround: the instrument's default is a POSITION (#998). Its azimuth
+        // is nine bits (byte 177 + byte 14's `A`), so it can sit behind the
+        // listener, and its elevation comes from record byte 254. An Ixmp patch
+        // can only override the azimuth — the patch record has no elevation
+        // field — so the instrument's height stands whichever pan is used.
+        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultAzimuth);
+        applyElevation(ts, voice, inst.defaultElevation);
+      }
     }
     // Pitch-pan separation.
     if (inst.pitchPanSeparation !== 0) {
@@ -331,8 +352,8 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.linearFreq = -1.0;
   voice.playbackRate = computePlaybackRate(voice, noteVal, ts.tuningRatio);
   // noteVolume seed (IT `chan->volume = psmp->volume` rule; channelVolume survives).
-  if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, 0x3f);
-  else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch);
+  if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, ts.volMax);
+  else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch, ts.volMax);
   // else: note-only retrigger inherits the channel's existing note volume.
   voice.rowVolume = voice.noteVolume;
   // Deferred anti-click ramp snap (applyVolColumn/applyEffectRow run after this).
@@ -572,19 +593,24 @@ export function applyPastNoteAction(eng, ts, channel, action) {
 }
 
 /** Volume column (value = 6-bit field, sel = 2-bit selector). */
-export function applyVolColumn(voice, value, sel) {
+export function applyVolColumn(ts, voice, value, sel) {
+  // FINE packs its direction into the TOP bit of the column's value field, so
+  // the flag and the magnitude mask move with the field's width (bit 5 of six,
+  // bit 7 of eight). Everything else is the same in both formats — a wide
+  // cell's numbers are simply four times as fine.
+  const dirBit = ts.wideCells ? 0x80 : 0x20;
   switch (sel) {
     case 0:
-      voice.noteVolume = clamp(value, 0, 0x3f);
+      voice.noteVolume = clamp(value, 0, ts.volMax);
       voice.rowVolume = voice.noteVolume;
       break;
     case 1: voice.volColSlideUp = value; break;
     case 2: voice.volColSlideDown = value; break;
     case 3: {
       if (value === 0) return;
-      const mag = value & 0x1f;
-      voice.noteVolume = (value & 0x20) !== 0
-        ? Math.min(voice.noteVolume + mag, 0x3f)
+      const mag = value & (dirBit - 1);
+      voice.noteVolume = (value & dirBit) !== 0
+        ? Math.min(voice.noteVolume + mag, ts.volMax)
         : Math.max(voice.noteVolume - mag, 0);
       voice.rowVolume = voice.noteVolume;
       break;
@@ -615,4 +641,50 @@ export function applyPanColumn(ts, voice, value, sel) {
       break;
     }
   }
+}
+
+/**
+ * A WIDE cell's panning column (format version 3): a 9-bit azimuth and a signed
+ * elevation, so the column alone can place a source anywhere on the sphere —
+ * the six bits of the narrow cell only ever reached the front arc.
+ *
+ * Two rows of the same channel can disagree, and the rules for that are the
+ * narrow cell's, extended: `S $8xxx` still wins over a column SET, and a `Z`
+ * slide on the same row turns a SET into that slide's TARGET rather than a jump
+ * (the column says what effect `4` would have said, and outranks a `4` on the
+ * same row for being the more specific statement).
+ */
+export function applyPanColumnWide(ts, voice, row) {
+  switch (row.panEff) {
+    case 0: {
+      const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
+                        ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
+      if (rowHasS80) break;
+      const el = ts.surroundModel === SURROUND_SPATIAL ? row.elevation : 0;
+      if (rowSlidesSpatially(row)) {
+        voice.spatialTargetAz = row.azimuth;
+        voice.spatialTargetEl = el;
+      } else {
+        applyPanSet(ts, voice, row.azimuth);
+        applyElevation(ts, voice, row.elevation);
+      }
+      break;
+    }
+    // Slides rotate the azimuth by the LOW byte per tick; the elevation byte is
+    // reserved for these selectors.
+    case 1: voice.panColSlideRight = row.azimuth & 0xff; break;
+    case 2: voice.panColSlideLeft = row.azimuth & 0xff; break;
+    case 3: {
+      const mag = row.azimuth & 0xff;
+      if (mag === 0) return;
+      applyPanSlide(ts, voice, (row.azimuth & 0x100) !== 0 ? mag : -mag);
+      break;
+    }
+  }
+}
+
+/** Does this row arm a Z slide (in either effect slot)? */
+function rowSlidesSpatially(row) {
+  return (row.effect === EffectOp.OP_Z && (row.effectArg & 0xfff) !== 0) ||
+         (row.effect2 === EffectOp.OP_Z && (row.effectArg2 & 0xfff) !== 0);
 }

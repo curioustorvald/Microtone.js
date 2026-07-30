@@ -79,6 +79,23 @@ const CUE_BYTES_64 = MAX_VOICES * 2; // 128 bytes / cue (64-ch)
 const NUM_PATTERNS = 0x7fff;
 const PATTERN_EMPTY = 0x7fff;
 
+// ── Cell layouts (file format version) ──
+// Versions 1-2 carry an 8-byte pattern cell; version 3 — the surround format —
+// carries 16, which is what buys the 8-bit volume column, the spherical panning
+// column and a second effect. It is a whole-FILE property, so the engine holds
+// one flag and every pattern in it is the same width.
+const ROWS_PER_PATTERN = 64;
+const CELL_BYTES = 8;
+const CELL_BYTES_WIDE = 16;
+const PATTERN_BYTES = ROWS_PER_PATTERN * CELL_BYTES;          // 512
+const PATTERN_BYTES_WIDE = ROWS_PER_PATTERN * CELL_BYTES_WIDE; // 1024
+
+/** Volume ceiling per cell format: 6-bit columns, or v3's 8-bit ones. */
+const VOLUME_MAX = 0x3f;
+const VOLUME_MAX_WIDE = 0xff;
+/** What a 6-bit-derived delta (a nibble slide, a tremolo depth) is worth. */
+const VOLUME_STEP_WIDE = 4;
+
 // Interpolation modes (TAUD_NOTE_EFFECTS.md §1, bits 2-4 of global behaviour flags).
 const INTERP_DEFAULT = 0;
 const INTERP_NONE = 1;
@@ -889,6 +906,420 @@ function spatialVoiceGains(bus, voice) {
   return sc.gains;
 }
 
+// ══ src/engine/binaural.js ══
+// Binaural monitoring (#998.3) — the render target that makes a surround song
+// AUDIBLE on headphones while you compose it.
+//
+// Why this exists: playback normally installs StereoRenderer, which folds the
+// rear semicircle onto the front and collapses elevation toward the centre. It
+// is the right stereo DOWNMIX, but it is a projection: behind sounds exactly
+// like in front, and height is inaudible. Authoring a position you cannot hear
+// is a non-starter, so this file adds a second monitor path.
+//
+// ── Why virtual speakers ──
+// A SpatialRenderer answers one question — "what GAIN does a source at (az, el)
+// get in each of my channels?" — one broadband scalar per channel. Direction-
+// dependent FILTERING (the interaural delay, the head's shadow, the pinna's
+// spectral cues) cannot be expressed that way. So the bus channels become a
+// fixed ring/sphere of VIRTUAL SPEAKERS, a source is amplitude-panned across
+// them, and the per-speaker HRTF — fixed, therefore precomputable — is applied
+// in `monitorStereo`, which the mixer calls once per frame in order. That
+// ordering is what lets this renderer be stateful (delay lines, filters) while
+// every other renderer stays a pure function.
+//
+// ── The head model ──
+// This is a PARAMETRIC model, not a measured HRTF set (no dependencies, no
+// megabytes of impulse responses, and no per-listener fitting):
+//   * ITD — Woodworth's spherical-head path length, applied to the LOW band
+//     only. Above ~1.1 kHz the ear stops using interaural phase, and delaying
+//     only the low band is also what keeps amplitude panning between two
+//     virtual speakers from combing: the comb notch of the delay DIFFERENCE
+//     between neighbours lands above the crossover, where nothing is delayed.
+//   * ILD — the Brown & Duda head-shadow shelf: unity at DC, α(θ) at HF with
+//     α = 1.05 + 0.95·cos(θ·180/150), corner c/(π·a) ≈ 1.25 kHz.
+//   * Elevation and front/back — OUR OWN cue pair, tuned by ear rather than
+//     measured: a pinna notch that rises with elevation (≈4 kHz below, 7 kHz
+//     at ear level, 12 kHz overhead) and is deepest for frontal sources where
+//     the pinna actually faces the source, plus a shelf that brightens sources
+//     that are above and/or in front. Both are direction-only cues, so they sit
+//     BEFORE the ear split and cost one biquad + one shelf per speaker.
+// Everything is unity-gain at DC, so the output level is calibrated by a single
+// constant against the stereo pan law (a front-centre source reads 0.707 per
+// ear, exactly as the fold gives it).
+//
+// Not a port: the Kotlin engine has no surround at all, so this file — like
+// spatial.js — IS the reference implementation.
+
+
+
+/** Monitor modes (playhead state). Fold = StereoRenderer, the default. */
+const MONITOR_FOLD = 0;
+const MONITOR_BINAURAL = 1;
+
+/** Head radius (m) and speed of sound (m/s) — the spherical-head model's only
+ *  physical constants; a/c is the maximum one-way path detour. */
+const BIN_HEAD_RADIUS = 0.0875;
+const BIN_SOUND_SPEED = 343.0;
+
+/** Amplitude-panning sharpness: gains ∝ max(0, cos γ)^BIN_PAN_EXP, then
+ *  energy-normalised. High enough that a source AT a speaker keeps ~83 % of its
+ *  energy there, low enough that the pan stays continuous as it moves. */
+const BIN_PAN_EXP = 8;
+
+/** ITD crossover: only this band is delayed (see the header). */
+const BIN_ITD_LP_HZ = 1100.0;
+/** Pinna-notch centre at ear level, its ± octave swing, depth and width. */
+const BIN_NOTCH_HZ = 7000.0;
+const BIN_NOTCH_OCTAVES = 0.75;
+const BIN_NOTCH_DB = 7.0;
+const BIN_NOTCH_Q = 1.6;
+/** Direction shelf: dB at HF = elevation term + front/back term, at this corner. */
+const BIN_SHELF_HZ = 4000.0;
+const BIN_SHELF_EL_DB = 6.0;
+const BIN_SHELF_FB_DB = 3.0;
+/**
+ * Level contract: a source sitting AT a virtual speaker must leave the head
+ * with the same total power the stereo pan law would have given it
+ * (cos² + sin² = 1). The head's own filters do not obey that on their own — the
+ * near ear's shadow shelf BOOSTS by up to 6 dB — so each speaker's feed is
+ * scaled by the calibration below. It equalises the SUM of the two ears and
+ * leaves their RATIO alone, which is the whole cue. Frequency grid size for
+ * that integral (midpoint rule over 0…Nyquist, white-weighted, i.e. what an RMS
+ * measurement on broadband noise sees).
+ */
+const BIN_CALIB_BANDS = 96;
+
+/** Delay-line length in frames — a power of two ≥ the longest ITD (~21 frames
+ *  at 32 kHz, since (a/c)(1 + π/2) ≈ 0.65 ms). */
+const BIN_RING = 32;
+const BIN_RING_MASK = BIN_RING - 1;
+
+/**
+ * Virtual speaker directions as [azimuth, elevation] pairs in engine units.
+ * Planar songs get a 12-point horizontal ring (30° apart, with speakers exactly
+ * at front/back/left/right); a spatial song adds ±45° rings and the two poles,
+ * 26 in all. Denser is smoother and linearly more expensive — this is the
+ * playback path, so it is deliberately the coarsest layout that still moves
+ * continuously.
+ */
+function binauralSpeakerLayout(sphere) {
+  const out = [];
+  const ring = (count, el) => {
+    for (let k = 0; k < count; k++) out.push([(k * AZIMUTH_TURN) / count, el]);
+  };
+  ring(12, 0);
+  if (sphere) {
+    ring(6, ELEVATION_QUARTER / 2);
+    ring(6, -ELEVATION_QUARTER / 2);
+    out.push([128, ELEVATION_QUARTER], [128, -ELEVATION_QUARTER]);
+  }
+  return out;
+}
+
+/**
+ * First-order shelf H(s) = (1 + G·s/ω)/(1 + s/ω) — unity at DC, `gainHf` at
+ * Nyquist — bilinear-transformed into y = b0·x + b1·x₋₁ − a1·y₋₁. Both the head
+ * shadow (G = α) and the direction shelf are this same section.
+ */
+function binauralShelf(gainHf, fc, fs, out, off) {
+  const k = fs / (Math.PI * fc);
+  out[off] = (1.0 + gainHf * k) / (1.0 + k);
+  out[off + 1] = (1.0 - gainHf * k) / (1.0 + k);
+  out[off + 2] = (1.0 - k) / (1.0 + k);
+  return out;
+}
+
+/**
+ * RBJ peaking section with negative gain — the pinna notch. Unity at DC and at
+ * Nyquist (so it colours the cue band and nothing else), `db` deep at `fc`.
+ * Written as b0, b1, b2, a1, a2 with a0 divided out.
+ */
+function binauralNotch(db, fc, q, fs, out, off) {
+  const w0 = (2.0 * Math.PI * Math.min(fc, fs * 0.45)) / fs;
+  const cw = Math.cos(w0);
+  const alpha = Math.sin(w0) / (2.0 * q);
+  const a = Math.pow(10.0, -db / 40.0); // db > 0 → a cut
+  const a0 = 1.0 + alpha / a;
+  out[off] = (1.0 + alpha * a) / a0;
+  out[off + 1] = (-2.0 * cw) / a0;
+  out[off + 2] = (1.0 - alpha * a) / a0;
+  out[off + 3] = (-2.0 * cw) / a0;
+  out[off + 4] = (1.0 - alpha / a) / a0;
+  return out;
+}
+
+/**
+ * One-way propagation delay (seconds) to an ear at `earY` (+1 left, −1 right)
+ * for a source whose direction has left/right component `dy` — Woodworth: the
+ * near side arrives early by a·cos, the far side has to creep round the sphere.
+ * The ear axis is ±y, so nothing else about the direction matters. Offset so
+ * the value is never negative: the absolute delay is inaudible, and a delay
+ * line cannot look ahead.
+ */
+function binauralEarDelay(dy, earY) {
+  const cosA = dy * earY; // |d| = 1, so this is the cosine of the angle
+  const a = Math.acos(cosA < -1 ? -1 : cosA > 1 ? 1 : cosA);
+  const t = a <= Math.PI / 2 ? -Math.cos(a) : a - Math.PI / 2;
+  return ((t + 1.0) * BIN_HEAD_RADIUS) / BIN_SOUND_SPEED;
+}
+
+// ── frequency responses, used once per construction by the calibration ────
+// Complex values are [re, im] pairs in a scratch array; none of this runs while
+// audio does.
+
+/** Complex response of a biquad b0,b1,b2 / 1,a1,a2 at digital frequency w. */
+function binBiquadResp(c, off, w, out) {
+  const c1 = Math.cos(w), s1 = Math.sin(w);
+  const c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+  const nr = c[off] + c[off + 1] * c1 + c[off + 2] * c2;
+  const ni = -(c[off + 1] * s1 + c[off + 2] * s2);
+  const dr = 1 + c[off + 3] * c1 + c[off + 4] * c2;
+  const di = -(c[off + 3] * s1 + c[off + 4] * s2);
+  const den = dr * dr + di * di;
+  out[0] = (nr * dr + ni * di) / den;
+  out[1] = (ni * dr - nr * di) / den;
+  return out;
+}
+
+/** Same, for a first-order section b0,b1 / 1,a1. */
+function binShelfResp(c, off, w, out) {
+  const c1 = Math.cos(w), s1 = Math.sin(w);
+  const nr = c[off] + c[off + 1] * c1;
+  const ni = -(c[off + 1] * s1);
+  const dr = 1 + c[off + 2] * c1;
+  const di = -(c[off + 2] * s1);
+  const den = dr * dr + di * di;
+  out[0] = (nr * dr + ni * di) / den;
+  out[1] = (ni * dr - nr * di) / den;
+  return out;
+}
+
+const binDir = new Float64Array(3);
+
+/**
+ * Headphone render target: the bus carries virtual-speaker feeds, and the
+ * monitor pair is those feeds through the head model. `numChannels` is the
+ * layout size, so this costs (speakers × voices) multiplies per frame in the
+ * mixer — the reason the layout stays small.
+ */
+class BinauralRenderer {
+  constructor(sphere = true, sampleRate = SAMPLING_RATE) {
+    this.sphere = sphere;
+    this.layout = binauralSpeakerLayout(sphere);
+    this.numChannels = this.layout.length;
+    this.name = `binaural-${sphere ? "3d" : "2d"}`;
+    this.sampleRate = sampleRate;
+
+    const ns = this.numChannels;
+    /** Unit vector per speaker — the panner compares directions, not angles. */
+    this.dirs = new Float64Array(ns * 3);
+    this.notch = new Float64Array(ns * 5);
+    this.shelf = new Float64Array(ns * 3);
+    this.shadow = new Float64Array(ns * 2 * 3);   // [speaker][ear] shelf
+    this.delayInt = new Int32Array(ns * 2);
+    this.delayFrac = new Float64Array(ns * 2);
+
+    for (let s = 0; s < ns; s++) {
+      const [az, el] = this.layout[s];
+      directionFromAngles(az, el, binDir);
+      const dx = binDir[0], dy = binDir[1], dz = binDir[2];
+      this.dirs[s * 3] = dx;
+      this.dirs[s * 3 + 1] = dy;
+      this.dirs[s * 3 + 2] = dz;
+
+      // Direction-only cues (ear-independent): the notch rises with elevation
+      // and is deepest where the pinna faces the source; the shelf brightens
+      // what is above and in front.
+      const front = dx > 0 ? dx : 0;
+      const sinEl = dz;
+      binauralNotch(
+        BIN_NOTCH_DB * (0.35 + 0.65 * front),
+        BIN_NOTCH_HZ * Math.pow(2.0, BIN_NOTCH_OCTAVES * sinEl),
+        BIN_NOTCH_Q, sampleRate, this.notch, s * 5,
+      );
+      const shelfDb = BIN_SHELF_EL_DB * sinEl + BIN_SHELF_FB_DB * dx;
+      binauralShelf(Math.pow(10.0, shelfDb / 20.0), BIN_SHELF_HZ, sampleRate, this.shelf, s * 3);
+
+      for (let ear = 0; ear < 2; ear++) {
+        const earY = ear === 0 ? 1.0 : -1.0;
+        // Brown & Duda: α runs 2.0 at the ear's own axis down to 0.1 at 150°.
+        const theta = Math.acos(Math.max(-1, Math.min(1, dy * earY)));
+        const alpha = 1.05 + 0.95 * Math.cos((theta * 180.0) / 150.0);
+        binauralShelf(alpha, BIN_SOUND_SPEED / (Math.PI * BIN_HEAD_RADIUS),
+          sampleRate, this.shadow, (s * 2 + ear) * 3);
+        const d = binauralEarDelay(dy, earY) * sampleRate;
+        const di = Math.floor(d);
+        this.delayInt[s * 2 + ear] = di;
+        this.delayFrac[s * 2 + ear] = d - di;
+      }
+    }
+
+    // Filter + delay state, all flat and preallocated (this runs per frame).
+    this.notchState = new Float64Array(ns * 2);
+    this.shelfState = new Float64Array(ns * 2);   // [x₋₁, y₋₁]
+    this.shadowState = new Float64Array(ns * 2 * 2);
+    this.lpState = new Float64Array(ns);
+    this.ring = new Float64Array(ns * BIN_RING);
+    this.ringPos = 0;
+    this.lpA = 1.0 - Math.exp((-2.0 * Math.PI * BIN_ITD_LP_HZ) / sampleRate);
+    this._g = new Float64Array(ns);
+    this._calibrate();
+  }
+
+  /**
+   * Scale each speaker's feed so both ears together carry unit power for unit
+   * broadband input — see BIN_CALIB_BANDS. The gain is folded into the notch's
+   * numerator, which is the first thing every sample meets, so it costs nothing
+   * at run time. Cheap enough to redo whenever the model is rebuilt (once per
+   * song, at most).
+   */
+  _calibrate() {
+    const ns = this.numChannels;
+    const a = new Float64Array(2);
+    const b = new Float64Array(2);
+    for (let s = 0; s < ns; s++) {
+      let acc = 0.0;
+      for (let k = 0; k < BIN_CALIB_BANDS; k++) {
+        const w = (Math.PI * (k + 0.5)) / BIN_CALIB_BANDS;
+        binBiquadResp(this.notch, s * 5, w, a);
+        binShelfResp(this.shelf, s * 3, w, b);
+        // Direction-only stages, common to both ears.
+        const dr = a[0] * b[0] - a[1] * b[1];
+        const di = a[0] * b[1] + a[1] * b[0];
+        // The ITD crossover: the low band is delayed, the high band is not, so
+        // the split is a (mild) comb of its own and belongs in the integral.
+        const lp = this.lpA;
+        const lr = 1 - (1 - lp) * Math.cos(w);
+        const li = (1 - lp) * Math.sin(w);
+        const lden = lr * lr + li * li;
+        const lo_r = (lp * lr) / lden;
+        const lo_i = (-lp * li) / lden;
+        for (let ear = 0; ear < 2; ear++) {
+          const j = s * 2 + ear;
+          const d = this.delayInt[j] + this.delayFrac[j];
+          const cd = Math.cos(w * d), sd = -Math.sin(w * d);
+          // lo·e^{-jwd} + (1 − lo)
+          const pr = lo_r * cd - lo_i * sd + (1 - lo_r);
+          const pi = lo_r * sd + lo_i * cd - lo_i;
+          binShelfResp(this.shadow, j * 3, w, b);
+          const er = pr * b[0] - pi * b[1];
+          const ei = pr * b[1] + pi * b[0];
+          const tr = dr * er - di * ei;
+          const ti = dr * ei + di * er;
+          acc += tr * tr + ti * ti;
+        }
+      }
+      const comp = 1.0 / Math.sqrt(acc / BIN_CALIB_BANDS);
+      this.notch[s * 5] *= comp;
+      this.notch[s * 5 + 1] *= comp;
+      this.notch[s * 5 + 2] *= comp;
+    }
+  }
+
+  /** Reset every filter and delay line (a new song, or a monitor switch). */
+  reset() {
+    this.notchState.fill(0);
+    this.shelfState.fill(0);
+    this.shadowState.fill(0);
+    this.lpState.fill(0);
+    this.ring.fill(0);
+    this.ringPos = 0;
+  }
+
+  /**
+   * Amplitude-pan a source across the layout: cos^n of the angle to each
+   * speaker, then normalised so the gains SUM to one.
+   *
+   * Sum, not sum-of-squares: loudspeakers in a room decorrelate and add in
+   * power, but here every virtual speaker feeding an ear is the same signal
+   * through a slightly different head, so it adds in AMPLITUDE — energy
+   * normalisation would make a phantom direction 3 dB louder than a source
+   * sitting on a speaker. A direction no speaker can see (only reachable if a
+   * planar layout is handed an elevated source) spreads evenly rather than
+   * falling silent.
+   */
+  channelGains(az, el, out, off) {
+    directionFromAngles(az, el, binDir);
+    const ns = this.numChannels;
+    const dirs = this.dirs;
+    const g = this._g;
+    let sum = 0.0;
+    for (let s = 0; s < ns; s++) {
+      const c = binDir[0] * dirs[s * 3] + binDir[1] * dirs[s * 3 + 1] + binDir[2] * dirs[s * 3 + 2];
+      const w = c > 0 ? Math.pow(c, BIN_PAN_EXP) : 0.0;
+      g[s] = w;
+      sum += w;
+    }
+    if (sum <= 0.0) {
+      const u = 1.0 / ns;
+      for (let s = 0; s < ns; s++) out[off + s] = u;
+      return;
+    }
+    const norm = 1.0 / sum;
+    for (let s = 0; s < ns; s++) out[off + s] = g[s] * norm;
+  }
+
+  /**
+   * The head model, one frame at a time (the mixer calls this in frame order,
+   * which is what makes the state below legal). Per speaker: pinna notch →
+   * direction shelf → split at the ITD crossover; per ear: delay the low band,
+   * add the undelayed high band, then the head shadow.
+   */
+  monitorStereo(data, frames, n, out) {
+    const ns = this.numChannels;
+    const notch = this.notch, nst = this.notchState;
+    const shelf = this.shelf, sst = this.shelfState;
+    const shadow = this.shadow, hst = this.shadowState;
+    const ring = this.ring, pos = this.ringPos;
+    const dInt = this.delayInt, dFrac = this.delayFrac;
+    const lpA = this.lpA, lp = this.lpState;
+    let l = 0.0;
+    let r = 0.0;
+
+    for (let s = 0; s < ns; s++) {
+      const x = data[s * frames + n];
+
+      // Pinna notch — transposed direct form II.
+      const nc = s * 5;
+      const y = notch[nc] * x + nst[s * 2];
+      nst[s * 2] = notch[nc + 1] * x - notch[nc + 3] * y + nst[s * 2 + 1];
+      nst[s * 2 + 1] = notch[nc + 2] * x - notch[nc + 4] * y;
+
+      // Direction shelf — first order, y = b0·x + b1·x₋₁ − a1·y₋₁.
+      const sc = s * 3;
+      const sv = shelf[sc] * y + shelf[sc + 1] * sst[s * 2] - shelf[sc + 2] * sst[s * 2 + 1];
+      sst[s * 2] = y;
+      sst[s * 2 + 1] = sv;
+
+      // ITD crossover: the low band goes down the delay line, the high band
+      // bypasses it (and the two sum back to sv when the delay is zero).
+      const lo = lp[s] + lpA * (sv - lp[s]);
+      lp[s] = lo;
+      const hi = sv - lo;
+      const base = s * BIN_RING;
+      ring[base + (pos & BIN_RING_MASK)] = lo;
+
+      for (let ear = 0; ear < 2; ear++) {
+        const j = s * 2 + ear;
+        const i0 = pos - dInt[j];
+        const f = dFrac[j];
+        const d0 = ring[base + (i0 & BIN_RING_MASK)];
+        const d1 = ring[base + ((i0 - 1) & BIN_RING_MASK)];
+        const ear_in = d0 + (d1 - d0) * f + hi;
+        const hc = j * 3;
+        const hs = shadow[hc] * ear_in + shadow[hc + 1] * hst[j * 2] - shadow[hc + 2] * hst[j * 2 + 1];
+        hst[j * 2] = ear_in;
+        hst[j * 2 + 1] = hs;
+        if (ear === 0) l += hs; else r += hs;
+      }
+    }
+
+    this.ringPos = pos + 1;
+    out[0] = l;
+    out[1] = r;
+  }
+}
+
 // ══ src/engine/inst.js ══
 // Taud instrument data model — port of AudioAdapter.kt TaudInstEnvPoint (5246),
 // TaudInstPatch (5261), MetaLayer (5312), TaudInst (5378-5766).
@@ -1170,7 +1601,8 @@ class TaudInst {
     this.samplePlayStart = 0;
     this.sampleLoopStart = 0;
     this.sampleLoopEnd = 0;
-    this.loopMode = 0;            // byte 14: bits 0-1 mode, bit 2 sustain, bit 4 percussion
+    this.loopMode = 0;            // byte 14: bits 0-1 mode, bit 2 sustain, bit 4 percussion,
+                                  //          bit 5 spatial azimuth MSB (#998)
     this.volEnvLoop = 0;          // bytes 15-16 (LOOP word)
     this.panEnvLoop = 0;          // bytes 17-18
     this.pfEnvLoop = 0;           // bytes 19-20
@@ -1229,6 +1661,21 @@ class TaudInst {
     return this.metaRaw !== null
       ? (this.metaRaw[0] & 0x02) !== 0
       : (this.loopMode & 0x10) !== 0;
+  }
+  /**
+   * The instrument's default position as a 9-bit azimuth (#998): record byte
+   * 177 is its LOW byte and byte 14's bit 5 (`A`) the ninth — exactly the
+   * relationship `S $8xxx` has with the legacy pan byte, which is what makes
+   * this backwards compatible. An old file has bit 5 clear, so its pan lands on
+   * the front arc it always meant, and a stereo song reads byte 177 alone.
+   */
+  get defaultAzimuth() {
+    return ((this.loopMode & 0x20) !== 0 ? 256 : 0) | (this.defaultPan & 0xff);
+  }
+  /** Default elevation (#998), record byte 254, signed. Spatial songs only. */
+  get defaultElevation() {
+    const b = this.reserved[3] & 0xff; // byte 254 → reserved[254 − 251]
+    return b >= 0x80 ? b - 256 : b;
   }
   get nnaKeyLift() { return ((this.instrumentFlag >>> 5) & 1) !== 0; }
   /** 0=note off, 1=note cut, 2=continue, 3=note fade. */
@@ -1382,7 +1829,7 @@ class TaudInst {
       case 11: return (this.sampleLoopStart >>> 8) & 0xff;
       case 12: return this.sampleLoopEnd & 0xff;
       case 13: return (this.sampleLoopEnd >>> 8) & 0xff;
-      case 14: return this.loopMode & 0x17;
+      case 14: return this.loopMode & 0x37;
       case 15: return this.volEnvLoop & 0xff;
       case 16: return (this.volEnvLoop >>> 8) & 0xff;
       case 17: return this.panEnvLoop & 0xff;
@@ -1445,7 +1892,7 @@ class TaudInst {
       case 11: this.sampleLoopStart = (this.sampleLoopStart & 0x00ff) | (byte << 8); break;
       case 12: this.sampleLoopEnd = (this.sampleLoopEnd & 0xff00) | byte; break;
       case 13: this.sampleLoopEnd = (this.sampleLoopEnd & 0x00ff) | (byte << 8); break;
-      case 14: this.loopMode = byte & 0x17; break;
+      case 14: this.loopMode = byte & 0x37; break;
       case 15: this.volEnvLoop = (this.volEnvLoop & 0xff00) | byte; break;
       case 16: this.volEnvLoop = (this.volEnvLoop & 0x00ff) | (byte << 8); break;
       case 17: this.panEnvLoop = (this.panEnvLoop & 0xff00) | byte; break;
@@ -1865,6 +2312,7 @@ class Voice {
 
 
 
+
 // ── PlayInstruction (4484-4494) — tagged objects ──
 const INST_NOP = 0;
 const INST_GOBACK = 1;
@@ -1955,16 +2403,73 @@ function rowsOf(inst) {
 }
 
 // ── TaudPlayData — one pattern cell (5210-5244) ──
+// Two wire layouts share these fields: the 8-byte cell of format versions 1-2
+// (getByte/setByte) and version 3's 16-byte WIDE cell (getByteWide/setByteWide).
+// The wide layout is a superset in meaning, not in encoding — its volume is a
+// whole byte and its panning column is an azimuth plus an elevation rather than
+// a 6-bit front-arc value — so the two codecs stay separate and the v2 path is
+// untouched, which is what keeps it bit-exact.
 class TaudPlayData {
   constructor() {
     this.note = 0;       // 0..65535
     this.instrment = 0;  // 0..255 (sic — Kotlin field name kept for diffability)
-    this.volume = 0;     // 0..63
-    this.volumeEff = 0;  // 0..3
-    this.pan = 0;        // 0..63
-    this.panEff = 0;     // 0..3
+    this.volume = 0;     // 0..63, or 0..255 in a wide cell
+    this.volumeEff = 0;  // 0..3, or 0..7 in a wide cell
+    this.pan = 0;        // 0..63 — the 8-byte cell's front-arc column value
+    this.panEff = 0;     // 0..3, or 0..15 in a wide cell
     this.effect = 0;     // 0..255
     this.effectArg = 0;  // 0..65535
+    // ── wide cell only (#v3) ──
+    this.azimuth = 0;    // 0..511, the panning column's 9-bit angle
+    this.elevation = 0;  // -128..127, signed
+    this.effect2 = 0;    // second effect, applied after the first
+    this.effectArg2 = 0;
+  }
+
+  /** Wide-cell byte view — see the file format's §5.5 table. */
+  getByteWide(offset) {
+    switch (offset) {
+      case 0: return this.note & 0xff;
+      case 1: return (this.note >>> 8) & 0xff;
+      case 2: return this.instrment & 0xff;
+      case 3: return this.volume & 0xff;
+      case 4: return this.azimuth & 0xff;
+      case 5: return this.effect & 0xff;
+      case 6: return this.effectArg & 0xff;
+      case 7: return (this.effectArg >>> 8) & 0xff;
+      case 8: return (((this.azimuth >>> 8) & 1) << 7) |
+                     ((this.volumeEff & 7) << 4) | (this.panEff & 0xf);
+      case 9: return this.elevation & 0xff;
+      case 10: return this.effect2 & 0xff;
+      case 11: return this.effectArg2 & 0xff;
+      case 12: return (this.effectArg2 >>> 8) & 0xff;
+      case 13: case 14: case 15: return 0; // RESERVED
+      default: throw new Error(`Bad offset ${offset}`);
+    }
+  }
+
+  setByteWide(offset, byte) {
+    switch (offset) {
+      case 0: this.note = (this.note & 0xff00) | byte; break;
+      case 1: this.note = (this.note & 0x00ff) | (byte << 8); break;
+      case 2: this.instrment = byte; break;
+      case 3: this.volume = byte & 0xff; break;
+      case 4: this.azimuth = (this.azimuth & 0x100) | byte; break;
+      case 5: this.effect = byte; break;
+      case 6: this.effectArg = (this.effectArg & 0xff00) | byte; break;
+      case 7: this.effectArg = (this.effectArg & 0x00ff) | (byte << 8); break;
+      case 8:
+        this.azimuth = (this.azimuth & 0xff) | ((byte & 0x80) << 1);
+        this.volumeEff = (byte >>> 4) & 7;
+        this.panEff = byte & 0xf;
+        break;
+      case 9: this.elevation = byte >= 0x80 ? byte - 0x100 : byte; break;
+      case 10: this.effect2 = byte; break;
+      case 11: this.effectArg2 = (this.effectArg2 & 0xff00) | byte; break;
+      case 12: this.effectArg2 = (this.effectArg2 & 0x00ff) | (byte << 8); break;
+      case 13: case 14: case 15: break; // RESERVED
+      default: throw new Error(`Bad offset ${offset}`);
+    }
   }
 
   getByte(offset) {
@@ -2013,6 +2518,18 @@ class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Cell format (file format version 3 — the wide cell). It sets the width of
+    // the volume column, and with it the whole volume STATE: note, row and
+    // channel volume are 0…63 in a v2 song and 0…255 in a v3 one. `volStep` is
+    // what a 6-bit-derived delta is worth (a nibble slide, a tremolo depth), so
+    // `D $01` moves at the same musical rate in both; `volDiv` normalises to
+    // gain. Instrument data — envelope nodes, Ixmp velocity rectangles — stays
+    // 6-bit in both, so a bank loads into either.
+    this.wideCells = false;
+    this.volMax = VOLUME_MAX;
+    this.volStep = 1;
+    this.volDiv = 63.0;
+
     // Surround model (#998; song-immutable `ss` flag) + the object bus it mixes
     // into. Null bus = the stereo model, which keeps the plain two-accumulator
     // path untouched — see mixer.js.
@@ -2055,6 +2572,24 @@ class TrackerState {
 
     // Mixer-private background voices (NNA ghosts); index 0 = oldest.
     this.backgroundVoices = [];
+  }
+
+  /**
+   * Install the cell format (file format version 3). Rescales the running
+   * volume state so a switch cannot leave a voice at a quarter of its intended
+   * level; in practice this is called once, before anything is uploaded.
+   */
+  setCellFormat(wide) {
+    if (this.wideCells === !!wide) return;
+    this.wideCells = !!wide;
+    this.volMax = wide ? VOLUME_MAX_WIDE : VOLUME_MAX;
+    this.volStep = wide ? VOLUME_STEP_WIDE : 1;
+    this.volDiv = this.volMax * 1.0;
+    for (const v of this.voices) {
+      v.noteVolume = this.volMax;
+      v.channelVolume = this.volMax;
+      v.rowVolume = this.volMax;
+    }
   }
 
   /**
@@ -2105,12 +2640,39 @@ class Playhead {
     this.jamActive = false;
     this.initialGlobalFlags = 0;
     // Song-immutable surround model + the render target it mixes through
-    // (#998). Null renderer = the device's stereo monitor; an exporter swaps in
-    // its own without the engine knowing which format asked.
+    // (#998). Null renderer = the device's own monitor, picked by monitorMode
+    // (fold or binaural, #998.3); an exporter overrides it with the format's
+    // renderer and the engine never learns which format asked.
     this.surroundModel = SURROUND_STEREO;
     this.spatialRenderer = null;
+    this.monitorMode = MONITOR_FOLD;
+    this.binauralRenderer = null; // built on demand, kept across model switches
 
     this._isPlaying = false;
+  }
+
+  /**
+   * The render target the object bus should use right now (#998.3): an
+   * exporter's explicit renderer if one is installed, otherwise the device
+   * monitor this playhead is set to — null for the fold (the bus builds its own
+   * StereoRenderer), or a binaural head matching the song's model. The binaural
+   * renderer is stateful, so it is kept across model switches and reset each
+   * time it is (re-)installed.
+   */
+  effectiveSpatialRenderer() {
+    if (this.spatialRenderer !== null) return this.spatialRenderer;
+    if (this.monitorMode !== MONITOR_BINAURAL || this.surroundModel === SURROUND_STEREO) return null;
+    const sphere = this.surroundModel === SURROUND_SPATIAL;
+    if (this.binauralRenderer === null || this.binauralRenderer.sphere !== sphere) {
+      this.binauralRenderer = new BinauralRenderer(sphere);
+    }
+    this.binauralRenderer.reset();
+    return this.binauralRenderer;
+  }
+
+  /** (Re-)install the surround model on the tracker state with that target. */
+  applySurroundModel() {
+    this.trackerState.setSurroundModel(this.surroundModel, this.effectiveSpatialRenderer());
   }
 
   updateTrackerGlobalBehaviour(flags) {
@@ -2166,15 +2728,15 @@ class Playhead {
     ts.pendingInterrupts = 0;
     ts.toneMode = this.initialGlobalFlags & 3;
     ts.interpolationMode = (this.initialGlobalFlags >>> 2) & 7;
-    ts.setSurroundModel(this.surroundModel, this.spatialRenderer);
+    this.applySurroundModel();
     ts.ledFilterOn = false;
     ts.amigaLPStateL = 0.0; ts.amigaLPStateR = 0.0;
     ts.amigaLEDStateL.fill(0.0); ts.amigaLEDStateR.fill(0.0);
     for (const it of ts.voices) {
       it.active = false;
-      it.noteVolume = 0x3f;
-      it.channelVolume = 0x3f;
-      it.rowVolume = 0x3f;
+      it.noteVolume = ts.volMax;
+      it.channelVolume = ts.volMax;
+      it.rowVolume = ts.volMax;
       it.currentMixVolume = 1.0;
       it.volRampSamples = 0;
       it.volRampStep = 0.0;
@@ -2435,9 +2997,10 @@ function startFastFade(voice, playhead) {
   voice.activeFadeoutStep = Math.min(Math.max(Math.round(1024.0 / ticks), 1), 0xfff);
 }
 
-/** Per-sample volume-ramp tick toward (rowVolume/63)·(channelVolume/63). */
-function advanceVolumeRamp(voice) {
-  const target = (voice.rowVolume / 63.0) * (voice.channelVolume / 63.0);
+/** Per-sample volume-ramp tick toward (rowVolume/max)·(channelVolume/max).
+ *  `div` is the volume column's ceiling: 63 as ever, 255 for a wide cell. */
+function advanceVolumeRamp(voice, div = 63.0) {
+  const target = (voice.rowVolume / div) * (voice.channelVolume / div);
   if (voice.snapMixVolume) {
     voice.currentMixVolume = target;
     voice.volRampSamples = 0;
@@ -3036,11 +3599,14 @@ function resolveActiveEnvelopes(voice, inst, patch) {
   }
 }
 
-/** Trigger-time noteVolume seed from Default Note Volume (byte 196; 0 = legacy 0x3F). */
-function rowVolumeFromDefault(inst, patch = null) {
+/** Trigger-time noteVolume seed from Default Note Volume (byte 196; 0 = legacy
+ *  full volume). The record's field is 8-bit: a 6-bit column narrows it, a wide
+ *  cell's 8-bit volume state takes it as it stands. */
+function rowVolumeFromDefault(inst, patch = null, volMax = 0x3f) {
   const patchDnv = patch !== null && patch.defaultNoteVolume !== 0 ? patch.defaultNoteVolume : null;
   const dnv = patchDnv !== null ? patchDnv : inst.defaultNoteVolume;
-  return dnv === 0 ? 0x3f : Math.trunc((dnv * 63 + 127) / 255);
+  if (dnv === 0) return volMax;
+  return volMax === 0xff ? dnv : Math.trunc((dnv * 63 + 127) / 255);
 }
 
 /** Cap backgroundVoices to MAX_BG_VOICES, preferring to evict the oldest NON-layer ghost. */
@@ -3094,7 +3660,10 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     voice.isLayerChild = false;
     return;
   }
-  const seedVol = rowVolOverride >= 0 && rowVolOverride <= 0x3f ? rowVolOverride : 0x3f;
+  // Layer gating is an INSTRUMENT-side rectangle, so the axis is 6-bit whatever
+  // the column's width: narrow a wide cell's volume to it.
+  const gateVol = ts.wideCells ? rowVolOverride >> 2 : rowVolOverride;
+  const seedVol = gateVol >= 0 && gateVol <= 0x3f ? gateVol : 0x3f;
   let layers = inst.resolveMetaLayers(noteVal, seedVol);
   // STRICT layering: drop layers whose patches don't cover the note (the gating
   // bbox is loose; strict converters emit each layer's canonical into its patches).
@@ -3137,10 +3706,13 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
+  // The velocity rectangle is instrument data and stays 6-bit in every format,
+  // so a wide cell's 8-bit volume is narrowed for the lookup (255 → 63).
+  const narrow = (v) => clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
   let seedVolForLookup;
-  if (volOverride >= 0) seedVolForLookup = clamp(volOverride, 0, 0x3f);
+  if (volOverride >= 0) seedVolForLookup = narrow(volOverride);
   else if (instId !== 0) seedVolForLookup = rowVolumeFromDefault(inst, null);
-  else seedVolForLookup = clamp(voice.noteVolume, 0, 0x3f);
+  else seedVolForLookup = narrow(voice.noteVolume);
   const patch = inst.resolvePatch(noteVal, seedVolForLookup);
   applyActiveSample(voice, inst, patch);
   voice.tonePortaTarget = -1; // fresh note trigger cancels any running porta
@@ -3195,7 +3767,17 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
     if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
-      applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
+      if (ts.surroundModel === SURROUND_STEREO) {
+        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
+      } else {
+        // Surround: the instrument's default is a POSITION (#998). Its azimuth
+        // is nine bits (byte 177 + byte 14's `A`), so it can sit behind the
+        // listener, and its elevation comes from record byte 254. An Ixmp patch
+        // can only override the azimuth — the patch record has no elevation
+        // field — so the instrument's height stands whichever pan is used.
+        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultAzimuth);
+        applyElevation(ts, voice, inst.defaultElevation);
+      }
     }
     // Pitch-pan separation.
     if (inst.pitchPanSeparation !== 0) {
@@ -3217,8 +3799,8 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.linearFreq = -1.0;
   voice.playbackRate = computePlaybackRate(voice, noteVal, ts.tuningRatio);
   // noteVolume seed (IT `chan->volume = psmp->volume` rule; channelVolume survives).
-  if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, 0x3f);
-  else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch);
+  if (volOverride >= 0) voice.noteVolume = clamp(volOverride, 0, ts.volMax);
+  else if (instId !== 0) voice.noteVolume = rowVolumeFromDefault(inst, patch, ts.volMax);
   // else: note-only retrigger inherits the channel's existing note volume.
   voice.rowVolume = voice.noteVolume;
   // Deferred anti-click ramp snap (applyVolColumn/applyEffectRow run after this).
@@ -3458,19 +4040,24 @@ function applyPastNoteAction(eng, ts, channel, action) {
 }
 
 /** Volume column (value = 6-bit field, sel = 2-bit selector). */
-function applyVolColumn(voice, value, sel) {
+function applyVolColumn(ts, voice, value, sel) {
+  // FINE packs its direction into the TOP bit of the column's value field, so
+  // the flag and the magnitude mask move with the field's width (bit 5 of six,
+  // bit 7 of eight). Everything else is the same in both formats — a wide
+  // cell's numbers are simply four times as fine.
+  const dirBit = ts.wideCells ? 0x80 : 0x20;
   switch (sel) {
     case 0:
-      voice.noteVolume = clamp(value, 0, 0x3f);
+      voice.noteVolume = clamp(value, 0, ts.volMax);
       voice.rowVolume = voice.noteVolume;
       break;
     case 1: voice.volColSlideUp = value; break;
     case 2: voice.volColSlideDown = value; break;
     case 3: {
       if (value === 0) return;
-      const mag = value & 0x1f;
-      voice.noteVolume = (value & 0x20) !== 0
-        ? Math.min(voice.noteVolume + mag, 0x3f)
+      const mag = value & (dirBit - 1);
+      voice.noteVolume = (value & dirBit) !== 0
+        ? Math.min(voice.noteVolume + mag, ts.volMax)
         : Math.max(voice.noteVolume - mag, 0);
       voice.rowVolume = voice.noteVolume;
       break;
@@ -3501,6 +4088,52 @@ function applyPanColumn(ts, voice, value, sel) {
       break;
     }
   }
+}
+
+/**
+ * A WIDE cell's panning column (format version 3): a 9-bit azimuth and a signed
+ * elevation, so the column alone can place a source anywhere on the sphere —
+ * the six bits of the narrow cell only ever reached the front arc.
+ *
+ * Two rows of the same channel can disagree, and the rules for that are the
+ * narrow cell's, extended: `S $8xxx` still wins over a column SET, and a `Z`
+ * slide on the same row turns a SET into that slide's TARGET rather than a jump
+ * (the column says what effect `4` would have said, and outranks a `4` on the
+ * same row for being the more specific statement).
+ */
+function applyPanColumnWide(ts, voice, row) {
+  switch (row.panEff) {
+    case 0: {
+      const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
+                        ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
+      if (rowHasS80) break;
+      const el = ts.surroundModel === SURROUND_SPATIAL ? row.elevation : 0;
+      if (rowSlidesSpatially(row)) {
+        voice.spatialTargetAz = row.azimuth;
+        voice.spatialTargetEl = el;
+      } else {
+        applyPanSet(ts, voice, row.azimuth);
+        applyElevation(ts, voice, row.elevation);
+      }
+      break;
+    }
+    // Slides rotate the azimuth by the LOW byte per tick; the elevation byte is
+    // reserved for these selectors.
+    case 1: voice.panColSlideRight = row.azimuth & 0xff; break;
+    case 2: voice.panColSlideLeft = row.azimuth & 0xff; break;
+    case 3: {
+      const mag = row.azimuth & 0xff;
+      if (mag === 0) return;
+      applyPanSlide(ts, voice, (row.azimuth & 0x100) !== 0 ? mag : -mag);
+      break;
+    }
+  }
+}
+
+/** Does this row arm a Z slide (in either effect slot)? */
+function rowSlidesSpatially(row) {
+  return (row.effect === EffectOp.OP_Z && (row.effectArg & 0xfff) !== 0) ||
+         (row.effect2 === EffectOp.OP_Z && (row.effectArg2 & 0xfff) !== 0);
 }
 
 // ══ src/engine/effects.js ══
@@ -3583,11 +4216,11 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
       if (hi === 0xff || hi === 0xf0) {
-        voice.noteVolume = Math.min(voice.noteVolume + 0xf, 0x3f); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.min(voice.noteVolume + 0xf * ts.volStep, ts.volMax); voice.rowVolume = voice.noteVolume;
       } else if (hin === 0xf && lo !== 0) {
-        voice.noteVolume = Math.max(voice.noteVolume - lo, 0); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.max(voice.noteVolume - lo * ts.volStep, 0); voice.rowVolume = voice.noteVolume;
       } else if (lo === 0xf && hin !== 0) {
-        voice.noteVolume = Math.min(voice.noteVolume + hin, 0x3f); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.min(voice.noteVolume + hin * ts.volStep, ts.volMax); voice.rowVolume = voice.noteVolume;
       } else if (hin === 0 && lo !== 0) {
         voice.slideMode = 5; voice.slideArg = -lo;
       } else if (lo === 0 && hin !== 0) {
@@ -3693,7 +4326,8 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
     }
     case EffectOp.OP_M:
       // M $xx00 — set channel volume (literal, no recall; IT $40 clamps to $3F).
-      voice.channelVolume = Math.min((rawArg >>> 8) & 0xff, 0x3f);
+      // A wide cell's volume state is 8-bit, so the byte lands unscaled there.
+      voice.channelVolume = Math.min((rawArg >>> 8) & 0xff, ts.volMax);
       break;
     case EffectOp.OP_N: {
       // N $xy00 — channel-volume slide (D nibble decoding, channel axis only).
@@ -3702,9 +4336,9 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const hi = (arg >>> 8) & 0xff;
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
-      if (hi === 0xff || hi === 0xf0) voice.channelVolume = Math.min(voice.channelVolume + 0xf, 0x3f);
-      else if (hin === 0xf && lo !== 0) voice.channelVolume = Math.max(voice.channelVolume - lo, 0);
-      else if (lo === 0xf && hin !== 0) voice.channelVolume = Math.min(voice.channelVolume + hin, 0x3f);
+      if (hi === 0xff || hi === 0xf0) voice.channelVolume = Math.min(voice.channelVolume + 0xf * ts.volStep, ts.volMax);
+      else if (hin === 0xf && lo !== 0) voice.channelVolume = Math.max(voice.channelVolume - lo * ts.volStep, 0);
+      else if (lo === 0xf && hin !== 0) voice.channelVolume = Math.min(voice.channelVolume + hin * ts.volStep, ts.volMax);
       else if (hin === 0 && lo !== 0) voice.nSlideDir = -lo;
       else if (lo === 0 && hin !== 0) voice.nSlideDir = hin;
       break;
@@ -3983,27 +4617,30 @@ function applyFilterParamEffect(eng, ts, voice, vi, rawArg, isResonance) {
   for (const bg of ts.backgroundVoices) if (bg.active) push(bg);
 }
 
-function applyRetrigVolMod(vol, x) {
+/** Q's volume modifiers. The additive cases are stated in 6-bit units, so they
+ *  scale with the cell format the way every other nibble delta does; the
+ *  multiplicative ones are ratios and do not. */
+function applyRetrigVolMod(vol, x, step = 1, max = 0x3f) {
   let v;
   switch (x & 0xf) {
     case 0: case 8: v = vol; break;
-    case 1: v = vol - 0x01; break;
-    case 2: v = vol - 0x02; break;
-    case 3: v = vol - 0x04; break;
-    case 4: v = vol - 0x08; break;
-    case 5: v = vol - 0x10; break;
+    case 1: v = vol - 0x01 * step; break;
+    case 2: v = vol - 0x02 * step; break;
+    case 3: v = vol - 0x04 * step; break;
+    case 4: v = vol - 0x08 * step; break;
+    case 5: v = vol - 0x10 * step; break;
     case 6: v = Math.trunc((vol * 2) / 3); break;
     case 7: v = vol >> 1; break;
-    case 9: v = vol + 0x01; break;
-    case 0xa: v = vol + 0x02; break;
-    case 0xb: v = vol + 0x04; break;
-    case 0xc: v = vol + 0x08; break;
-    case 0xd: v = vol + 0x10; break;
+    case 9: v = vol + 0x01 * step; break;
+    case 0xa: v = vol + 0x02 * step; break;
+    case 0xb: v = vol + 0x04 * step; break;
+    case 0xc: v = vol + 0x08 * step; break;
+    case 0xd: v = vol + 0x10 * step; break;
     case 0xe: v = Math.trunc((vol * 3) / 2); break;
     case 0xf: v = vol << 1; break;
     default: v = vol; break;
   }
-  return clamp(v, 0, 0x3f);
+  return clamp(v, 0, max);
 }
 
 // ══ src/engine/row.js ══
@@ -4070,9 +4707,12 @@ function applyTrackerRow(eng, ts, playhead) {
       const srcRow = voice.dittoSourceStart + rel;
       const src = eng.patternRead(patIdx)[srcRow];
 
-      // Vol-/pan-column "no-op" sentinel is SEL_FINE (3) with value 0.
+      // Vol-/pan-column "no-op" sentinel is SEL_FINE (3) with value 0 — in a
+      // wide cell the pan column's "value" is the azimuth AND the elevation.
       const volIsSet = !(rawRow.volumeEff === 3 && rawRow.volume === 0);
-      const panIsSet = !(rawRow.panEff === 3 && rawRow.pan === 0);
+      const panIsSet = ts.wideCells
+        ? !(rawRow.panEff === 3 && rawRow.azimuth === 0 && rawRow.elevation === 0)
+        : !(rawRow.panEff === 3 && rawRow.pan === 0);
 
       const destOp = isArmer ? 0 : rawRow.effect;
       const destArg = isArmer ? 0 : rawRow.effectArg;
@@ -4088,8 +4728,15 @@ function applyTrackerRow(eng, ts, playhead) {
       row.volumeEff = volIsSet ? rawRow.volumeEff : src.volumeEff;
       row.pan = panIsSet ? rawRow.pan : src.pan;
       row.panEff = panIsSet ? rawRow.panEff : src.panEff;
+      row.azimuth = panIsSet ? rawRow.azimuth : src.azimuth;
+      row.elevation = panIsSet ? rawRow.elevation : src.elevation;
       row.effect = effOp;
       row.effectArg = effArg;
+      // The second effect follows the first: a ditto that inherits one command
+      // inherits the pair the source row actually carried.
+      const dittoUsedSrc = destOp === 0 && effOp !== 0;
+      row.effect2 = dittoUsedSrc ? src.effect2 : rawRow.effect2;
+      row.effectArg2 = dittoUsedSrc ? src.effectArg2 : rawRow.effectArg2;
     } else {
       row = rawRow;
     }
@@ -4144,7 +4791,7 @@ function applyTrackerRow(eng, ts, playhead) {
         const newInst = eng.instruments[voice.instrumentId];
         const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
         // applyActiveSample without retrigger (Schism csf_instrument_change).
-        applyInstrumentChange(eng, voice, newInst, newPatch);
+        applyInstrumentChange(eng, ts, voice, newInst, newPatch);
       }
     } else if (note === 0x0001) {
       // Key-off (sub-row delay via S$Dx defers it).
@@ -4198,7 +4845,7 @@ function applyTrackerRow(eng, ts, playhead) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
-          applyInstrumentChange(eng, voice, newInst, newPatch);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -4218,19 +4865,25 @@ function applyTrackerRow(eng, ts, playhead) {
     }
 
     // ── Volume / pan columns ──
-    applyVolColumn(voice, row.volume, row.volumeEff);
-    applyPanColumn(ts, voice, row.pan, row.panEff);
+    applyVolColumn(ts, voice, row.volume, row.volumeEff);
+    if (ts.wideCells) applyPanColumnWide(ts, voice, row);
+    else applyPanColumn(ts, voice, row.pan, row.panEff);
 
-    // ── Effect column ──
+    // ── Effect columns ──
+    // A wide cell carries two, applied in order, so the second lands last where
+    // both write the same channel state.
     applyEffectRow(eng, ts, playhead, voice, vi, row.effect, row.effectArg);
+    if (ts.wideCells && row.effect2 !== 0) {
+      applyEffectRow(eng, ts, playhead, voice, vi, row.effect2, row.effectArg2);
+    }
   }
 }
 
 // Shared "instrument byte without retrigger" path (no-note-inst and porta+inst rows).
 
-function applyInstrumentChange(eng, voice, newInst, newPatch) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
   applyActiveSample(voice, newInst, newPatch);
-  const seedVol = rowVolumeFromDefault(newInst, newPatch);
+  const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
   voice.rowVolume = seedVol;
   voice.keyOff = false;
@@ -4494,14 +5147,14 @@ function applyTrackerTick(eng, ts, playhead) {
 
     // Volume slides (D coarse on tick > 0).
     if (ts.tickInRow > 0 && voice.slideMode === 5) {
-      voice.noteVolume = clamp(voice.noteVolume + voice.slideArg, 0, 0x3f);
+      voice.noteVolume = clamp(voice.noteVolume + voice.slideArg * ts.volStep, 0, ts.volMax);
       voice.rowVolume = voice.noteVolume;
     }
 
     // Vol-col slides (selectors 1/2) + N coarse slide + pan-col slides.
     if (ts.tickInRow > 0) {
       if (voice.volColSlideUp !== 0) {
-        voice.noteVolume = Math.min(voice.noteVolume + voice.volColSlideUp, 0x3f);
+        voice.noteVolume = Math.min(voice.noteVolume + voice.volColSlideUp, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
       if (voice.volColSlideDown !== 0) {
@@ -4509,7 +5162,7 @@ function applyTrackerTick(eng, ts, playhead) {
         voice.rowVolume = voice.noteVolume;
       }
       if (voice.nSlideDir !== 0) {
-        voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir, 0, 0x3f);
+        voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir * ts.volStep, 0, ts.volMax);
       }
       if (voice.panColSlideRight !== 0) {
         applyPanSlide(ts, voice, voice.panColSlideRight);
@@ -4560,7 +5213,7 @@ function applyTrackerTick(eng, ts, playhead) {
     if (voice.tremoloActive) {
       const sine = lfoSample(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
-      voice.rowVolume = clamp(voice.noteVolume + volDelta, 0, 0x3f);
+      voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
       voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed * 4) & 0xff;
     }
 
@@ -4610,7 +5263,7 @@ function applyTrackerTick(eng, ts, playhead) {
         voice.autoVibTicksSinceTrigger = 0;
         voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
         voice.right.reset();
-        voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod);
+        voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod, ts.volStep, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
     }
@@ -4946,7 +5599,7 @@ function generateTrackerAudio(eng, playhead, out) {
       // Per-sample envelope smoothing.
       voice.envVolMix += voice.envVolStep;
       const effEnvVol = voice.volEnvOn ? voice.envVolMix : 1.0;
-      advanceVolumeRamp(voice);
+      advanceVolumeRamp(voice, ts.volDiv);
       const faderGain = (255 - voice.fader) / 255.0;
       const perVoiceGain = effEnvVol * voice.fadeoutVolume * voice.currentMixVolume *
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
@@ -5010,7 +5663,7 @@ function generateTrackerAudio(eng, playhead, out) {
       const swingScale = 1.0 + bg.randomVolBias / 255.0;
       bg.envVolMix += bg.envVolStep;
       const effEnvVol = bg.volEnvOn ? bg.envVolMix : 1.0;
-      advanceVolumeRamp(bg);
+      advanceVolumeRamp(bg, ts.volDiv);
       const faderGain = (255 - bgFader) / 255.0;
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
@@ -5161,6 +5814,8 @@ class TaudEngine {
     this.cueSheet = new Array(NUM_CUES);
     for (let i = 0; i < NUM_CUES; i++) this.cueSheet[i] = new PlayCue();
     this.is64ChannelMode = false;
+    // Format version 3's 16-byte pattern cell — a whole-file property.
+    this.wideCells = false;
     this.playheads = [
       new Playhead(this, 0), new Playhead(this, 1),
       new Playhead(this, 2), new Playhead(this, 3),
@@ -5269,9 +5924,27 @@ class TaudEngine {
   /** Upload 512 bytes (64 rows × 8) defining pattern slot. */
   uploadPattern(slot, bytes) {
     const pat = this.patternFor(slot & 0x7fff);
-    const n = Math.min(512, bytes.length);
-    for (let i = 0; i < n; i++) pat[(i / 8) | 0].setByte(i % 8, bytes[i] & 0xff);
+    if (this.wideCells) {
+      const n = Math.min(PATTERN_BYTES_WIDE, bytes.length);
+      for (let i = 0; i < n; i++) {
+        pat[(i / CELL_BYTES_WIDE) | 0].setByteWide(i % CELL_BYTES_WIDE, bytes[i] & 0xff);
+      }
+      return;
+    }
+    const n = Math.min(PATTERN_BYTES, bytes.length);
+    for (let i = 0; i < n; i++) pat[(i / CELL_BYTES) | 0].setByte(i % CELL_BYTES, bytes[i] & 0xff);
   }
+
+  /**
+   * Select the file format's cell layout (version 3 = the wide cell). A
+   * whole-file property: patterns uploaded afterwards are read in this layout,
+   * and the volume columns' width follows it. Set it BEFORE uploading anything.
+   */
+  setCellFormat(wide) {
+    this.wideCells = !!wide;
+    for (const p of this.playheads) p.trackerState?.setCellFormat(this.wideCells);
+  }
+  getCellFormat() { return this.wideCells; }
 
   /** Upload one cue entry (64 bytes / 128 bytes in 64-channel mode). */
   uploadCue(idx, bytes) {
@@ -5373,20 +6046,34 @@ class TaudEngine {
   setSurroundModel(ph, model) {
     const p = this.playheads[ph];
     p.surroundModel = model & 3;
-    p.trackerState.setSurroundModel(p.surroundModel, p.spatialRenderer);
+    p.applySurroundModel();
   }
   getSurroundModel(ph) { return this.playheads[ph].surroundModel; }
 
   /**
    * Swap the render target the object bus feeds (#998.0). Null = the device's
-   * stereo monitor; an exporter installs e.g. an AmbisonicRenderer and reads
-   * `trackerState.spatial.data` after each chunk. No-op for a stereo song.
+   * own monitor (see setMonitorMode); an exporter installs e.g. an
+   * AmbisonicRenderer and reads `trackerState.spatial.data` after each chunk.
+   * No-op for a stereo song.
    */
   setSpatialRenderer(ph, renderer) {
     const p = this.playheads[ph];
     p.spatialRenderer = renderer;
-    p.trackerState.setSurroundModel(p.surroundModel, renderer);
+    p.applySurroundModel();
   }
+
+  /**
+   * How the device monitors a surround song (#998.3): MONITOR_FOLD folds it
+   * onto the stereo pan law, MONITOR_BINAURAL renders it through a head model
+   * so elevation and front/back are audible on headphones. Ignored while an
+   * exporter's renderer is installed, and irrelevant to a stereo song.
+   */
+  setMonitorMode(ph, mode) {
+    const p = this.playheads[ph];
+    p.monitorMode = mode & 1;
+    p.applySurroundModel();
+  }
+  getMonitorMode(ph) { return this.playheads[ph].monitorMode; }
 
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }
@@ -5647,6 +6334,7 @@ const CMD = Object.freeze({
   UPLOAD_PATTERNS: "uploadPatterns",               // {slots: int[], blob: ArrayBuffer} (bulk, 512 B each)
   UPLOAD_CUE: "uploadCue",                         // {idx, bytes: ArrayBuffer}
   SET_64CH: "set64ChannelMode",                    // {on}
+  SET_CELL_FORMAT: "setCellFormat",                // {wide} — format v3's 16-byte cell
   SET_BPM: "setBPM",                               // {ph, bpm}
   SET_TICK_RATE: "setTickRate",                    // {ph, rate}
   SET_TUNING: "setTuning",                         // {ph, baseNote, freq} — song tuning (item 77)
@@ -5656,6 +6344,7 @@ const CMD = Object.freeze({
   SET_MASTER_PAN: "setMasterPan",                  // {ph, pan}
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
   SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
+  SET_MONITOR_MODE: "setMonitorMode",              // {ph, mode} — #998.3 fold / binaural
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
@@ -5784,13 +6473,17 @@ function applyAudioCommand(eng, m) {
     case CMD.UPLOAD_PATTERN: eng.uploadPattern(m.slot, new Uint8Array(m.bytes)); return true;
     case CMD.UPLOAD_PATTERNS: {
       const blob = new Uint8Array(m.blob);
+      // Stride follows the file's cell layout, which SET_CELL_FORMAT installed
+      // before the first pattern was ever sent.
+      const size = eng.getCellFormat() ? PATTERN_BYTES_WIDE : PATTERN_BYTES;
       for (let i = 0; i < m.slots.length; i++) {
-        eng.uploadPattern(m.slots[i], blob.subarray(i * 512, (i + 1) * 512));
+        eng.uploadPattern(m.slots[i], blob.subarray(i * size, (i + 1) * size));
       }
       return true;
     }
     case CMD.UPLOAD_CUE: eng.uploadCue(m.idx, new Uint8Array(m.bytes)); return true;
     case CMD.SET_64CH: eng.set64ChannelMode(m.on); return true;
+    case CMD.SET_CELL_FORMAT: eng.setCellFormat(m.wide); return true;
     case CMD.SET_BPM: eng.setBPM(m.ph, m.bpm); return true;
     case CMD.SET_TUNING: eng.setTuning(m.ph, m.baseNote, m.freq); return true;
     case CMD.SET_TICK_RATE: eng.setTickRate(m.ph, m.rate); return true;
@@ -5800,6 +6493,7 @@ function applyAudioCommand(eng, m) {
     case CMD.SET_MASTER_PAN: eng.setMasterPan(m.ph, m.pan); return true;
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
     case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
+    case CMD.SET_MONITOR_MODE: eng.setMonitorMode(m.ph, m.mode); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;

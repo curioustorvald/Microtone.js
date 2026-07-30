@@ -26,7 +26,15 @@ export const SAMPLEINST_SIZE = SAMPLEBIN_SIZE + INSTBIN_SIZE; // 8650752
 export const INST_RECORD_SIZE = 256;
 export const NUM_INSTRUMENTS = 1024;
 
-export const PATTERN_SIZE = 512; // 64 rows × 8 bytes
+export const PATTERN_SIZE = 512; // 64 rows × 8 bytes (format versions 1-2)
+/** Format version 3's wide cell: 64 rows × 16 bytes. */
+export const PATTERN_SIZE_WIDE = 1024;
+/** The version whose pattern cell is 16 bytes wide (surround songs only). */
+export const TAUD_VERSION_WIDE = 3;
+/** Bytes per pattern image for a format version. */
+export function patternSizeFor(fmtVer) {
+  return fmtVer >= TAUD_VERSION_WIDE ? PATTERN_SIZE_WIDE : PATTERN_SIZE;
+}
 export const NUM_PATTERNS_MAX = 0x7fff;
 
 // Cue sheet (v2): 32×Sint16 = 64 bytes; 64-channel mode: 64×Sint16 = 128 bytes.

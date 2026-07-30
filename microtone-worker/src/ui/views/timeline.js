@@ -12,8 +12,9 @@ import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  SUB_POSITIONS, subCharPos, charToSub, CELL_CHARS, lookahead,
-  colsForSubs, subToCol, ALL_COLS, COL_CHAR_RANGE, subIsEmpty, volPanStep, volPanState,
+  subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, lookahead,
+  colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty,
+  volPanStep, volPanState, elevationStep,
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
 import { dittoGhosts } from "../../doc/ditto.js";
@@ -30,6 +31,9 @@ const HEADER_H = 58;   // header: [voxnum·note+inst·patNum] / VU / pan / patNa
 const RADAR_H = 44;    // extra height when the surround radar is expanded (#998.6)
 const GUTTER_W = 76;   // "cue:row | absrow"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
+// Format v3's wide cell needs three more characters for the panning column's
+// elevation, so the channel column's width follows the document (§5.5).
+const COL_W_WIDE = Math.ceil(CELL_CHARS_WIDE * CHAR_W) + 10;
 
 export class TimelineView {
   constructor(store, canvas) {
@@ -110,7 +114,12 @@ export class TimelineView {
     return this.store.surroundMeters === true &&
       (this.store.doc?.songs[this.store.songIndex]?.surroundModel ?? 0) !== 0;
   }
-  visibleChans() { return Math.floor((this.canvas.width / this.dpr - GUTTER_W) / COL_W); }
+  /** The document's cell format — v3's wide cell changes the column layout. */
+  wide() { return this.store.doc?.wideCells === true; }
+  colW() { return this.wide() ? COL_W_WIDE : COL_W; }
+  subPos() { return subPositions(this.wide()); }
+
+  visibleChans() { return Math.floor((this.canvas.width / this.dpr - GUTTER_W) / this.colW()); }
   maxScrollCh() {
     const chans = this.store.doc?.channelCount ?? 32;
     return Math.max(0, chans - this.visibleChans());
@@ -146,7 +155,7 @@ export class TimelineView {
    */
   paintChannelRadar(ctx, C, x, y, ch, audio, spatialSong) {
     const r = (RADAR_H - 10) / 2;
-    const cx = x + (COL_W - 2) / 2;
+    const cx = x + (this.colW() - 2) / 2;
     const cy = y + RADAR_H / 2 - 3;
     ctx.strokeStyle = C.border;
     ctx.lineWidth = 1;
@@ -192,7 +201,7 @@ export class TimelineView {
 
     if (spatialSong) {
       // Height bar: centre line = ear level, up = above.
-      const bx = x + COL_W - 10;
+      const bx = x + this.colW() - 10;
       const half = r;
       ctx.strokeStyle = C.border;
       ctx.beginPath();
@@ -229,7 +238,7 @@ export class TimelineView {
     const y = e.clientY - rect.top;
     if (y < this.headerH()) {
       // channel header: click = mute toggle, Ctrl/⌘+click = solo toggle
-      const ch = this.scrollCh + Math.floor((x - GUTTER_W) / COL_W);
+      const ch = this.scrollCh + Math.floor((x - GUTTER_W) / this.colW());
       if (x >= GUTTER_W && ch >= this.scrollCh &&
           ch < (this.store.doc?.channelCount ?? 0)) {
         if (e.ctrlKey || e.metaKey) this.store.toggleSolo(ch);
@@ -349,15 +358,15 @@ export class TimelineView {
     this._ensureSel();
     const c = this.store.cursor;
     const chans = this.store.doc.channelCount;
-    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
+    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
     if (idx < 0) idx = 0;
     idx += dir;
     if (idx < 0) {
-      if (c.ch > 0) { c.ch--; idx = SUB_POSITIONS.length - 1; } else idx = 0;
-    } else if (idx >= SUB_POSITIONS.length) {
-      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = SUB_POSITIONS.length - 1;
+      if (c.ch > 0) { c.ch--; idx = this.subPos().length - 1; } else idx = 0;
+    } else if (idx >= this.subPos().length) {
+      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = this.subPos().length - 1;
     }
-    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    [c.sub, c.nib] = this.subPos()[idx];
     this.sel.ch = c.ch; this.sel.sub = c.sub; this.sel.row = c.row;
     this.keepCursorVisible();
     this.store.emit("cursor");
@@ -375,11 +384,11 @@ export class TimelineView {
     const b = this.selBounds();
     if (!b) return false;
     const rows = b.r1 - b.r0 + 1, chans = b.c1 - b.c0 + 1;
-    const block = makeBlock(rows, chans);
+    const block = makeBlock(rows, chans, this.wide());
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < chans; c++) {
         const t = this.cellAt(b.r0 + r, b.c0 + c);
-        if (t) blockCell(block, r, c).set(cellToBytes(t.cell));
+        if (t) blockCell(block, r, c).set(cellToBytes(t.cell, this.wide()));
       }
     }
     block.cols = this.selCols(); // which logical columns the paste will carry
@@ -401,13 +410,13 @@ export class TimelineView {
   }
 
   clearRegion(b, cols = ALL_COLS) {
-    const empty = emptyCellBytes();
+    const empty = emptyCellBytes(this.wide());
     const writes = this.dedupeWrites((push) => {
       for (let r = b.r0; r <= b.r1; r++) {
         for (let ch = b.c0; ch <= b.c1; ch++) {
           const t = this.cellAt(r, ch);
           // overlay only the selected columns' empty bytes onto the cell
-          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell), empty, cols));
+          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell, this.wide()), empty, cols, this.wide()));
         }
       }
     });
@@ -427,7 +436,7 @@ export class TimelineView {
         for (let ch = 0; ch < block.chans; ch++) {
           const t = this.cellAt(c.row + r, c.ch + ch);
           // merge only the block's columns onto the destination cell
-          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell), blockCell(block, r, ch), cols));
+          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell, this.wide()), blockCell(block, r, ch), cols, this.wide()));
         }
       }
     });
@@ -448,13 +457,13 @@ export class TimelineView {
   hitTest(x, y) {
     if (y < this.headerH()) return null;
     const row = Math.floor(this.scrollRow) + Math.floor((y - this.headerH()) / ROW_H);
-    const colIdx = Math.floor((x - GUTTER_W) / COL_W);
+    const colIdx = Math.floor((x - GUTTER_W) / this.colW());
     const ch = this.scrollCh + colIdx;
     const map = this.getMap();
     if (!map || row < 0 || row >= map.totalRows || colIdx < 0) return null;
     const chans = this.store.doc.channelCount;
-    const charX = (x - GUTTER_W - colIdx * COL_W - 2) / CHAR_W;
-    const [sub, nib] = charToSub(charX);
+    const charX = (x - GUTTER_W - colIdx * this.colW() - 2) / CHAR_W;
+    const [sub, nib] = charToSub(charX, this.wide());
     return { row, ch: clampInt(ch, 0, chans - 1), sub, nib };
   }
 
@@ -484,8 +493,14 @@ export class TimelineView {
       case SUB_INST: fields = { instrment: clampInt(cell.instrment + dir, 0, 255) }; break;
       // vol/pan: a fine slide steps its SIGNED delta (item 87), everything else
       // the plain value; neither ever steps into the no-op sentinel.
-      case SUB_VOL: fields = volPanStep(false, cell, dir); break;
-      case SUB_PAN: fields = volPanStep(true, cell, dir); break;
+      case SUB_VOL: fields = volPanStep(false, cell, dir, this.wide()); break;
+      case SUB_PAN:
+        // In a wide cell the panning column's first two digits are the
+        // elevation, which steps on its own signed axis.
+        fields = this.wide() && c.nib >= 1 && c.nib <= 2
+          ? elevationStep(cell, dir)
+          : volPanStep(true, cell, dir, this.wide());
+        break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
     }
@@ -513,15 +528,15 @@ export class TimelineView {
     this.sel = null; // plain navigation drops any block selection
     const c = this.store.cursor;
     const chans = this.store.doc.channelCount;
-    let idx = SUB_POSITIONS.findIndex(([s, n]) => s === c.sub && n === c.nib);
+    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
     if (idx < 0) idx = 0;
     idx += dir;
     if (idx < 0) {
-      if (c.ch > 0) { c.ch--; idx = SUB_POSITIONS.length - 1; } else idx = 0;
-    } else if (idx >= SUB_POSITIONS.length) {
-      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = SUB_POSITIONS.length - 1;
+      if (c.ch > 0) { c.ch--; idx = this.subPos().length - 1; } else idx = 0;
+    } else if (idx >= this.subPos().length) {
+      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = this.subPos().length - 1;
     }
-    [c.sub, c.nib] = SUB_POSITIONS[idx];
+    [c.sub, c.nib] = this.subPos()[idx];
     this.keepCursorVisible();
     this.store.emit("cursor");
   }
@@ -590,7 +605,8 @@ export class TimelineView {
     const action = interpretEditKey(
       { code: e.code, key: e.key }, c.sub, c.nib, target.cell,
       { octave: jam.octave, currentInst: jam.currentInst, preset: store.pitchPreset,
-        rawHex: rawNoteView(store.rawNoteView, store.pitchPreset) });
+        rawHex: rawNoteView(store.rawNoteView, store.pitchPreset),
+        wideCells: store.doc?.wideCells === true });
     if (!action) return false;
 
     if (action.fields) {
@@ -709,9 +725,9 @@ export class TimelineView {
     const spatialSong = surroundModel === SURROUND_SPATIAL;
     for (let i = 0; i < visCh; i++) {
       const ch = this.scrollCh + i;
-      const x = GUTTER_W + i * COL_W;
+      const x = GUTTER_W + i * this.colW();
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
-      ctx.fillRect(x, 0, COL_W - 2, headerH - 2);
+      ctx.fillRect(x, 0, this.colW() - 2, headerH - 2);
       const patNum = this.currentPatternFor(ch);
 
       // upper row: channel number (left) + current pattern number (right, amber)
@@ -721,12 +737,12 @@ export class TimelineView {
       if (patNum !== null && patNum !== PATTERN_EMPTY) {
         ctx.fillStyle = C.accent;
         ctx.textAlign = "right";
-        ctx.fillText(hex4(patNum), x + COL_W - 6, UP_MID);
+        ctx.fillText(hex4(patNum), x + this.colW() - 6, UP_MID);
         ctx.textAlign = "left";
       }
       // upper row centre: live note + instrument (only while sounding)
       if (audio && audio.getVoiceActive(ch)) {
-        const groupX = x + Math.round((COL_W - 7 * CHAR_W) / 2);
+        const groupX = x + Math.round((this.colW() - 7 * CHAR_W) / 2);
         paintNoteCell(ctx, audio.getVoiceNote(ch), store.pitchPreset, groupX, UP_Y,
           CHAR_W, NOTE_H, headPal, store.rawNoteView);
         ctx.fillStyle = C.dim;
@@ -735,7 +751,7 @@ export class TimelineView {
 
       // VU
       const barX = x + 4;
-      const barW = COL_W - 12;
+      const barW = this.colW() - 12;
       ctx.fillStyle = C.meterBg;
       ctx.fillRect(barX, VU_Y, barW, 7);
       if (audio && audio.getVoiceActive(ch)) {
@@ -769,11 +785,11 @@ export class TimelineView {
         if (nm) {
           ctx.save();
           ctx.beginPath();
-          ctx.rect(x + 2, NAME_Y - 8, COL_W - 6, 16);
+          ctx.rect(x + 2, NAME_Y - 8, this.colW() - 6, 16);
           ctx.clip();
           ctx.fillStyle = C.fg2;
           ctx.textAlign = "center";
-          ctx.fillText(nm, x + (COL_W - 2) / 2, NAME_Y);
+          ctx.fillText(nm, x + (this.colW() - 2) / 2, NAME_Y);
           ctx.restore();
           ctx.textAlign = "left";
         }
@@ -783,11 +799,11 @@ export class TimelineView {
       if (store.voiceMutes[ch]) {
         ctx.globalAlpha = 0.6;
         ctx.fillStyle = C.bg;
-        ctx.fillRect(x, 0, COL_W - 2, headerH - 2);
+        ctx.fillRect(x, 0, this.colW() - 2, headerH - 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = C.fg2;
         ctx.textAlign = "center";
-        ctx.fillText("MUTE", x + (COL_W - 2) / 2, (VU_Y + PAN_Y) / 2 + 3);
+        ctx.fillText("MUTE", x + (this.colW() - 2) / 2, (VU_Y + PAN_Y) / 2 + 3);
         ctx.textAlign = "left";
       }
     }
@@ -836,21 +852,22 @@ export class TimelineView {
       // cells
       for (let i = 0; i < visCh; i++) {
         const ch = this.scrollCh + i;
-        const x = GUTTER_W + i * COL_W;
+        const x = GUTTER_W + i * this.colW();
         if (sb && absRow >= sb.r0 && absRow <= sb.r1 && ch >= sb.c0 && ch <= sb.c1) {
           ctx.fillStyle = C.sel;
           if (sb.colLo === 0 && sb.colHi === 4) {
-            ctx.fillRect(x - 2, y, COL_W - 2, ROW_H); // whole cell
+            ctx.fillRect(x - 2, y, this.colW() - 2, ROW_H); // whole cell
           } else { // partial column band
-            const cs = COL_CHAR_RANGE[sb.colLo][0], ce = COL_CHAR_RANGE[sb.colHi][1];
+            const ccr = colCharRange(this.wide());
+          const cs = ccr[sb.colLo][0], ce = ccr[sb.colHi][1];
             ctx.fillRect(x + 2 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
           }
         }
         if (absRow === cursor.row && ch === cursor.ch) {
           ctx.fillStyle = C.cursor;
-          ctx.fillRect(x - 2, y, COL_W - 2, ROW_H);
+          ctx.fillRect(x - 2, y, this.colW() - 2, ROW_H);
           // sub-column caret: amber in record mode, blue otherwise
-          const [cpos, cw] = subCharPos(cursor.sub ?? 0, cursor.nib ?? 0);
+          const [cpos, cw] = subCharPos(cursor.sub ?? 0, cursor.nib ?? 0, this.wide());
           ctx.fillStyle = store.record ? C.caret : C.caretNav;
           ctx.fillRect(x + 2 + cpos * CHAR_W - 1, y, cw * CHAR_W + 2, ROW_H);
         }
@@ -883,15 +900,19 @@ export class TimelineView {
         ctx.fillText(instS, x + 2 + 5 * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
         // vol/pan: symbol cell (vector ticks) + argument digits — item 87
+        const wide = this.wide();
         const vol = ghost?.vol ?? [cell.volume, cell.volumeEff];
         paintVolPanCell(ctx, vol[0], vol[1], false, x + 2 + 8 * CHAR_W, y, CHAR_W, ROW_H,
-          { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim });
-        const pan = ghost?.pan ?? [cell.pan, cell.panEff];
+          { ink: ghost?.vol ? C.ditto : C.meter, dim: C.dim, wide });
+        // A wide cell's panning column IS the azimuth, with the elevation in
+        // front of it in its own ink (§5.5).
+        const pan = ghost?.pan ?? [wide ? cell.azimuth : cell.pan, cell.panEff];
         paintVolPanCell(ctx, pan[0], pan[1], true, x + 2 + 12 * CHAR_W, y, CHAR_W, ROW_H,
-          { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim });
+          { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim, wide,
+            elevation: wide ? cell.elevation : 0, elevationInk: C.accent2 });
         ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
         if (fxS === "·····") ctx.globalAlpha = 0.4;
-        ctx.fillText(fxS, x + 2 + 16 * CHAR_W, y + ROW_H / 2);
+        ctx.fillText(fxS, x + 2 + (wide ? 19 : 16) * CHAR_W, y + ROW_H / 2);
         ctx.globalAlpha = 1;
       }
     }

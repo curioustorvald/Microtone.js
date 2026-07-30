@@ -23,7 +23,10 @@ import { envPresent } from "../../engine/envelope.js";
 import { hex2, rangeToStr } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
-import { annHex2, annFilter, annFadeout, annSfCutoff, annSfReso } from "../units.js";
+import {
+  annHex2, annFilter, annFadeout, annSfCutoff, annSfReso, azimuthLabel, elevationLabel,
+} from "../units.js";
+import { SURROUND_STEREO, SURROUND_SPATIAL } from "../../engine/spatial.js";
 import { t } from "../i18n.js";
 
 // Fraction of the envelope graph's plottable width the time axis uses; the
@@ -676,6 +679,38 @@ export class InstrumentsView {
       { ann, wide: true, signedLog: true });
   }
 
+  /**
+   * The instrument's default position (#998). A stereo song sees the pan byte
+   * it always saw; a surround song sees the same byte as the low eight bits of
+   * a NINE-bit azimuth (the ninth is record byte 14's bit 5), so the default
+   * can sit behind the listener, and a spatial song additionally gets the
+   * elevation from byte 254. Both extra fields are hidden in a stereo song
+   * because the engine ignores them there — nothing would come of editing them.
+   */
+  defaultPositionRows(inst) {
+    const model = this.store.doc?.songs[this.store.songIndex]?.surroundModel ?? SURROUND_STEREO;
+    if (model === SURROUND_STEREO) {
+      return [this.sliderRow(t("inst.defaultPan"), inst.defaultPan, 0, 255,
+        (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, "defaultPan", v, gid)),
+        { ann: annHex2 })];
+    }
+    const rows = [
+      // One op for the pair: the azimuth's ninth bit lives in another byte, and
+      // a drag that wrote them separately would undo in two steps.
+      this.sliderRow(t("inst.defaultAzimuth"), inst.defaultAzimuth, 0, 511, (v, gid) =>
+        this.applyQuiet(setInstBytesOp(this.selected, [
+          [177, v & 0xff],
+          [14, (inst.getByteNormal(14) & ~0x20) | (v >= 256 ? 0x20 : 0)],
+        ], gid)), { ann: azimuthLabel }),
+    ];
+    if (model === SURROUND_SPATIAL) {
+      rows.push(this.sliderRow(t("inst.defaultElevation"), inst.defaultElevation, -128, 127,
+        (v, gid) => this.applyQuiet(setInstBytesOp(this.selected, [[254, v & 0xff]], gid)),
+        { ann: elevationLabel }));
+    }
+    return rows;
+  }
+
   renderGeneral(inst) {
     const fSet = (key) => (v, gid) => this.applyQuiet(setInstFieldOp(this.selected, key, v, gid));
     const flagSet = (mask, shift) => (v) =>
@@ -696,7 +731,7 @@ export class InstrumentsView {
     );
 
     this.group(t("inst.grpPanning"),
-      this.sliderRow(t("inst.defaultPan"), inst.defaultPan, 0, 255, fSet("defaultPan"), { ann: annHex2 }),
+      ...this.defaultPositionRows(inst),
       this.sliderRow(t("inst.pitchPanSep"), inst.pitchPanSeparation, -128, 127, fSet("pitchPanSeparation")),
       this.sliderRow(t("inst.panSwing"), inst.panSwing, 0, 255, fSet("panSwing"), { ann: annHex2 }),
       this.sliderRow(t("inst.pitchPanCentre"), inst.pitchPanCentre, 0, 0xffff, fSet("pitchPanCentre"), { ann: annHex4 }),

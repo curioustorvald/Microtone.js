@@ -34,3 +34,22 @@ export function annSfReso(v) {
   if (v >= 0xffff) return t("inst.annFlat");
   return (Math.min(v, 960) / 10).toFixed(1) + " dB";
 }
+
+// ── spatial directions (#998) ────────────────────────────────────────────
+// Shared by the Panner dialog and the Instruments view's default-position
+// fields, so a direction is named the same wherever it is shown.
+
+/** Human label for a 9-bit azimuth: "90.0° front". */
+export function azimuthLabel(az) {
+  const a = ((az % 512) + 512) % 512;
+  const deg = (a * 360) / 512;
+  const names = ["dir.left", "dir.frontLeft", "dir.front", "dir.frontRight", "dir.right",
+    "dir.backRight", "dir.back", "dir.backLeft", "dir.left"];
+  return `${deg.toFixed(1)}° ${t(names[Math.round(deg / 45)])}`;
+}
+
+/** Human label for a signed elevation byte: "+45.0°". */
+export function elevationLabel(el) {
+  const deg = (el * 90) / 128;
+  return `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}°`;
+}

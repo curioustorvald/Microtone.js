@@ -86,15 +86,16 @@ A file whose magic does not match is **INVALID**.
 0b kk x vvvvv
 ```
 
-- `vvvvv` — **format version**, 1 or 2.
+- `vvvvv` — **format version**, 1 to 3.
   - **1** — legacy cue sheet: 20 voices, 12-bit pattern numbers, 32 bytes per cue.
   - **2** — extended cue sheet (2026-07-01): 32 voices, 15-bit pattern numbers, 64 bytes per cue with sign-bit instruction words.
+  - **3** — the wide pattern cell (2026-07-31): 16 bytes per cell, 8-bit volume, spherical panning column, a second effect ([§5.5](#5-5-format-version-3-the-wide-cell)). Cue sheets are as version 2. Surround songs only, and not readable by the TSVM device.
 - `x` (`0x20`) — the Project Data carries an `xHDR` section, which the reader **MUST** also parse. If this bit is clear but an `xHDR` section is present, the file is **INVALID**.
 - `kk` — container kind, per the table in [§1](#container-kinds).
 
-A version-2 reader **MUST** accept version-1 files and translate their cue images into the version-2 layout on load (see [§6.3](#6-3-legacy-version-1-cue-sheet)). Writers **SHOULD** emit version 2.
+A version-2 reader **MUST** accept version-1 files and translate their cue images into the version-2 layout on load (see [§6.3](#6-3-legacy-version-1-cue-sheet)). Writers **SHOULD** emit version 2, and version 3 only for the songs that need it.
 
-Version numbers above 2 are unassigned; a decoder that does not recognise a version **MUST** stop rather than guess.
+Version numbers above 3 are unassigned; a decoder that does not recognise a version **MUST** stop rather than guess.
 
 ### Signature
 
@@ -186,7 +187,7 @@ Well-known declarations:
 
 ## 5. Pattern bin
 
-A song's pattern bin decompresses to `numPatterns × 512` bytes: one 512-byte image per pattern, back to back. A Taud pattern is **single-channel** — 64 rows of 8 bytes — which is why a cue names one pattern *per channel* rather than one pattern for the whole song.
+A song's pattern bin decompresses to `numPatterns × 64 × cellSize` bytes: one image per pattern, back to back. A Taud pattern is **single-channel** — 64 rows — which is why a cue names one pattern *per channel* rather than one pattern for the whole song. `cellSize` is fixed by the file's format version: **8 bytes** in versions 1 and 2, **16 bytes** in version 3 ([§5.5](#5-5-format-version-3-the-wide-cell)), so a v3 pattern image is 1024 bytes and a given pattern bin holds half as many patterns for the same number of bytes.
 
 ### Pattern cell
 
@@ -203,7 +204,7 @@ Rendered by a tracker's display, one row reads:
 
 ```
 rr || NOTE | Ins | E.Vol | E.Pan | EE.ffff |
-63 || FFFF | 255 | 3 63  | 3 63  | FF FFFF |
+63 || FFFF |  FF | 3 3F  | 3 3F  | FF FFFF |
 ```
 
 ### Note words
@@ -235,7 +236,85 @@ Both columns share one encoding: a 6-bit value plus a 2-bit selector.
 
 A FINE selector with a value of 0 is therefore a **no-op**, and that is the canonical "this column is empty" encoding: byte `0xC0`. Converters and editors write `0xC0` into both columns of an untouched cell, so a cell with no volume or pan intent does not disturb running state.
 
-The panning column's SET is a front-arc value even in a surround song — six bits cannot express a full turn. Effects `S $8xxx` and `X` are the commands that place a source anywhere on the circle or the sphere.
+The panning column's SET is a front-arc value even in a surround song — six bits cannot express a full turn. Effects `S $8xxx` and `X` are the commands that place a source anywhere on the circle or the sphere. Format version 3 lifts that limit; see below.
+
+### 5.5 Format version 3 — the wide cell
+
+Version 3 doubles the pattern cell to **16 bytes** so that the two columns a surround song leans on hardest stop being the narrowest fields in the format: the volume column becomes eight bits, and the panning column carries a whole spherical position rather than a front-arc sixth of one.
+
+It is a **whole-file** property, because the version byte is. Every song in a v3 file uses the wide cell, including any that is still stereo — such a song simply never reads the spatial fields.
+
+**When it may be written.** A writer **MUST NOT** emit version 3 unless at least one song in the file declares a surround model (`ss` ≠ 0); version 3 exists to serve them. A reader **MUST** accept any well-formed v3 file regardless. There is no downgrade: the wide cell can express positions, volumes and second effects that the 8-byte cell cannot, so a conversion back to version 2 would be lossy and is **NOT** defined. An editor offering the upgrade **SHOULD** say so, and **SHOULD** write the result to a new file rather than over the original.
+
+Version 3 is not supported by the TSVM device, whose audio hardware has no surround model at all.
+
+#### The wide cell
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | `U16` | Note word — unchanged |
+| 2 | `U8` | Instrument, 0…255; 0 = no instrument change |
+| 3 | `U8` | Volume column **value**, 0…255 |
+| 4 | `U8` | Panning column **azimuth**, low 8 bits |
+| 5 | `U8` | Effect 1 opcode |
+| 6 | `U16` | Effect 1 argument |
+| 8 | `U8` | Column selectors: `0b Avvv pppp` — `A` = azimuth bit 8, `vvv` = volume selector, `pppp` = panning selector |
+| 9 | `S8` | Panning column **elevation** |
+| 10 | `U8` | Effect 2 opcode |
+| 11 | `U16` | Effect 2 argument |
+| 13 | `Byte[3]` | **RESERVED** |
+
+Rendered by a tracker's display, one row reads:
+
+```
+rr || NOTE | Ins | E.Vol | E.ElAzm | EE.ffff |
+63 || FFFF |  FF | 7 FF  | F FF1FF | FF FFFF |
+```
+
+The volume selector is three bits, so its display digit only ever reaches **7**; the panning selector is a full nibble. Both keep the version-2 numbering — 0 SET, 1 SLIDE UP, 2 SLIDE DOWN, 3 FINE — and selectors 4 and above are **RESERVED** in both columns.
+
+#### Volume column
+
+The value is a plain byte, 0…255. Note volume, row volume and channel volume are all 0…255 in a v3 song, so the column reaches the engine's own resolution instead of a quarter of it.
+
+- **SET** — note volume = *value*.
+- **SLIDE UP / SLIDE DOWN** — by *value* per tick, in the same 0…255 units, so a slide can now move by one unit per tick.
+- **FINE** — a one-shot delta on tick 0: **bit 7** = direction (set = up), bits 0…6 = magnitude. (Version 2 put the direction in bit 5, the top of its 6-bit field; the flag moves with the field width.)
+
+A FINE selector with a value of 0 remains the **no-op**, and remains the canonical "this column is empty" encoding: a fine slide by zero is meaningless at any width. An untouched v3 cell therefore has selector byte `0x33` — FINE in both columns — with its value, azimuth and elevation bytes zero.
+
+**What stays six bits.** Volume-envelope node values and an Ixmp patch's velocity rectangle live in the *instrument* record, which version 3 does not change: a bank is format-neutral, and the same `.tsii` loads into a v2 or a v3 project. A v3 engine scales those 0…63 values by 4 when it reads or compares them. Effect-column volume slides (`D`, `K`, `L`, `N`, the retrigger volume modifiers) are nibble-packed and keep their version-2 arguments; a v3 engine multiplies their per-tick step by 4, so `D $01` moves at the rate it always did. Effects that set an absolute volume LEVEL from a byte — channel volume `M` — use the full 0…255 range.
+
+#### Panning column
+
+The azimuth is nine bits: byte 4 plus the `A` bit, in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind, clockwise). The elevation is byte 9, signed, in effect `X`'s units (128 = 90°). Together they place a source anywhere on the sphere from the column alone.
+
+- **SET** — position the source at (azimuth, elevation). A planar song forces the elevation to zero; a stereo song folds the azimuth as it folds every other one.
+- **SLIDE UP / SLIDE DOWN** — rotate the azimuth right / left by the **low byte** per tick, wrapping in a surround song and clamping in a stereo one. The elevation byte is **RESERVED** for these selectors and **MUST** be zero.
+- **FINE** — a one-shot rotation on tick 0: `A` = direction (set = right), low byte = magnitude, elevation **RESERVED**.
+
+Two interactions carry over or extend the version-2 rules:
+
+- `S $8xxx` on the same row **wins**: a pan column SET is ignored when the row's effect is a set-pan, exactly as in version 2.
+- A **`Z` slide on the same row** turns a pan column SET into the slide's TARGET rather than an immediate jump — the column then says the same thing effect `4` would have, and the source travels there instead of appearing there. If the row carries both `4` and a pan SET, the column wins, being the more specific statement.
+
+#### Effect 2
+
+A second effect, with the same opcode and 16-bit argument encoding as the first, applied **after** it on every pass — the row pass and each tick pass alike. Where two effects would write the same channel state, the second therefore lands last. The reference editor does not expose it; it exists so that a converter is no longer forced to discard one of two simultaneous source commands.
+
+#### Upgrading a version-2 song
+
+| Field | Mapping |
+|---|---|
+| Volume SET / slides | `round(value × 255 ÷ 63)` — the column's units quadrupled |
+| Volume FINE | magnitude scaled the same way; the direction flag moves bit 5 → bit 7 |
+| Panning SET | azimuth = `(value << 2) \| (value >> 4)`, the same byte the version-2 engine derived from a 6-bit SET; elevation 0 |
+| Panning slides | magnitude **verbatim** — a pan-byte step and an azimuth step are the same unit |
+| Panning FINE | magnitude verbatim; the direction flag moves bit 5 → `A` |
+| Effect columns | copied verbatim into effect 1; effect 2 empty |
+| Channel volume `M` | argument scaled `round(× 255 ÷ 63)` — it sets an absolute level, not a delta |
+
+Everything else copies across unchanged. Note that only the volume column is rescaled: the panning column's old value was a *fraction of the front arc* and its new one is an angle on the same arc, so the numbers already agree. Nibble-packed effect arguments are never touched — a version-3 engine scales their per-tick step instead ([§5.5 volume column](#volume-column)) — so a converted song sounds as it did.
 
 ## 6. Cue sheet
 
@@ -334,7 +413,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 | 174 | `U8` | Volume swing, 0…255 |
 | 175 | `U8` | Auto-vibrato speed |
 | 176 | `U8` | Auto-vibrato sweep |
-| 177 | `U8` | Default pan value, 0…255 (enabled by the pan LOOP word's `p` bit) |
+| 177 | `U8` | Default pan value, 0…255 (enabled by the pan LOOP word's `p` bit). In surround/spatial mode, the positive half of the azimuth |
 | 178 | `U16` | Pitch-pan centre, as a 4096-TET note word |
 | 180 | `S8` | Pitch-pan separation, −128…127 |
 | 181 | `U8` | Pan swing, 0…255 |
@@ -355,12 +434,17 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 | 251 | `U8` | Initial attenuation, as a decibel octet ([§7.5](#7-5-the-decibel-octet-table)); 0 = unity |
 | 252 | `U8` | Default cutoff, low bits (SoundFont mode only) |
 | 253 | `U8` | Default resonance, low bits (SoundFont mode only) |
-| 254 | `Byte[2]` | **RESERVED** |
+| 254 | `S8` | Panning elevation, ignored in stereo mode |
+| 255 | `Byte` | **RESERVED** |
+
+**The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
+
+A planar song forces the elevation to zero, as it does for every other source of elevation. The fields are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch cannot override them**: a patch record carries an 8-bit `default pan` and no elevation, so a patch override moves the azimuth onto the front arc while the instrument's elevation stands. The pan ENVELOPE offsets the azimuth and leaves the elevation alone.
 
 #### Byte 14 — instrument / sample flags
 
 ```
-0b 000P 0spp
+0b 00AP 0spp
 ```
 
 | Bits | Field |
@@ -368,6 +452,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 | `pp` (0…1) | Loop mode: 0 = none, 1 = forward loop, 2 = ping-pong, 3 = one-shot (plays to the end regardless of note length) |
 | `s` (2) | The loop is a **sustain** loop: key-off escapes it |
 | `P` (4) | This instrument is **percussion**; a retuner or transposer **MUST NOT** touch its notes |
+| `A` (5) | The panning azimuth is behind the listener: bit 8 of the 9-bit azimuth, i.e. **add 0x100** to byte 177's value |
 
 #### Byte 173 — fadeout high bits and filter mode
 

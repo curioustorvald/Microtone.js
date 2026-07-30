@@ -6,26 +6,40 @@
 import { TaudPlayData } from "../engine/state.js";
 import { decodeInstWord, INST_PATLEN, INST_HALTAT, INST_HALT, INST_GOBACK, INST_SKIP, INST_JUMP } from "../engine/state.js";
 import { TaudInst, parsePatchesBlob } from "../engine/inst.js";
-import { CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
+import {
+  CUE_EMPTY, MAX_VOICES, NUM_VOICES, PATTERN_SIZE, PATTERN_SIZE_WIDE, SAMPLEBIN_SIZE,
+  TAUD_VERSION_WIDE,
+} from "../format/taud-const.js";
 import { emptyPatternBytes } from "./patterntools.js";
+import { widenPattern } from "./upgrade.js";
 import { parseNotaPayload, defToPreset, slotForNotationValue } from "./notation.js";
 import { cueInstructionWords } from "../format/taud-parse.js";
 import { writeTaud } from "../format/taud-write.js";
 
-function decodePattern(bytes) {
+// Cells are decoded with the ENGINE's codec, in whichever of its two layouts
+// the file declares (format version 3 = the 16-byte wide cell, §5.5), so a
+// round-trip through the document is byte-exact in both.
+function decodePattern(bytes, wide = false) {
   const rows = new Array(64);
+  const size = wide ? 16 : 8;
   for (let r = 0; r < 64; r++) {
     const cell = new TaudPlayData();
-    for (let b = 0; b < 8; b++) cell.setByte(b, bytes[r * 8 + b]);
+    for (let b = 0; b < size; b++) {
+      if (wide) cell.setByteWide(b, bytes[r * size + b]);
+      else cell.setByte(b, bytes[r * size + b]);
+    }
     rows[r] = cell;
   }
   return rows;
 }
 
-function encodePattern(rows) {
-  const bytes = new Uint8Array(PATTERN_SIZE);
+function encodePattern(rows, wide = false) {
+  const size = wide ? 16 : 8;
+  const bytes = new Uint8Array(wide ? PATTERN_SIZE_WIDE : PATTERN_SIZE);
   for (let r = 0; r < 64; r++) {
-    for (let b = 0; b < 8; b++) bytes[r * 8 + b] = rows[r].getByte(b);
+    for (let b = 0; b < size; b++) {
+      bytes[r * size + b] = wide ? rows[r].getByteWide(b) : rows[r].getByte(b);
+    }
   }
   return bytes;
 }
@@ -69,7 +83,8 @@ export function cueInfo(words) {
 }
 
 export class Song {
-  constructor(parsedSong) {
+  /** @param wide the file's cell layout (format version 3). */
+  constructor(parsedSong, wide = false) {
     this.numVoices = parsedSong.numVoices;
     this.bpm = parsedSong.bpm;
     this.tickRate = parsedSong.tickRate;
@@ -81,7 +96,7 @@ export class Song {
     this.globalVolume = parsedSong.globalVolume;
     this.mixingVolume = parsedSong.mixingVolume;
     /** @type {TaudPlayData[][]} 64 cells per pattern */
-    this.patterns = parsedSong.patterns.map(decodePattern);
+    this.patterns = parsedSong.patterns.map((p) => decodePattern(p, wide));
     /** @type {Uint16Array[]} raw u16 channel words per cue (64-wide) */
     this.cues = parsedSong.cues.map((w) => Uint16Array.from(w));
   }
@@ -148,10 +163,13 @@ export class Document {
   constructor(parsed) {
     this.kind = parsed.kind;
     this.fmtVer = parsed.fmtVer;
+    /** Format version 3's 16-byte cell (§5.5) — a whole-FILE property, so the
+     *  document holds one flag and every song in it is read the same way. */
+    this.wideCells = (parsed.fmtVer ?? 2) >= TAUD_VERSION_WIDE;
     this.is64Channel = parsed.is64Channel;
     this.signature = parsed.signature;
     this.sampleInstImage = parsed.sampleInstImage; // Uint8Array(8650752) | null
-    this.songs = parsed.songs.map((s) => new Song(s));
+    this.songs = parsed.songs.map((s) => new Song(s, this.wideCells));
     this.projSections = parsed.projSections.map((s) => ({
       fourcc: s.fourcc,
       payload: Uint8Array.from(s.payload),
@@ -436,12 +454,36 @@ export class Document {
     this.smetEdited = false;
   }
 
+  /**
+   * Widen every pattern in the project to the version-3 cell (§5.5). Called
+   * when the project first declares a surround model — see upgradeCellFormatOp,
+   * which wraps this so it can be undone within the session.
+   */
+  upgradeToWideCells() {
+    if (this.wideCells) return 0;
+    let n = 0;
+    for (const song of this.songs) {
+      song.patterns = song.patterns.map((rows) => {
+        if (!rows) return rows;
+        n++;
+        return decodePattern(widenPattern(encodePattern(rows, false)), true);
+      });
+    }
+    this.fmtVer = TAUD_VERSION_WIDE;
+    this.wideCells = true;
+    this._emptyPattern = null; // its width just changed
+    return n;
+  }
+
   /** Re-serialise to .taud bytes (via the format layer). */
   toBytes() {
     this._rebuildInstRegion();
     this._rebuildSMet();
     return writeTaud({
       kind: this.kind,
+      // The cell layout the patterns below are encoded in — without it the
+      // writer would stride the bin as if they were 8-byte cells (§5.5).
+      fmtVer: this.fmtVer,
       is64Channel: this.is64Channel,
       signature: this.signature,
       sampleInstImage: this.sampleInstImage,
@@ -457,7 +499,7 @@ export class Document {
         surroundModel: s.surroundModel,
         // Null gaps (unmaterialised arbitrary-number patterns, item 48) serialise
         // as empty patterns — gzip compresses the sparsity.
-        patterns: s.patterns.map((p) => (p ? encodePattern(p) : emptyPatternBytes())),
+        patterns: s.patterns.map((p) => (p ? encodePattern(p, this.wideCells) : emptyPatternBytes(this.wideCells))),
         cues: s.cues,
       })),
       projSections: this.projSections,
@@ -469,7 +511,7 @@ export class Document {
    *  empty-cell image so the sync flush blanks the worklet's stale copy. */
   patternBytes(songIdx, patIdx) {
     const rows = this.songs[songIdx].patterns[patIdx];
-    return rows ? encodePattern(rows) : emptyPatternBytes();
+    return rows ? encodePattern(rows, this.wideCells) : emptyPatternBytes(this.wideCells);
   }
 
   // ── item 48: arbitrary pattern numbers ──
@@ -491,7 +533,7 @@ export class Document {
 
   /** Shared read-only empty pattern for displaying an unmaterialised index. */
   emptyPattern() {
-    return (this._emptyPattern ??= decodePattern(emptyPatternBytes()));
+    return (this._emptyPattern ??= decodePattern(emptyPatternBytes(this.wideCells), this.wideCells));
   }
 
   /** Materialise (songIdx, patIdx) so it can be edited: pad the array with null
@@ -502,7 +544,7 @@ export class Document {
   ensurePattern(songIdx, patIdx) {
     const pats = this.songs[songIdx].patterns;
     for (let i = pats.length; i < patIdx; i++) pats[i] = null;
-    if (!pats[patIdx]) pats[patIdx] = decodePattern(emptyPatternBytes());
+    if (!pats[patIdx]) pats[patIdx] = decodePattern(emptyPatternBytes(this.wideCells), this.wideCells);
     return pats[patIdx];
   }
 
@@ -513,6 +555,9 @@ export class Document {
     const s = this.songs[songIndex];
     return {
       is64Channel: this.is64Channel,
+      // The renderer has to read the cells in the layout they were written in.
+      fmtVer: this.fmtVer,
+      wideCells: this.wideCells,
       sampleInstImage: this.sampleInstImage,
       ixmp: this.ixmp,
       songs: this.songs.map((song, i) => i === songIndex ? {

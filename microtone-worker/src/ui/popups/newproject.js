@@ -101,6 +101,13 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
                 <button type="button" class="np-chip sel" data-chan="32">32</button>
                 <button type="button" class="np-chip" data-chan="64">64</button>
               </span></div>
+            <div class="np-field"><span>${esc(t("np.panning"))}</span>
+              <span class="np-chips" data-f="pan">
+                <button type="button" class="np-chip sel" data-pan="0">${esc(t("proj.surroundStereo"))}</button>
+                <button type="button" class="np-chip" data-pan="1">${esc(t("proj.surroundPlanar"))}</button>
+                <button type="button" class="np-chip" data-pan="2">${esc(t("proj.surroundSpatial"))}</button>
+              </span></div>
+            <p class="np-derived dim" data-f="panhint"></p>
           </fieldset>
         </div>
         <div class="np-col np-col-right">
@@ -234,12 +241,25 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
     function curChan() {
       return dlg.querySelector("[data-chan].sel")?.dataset.chan === "64" ? 64 : 32;
     }
+    function curPan() {
+      return +(dlg.querySelector("[data-pan].sel")?.dataset.pan ?? 0);
+    }
+    /** A surround project is born in format version 3 (the wide cell, §5.5),
+     *  which nothing can read back down to version 2 — say so BEFORE creating
+     *  it rather than in a dialog afterwards. */
+    function selectPan(v) {
+      dlg.querySelectorAll("[data-pan]").forEach((el) =>
+        el.classList.toggle("sel", el.dataset.pan === String(v)));
+      inp("panhint").textContent = +v === 0 ? "" : t("np.panHintV3");
+    }
 
     // ── wiring ──
     dlg.querySelectorAll("[data-base]").forEach((el) =>
       el.addEventListener("click", () => selectBase(+el.dataset.base)));
     dlg.querySelectorAll("[data-chan]").forEach((el) =>
       el.addEventListener("click", () => selectChan(el.dataset.chan)));
+    dlg.querySelectorAll("[data-pan]").forEach((el) =>
+      el.addEventListener("click", () => selectPan(el.dataset.pan)));
     dlg.querySelectorAll("[data-note]").forEach((el) =>
       el.addEventListener("click", () => selectNote(+el.dataset.note)));
 
@@ -267,6 +287,7 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
         composer: inp("comp").value,
         copyright: inp("copy").value,
         channels: curChan(),
+        surroundModel: curPan(),
         bpm: bpmVal(),
         tickRate: spdVal(),
         notation: NOTE_PRESETS[noteSel].index,

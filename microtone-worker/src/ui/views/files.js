@@ -170,35 +170,74 @@ export class FilesView {
     download(doc.toBytes(), fileName ?? "untitled.taud");
   }
 
-  /** Offline-render the current song through the engine → 16-bit stereo WAV. */
+  /**
+   * Offline-render the current song through the engine to an audio file
+   * (#998.4). Stereo stays the 16-bit fold it always was; the surround and
+   * ambisonic targets re-render the same song with a different SpatialRenderer
+   * installed and carry ADM metadata so the channels mean something.
+   */
   async exportWav() {
     const { doc, fileName } = this.cb.currentDoc();
     if (!doc) return;
-    const result = await showModal({
-      title: t("files.wavTitle"),
-      body: t("files.wavBody"),
-      fields: [{ name: "cap", label: t("files.wavCap"), type: "number", value: 300, min: 1, max: 3600 }],
-      okLabel: t("files.render"),
-    });
-    if (!result) return;
-    const cap = Math.min(Math.max(parseInt(result.cap || "300", 10), 1), 3600);
     const songIndex = this.cb.songIndex?.() ?? 0;
+    const song = doc.songs[songIndex];
+    const surroundModel = song?.surroundModel ?? 0;
+    const { showExportAudio } = await import("../popups/exportaudio.js");
+    const choice = await showExportAudio({
+      surroundModel,
+      defaults: {
+        format: this._lastExport?.format ?? (surroundModel === 2 ? "ambix3" : surroundModel === 1 ? "5.1" : "stereo"),
+        outRate: this._lastExport?.outRate ?? 48000,
+        cap: this._lastExport?.cap ?? 300,
+        monitor: this._lastExport?.monitor,
+      },
+    });
+    if (!choice) return;
+    this._lastExport = choice; // the next export starts where this one left off
+    const base = (fileName ?? "untitled.taud").replace(/\.taud$/, "");
+    // The song's own name reaches the ADM metadata; the file name is the fallback.
+    const title = unescapeName(doc.meta?.songMeta?.[songIndex]?.name ?? "") || base;
     const progress = showProgress(t("files.wavRendering"), { cancellable: true });
     const t0 = performance.now();
-    let wav;
-    try {
-      wav = await renderToWavAsync(doc.toRenderable(songIndex), songIndex, cap,
-        { onProgress: (f) => progress.set(f), signal: progress.signal });
-    } catch (err) {
-      progress.fail(err.message ?? String(err));
-      console.error("WAV render failed:", err);
+
+    if (choice.format === "stereo") {
+      let wav;
+      try {
+        wav = await renderToWavAsync(doc.toRenderable(songIndex), songIndex, choice.cap, {
+          outRate: choice.outRate, monitor: choice.monitor,
+          onProgress: (f) => progress.set(f), signal: progress.signal,
+        });
+      } catch (err) {
+        progress.fail(err.message ?? String(err));
+        console.error("WAV render failed:", err);
+        return;
+      }
+      if (wav.aborted) { progress.done(); return; } // user cancelled
+      progress.done();
+      console.info(`WAV render: ${wav.seconds.toFixed(1)}s in ${(performance.now() - t0).toFixed(0)}ms (halted=${wav.halted})`);
+      download(wav.bytes, `${base}.wav`);
       return;
     }
-    if (wav.aborted) { progress.done(); return; } // user cancelled
+
+    const { renderMultichannelAsync, exportFileSuffix } = await import("../../audio/surround-export.js");
+    let render;
+    try {
+      render = await renderMultichannelAsync(doc.toRenderable(songIndex), songIndex, choice.cap, {
+        format: choice.format, outRate: choice.outRate, title,
+        onProgress: (f) => progress.set(f), signal: progress.signal,
+      });
+    } catch (err) {
+      progress.fail(err.message ?? String(err));
+      console.error("Surround render failed:", err);
+      return;
+    }
+    if (render.aborted) { progress.done(); return; }
     progress.done();
-    console.info(`WAV render: ${wav.seconds.toFixed(1)}s in ${(performance.now() - t0).toFixed(0)}ms (halted=${wav.halted})`);
-    const base = (fileName ?? "untitled.taud").replace(/\.taud$/, "");
-    download(wav.bytes, `${base}.wav`);
+    const bytes = render.blocks.reduce((n, b) => n + b.length, 0);
+    console.info(`${choice.format} render: ${render.seconds.toFixed(1)}s, ${render.channels} ch, ` +
+      `${(bytes / 1048576).toFixed(1)} MiB in ${(performance.now() - t0).toFixed(0)}ms (halted=${render.halted})`);
+    downloadBlob(new Blob(render.blocks, { type: "audio/wav" }),
+      `${base}${exportFileSuffix(choice.format)}`);
   }
 
   /**

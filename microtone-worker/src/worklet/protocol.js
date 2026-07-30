@@ -14,6 +14,7 @@ export const CMD = Object.freeze({
   UPLOAD_PATTERNS: "uploadPatterns",               // {slots: int[], blob: ArrayBuffer} (bulk, 512 B each)
   UPLOAD_CUE: "uploadCue",                         // {idx, bytes: ArrayBuffer}
   SET_64CH: "set64ChannelMode",                    // {on}
+  SET_CELL_FORMAT: "setCellFormat",                // {wide} — format v3's 16-byte cell
   SET_BPM: "setBPM",                               // {ph, bpm}
   SET_TICK_RATE: "setTickRate",                    // {ph, rate}
   SET_TUNING: "setTuning",                         // {ph, baseNote, freq} — song tuning (item 77)
@@ -23,6 +24,7 @@ export const CMD = Object.freeze({
   SET_MASTER_PAN: "setMasterPan",                  // {ph, pan}
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
   SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
+  SET_MONITOR_MODE: "setMonitorMode",              // {ph, mode} — #998.3 fold / binaural
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}

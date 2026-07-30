@@ -4,7 +4,7 @@
 
 import {
   setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
-  changeInstrumentOp, bulkNotesOp,
+  changeInstrumentOp, bulkNotesOp, upgradeCellFormatOp,
 } from "../../doc/ops.js";
 import { tuningRatioOf } from "../../engine/tables.js";
 import {
@@ -59,6 +59,35 @@ export class ProjectView {
 
   op(key, value) {
     this.store.undo.apply(setSongScalarOp(this.store.songIndex, key, value));
+    this.refresh();
+  }
+
+  /**
+   * The surround model is an ordinary song scalar — except the first time a
+   * project declares one, because that is also what upgrades the file to format
+   * version 3 (the wide cell, §5.5). That upgrade cannot be undone in the FILE,
+   * so it is explained first and lands in a COPY: the original stays on disk
+   * exactly as it was, readable by anything that reads version 2.
+   */
+  async setSurroundModel(value) {
+    const doc = this.store.doc;
+    if (value === 0 || !doc || doc.wideCells) {
+      this.op("surroundModel", value);
+      return;
+    }
+    const base = (this.store.fileName ?? "untitled.taud").replace(/\.taud$/, "");
+    const copyName = `${base}-surround.taud`;
+    const ok = await showModal({
+      title: t("proj.upgradeTitle"),
+      body: t("proj.upgradeBody", { name: copyName }),
+      okLabel: t("proj.upgradeOk"),
+    });
+    if (!ok) { this.refresh(); return; } // put the selector back
+    // One op, so one Ctrl+Z takes the project back to where it was — the
+    // widening and the flag are one action.
+    this.store.undo.apply(upgradeCellFormatOp(this.store.songIndex, value));
+    this.store.emit("format");
+    await this.cb?.saveCopyAs?.(copyName);
     this.refresh();
   }
 
@@ -248,7 +277,7 @@ export class ProjectView {
       // it decides what the pan commands MEAN, so switching it moves sources.
       sel(t("proj.surroundModel"), song.surroundModel ?? 0, [
         [0, t("proj.surroundStereo")], [1, t("proj.surroundPlanar")], [2, t("proj.surroundSpatial")],
-      ], (v) => this.op("surroundModel", v)),
+      ], (v) => this.setSurroundModel(v)),
       notationRow,
     );
     this.root.appendChild(grid);
@@ -257,8 +286,10 @@ export class ProjectView {
     surroundHint.className = "dim";
     surroundHint.style.margin = "0.1rem 0 0.4rem";
     surroundHint.style.fontSize = "0.8rem";
-    surroundHint.textContent = t("proj.surroundHint");
-    if ((song.surroundModel ?? 0) === 0) surroundHint.hidden = true;
+    surroundHint.textContent = doc.wideCells
+      ? `${t("proj.surroundHint")} ${t("proj.surroundHintV3")}`
+      : t("proj.surroundHint");
+    if ((song.surroundModel ?? 0) === 0 && !doc.wideCells) surroundHint.hidden = true;
     this.root.appendChild(surroundHint);
 
     this.root.appendChild(this.buildTuning(song));

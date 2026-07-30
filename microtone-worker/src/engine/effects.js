@@ -84,11 +84,11 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
       if (hi === 0xff || hi === 0xf0) {
-        voice.noteVolume = Math.min(voice.noteVolume + 0xf, 0x3f); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.min(voice.noteVolume + 0xf * ts.volStep, ts.volMax); voice.rowVolume = voice.noteVolume;
       } else if (hin === 0xf && lo !== 0) {
-        voice.noteVolume = Math.max(voice.noteVolume - lo, 0); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.max(voice.noteVolume - lo * ts.volStep, 0); voice.rowVolume = voice.noteVolume;
       } else if (lo === 0xf && hin !== 0) {
-        voice.noteVolume = Math.min(voice.noteVolume + hin, 0x3f); voice.rowVolume = voice.noteVolume;
+        voice.noteVolume = Math.min(voice.noteVolume + hin * ts.volStep, ts.volMax); voice.rowVolume = voice.noteVolume;
       } else if (hin === 0 && lo !== 0) {
         voice.slideMode = 5; voice.slideArg = -lo;
       } else if (lo === 0 && hin !== 0) {
@@ -194,7 +194,8 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
     }
     case EffectOp.OP_M:
       // M $xx00 — set channel volume (literal, no recall; IT $40 clamps to $3F).
-      voice.channelVolume = Math.min((rawArg >>> 8) & 0xff, 0x3f);
+      // A wide cell's volume state is 8-bit, so the byte lands unscaled there.
+      voice.channelVolume = Math.min((rawArg >>> 8) & 0xff, ts.volMax);
       break;
     case EffectOp.OP_N: {
       // N $xy00 — channel-volume slide (D nibble decoding, channel axis only).
@@ -203,9 +204,9 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       const hi = (arg >>> 8) & 0xff;
       const lo = hi & 0x0f;
       const hin = (hi >>> 4) & 0x0f;
-      if (hi === 0xff || hi === 0xf0) voice.channelVolume = Math.min(voice.channelVolume + 0xf, 0x3f);
-      else if (hin === 0xf && lo !== 0) voice.channelVolume = Math.max(voice.channelVolume - lo, 0);
-      else if (lo === 0xf && hin !== 0) voice.channelVolume = Math.min(voice.channelVolume + hin, 0x3f);
+      if (hi === 0xff || hi === 0xf0) voice.channelVolume = Math.min(voice.channelVolume + 0xf * ts.volStep, ts.volMax);
+      else if (hin === 0xf && lo !== 0) voice.channelVolume = Math.max(voice.channelVolume - lo * ts.volStep, 0);
+      else if (lo === 0xf && hin !== 0) voice.channelVolume = Math.min(voice.channelVolume + hin * ts.volStep, ts.volMax);
       else if (hin === 0 && lo !== 0) voice.nSlideDir = -lo;
       else if (lo === 0 && hin !== 0) voice.nSlideDir = hin;
       break;
@@ -484,25 +485,28 @@ export function applyFilterParamEffect(eng, ts, voice, vi, rawArg, isResonance) 
   for (const bg of ts.backgroundVoices) if (bg.active) push(bg);
 }
 
-export function applyRetrigVolMod(vol, x) {
+/** Q's volume modifiers. The additive cases are stated in 6-bit units, so they
+ *  scale with the cell format the way every other nibble delta does; the
+ *  multiplicative ones are ratios and do not. */
+export function applyRetrigVolMod(vol, x, step = 1, max = 0x3f) {
   let v;
   switch (x & 0xf) {
     case 0: case 8: v = vol; break;
-    case 1: v = vol - 0x01; break;
-    case 2: v = vol - 0x02; break;
-    case 3: v = vol - 0x04; break;
-    case 4: v = vol - 0x08; break;
-    case 5: v = vol - 0x10; break;
+    case 1: v = vol - 0x01 * step; break;
+    case 2: v = vol - 0x02 * step; break;
+    case 3: v = vol - 0x04 * step; break;
+    case 4: v = vol - 0x08 * step; break;
+    case 5: v = vol - 0x10 * step; break;
     case 6: v = Math.trunc((vol * 2) / 3); break;
     case 7: v = vol >> 1; break;
-    case 9: v = vol + 0x01; break;
-    case 0xa: v = vol + 0x02; break;
-    case 0xb: v = vol + 0x04; break;
-    case 0xc: v = vol + 0x08; break;
-    case 0xd: v = vol + 0x10; break;
+    case 9: v = vol + 0x01 * step; break;
+    case 0xa: v = vol + 0x02 * step; break;
+    case 0xb: v = vol + 0x04 * step; break;
+    case 0xc: v = vol + 0x08 * step; break;
+    case 0xd: v = vol + 0x10 * step; break;
     case 0xe: v = Math.trunc((vol * 3) / 2); break;
     case 0xf: v = vol << 1; break;
     default: v = vol; break;
   }
-  return clamp(v, 0, 0x3f);
+  return clamp(v, 0, max);
 }

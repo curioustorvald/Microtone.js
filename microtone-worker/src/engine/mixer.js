@@ -182,7 +182,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       // Per-sample envelope smoothing.
       voice.envVolMix += voice.envVolStep;
       const effEnvVol = voice.volEnvOn ? voice.envVolMix : 1.0;
-      advanceVolumeRamp(voice);
+      advanceVolumeRamp(voice, ts.volDiv);
       const faderGain = (255 - voice.fader) / 255.0;
       const perVoiceGain = effEnvVol * voice.fadeoutVolume * voice.currentMixVolume *
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
@@ -246,7 +246,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       const swingScale = 1.0 + bg.randomVolBias / 255.0;
       bg.envVolMix += bg.envVolStep;
       const effEnvVol = bg.volEnvOn ? bg.envVolMix : 1.0;
-      advanceVolumeRamp(bg);
+      advanceVolumeRamp(bg, ts.volDiv);
       const faderGain = (255 - bgFader) / 255.0;
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *

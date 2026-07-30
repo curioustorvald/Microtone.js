@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 
 import {
   pointerAzimuth, azimuthOffset, pointerElevation, elevationOffset,
-  azimuthLabel, elevationLabel,
 } from "../../src/ui/popups/panner.js";
+// The labels are shared with the Instruments view's default-position fields.
+import { azimuthLabel, elevationLabel } from "../../src/ui/units.js";
 import {
   AZIMUTH_TURN, ELEVATION_QUARTER, wrapAzimuth,
   anglesFromSpatialArg, spatialArgFromAngles,

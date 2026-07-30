@@ -286,11 +286,15 @@ export function setPatternBytesOp(song, pat, bytes, gestureId = null) {
     apply(doc) {
       doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
       const rows = doc.songs[song].patterns[pat];
-      const prev = new Uint8Array(512);
+      // Cell width follows the file's format version (§5.5).
+      const wide = doc.wideCells === true;
+      const n = wide ? 16 : 8;
+      const prev = new Uint8Array(64 * n);
       for (let r = 0; r < 64; r++) {
-        for (let b = 0; b < 8; b++) {
-          prev[r * 8 + b] = rows[r].getByte(b);
-          rows[r].setByte(b, bytes[r * 8 + b]);
+        for (let b = 0; b < n; b++) {
+          prev[r * n + b] = wide ? rows[r].getByteWide(b) : rows[r].getByte(b);
+          if (wide) rows[r].setByteWide(b, bytes[r * n + b]);
+          else rows[r].setByte(b, bytes[r * n + b]);
         }
       }
       doc.dirty = true;
@@ -316,8 +320,14 @@ export function setCellsBytesOp(song, writes, gestureId = null) {
         const { pat, row, bytes } = writes[i];
         doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
         const cell = s.patterns[pat][row];
-        const prev = new Uint8Array(8);
-        for (let b = 0; b < 8; b++) { prev[b] = cell.getByte(b); cell.setByte(b, bytes[b]); }
+        const wide = doc.wideCells === true;
+        const n = wide ? 16 : 8;
+        const prev = new Uint8Array(n);
+        for (let b = 0; b < n; b++) {
+          prev[b] = wide ? cell.getByteWide(b) : cell.getByte(b);
+          if (wide) cell.setByteWide(b, bytes[b]);
+          else cell.setByte(b, bytes[b]);
+        }
         inverse[i] = { pat, row, bytes: prev };
       }
       doc.dirty = true;
@@ -341,9 +351,14 @@ export function appendPatternOp(song, bytes, gestureId = null) {
     coalesceKey: `addpat:${song}`,
     apply(doc) {
       const rows = new Array(64);
+      const wide = doc.wideCells === true;
+      const n = wide ? 16 : 8;
       for (let r = 0; r < 64; r++) {
         const cell = new TaudPlayData();
-        for (let b = 0; b < 8; b++) cell.setByte(b, bytes[r * 8 + b]);
+        for (let b = 0; b < n; b++) {
+          if (wide) cell.setByteWide(b, bytes[r * n + b]);
+          else cell.setByte(b, bytes[r * n + b]);
+        }
         rows[r] = cell;
       }
       doc.songs[song].patterns.push(rows);
@@ -924,5 +939,58 @@ export function cleanupBankOp(plan, gestureId = null) {
       return cleanupBankOp(old, gestureId);
     },
     dirty: () => [{ kind: "bank" }],
+  };
+}
+
+/**
+ * Widen the whole project's pattern cells to format version 3 (§5.5) AND set
+ * the song's surround model — what a project does the first time it declares
+ * one.
+ *
+ * The two belong in ONE op because they are one user action: the format change
+ * exists to serve the model, and a half-undone pair (wide cells, stereo song,
+ * or worse the reverse) is not a state the user ever asked for. It covers every
+ * song in the file because the version byte is one byte for the file — half a
+ * project cannot be wide.
+ *
+ * The inverse restores the exact pattern images it replaced, so the switch is
+ * undoable IN THE SESSION even though the FORMAT has no defined downgrade:
+ * nothing has had a chance to use the wider range yet, and the bytes are simply
+ * kept.
+ */
+export function upgradeCellFormatOp(song = 0, surroundModel = 0, gestureId = null) {
+  return {
+    type: "upgradeCellFormat",
+    song, surroundModel, gestureId,
+    apply(doc) {
+      const before = {
+        fmtVer: doc.fmtVer,
+        surroundModel: doc.songs[song].surroundModel,
+        patterns: doc.songs.map((s) => s.patterns.map((p) => (p ? p.slice() : null))),
+      };
+      doc.upgradeToWideCells();
+      doc.songs[song].surroundModel = surroundModel;
+      doc.dirty = true;
+      return restoreCellFormatOp(song, surroundModel, before, gestureId);
+    },
+    dirty: () => [{ kind: "format" }],
+  };
+}
+
+/** Inverse of upgradeCellFormatOp: narrow the patterns and restore the flag. */
+function restoreCellFormatOp(song, surroundModel, before, gestureId = null) {
+  return {
+    type: "restoreCellFormat",
+    song, surroundModel, gestureId,
+    apply(doc) {
+      doc.fmtVer = before.fmtVer;
+      doc.wideCells = false;
+      doc.songs.forEach((s, i) => { s.patterns = before.patterns[i]; });
+      doc.songs[song].surroundModel = before.surroundModel;
+      doc._emptyPattern = null;
+      doc.dirty = true;
+      return upgradeCellFormatOp(song, surroundModel, gestureId);
+    },
+    dirty: () => [{ kind: "format" }],
   };
 }

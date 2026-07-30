@@ -38,12 +38,14 @@ test("the dot grows above ear level and shrinks below it", () => {
   near(up, down, 1e-12);
 });
 
-test("the shadow geometry is the stated light: height / tan(80°)", () => {
-  // Ear level is half the sphere's height, so its offset is (dialR/2)/tan(80°).
+test("the shadow geometry is the stated light: height / tan(elevation)", () => {
+  // Ear level is half the sphere's height, so its offset is (dialR/2)/tan(light).
+  // The light angle itself is a tunable, eyeballed in the gallery — the test
+  // pins the RELATION to it, not the value, so a visual tweak is not a failure.
   const want = (DIAL * 0.5) / Math.tan((LIGHT_ELEVATION_DEG * Math.PI) / 180);
   near(cue(0).offset, want);
   near(cue(ELEVATION_QUARTER).offset, 2 * want);
-  assert.equal(LIGHT_ELEVATION_DEG, 80);
+  assert.ok(LIGHT_ELEVATION_DEG > 45 && LIGHT_ELEVATION_DEG < 90, "a key light, not a sunset");
 });
 
 test("everything varies monotonically with elevation", () => {

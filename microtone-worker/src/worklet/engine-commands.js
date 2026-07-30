@@ -4,7 +4,7 @@
 // path in one place (no drift between the two hosts). Bundle-safe (plain export
 // forms, unique names) — included in tools/make-worklet-bundle.js.
 
-import { MAX_VOICES } from "../engine/constants.js";
+import { MAX_VOICES, PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
 import {
   CMD,
   SNAP_CUE_POS, SNAP_ROW_INDEX, SNAP_TICK_IN_ROW, SNAP_BPM, SNAP_TICK_RATE,
@@ -32,13 +32,17 @@ export function applyAudioCommand(eng, m) {
     case CMD.UPLOAD_PATTERN: eng.uploadPattern(m.slot, new Uint8Array(m.bytes)); return true;
     case CMD.UPLOAD_PATTERNS: {
       const blob = new Uint8Array(m.blob);
+      // Stride follows the file's cell layout, which SET_CELL_FORMAT installed
+      // before the first pattern was ever sent.
+      const size = eng.getCellFormat() ? PATTERN_BYTES_WIDE : PATTERN_BYTES;
       for (let i = 0; i < m.slots.length; i++) {
-        eng.uploadPattern(m.slots[i], blob.subarray(i * 512, (i + 1) * 512));
+        eng.uploadPattern(m.slots[i], blob.subarray(i * size, (i + 1) * size));
       }
       return true;
     }
     case CMD.UPLOAD_CUE: eng.uploadCue(m.idx, new Uint8Array(m.bytes)); return true;
     case CMD.SET_64CH: eng.set64ChannelMode(m.on); return true;
+    case CMD.SET_CELL_FORMAT: eng.setCellFormat(m.wide); return true;
     case CMD.SET_BPM: eng.setBPM(m.ph, m.bpm); return true;
     case CMD.SET_TUNING: eng.setTuning(m.ph, m.baseNote, m.freq); return true;
     case CMD.SET_TICK_RATE: eng.setTickRate(m.ph, m.rate); return true;
@@ -48,6 +52,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.SET_MASTER_PAN: eng.setMasterPan(m.ph, m.pan); return true;
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
     case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
+    case CMD.SET_MONITOR_MODE: eng.setMonitorMode(m.ph, m.mode); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;

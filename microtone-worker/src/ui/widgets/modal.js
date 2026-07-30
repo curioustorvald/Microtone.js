@@ -6,7 +6,12 @@ import { t } from "../i18n.js";
 export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
-    dlg.className = "modal";
+    // `modal-text` caps the width: these dialogs are title + prose + fields, and
+    // a <dialog> otherwise grows to fit its longest line — the format-upgrade
+    // explanation would run the width of the screen. Dialogs with their own
+    // layout (the panner, the export picker, New Project) build their own
+    // element and set their own width.
+    dlg.className = "modal modal-text";
     const h = document.createElement("h3");
     h.textContent = title;
     dlg.appendChild(h);

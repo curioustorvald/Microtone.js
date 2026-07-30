@@ -138,6 +138,10 @@ Each cell is five columns:
 | **+** / **−** | fine (one-shot) rise / drop | fine step right / left | **00–1F** |
 | `···` | nothing — the column is empty | | |
 
+In a **surround project** these two columns are wider: the volume runs 00–FF and
+the panning column carries a height and a full-circle angle. See
+[The wide pattern cell](#the-wide-pattern-cell).
+
 A fine slide happens once on the row rather than every tick, so its argument is
 just a magnitude (00–1F) and the **+ / −** symbol carries the direction. Setting
 a fine slide's argument to zero empties the cell, since "shift by nothing" and
@@ -488,7 +492,7 @@ either way.
 
 ### Editing an instrument
 
-- **General** — global volume, volume swing, fadeout; default pan, pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
+- **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
 - **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
@@ -549,6 +553,16 @@ A **stereo sample** in a surround song is placed as a pair of sources 30° eithe
 side of where the voice points — the ITU listening triangle — and the pair turns
 with the voice instead of being nailed to the speakers.
 
+**Where an instrument starts.** The Instruments view's *Default pan* becomes
+**Default azimuth** in a surround song — the full circle, not just the front
+half, so an instrument can sit behind you without a single command in the
+pattern — and a spatial song adds **Default elevation** beside it. Both apply on
+a note that carries an instrument number, and only when the instrument's *Use
+default pan* box is ticked. They are stored in bits that older files leave
+clear, so nothing you already have changes, and a stereo song ignores them
+entirely. An instrument's Ixmp zones can still override the azimuth (they carry
+their own pan), but not the height.
+
 **The panner.** Rather than working the angles out by hand, press **Panner…**
 on the Timeline or Patterns toolbox (it appears once the song is planar or
 spatial). It draws the circle from above — plus a side view for elevation on a
@@ -576,10 +590,44 @@ of you — pressed against the dot and sharp when the source is low, drifting
 below it and softening as it climbs. A dial drawn from above cannot otherwise
 tell you whether a source is over your head or under your feet.
 
-Playback and WAV export fold everything back to stereo: what is behind you
-mirrors onto the front (two speakers cannot do front and back), while left and
-right stay put, and height pulls the image toward the centre. Surround and
-ambisonic export files are still to come.
+**Hearing it: the head model.** A surround song is monitored through a
+**binaural** head model by default — the **Binaural** toggle sits next to Radar
+in the toolbox. It gives each ear its own arrival time and its own shading of
+the sound, so on headphones a source behind you sounds behind you and one above
+you sounds above you, which is the only way to compose a position you can hear.
+It costs a little colouration, and it is meant for headphones; switch it off to
+hear the plain **stereo fold** everyone gets who never touches the surround
+controls. The fold mirrors what is behind you onto the front (two speakers
+cannot do front and back), leaves left and right where they are, and pulls
+height toward the centre.
+
+**Getting it out.** **Export audio…** on the Files tab (F7) offers the whole
+range — stereo, quadraphonic, 5.1, 7.1 and ambisonic B-format — with a picture
+of each channel layout; see [Import and export](#import-and-export).
+
+The panner's **This channel only** box hides every other channel's dot, for when
+a busy song makes the dial hard to read.
+
+### The wide pattern cell
+
+Turning a project surround also **upgrades its file format** — to version 3,
+whose pattern cells are twice as wide. The editor tells you before it happens
+and writes the upgraded project to a **new file**, leaving the original exactly
+as it was; there is no way back, and the TSVM device cannot play a version-3
+file. A project created as Planar or Spatial in the **New…** wizard starts out
+this way.
+
+What the extra room buys you:
+
+- **An 8-bit volume column.** Volumes run 00–FF instead of 00–3F, so the column has four times the resolution — and its own slides can move by a single unit per tick. Effect-column volume slides (`D`, `K`, `L`, `N`) keep their old arguments and their old speed.
+- **A panning column that holds a position.** Instead of one front-arc value, it carries the **height** (two digits, signed: `00` ear level, `40` = +45°, `C0` = −45°) followed by the **angle** (three digits: `000` left, `080` front, `100` right, `180` behind). The height is drawn in its own colour so the two numbers never read as one. A `Z` slide on the same row turns the column into that slide's *target*, so the source travels there instead of jumping.
+- A second effect slot per cell, which converters can use so that two simultaneous commands from a source file no longer have to fight over one column. The editor does not show it.
+
+The **Panner…** dialog gains a **Column** button in such a project: it writes the
+position into the panning column and leaves the effect slot free.
+
+Everything else works as before — the same keys, the same symbol cell, the same
+`Del` to clear a column.
 
 ### Tuning
 
@@ -658,7 +706,11 @@ should use **Export** to keep your work.
 - **Import Taud/Module…** — bring a file from your real disk into OPFS.
 - **Import MIDI…** — convert a MIDI file and save the result straight into OPFS.
 - **Export ⬇** — download the project as a `.taud` file.
-- **Export WAV…** — render the current song offline through the same engine to a 16-bit stereo WAV at 48 kHz. Set a maximum length (songs that never HALT stop at the cap).
+- **Export audio…** — render the current song offline through the same engine. Pick a target from the pictures, a sample rate and a maximum length (songs that never HALT stop at the cap). Every target is the same song re-rendered, not a downmix stage bolted on the end:
+  - **Stereo** — 16-bit, the ordinary file. For a surround song you also choose how it comes down to two channels: **Fold** (the safe choice for speakers) or **Binaural** (keeps height and front/back, for headphones).
+  - **Quadraphonic / 5.1 / 7.1** — 24-bit speaker feeds at ITU angles, with the channel mask and ADM metadata a DAW needs to know which channel is which. The LFE is left silent; there is no bass management here, and a mastering engineer will want to do that themselves.
+  - **Ambisonic 1st / 2nd / 3rd order** — 24-bit AmbiX B-format (ACN order, SN3D normalisation) with ADM HOA metadata, saved as `<name>.ambix.wav`. This is the only export that keeps the full sphere: the listener's own decoder places it on whatever they have, headphones included. Higher orders are sharper and larger — third order is sixteen channels.
+  - Height only survives into B-format. A speaker layout spreads an overhead source evenly around the ring (it has nowhere else to go), and stereo folds it toward the centre. A stereo song can still be exported to any of these; it is simply promoted to the planar model first, which sounds the same for ordinary panning.
 - **Export stems…** — render the song into one 24-bit 48 kHz mono WAV per track, delivered as a single ZIP. A filename prefix is required; tracks come out as `<prefix>_01_<name>.wav`. Choose how they are arranged:
   - **Per instrument** (default) — one track per instrument as it appears in the pattern. A percussion instrument is split further, one track per kit piece, so kicks, snares and hats arrive separately; a drum layered from several sub-instruments stays on one track.
   - **Per voice** — one track per channel. Note-off ghosts and layered notes follow the channel that spawned them.
@@ -908,5 +960,5 @@ Microtone is free software, distributed under the terms of the GNU General Publi
 version 3. Source, issues and discussion:
 [github.com/curioustorvald/Microtone.js](https://github.com/curioustorvald/Microtone.js)
 — you can support development via
-[PayPal](https://paypal.me/curioustorvald) or
+[Ko-fi](https://ko-fi.com/curioustorvald), [PayPal](https://paypal.me/curioustorvald) or
 [GitHub Sponsors](https://github.com/sponsors/curioustorvald).

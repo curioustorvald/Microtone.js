@@ -3,9 +3,11 @@
 
 import {
   MAX_VOICES, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK, INTERP_DEFAULT,
+  VOLUME_MAX, VOLUME_MAX_WIDE, VOLUME_STEP_WIDE,
 } from "./constants.js";
 import { Voice } from "./voice.js";
-import { SURROUND_STEREO, SpatialBus, StereoRenderer } from "./spatial.js";
+import { SURROUND_STEREO, SURROUND_SPATIAL, SpatialBus, StereoRenderer } from "./spatial.js";
+import { MONITOR_FOLD, MONITOR_BINAURAL, BinauralRenderer } from "./binaural.js";
 
 // ── PlayInstruction (4484-4494) — tagged objects ──
 export const INST_NOP = 0;
@@ -97,16 +99,73 @@ function rowsOf(inst) {
 }
 
 // ── TaudPlayData — one pattern cell (5210-5244) ──
+// Two wire layouts share these fields: the 8-byte cell of format versions 1-2
+// (getByte/setByte) and version 3's 16-byte WIDE cell (getByteWide/setByteWide).
+// The wide layout is a superset in meaning, not in encoding — its volume is a
+// whole byte and its panning column is an azimuth plus an elevation rather than
+// a 6-bit front-arc value — so the two codecs stay separate and the v2 path is
+// untouched, which is what keeps it bit-exact.
 export class TaudPlayData {
   constructor() {
     this.note = 0;       // 0..65535
     this.instrment = 0;  // 0..255 (sic — Kotlin field name kept for diffability)
-    this.volume = 0;     // 0..63
-    this.volumeEff = 0;  // 0..3
-    this.pan = 0;        // 0..63
-    this.panEff = 0;     // 0..3
+    this.volume = 0;     // 0..63, or 0..255 in a wide cell
+    this.volumeEff = 0;  // 0..3, or 0..7 in a wide cell
+    this.pan = 0;        // 0..63 — the 8-byte cell's front-arc column value
+    this.panEff = 0;     // 0..3, or 0..15 in a wide cell
     this.effect = 0;     // 0..255
     this.effectArg = 0;  // 0..65535
+    // ── wide cell only (#v3) ──
+    this.azimuth = 0;    // 0..511, the panning column's 9-bit angle
+    this.elevation = 0;  // -128..127, signed
+    this.effect2 = 0;    // second effect, applied after the first
+    this.effectArg2 = 0;
+  }
+
+  /** Wide-cell byte view — see the file format's §5.5 table. */
+  getByteWide(offset) {
+    switch (offset) {
+      case 0: return this.note & 0xff;
+      case 1: return (this.note >>> 8) & 0xff;
+      case 2: return this.instrment & 0xff;
+      case 3: return this.volume & 0xff;
+      case 4: return this.azimuth & 0xff;
+      case 5: return this.effect & 0xff;
+      case 6: return this.effectArg & 0xff;
+      case 7: return (this.effectArg >>> 8) & 0xff;
+      case 8: return (((this.azimuth >>> 8) & 1) << 7) |
+                     ((this.volumeEff & 7) << 4) | (this.panEff & 0xf);
+      case 9: return this.elevation & 0xff;
+      case 10: return this.effect2 & 0xff;
+      case 11: return this.effectArg2 & 0xff;
+      case 12: return (this.effectArg2 >>> 8) & 0xff;
+      case 13: case 14: case 15: return 0; // RESERVED
+      default: throw new Error(`Bad offset ${offset}`);
+    }
+  }
+
+  setByteWide(offset, byte) {
+    switch (offset) {
+      case 0: this.note = (this.note & 0xff00) | byte; break;
+      case 1: this.note = (this.note & 0x00ff) | (byte << 8); break;
+      case 2: this.instrment = byte; break;
+      case 3: this.volume = byte & 0xff; break;
+      case 4: this.azimuth = (this.azimuth & 0x100) | byte; break;
+      case 5: this.effect = byte; break;
+      case 6: this.effectArg = (this.effectArg & 0xff00) | byte; break;
+      case 7: this.effectArg = (this.effectArg & 0x00ff) | (byte << 8); break;
+      case 8:
+        this.azimuth = (this.azimuth & 0xff) | ((byte & 0x80) << 1);
+        this.volumeEff = (byte >>> 4) & 7;
+        this.panEff = byte & 0xf;
+        break;
+      case 9: this.elevation = byte >= 0x80 ? byte - 0x100 : byte; break;
+      case 10: this.effect2 = byte; break;
+      case 11: this.effectArg2 = (this.effectArg2 & 0xff00) | byte; break;
+      case 12: this.effectArg2 = (this.effectArg2 & 0x00ff) | (byte << 8); break;
+      case 13: case 14: case 15: break; // RESERVED
+      default: throw new Error(`Bad offset ${offset}`);
+    }
   }
 
   getByte(offset) {
@@ -155,6 +214,18 @@ export class TrackerState {
     this.interpolationMode = INTERP_DEFAULT;
     this.ledFilterOn = false;
 
+    // Cell format (file format version 3 — the wide cell). It sets the width of
+    // the volume column, and with it the whole volume STATE: note, row and
+    // channel volume are 0…63 in a v2 song and 0…255 in a v3 one. `volStep` is
+    // what a 6-bit-derived delta is worth (a nibble slide, a tremolo depth), so
+    // `D $01` moves at the same musical rate in both; `volDiv` normalises to
+    // gain. Instrument data — envelope nodes, Ixmp velocity rectangles — stays
+    // 6-bit in both, so a bank loads into either.
+    this.wideCells = false;
+    this.volMax = VOLUME_MAX;
+    this.volStep = 1;
+    this.volDiv = 63.0;
+
     // Surround model (#998; song-immutable `ss` flag) + the object bus it mixes
     // into. Null bus = the stereo model, which keeps the plain two-accumulator
     // path untouched — see mixer.js.
@@ -197,6 +268,24 @@ export class TrackerState {
 
     // Mixer-private background voices (NNA ghosts); index 0 = oldest.
     this.backgroundVoices = [];
+  }
+
+  /**
+   * Install the cell format (file format version 3). Rescales the running
+   * volume state so a switch cannot leave a voice at a quarter of its intended
+   * level; in practice this is called once, before anything is uploaded.
+   */
+  setCellFormat(wide) {
+    if (this.wideCells === !!wide) return;
+    this.wideCells = !!wide;
+    this.volMax = wide ? VOLUME_MAX_WIDE : VOLUME_MAX;
+    this.volStep = wide ? VOLUME_STEP_WIDE : 1;
+    this.volDiv = this.volMax * 1.0;
+    for (const v of this.voices) {
+      v.noteVolume = this.volMax;
+      v.channelVolume = this.volMax;
+      v.rowVolume = this.volMax;
+    }
   }
 
   /**
@@ -247,12 +336,39 @@ export class Playhead {
     this.jamActive = false;
     this.initialGlobalFlags = 0;
     // Song-immutable surround model + the render target it mixes through
-    // (#998). Null renderer = the device's stereo monitor; an exporter swaps in
-    // its own without the engine knowing which format asked.
+    // (#998). Null renderer = the device's own monitor, picked by monitorMode
+    // (fold or binaural, #998.3); an exporter overrides it with the format's
+    // renderer and the engine never learns which format asked.
     this.surroundModel = SURROUND_STEREO;
     this.spatialRenderer = null;
+    this.monitorMode = MONITOR_FOLD;
+    this.binauralRenderer = null; // built on demand, kept across model switches
 
     this._isPlaying = false;
+  }
+
+  /**
+   * The render target the object bus should use right now (#998.3): an
+   * exporter's explicit renderer if one is installed, otherwise the device
+   * monitor this playhead is set to — null for the fold (the bus builds its own
+   * StereoRenderer), or a binaural head matching the song's model. The binaural
+   * renderer is stateful, so it is kept across model switches and reset each
+   * time it is (re-)installed.
+   */
+  effectiveSpatialRenderer() {
+    if (this.spatialRenderer !== null) return this.spatialRenderer;
+    if (this.monitorMode !== MONITOR_BINAURAL || this.surroundModel === SURROUND_STEREO) return null;
+    const sphere = this.surroundModel === SURROUND_SPATIAL;
+    if (this.binauralRenderer === null || this.binauralRenderer.sphere !== sphere) {
+      this.binauralRenderer = new BinauralRenderer(sphere);
+    }
+    this.binauralRenderer.reset();
+    return this.binauralRenderer;
+  }
+
+  /** (Re-)install the surround model on the tracker state with that target. */
+  applySurroundModel() {
+    this.trackerState.setSurroundModel(this.surroundModel, this.effectiveSpatialRenderer());
   }
 
   updateTrackerGlobalBehaviour(flags) {
@@ -308,15 +424,15 @@ export class Playhead {
     ts.pendingInterrupts = 0;
     ts.toneMode = this.initialGlobalFlags & 3;
     ts.interpolationMode = (this.initialGlobalFlags >>> 2) & 7;
-    ts.setSurroundModel(this.surroundModel, this.spatialRenderer);
+    this.applySurroundModel();
     ts.ledFilterOn = false;
     ts.amigaLPStateL = 0.0; ts.amigaLPStateR = 0.0;
     ts.amigaLEDStateL.fill(0.0); ts.amigaLEDStateR.fill(0.0);
     for (const it of ts.voices) {
       it.active = false;
-      it.noteVolume = 0x3f;
-      it.channelVolume = 0x3f;
-      it.rowVolume = 0x3f;
+      it.noteVolume = ts.volMax;
+      it.channelVolume = ts.volMax;
+      it.rowVolume = ts.volMax;
       it.currentMixVolume = 1.0;
       it.volRampSamples = 0;
       it.volRampStep = 0.0;
