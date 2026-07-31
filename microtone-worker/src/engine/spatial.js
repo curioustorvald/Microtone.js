@@ -425,19 +425,20 @@ export function voiceAzimuth(voice) {
 const angleScratch = new Float64Array(2);
 
 /**
- * Renderer gains for every channel of `voice`, cached on the voice and
- * recomputed only when the source actually moves (a direction changes at most
- * once per tick, the mixer asks once per sample).
+ * Renderer gains for every channel of `voice`, cached in `sc` and recomputed
+ * only when the source actually moves (a direction changes at most once per
+ * tick, the mixer asks once per sample). Returns the cache entry, which the
+ * caller stores back — each BUS needs its own, or two buses alternating on the
+ * same voice would invalidate each other's on every single sample.
  */
-export function spatialVoiceGains(bus, voice) {
+function voiceGainsCache(bus, voice, sc) {
   const nc = bus.numChannels;
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
   const az = voiceAzimuth(voice);
   const el = voice.panElevation;
-  let sc = voice.spatial;
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
-    sc = voice.spatial = {
+    sc = {
       az: NaN, el: NaN, chans: 0, renderer: null,
       gains: new Float64Array(nc * MAX_SAMPLE_CHANNELS),
     };
@@ -449,5 +450,15 @@ export function spatialVoiceGains(bus, voice) {
     }
     sc.az = az; sc.el = el; sc.chans = chans; sc.renderer = bus.renderer;
   }
-  return sc.gains;
+  return sc;
+}
+
+/** Gains for the MONITOR / export bus (voice.spatial). */
+export function spatialVoiceGains(bus, voice) {
+  return (voice.spatial = voiceGainsCache(bus, voice, voice.spatial)).gains;
+}
+
+/** Gains for the master-strip analysis bus (item 98) — its own cache slot. */
+export function analysisVoiceGains(bus, voice) {
+  return (voice.analysisSpatial = voiceGainsCache(bus, voice, voice.analysisSpatial)).gains;
 }

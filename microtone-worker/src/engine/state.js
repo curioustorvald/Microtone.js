@@ -8,6 +8,7 @@ import {
 import { Voice } from "./voice.js";
 import { SURROUND_STEREO, SURROUND_SPATIAL, SpatialBus, StereoRenderer } from "./spatial.js";
 import { MONITOR_FOLD, MONITOR_BINAURAL, BinauralRenderer } from "./binaural.js";
+import { ANALYSIS_OFF, AnalysisTap } from "./analysis.js";
 
 // ── PlayInstruction (4484-4494) — tagged objects ──
 export const INST_NOP = 0;
@@ -231,6 +232,9 @@ export class TrackerState {
     // path untouched — see mixer.js.
     this.surroundModel = SURROUND_STEREO;
     this.spatial = null;
+    // Master-strip analysis tap (item 98) — null unless a host asked for one.
+    this.analysis = null;
+    this.analysisTarget = ANALYSIS_OFF;
 
     // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
     // the playhead by setTuning, like toneMode/interpolationMode are from the
@@ -299,6 +303,19 @@ export class TrackerState {
     this.spatial = this.surroundModel === SURROUND_STEREO
       ? null
       : new SpatialBus(renderer ?? new StereoRenderer(), TRACKER_CHUNK);
+    this.setAnalysis(this.analysisTarget); // the tap's shape follows the model
+  }
+
+  /**
+   * Install (or remove) the master-strip analysis tap (item 98). ANALYSIS_OFF
+   * frees it: nothing on the render path may cost anything while the strip is
+   * hidden, which is also why this is a command and not a permanent fixture.
+   */
+  setAnalysis(target) {
+    this.analysisTarget = target;
+    this.analysis = (target === ANALYSIS_OFF || target === undefined)
+      ? null
+      : new AnalysisTap(target, this.surroundModel);
   }
 
   drainInterrupts() {

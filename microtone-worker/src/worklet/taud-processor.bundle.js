@@ -879,19 +879,20 @@ function voiceAzimuth(voice) {
 const angleScratch = new Float64Array(2);
 
 /**
- * Renderer gains for every channel of `voice`, cached on the voice and
- * recomputed only when the source actually moves (a direction changes at most
- * once per tick, the mixer asks once per sample).
+ * Renderer gains for every channel of `voice`, cached in `sc` and recomputed
+ * only when the source actually moves (a direction changes at most once per
+ * tick, the mixer asks once per sample). Returns the cache entry, which the
+ * caller stores back — each BUS needs its own, or two buses alternating on the
+ * same voice would invalidate each other's on every single sample.
  */
-function spatialVoiceGains(bus, voice) {
+function voiceGainsCache(bus, voice, sc) {
   const nc = bus.numChannels;
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
   const az = voiceAzimuth(voice);
   const el = voice.panElevation;
-  let sc = voice.spatial;
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
-    sc = voice.spatial = {
+    sc = {
       az: NaN, el: NaN, chans: 0, renderer: null,
       gains: new Float64Array(nc * MAX_SAMPLE_CHANNELS),
     };
@@ -903,7 +904,17 @@ function spatialVoiceGains(bus, voice) {
     }
     sc.az = az; sc.el = el; sc.chans = chans; sc.renderer = bus.renderer;
   }
-  return sc.gains;
+  return sc;
+}
+
+/** Gains for the MONITOR / export bus (voice.spatial). */
+function spatialVoiceGains(bus, voice) {
+  return (voice.spatial = voiceGainsCache(bus, voice, voice.spatial)).gains;
+}
+
+/** Gains for the master-strip analysis bus (item 98) — its own cache slot. */
+function analysisVoiceGains(bus, voice) {
+  return (voice.analysisSpatial = voiceGainsCache(bus, voice, voice.analysisSpatial)).gains;
 }
 
 // ══ src/engine/binaural.js ══
@@ -2075,6 +2086,9 @@ class Voice {
     this.spatialSlideActive = false; // armed by Z for the current row
     // Mixer-side cache of the renderer gains: {az, el, chans, renderer, gains}.
     this.spatial = null;
+    // The same, for the master strip's analysis bus (item 98) — a separate slot
+    // so the two buses do not invalidate each other every sample.
+    this.analysisSpatial = null;
 
     // Anti-click volume ramp.
     this.currentMixVolume = 1.0;
@@ -2313,6 +2327,7 @@ class Voice {
 
 
 
+
 // ── PlayInstruction (4484-4494) — tagged objects ──
 const INST_NOP = 0;
 const INST_GOBACK = 1;
@@ -2535,6 +2550,9 @@ class TrackerState {
     // path untouched — see mixer.js.
     this.surroundModel = SURROUND_STEREO;
     this.spatial = null;
+    // Master-strip analysis tap (item 98) — null unless a host asked for one.
+    this.analysis = null;
+    this.analysisTarget = ANALYSIS_OFF;
 
     // Song tuning as a playback-rate multiplier (item 77) — mirrored down from
     // the playhead by setTuning, like toneMode/interpolationMode are from the
@@ -2603,6 +2621,19 @@ class TrackerState {
     this.spatial = this.surroundModel === SURROUND_STEREO
       ? null
       : new SpatialBus(renderer ?? new StereoRenderer(), TRACKER_CHUNK);
+    this.setAnalysis(this.analysisTarget); // the tap's shape follows the model
+  }
+
+  /**
+   * Install (or remove) the master-strip analysis tap (item 98). ANALYSIS_OFF
+   * frees it: nothing on the render path may cost anything while the strip is
+   * hidden, which is also why this is a command and not a permanent fixture.
+   */
+  setAnalysis(target) {
+    this.analysisTarget = target;
+    this.analysis = (target === ANALYSIS_OFF || target === undefined)
+      ? null
+      : new AnalysisTap(target, this.surroundModel);
   }
 
   drainInterrupts() {
@@ -5548,6 +5579,12 @@ function generateTrackerAudio(eng, playhead, out) {
   // plain mixL/mixR accumulators below and stays bit-exact against the JVM.
   const spatial = ts.spatial;
   if (spatial !== null) spatial.clear();
+  // Master-strip analysis tap (item 98) — null unless the strip is on screen.
+  // Its bus is null for a stereo song, whose tap is taken from the finished
+  // mix below, so the legacy path stays exactly as it was.
+  const analysis = ts.analysis;
+  const abus = analysis === null ? null : analysis.bus;
+  if (analysis !== null) analysis.begin();
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -5646,6 +5683,13 @@ function generateTrackerAudio(eng, playhead, out) {
           spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
         }
       }
+      if (abus !== null) {
+        const ag = analysisVoiceGains(abus, voice);
+        abus.addSource(n, sL * vol, ag, 0, rampGain);
+        if (voice.activeChanCount === 2) {
+          abus.addSource(n, sR * vol, ag, abus.numChannels, rampGain);
+        }
+      }
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -5707,6 +5751,13 @@ function generateTrackerAudio(eng, playhead, out) {
           spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
         }
       }
+      if (abus !== null) {
+        const ag = analysisVoiceGains(abus, bg);
+        abus.addSource(n, sL * vol, ag, 0, rampGain);
+        if (bg.activeChanCount === 2) {
+          abus.addSource(n, sR * vol, ag, abus.numChannels, rampGain);
+        }
+      }
     }
 
     // Fold the object bus down to the device's pair — for the stereo renderer
@@ -5753,6 +5804,10 @@ function generateTrackerAudio(eng, playhead, out) {
     ts.mixLeft[n] = fl < -1.0 ? -1.0 : fl > 1.0 ? 1.0 : fl;
     ts.mixRight[n] = fr < -1.0 ? -1.0 : fr > 1.0 ? 1.0 : fr;
   }
+
+  // Meters/scopes read the FINISHED pair (post fold/binaural, post Amiga
+  // filter, post clamp) and, for a surround target, the analysis bus above.
+  if (analysis !== null) analysis.finish(TRACKER_CHUNK, ts.mixLeft, ts.mixRight);
 
   pcm32fToPcm8(eng, ts.mixLeft, ts.mixRight, TRACKER_CHUNK, out);
 
@@ -6075,6 +6130,14 @@ class TaudEngine {
   }
   getMonitorMode(ph) { return this.playheads[ph].monitorMode; }
 
+  /**
+   * Master-strip analysis tap (item 98): ANALYSIS_OFF, ANALYSIS_STEREO,
+   * ANALYSIS_AMBISONIC or a speaker-layout key. Costs nothing while off, so the
+   * host turns it on only while the strip is visible.
+   */
+  setAnalysis(ph, target) { this.playheads[ph].trackerState.setAnalysis(target); }
+  getAnalysis(ph) { return this.playheads[ph].trackerState.analysisTarget; }
+
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }
   setSongMixingVolume(ph, volume) { this.playheads[ph].mixingVolume = volume & 255; }
@@ -6319,10 +6382,14 @@ class TaudEngine {
 
 // ══ src/worklet/protocol.js ══
 // Message protocol shared by the AudioWorklet processor and the main thread.
+// The master-strip block's geometry comes from the analysis tap itself, so the
+// wire layout cannot drift from what fills it.
+//
 // Commands (main → worklet) are plain {t, ...} messages, deliberately
 // isomorphic to the TSVM `audio.*` calls taut.js makes; bulk payloads ride as
 // transferred ArrayBuffers. Snapshots (worklet → main) are recycled
 // Float32Array buffers with the fixed layout below.
+
 
 const CMD = Object.freeze({
   INIT: "init",
@@ -6345,6 +6412,7 @@ const CMD = Object.freeze({
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
   SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
   SET_MONITOR_MODE: "setMonitorMode",              // {ph, mode} — #998.3 fold / binaural
+  SET_ANALYSIS: "setAnalysis",                     // {ph, target} — item 98 master-strip tap
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
@@ -6378,7 +6446,21 @@ const SNAP_TICK_RATE = 4;
 const SNAP_FLAGS = 5;          // bit0 isPlaying, bit1 jamActive
 const SNAP_INTERRUPT_MASK = 6; // drained latch (edge-triggered)
 const SNAP_CHANNEL_COUNT = 7;
-const SNAP_HEADER_SIZE = 8;
+// Song global volume (0..255). Effects V and W move it DURING playback, which
+// is what the master fader follows (item 98).
+const SNAP_GLOBAL_VOLUME = 8;
+// ── Master-strip analysis (item 98) ──
+// All of these are zero while the tap is off. The meter/correlation figures are
+// sums over SNAP_AN_FRAMES samples — one snapshot interval — and the UI owns
+// the ballistics.
+const SNAP_AN_METERS = 9;      // metered channel count (0 = tap off)
+const SNAP_AN_FRAMES = 10;     // samples integrated since the last snapshot
+const SNAP_AN_FIELD = 11;      // Σ (W²+X²+Y²+Z²)/2 — acoustic energy density
+const SNAP_AN_CORR_LL = 12;    // Σ L², Σ R², Σ L·R of the stereo (decode)
+const SNAP_AN_CORR_RR = 13;
+const SNAP_AN_CORR_LR = 14;
+const SNAP_AN_RING_WRITE = 15; // next frame index in the scope ring
+const SNAP_HEADER_SIZE = 16;
 
 // Per-voice block, stride SNAP_VOICE_STRIDE, MAX_VOICES blocks.
 const SNAP_V_ACTIVE = 0;
@@ -6402,7 +6484,24 @@ const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a 
 const SNAP_VOICE_STRIDE = 18;
 
 const SNAP_MAX_VOICES = 64;
-const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1160
+
+// ── Master-strip blocks (item 98), after the voice array ──
+// Per metered channel: peak, true peak (4× oversampled), mean square over the
+// interval, and the number of samples that hit full scale.
+const SNAP_METER_BASE = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE;
+const SNAP_M_PEAK = 0;
+const SNAP_M_TRUE_PEAK = 1;
+const SNAP_M_MEAN_SQUARE = 2;
+const SNAP_M_CLIP = 3;
+const SNAP_METER_STRIDE = 4;
+
+// The vectorscope ring: SCOPE_FRAMES frames of first-order B-format, frame
+// interleaved (W, Y, Z, X), written continuously and read backwards from
+// SNAP_AN_RING_WRITE. See src/engine/analysis.js for why the scopes are always
+// B-format whatever the metering target is.
+const SNAP_SCOPE_BASE = SNAP_METER_BASE + ANALYSIS_MAX_METERS * SNAP_METER_STRIDE;
+
+const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS; // 17584
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the
@@ -6459,6 +6558,10 @@ function audioRingViews(sab) {
 
 
 
+
+/** Reused drain target — the snapshot path never allocates. */
+const analysisReadout = makeAnalysisReadout();
+
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
  * Transport/reply commands (INIT, USE_SAB, USE_AUDIO_SAB, SNAPSHOT_RETURN,
@@ -6494,6 +6597,7 @@ function applyAudioCommand(eng, m) {
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
     case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
     case CMD.SET_MONITOR_MODE: eng.setMonitorMode(m.ph, m.mode); return true;
+    case CMD.SET_ANALYSIS: eng.setAnalysis(m.ph, m.target); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;
@@ -6533,6 +6637,7 @@ function fillSnapshotInto(eng, playhead, f) {
   f[SNAP_TICK_RATE] = ph.tickRate;
   f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
   f[SNAP_CHANNEL_COUNT] = eng.channelCount();
+  f[SNAP_GLOBAL_VOLUME] = ph.globalVolume;
   for (let vi = 0; vi < MAX_VOICES; vi++) {
     const v = ts.voices[vi];
     const o = SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE;
@@ -6591,6 +6696,43 @@ function fillSnapshotInto(eng, playhead, f) {
       f[o + SNAP_V_ENV_FILTER_IDX] = -1;
     }
   }
+  fillAnalysisInto(ts, f);
+}
+
+/**
+ * Master-strip block (item 98). Drains the analysis tap — meters, correlation
+ * sums, field energy and the B-format scope ring — into the snapshot. With the
+ * tap off, only the "no meters" marker is written; the ring keeps whatever it
+ * last held, which nothing reads.
+ */
+function fillAnalysisInto(ts, f) {
+  const tap = ts.analysis;
+  if (tap === null) {
+    f[SNAP_AN_METERS] = 0;
+    f[SNAP_AN_FRAMES] = 0;
+    f[SNAP_AN_FIELD] = 0;
+    f[SNAP_AN_CORR_LL] = 0;
+    f[SNAP_AN_CORR_RR] = 0;
+    f[SNAP_AN_CORR_LR] = 0;
+    return;
+  }
+  const r = tap.drain(analysisReadout);
+  f[SNAP_AN_METERS] = r.meterCount;
+  f[SNAP_AN_FRAMES] = r.frames;
+  f[SNAP_AN_FIELD] = r.fieldEnergy;
+  f[SNAP_AN_CORR_LL] = r.corrLL;
+  f[SNAP_AN_CORR_RR] = r.corrRR;
+  f[SNAP_AN_CORR_LR] = r.corrLR;
+  f[SNAP_AN_RING_WRITE] = r.ringWrite;
+  for (let c = 0; c < ANALYSIS_MAX_METERS; c++) {
+    const o = SNAP_METER_BASE + c * SNAP_METER_STRIDE;
+    const live = c < r.meterCount;
+    f[o + SNAP_M_PEAK] = live ? r.peak[c] : 0;
+    f[o + SNAP_M_TRUE_PEAK] = live ? r.truePeak[c] : 0;
+    f[o + SNAP_M_MEAN_SQUARE] = live ? r.meanSquare[c] : 0;
+    f[o + SNAP_M_CLIP] = live ? r.clip[c] : 0;
+  }
+  f.set(tap.ring, SNAP_SCOPE_BASE);
 }
 
 // ══ src/worklet/taud-processor.js ══

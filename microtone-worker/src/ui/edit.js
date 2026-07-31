@@ -501,7 +501,8 @@ function base36Digit(key) {
 
 /**
  * Interpret an edit-mode keydown against a cell column.
- * @param ev   {code, key} from the KeyboardEvent
+ * @param ev   {code, key, repeat} from the KeyboardEvent (repeat = autorepeat,
+ *             which the piano keys ignore)
  * @param sub  cursor sub-column, nib nibble index within it
  * @param cell current TaudPlayData (read-only here)
  * @param ctx  {octave, currentInst, preset, wideCells} — preset = active pitch
@@ -530,6 +531,10 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
       return { fields: { note: ((cell.note << 4) | d) & 0xffff } };
     }
     if (code in JAM_SEMIS) {
+      // Hardware autorepeat is not a new keypress: a held piano key is ONE
+      // note, like a piano. Swallowed (no retrigger, no cell write, no row
+      // advance) — the keyup still ends it.
+      if (ev.repeat) return { consumed: true };
       const note = semiToNoteInTable(ctx.octave, JAM_SEMIS[code], ctx.preset);
       const fields = { note };
       // Current-instrument auto-adopt (taut behaviour): note entry stamps the

@@ -603,7 +603,7 @@ export class TimelineView {
     if (!target) return false;
     const c = store.cursor;
     const action = interpretEditKey(
-      { code: e.code, key: e.key }, c.sub, c.nib, target.cell,
+      { code: e.code, key: e.key, repeat: e.repeat }, c.sub, c.nib, target.cell,
       { octave: jam.octave, currentInst: jam.currentInst, preset: store.pitchPreset,
         rawHex: rawNoteView(store.rawNoteView, store.pitchPreset),
         wideCells: store.doc?.wideCells === true });
@@ -612,8 +612,8 @@ export class TimelineView {
     if (action.fields) {
       store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, action.fields));
     }
-    if (action.jamNote !== undefined && store.audio) {
-      store.audio.jamNote(0, c.ch, action.jamNote, jam.currentInst);
+    if (action.jamNote !== undefined) {
+      jam.hold(e.code, action.jamNote, c.ch);
     }
     if (action.advanceNib) {
       this.moveSubCursor(1);

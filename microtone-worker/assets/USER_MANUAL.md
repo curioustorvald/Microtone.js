@@ -171,6 +171,82 @@ Turn on the **Instruments** lookup panel in the toolbox — a
 floating list of every top-level instrument; click one to select it.
 Scrolling on the **Inst** cell on the top bar also changes selection.
 
+### The master strip
+
+The panel down the right-hand edge of the Timeline is where you check the mix as
+a whole: a stack of vectorscopes over a meter and a fader. It is shown by
+default; the **Master** toolbox button (and the ✕ in its corner) hides the whole
+strip, and while it is hidden it costs no processing at all.
+
+**The panels.** A scope panel is a fixed size — its chooser, a square dial and a
+correlation bar — so how many of them you get is a question about your screen:
+two by default, more on a tall window, fewer on a short one. Each panel's
+chooser picks what it shows, and its last entry, *Hide this panel*, drops **that
+panel** (the strip stays). **+** in the header adds one back whenever there is
+room, and hands it a view none of the others is using. A panel set to a view the
+current song cannot express — a height view on a song that is not spatial —
+simply waits: it is not drawn, it does not turn into a second copy of another
+panel, and it comes back as itself the moment you open a song that has that
+axis. Drag the divider above the meter to give it more or less height; because
+scope panels cannot be squeezed, growing the meter eventually pushes one out and
+takes its room, and shrinking it lets one back in. Double-click the divider to
+reset it. Everything here is remembered between sessions.
+
+**The vectorscopes.** *Blobs (top)* is the tracker's own view: a dial seen from
+above with a dot for every sounding channel, drawn where the engine actually
+has it, the same reading as the Panner and the channel radars. The three
+*Lissajous* views trace the sound itself rather than the channels: **top** plots
+left–right against front–back, **front** plots left–right against height, and
+**side** plots front–back against height. Each labels its own edges, so there is
+never a question of which way round it is. A stereo song has no front–back axis
+and a planar song has no height, so those views are simply not offered.
+
+A Lissajous view draws the last eighth of a second as a **cloud of points**, one
+per sample, and where the trace passes again and again the ink builds up — so the
+densest part of the cloud is where most of the energy actually is, the way a
+phosphor screen shows it. The window is deliberately long: only a fraction of the
+points change from frame to frame, so the shape settles into something you can
+read instead of flickering.
+
+In a stereo song the top view is the familiar mid/side goniometer: a vertical
+cloud is a mono-safe mix, a horizontal one is very wide, a diagonal one leans to
+that side. This is not a special case — for two speakers, left–right and
+front–back *are* side and mid — so the same display serves every song. It is
+auto-gained so a quiet mix still fills the dial, with the factor shown in the
+corner; the meters below it are the absolute reading.
+
+Under each scope is the **correlation meter**, a thin bar growing out of the
+centre: nothing at all when the mix folds to mono cleanly, wider as the two
+sides disagree, full width when they are in anti-phase.
+
+**The meter** shows RMS and peak in one bar — the fill is the RMS, the line
+across it is the peak, held for a moment before it falls — with a clip light on
+top of each bar. The clip light **latches**: once a channel has clipped it stays
+lit, however long ago it happened and however quiet the song has gone since, and
+only starting playback again puts it out. You can leave the room and still know
+whether that take clipped. Peak is a **true peak**: the level
+between the samples, which is what a resampler or a decoder runs into even when
+every sample is inside.
+
+**What it measures is up to you** — the chooser at the foot of the meter panel —
+and it need not be what you are listening to. A
+surround song can be metered as stereo, as quadraphonic, 5.1 or 7.1 — those are
+the same speaker feeds [Export audio…](#import-and-export) writes, so the bars
+match the file you get — or as the **ambisonic** field. A speaker layout's bars
+stand where its speakers do, left to right around you: `Ls L C R Rs` for 5.1,
+`Lrs Lss L C R Rss Rrs` for 7.1. There is no LFE bar, because the exporter leaves
+that channel silent by design and a permanently empty meter tells you nothing. There are no speakers in an ambisonic
+master, so that setting meters the field itself: one bar for the acoustic energy
+in the encoded sound field, which reads the same whichever direction the sound
+arrives from, next to one bar per encoded channel so you can see which of them
+is close to clipping. A planar song meters the three channels it can excite.
+
+**The fader is the song's global volume**, not a monitor knob. While the song
+plays it follows the `V` and `W` commands as they move it, so a written fade is
+visible as it happens; dragging it writes the project's own value as a single
+undo step, and stopping playback snaps it back to that value. Double-click
+resets it to the default, and the mouse wheel nudges it.
+
 ## Editing
 
 ### Record mode

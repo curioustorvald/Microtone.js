@@ -15,10 +15,16 @@ import {
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
-  SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES,
+  SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES, SNAP_GLOBAL_VOLUME,
+  SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
+  SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
+  SNAP_METER_BASE, SNAP_METER_STRIDE,
+  SNAP_M_PEAK, SNAP_M_TRUE_PEAK, SNAP_M_MEAN_SQUARE, SNAP_M_CLIP,
+  SNAP_SCOPE_BASE,
 } from "../worklet/protocol.js";
 import { MAX_VOICES, NUM_VOICES, PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
 import { AR_SAB_BYTES } from "./audio-ring.js";
+import { ANALYSIS_OFF, SCOPE_FRAMES, SCOPE_CHANNELS } from "../engine/analysis.js";
 
 const WORKLET_MODULE = new URL("../worklet/taud-processor.js", import.meta.url);
 const WORKLET_BUNDLE = new URL("../worklet/taud-processor.bundle.js", import.meta.url);
@@ -44,6 +50,7 @@ export class AudioSystem {
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
     this.wideCells = false; // format v3's 16-byte cell (set by loadDocument)
     this.monitorMode = 0;   // #998.3 fold/binaural — re-sent on every song load
+    this.analysisTarget = ANALYSIS_OFF; // item 98 master-strip tap; the strip owns it
     this.profile = null;    // latest worklet profiler report (opt-in; null when off)
     this.onProfile = null;  // optional callback(profile) when a report arrives
   }
@@ -249,6 +256,15 @@ export class AudioSystem {
     if (ph === 0) this.monitorMode = mode;
     this._post({ t: CMD.SET_MONITOR_MODE, ph, mode });
   }
+  /**
+   * Item 98: install (or drop) the master strip's analysis tap. The engine
+   * spends nothing while it is ANALYSIS_OFF, so the strip turns it off the
+   * moment it is hidden or the view changes.
+   */
+  setAnalysis(ph, target) {
+    if (ph === 0) this.analysisTarget = target;
+    this._post({ t: CMD.SET_ANALYSIS, ph, target });
+  }
   resetParams(ph = 0) { this._post({ t: CMD.RESET_PARAMS, ph }); }
   resetFunkState(ph = 0) { this._post({ t: CMD.RESET_FUNK_STATE, ph }); }
   jamNote(ph, voice, note, inst, audition = false) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst, audition }); }
@@ -334,4 +350,40 @@ export class AudioSystem {
    *  its pan byte on the front arc and zero elevation. */
   getVoiceAzimuth(vi) { return this._v(vi, SNAP_V_AZIMUTH); }
   getVoiceElevation(vi) { return this._v(vi, SNAP_V_ELEVATION); }
+
+  /** Song global volume as the ENGINE currently has it (0..255) — effects V and
+   *  W move it while the song plays, which is what the master fader follows. */
+  getLiveGlobalVolume() { return this.snapshot[SNAP_GLOBAL_VOLUME]; }
+
+  /**
+   * Item 98: the master-strip block for the interval this snapshot covers.
+   * Fills `out` (see makeAnalysisReadout) and returns it; meterCount 0 means
+   * the tap is off. Sums, not levels — the strip owns the ballistics.
+   */
+  readAnalysis(out) {
+    const f = this.snapshot;
+    const n = f[SNAP_AN_METERS] | 0;
+    out.meterCount = n;
+    out.frames = f[SNAP_AN_FRAMES];
+    out.fieldEnergy = f[SNAP_AN_FIELD];
+    out.corrLL = f[SNAP_AN_CORR_LL];
+    out.corrRR = f[SNAP_AN_CORR_RR];
+    out.corrLR = f[SNAP_AN_CORR_LR];
+    out.ringWrite = f[SNAP_AN_RING_WRITE] | 0;
+    for (let c = 0; c < n; c++) {
+      const o = SNAP_METER_BASE + c * SNAP_METER_STRIDE;
+      out.peak[c] = f[o + SNAP_M_PEAK];
+      out.truePeak[c] = f[o + SNAP_M_TRUE_PEAK];
+      out.meanSquare[c] = f[o + SNAP_M_MEAN_SQUARE];
+      out.clip[c] = f[o + SNAP_M_CLIP];
+    }
+    return out;
+  }
+
+  /** The B-format scope ring (W, Y, Z, X interleaved), newest frame at
+   *  readAnalysis().ringWrite − 1. A live view: on the SAB path the worklet may
+   *  be part way through rewriting it, which costs a scope trace at worst. */
+  scopeRing() {
+    return this.snapshot.subarray(SNAP_SCOPE_BASE, SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS);
+  }
 }

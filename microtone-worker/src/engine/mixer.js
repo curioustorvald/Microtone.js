@@ -17,7 +17,7 @@ import {
 import { fetchTrackerSample, fetchTrackerSampleStereo, advanceVolumeRamp } from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
 import { CHAN_MODE_MATRIX } from "./inst.js";
-import { spatialVoiceGains } from "./spatial.js";
+import { spatialVoiceGains, analysisVoiceGains } from "./spatial.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
 import { applyTrackerTick } from "./tick.js";
 
@@ -131,6 +131,12 @@ export function generateTrackerAudio(eng, playhead, out) {
   // plain mixL/mixR accumulators below and stays bit-exact against the JVM.
   const spatial = ts.spatial;
   if (spatial !== null) spatial.clear();
+  // Master-strip analysis tap (item 98) — null unless the strip is on screen.
+  // Its bus is null for a stereo song, whose tap is taken from the finished
+  // mix below, so the legacy path stays exactly as it was.
+  const analysis = ts.analysis;
+  const abus = analysis === null ? null : analysis.bus;
+  if (analysis !== null) analysis.begin();
 
   if (advancing && ts.firstRow) {
     ts.firstRow = false;
@@ -229,6 +235,13 @@ export function generateTrackerAudio(eng, playhead, out) {
           spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
         }
       }
+      if (abus !== null) {
+        const ag = analysisVoiceGains(abus, voice);
+        abus.addSource(n, sL * vol, ag, 0, rampGain);
+        if (voice.activeChanCount === 2) {
+          abus.addSource(n, sR * vol, ag, abus.numChannels, rampGain);
+        }
+      }
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
@@ -290,6 +303,13 @@ export function generateTrackerAudio(eng, playhead, out) {
           spatial.addSource(n, sR * vol, g, spatial.numChannels, rampGain);
         }
       }
+      if (abus !== null) {
+        const ag = analysisVoiceGains(abus, bg);
+        abus.addSource(n, sL * vol, ag, 0, rampGain);
+        if (bg.activeChanCount === 2) {
+          abus.addSource(n, sR * vol, ag, abus.numChannels, rampGain);
+        }
+      }
     }
 
     // Fold the object bus down to the device's pair — for the stereo renderer
@@ -336,6 +356,10 @@ export function generateTrackerAudio(eng, playhead, out) {
     ts.mixLeft[n] = fl < -1.0 ? -1.0 : fl > 1.0 ? 1.0 : fl;
     ts.mixRight[n] = fr < -1.0 ? -1.0 : fr > 1.0 ? 1.0 : fr;
   }
+
+  // Meters/scopes read the FINISHED pair (post fold/binaural, post Amiga
+  // filter, post clamp) and, for a surround target, the analysis bus above.
+  if (analysis !== null) analysis.finish(TRACKER_CHUNK, ts.mixLeft, ts.mixRight);
 
   pcm32fToPcm8(eng, ts.mixLeft, ts.mixRight, TRACKER_CHUNK, out);
 

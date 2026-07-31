@@ -206,21 +206,28 @@
     <button id="tbPanner" data-i18n="toolbox.panner" data-i18n-title="toolbox.pannerTitle" hidden>Panner…</button>
     <button id="tbRadar" data-i18n-title="toolbox.radarTitle" hidden>Radar: off</button>
     <button id="tbBinaural" data-i18n-title="toolbox.binauralTitle" hidden>Binaural: on</button>
+    <button id="tbMaster" data-i18n-title="toolbox.masterTitle">Master: on</button>
   </div>
 
   <main id="viewHost" class="view-host">
-    <div id="emptyState" class="empty-state">
-      <p><strong data-i18n="empty.drop">Drop a .taud file anywhere</strong><span data-i18n="empty.orOpen"> or use Open…</span></p>
+    <!-- The stage holds every view (all absolutely positioned); the master
+         strip is a SIBLING so it takes width off the grid instead of covering
+         it, and the canvases' ResizeObserver picks the change up on its own. -->
+    <div id="viewStage" class="view-stage">
+      <div id="emptyState" class="empty-state">
+        <p><strong data-i18n="empty.drop">Drop a .taud file anywhere</strong><span data-i18n="empty.orOpen"> or use Open…</span></p>
+      </div>
+      <canvas id="timeline" class="view-canvas" hidden></canvas>
+      <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
+      <div id="patternHost" class="view-dom" hidden></div>
+      <div id="samplesHost" class="view-dom" hidden></div>
+      <div id="instrumentsHost" class="view-dom" hidden></div>
+      <div id="projectHost" class="view-dom" hidden></div>
+      <div id="filesHost" class="files-host" hidden></div>
+      <div id="placeholder" class="empty-state" hidden></div>
+      <aside id="instLookup" class="inst-lookup" hidden></aside>
     </div>
-    <canvas id="timeline" class="view-canvas" hidden></canvas>
-    <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
-    <div id="patternHost" class="view-dom" hidden></div>
-    <div id="samplesHost" class="view-dom" hidden></div>
-    <div id="instrumentsHost" class="view-dom" hidden></div>
-    <div id="projectHost" class="view-dom" hidden></div>
-    <div id="filesHost" class="files-host" hidden></div>
-    <div id="placeholder" class="empty-state" hidden></div>
-    <aside id="instLookup" class="inst-lookup" hidden></aside>
+    <aside id="masterStrip" class="master-strip" hidden></aside>
   </main>
 
   <div id="cmdPalette" class="cmd-palette" hidden></div>

@@ -312,6 +312,14 @@ export class TaudEngine {
   }
   getMonitorMode(ph) { return this.playheads[ph].monitorMode; }
 
+  /**
+   * Master-strip analysis tap (item 98): ANALYSIS_OFF, ANALYSIS_STEREO,
+   * ANALYSIS_AMBISONIC or a speaker-layout key. Costs nothing while off, so the
+   * host turns it on only while the strip is visible.
+   */
+  setAnalysis(ph, target) { this.playheads[ph].trackerState.setAnalysis(target); }
+  getAnalysis(ph) { return this.playheads[ph].trackerState.analysisTarget; }
+
   setSongGlobalVolume(ph, volume) { this.playheads[ph].globalVolume = volume & 255; }
   getSongGlobalVolume(ph) { return this.playheads[ph].globalVolume; }
   setSongMixingVolume(ph, volume) { this.playheads[ph].mixingVolume = volume & 255; }

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Master strip visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Leaves the master strip (item 98) on screen with the song playing, a
+       layout harness like panner-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/master.png \
+           --autoplay-policy=no-user-gesture-required --timeout=15000 \
+           "http://localhost:8932/test/browser/master-visual.html?theme=dark"
+       ?theme=light for the light theme; ?model=0|1|2 picks the surround model
+       (0 = stereo, the mid/side goniometer; 2 = spatial, all four scopes);
+       ?a=/&b= choose the two scope kinds (blobs|top|front|side);
+       ?target= forces the metering target (stereo|quad|5.1|7.1|ambisonic). -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store, masterStrip } = win.__microtone;
+      for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      const model = parseInt(params.get("model") ?? "2", 10);
+      if (model !== 0) {
+        const { setSongScalarOp } = await win.eval('import("/src/doc/ops.js")');
+        store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", model));
+      }
+      await sleep(80);
+      // Scatter the sources so the scopes have something to draw.
+      if (model !== 0) {
+        const { EffectOp } = await win.eval('import("/src/engine/tables.js")');
+        const { setCellOp } = await win.eval('import("/src/doc/ops.js")');
+        const args = [0x0000, 0x4030, 0xc080, 0x00c0, 0x2060, 0xe0a0];
+        for (let ch = 0; ch < 6; ch++) {
+          const pat = store.song.cues[0][ch] & 0x7fff;
+          if (pat === 0x7fff) continue;
+          store.undo.apply(setCellOp(store.songIndex, pat, 0,
+            { effect: EffectOp.OP_X, effectArg: args[ch] }));
+        }
+      }
+      if (params.get("target")) {
+        masterStrip.targetSel.value = params.get("target");
+        masterStrip.targetSel.dispatchEvent(new win.Event("change"));
+      }
+      for (const [key, i] of [["a", 0], ["b", 1]]) {
+        const v = params.get(key);
+        if (!v) continue;
+        masterStrip.scopeSel[i].value = v;
+        masterStrip.scopeSel[i].dispatchEvent(new win.Event("change"));
+      }
+      // Needs --autoplay-policy=no-user-gesture-required to actually sound.
+      win.document.getElementById("playSong").click();
+      await sleep(2500);
+    })();
+  </script>
+</body>
+</html>

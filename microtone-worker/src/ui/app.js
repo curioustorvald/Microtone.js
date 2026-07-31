@@ -16,6 +16,7 @@ import { FilesView } from "./views/files.js";
 import { SamplesView } from "./views/samples.js";
 import { InstrumentsView } from "./views/instruments.js";
 import { ProjectView } from "./views/project.js";
+import { MasterStrip } from "./views/masterstrip.js";
 import { JamKeyboard } from "./jam.js";
 import { InstLookup } from "./instlookup.js";
 import { SUB_NOTE } from "./edit.js";
@@ -564,6 +565,8 @@ const projectView = new ProjectView(store, $("projectHost"), {
   },
 });
 const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
+const masterStrip = new MasterStrip(store, $("masterStrip"));
+masterStrip.onToggle = () => refreshToolbox();
 const filesView = new FilesView(store, $("filesHost"), {
   openBytes: (name, bytes) => loadBytes(name, bytes),
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
@@ -581,6 +584,11 @@ function refreshToolbox() {
   $("tbBinaural").hidden = !surround;
   $("tbBinaural").textContent = t(store.binaural ? "toolbox.binauralOn" : "toolbox.binauralOff");
   $("tbBinaural").classList.toggle("active", store.binaural);
+  // Master strip (item 98) — a Timeline fixture, so the button only means
+  // anything there.
+  $("tbMaster").hidden = store.view !== "timeline";
+  $("tbMaster").textContent = t(masterStrip.visible ? "toolbox.masterOn" : "toolbox.masterOff");
+  $("tbMaster").classList.toggle("active", masterStrip.visible);
 }
 
 function showView(name) {
@@ -761,6 +769,13 @@ $("tbPanner").addEventListener("click", async () => {
   await showPanner(store, cursorCellTarget());
   timeline.invalidate();
   patternView.invalidate();
+});
+// Master strip (item 98): the mastering panel down the right-hand edge —
+// vectorscopes, RMS/peak metering and the song's global-volume fader. Visible
+// by default; hiding it also drops the engine's analysis tap.
+$("tbMaster").addEventListener("click", () => {
+  masterStrip.toggle();
+  refreshToolbox();
 });
 // Quick instrument lookup toggle (persists per session).
 $("tbInstList").classList.toggle("active", instLookup.visible);
@@ -1065,6 +1080,8 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("keyup", (e) => jam.up(e.code));
+// Focus loss eats the keyup, which would leave the audition sounding for ever.
+window.addEventListener("blur", () => jam.allUp());
 
 async function openGoto() {
   if (!store.doc) return;
@@ -1148,7 +1165,7 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, jam, instLookup, loadBytes, playCursor };
+window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, jam, instLookup, masterStrip, loadBytes, playCursor };
 
 // ── frame loop ──
 function frame() {
@@ -1160,7 +1177,7 @@ function frame() {
     $("posBpm").textContent = audio.getBPM() || "–";
     $("posSpd").textContent = audio.getTickRate() || "–";
   }
-  if (store.view === "timeline") timeline.frame();
+  if (store.view === "timeline") { timeline.frame(); masterStrip.frame(); }
   if (store.view === "cues") cuesView.frame();
   if (store.view === "pattern") patternView.frame();
   if (store.view === "samples") samplesView.frame();

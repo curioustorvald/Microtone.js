@@ -1,0 +1,248 @@
+<!doctype html><meta charset="utf-8"><title>master strip (item 98)</title>
+<pre id="out">running… (needs a real audio-capable browser; ~8s)</pre>
+<img src="/hang" hidden>
+<!-- Tall enough for the default two scope panels: a scope panel is a fixed
+     size, so how many fit is a property of the viewport (item 98 note 2). -->
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1000px"></iframe>
+<script type="module">
+// Drives the REAL app: the master strip's layout, its choosers per surround
+// model, the engine-side analysis tap it installs, live meters/scopes while the
+// song plays, and the fader writing the project's global volume in ONE undo
+// step. The maths behind the numbers is unit-tested in test/node/analysis.test.js.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; console.log("MASTER: " + s); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+/** Any pixel that is not the flat background → the canvas actually drew. */
+function painted(cv) {
+  const ctx = cv.getContext("2d");
+  const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+  const r0 = d[0], g0 = d[1], b0 = d[2];
+  for (let i = 4; i < d.length; i += 4) {
+    if (d[i] !== r0 || d[i + 1] !== g0 || d[i + 2] !== b0) return true;
+  }
+  return false;
+}
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone?.store.doc; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  const doc = win.document;
+  const { store, masterStrip } = M;
+  const { setSongScalarOp } = await import("../../src/doc/ops.js");
+  const strip = doc.getElementById("masterStrip");
+
+  // ── 1. visible by default, and only on the Timeline ──────────────────────
+  check(!strip.hidden, "strip is visible by default on the Timeline");
+  check(masterStrip.panelCount() === 2 && !!masterStrip.meterCanvas,
+    "two scope panels + one meter panel", String(masterStrip.panelCount()));
+  // Item 98 note 4: the metering chooser lives on the meter panel, at its foot.
+  check(masterStrip.targetSel.parentElement === masterStrip.meterBox &&
+    masterStrip.meterBox.lastElementChild === masterStrip.targetSel,
+    "the meters chooser sits at the bottom of the meter panel");
+  // It must take width off the grid, not cover it.
+  const stage = doc.getElementById("viewStage");
+  check(stage.clientWidth + strip.offsetWidth <= doc.getElementById("viewHost").clientWidth + 2,
+    "the grid stage and the strip share the width", `${stage.clientWidth}+${strip.offsetWidth}`);
+
+  // The instrument lookup panel floats at the stage's right edge — it must land
+  // beside the strip, not under it.
+  doc.getElementById("tbInstList").click();
+  await sleep(200);
+  const il = doc.getElementById("instLookup").getBoundingClientRect();
+  const ms = strip.getBoundingClientRect();
+  check(il.right <= ms.left, "the instrument panel clears the strip", `${il.right} vs ${ms.left}`);
+  check(doc.getElementById("timeline").getBoundingClientRect().right <= ms.left + 1,
+    "the grid canvas clears the strip");
+  doc.getElementById("tbInstList").click();
+
+  doc.querySelector('[data-view="samples"]').click();
+  await sleep(60);
+  check(strip.hidden, "strip is hidden away from the Timeline");
+  check(store.audio === null || store.audio.analysisTarget === "off",
+    "the tap is off while the strip is hidden", String(store.audio?.analysisTarget));
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(60);
+  check(!strip.hidden, "strip returns with the Timeline");
+
+  // ── 2. choosers follow the song's surround model ─────────────────────────
+  const targets = () => [...masterStrip.targetSel.options].map((o) => o.value);
+  const scopes = () => [...masterStrip.scopeSel[0].options].map((o) => o.value);
+  check(targets().join() === "stereo", "a stereo song offers only the stereo meter", targets().join());
+  check(masterStrip.targetSel.disabled, "…and there is nothing to choose");
+  check(scopes().join() === "blobs,top,hide", "a stereo song offers the two flat scopes", scopes().join());
+
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 1));
+  await sleep(80);
+  check(targets().join() === "stereo,quad,5.1,7.1,ambisonic", "a planar song offers every target", targets().join());
+  check(scopes().join() === "blobs,top,hide", "…but still no vertical-plane scopes", scopes().join());
+  check(masterStrip.target === "5.1", "planar defaults to metering 5.1", masterStrip.target);
+
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(80);
+  check(scopes().join() === "blobs,top,front,side,hide", "a spatial song offers all four scopes", scopes().join());
+  check(masterStrip.target === "ambisonic", "spatial defaults to the ambisonic field", masterStrip.target);
+
+  // ── 3. the tap reaches the engine, and the strip draws live ──────────────
+  masterStrip.scopeSel[1].value = "top";
+  masterStrip.scopeSel[1].dispatchEvent(new win.Event("change"));
+  doc.getElementById("playSong").click();
+  await sleep(2500);
+  const audio = store.audio;
+  check(!!audio && audio.isPlaying(), "song is playing");
+  check(audio?.analysisTarget === "ambisonic", "the engine got the ambisonic tap", String(audio?.analysisTarget));
+
+  const r = audio.readAnalysis(masterStrip.readout);
+  check(r.frames > 0, "the tap reported rendered frames", String(r.frames));
+  check(r.meterCount === 4, "spatial ambisonic meters W Y X Z", String(r.meterCount));
+  check(masterStrip.meterBars().map((b) => b.label).join(" ") === "E W Y X Z",
+    "the ambisonic strip leads with the field bar",
+    masterStrip.meterBars().map((b) => b.label).join(" "));
+  check(r.fieldEnergy > 0, "the encoded field carries energy", r.fieldEnergy.toExponential(3));
+  let ringMax = 0;
+  const ring = audio.scopeRing();
+  for (let i = 0; i < ring.length; i++) ringMax = Math.max(ringMax, Math.abs(ring[i]));
+  check(ringMax > 0, "the scope ring carries a signal", ringMax.toFixed(4));
+  check(masterStrip.meters[0].rmsDb() > -60, "the meter ballistics moved", masterStrip.meters[0].rmsDb().toFixed(1));
+
+  await sleep(200);
+  check(painted(masterStrip.scopeCanvas[0]), "scope A painted");
+  check(painted(masterStrip.scopeCanvas[1]), "scope B painted");
+  check(painted(masterStrip.meterCanvas), "meter/fader painted");
+
+  // ── 4. the fader is the SONG's global volume, one undo step per drag ─────
+  const before = store.song.globalVolume;
+  const depth = store.undo.undoStack.length;
+  const g = `fader:test`;
+  masterStrip.writeVolume(200, g);
+  masterStrip.writeVolume(160, g);
+  masterStrip.writeVolume(120, g);
+  await sleep(80);
+  check(store.song.globalVolume === 120, "the drag wrote the project's global volume", String(store.song.globalVolume));
+  check(store.undo.undoStack.length === depth + 1, "…as ONE undo step",
+    `${store.undo.undoStack.length} vs ${depth + 1}`);
+  store.undo.undo();
+  await sleep(60);
+  check(store.song.globalVolume === before, "undo restores the pre-drag value", String(store.song.globalVolume));
+
+  // While the song plays the cap follows the ENGINE (effects V/W move it);
+  // stopped, it snaps back to the project's own value.
+  doc.getElementById("stopBtn").click();
+  await sleep(300);
+  check(masterStrip.volumeValue() === store.song.globalVolume,
+    "stopped, the fader reads the project value",
+    `${masterStrip.volumeValue()} vs ${store.song.globalVolume}`);
+
+  // ── 5. panels: add, drop just one, resize the meter ──────────────────────
+  const panelH = masterStrip.scopePanel[0].getBoundingClientRect().height;
+  const meterBefore = masterStrip.meterBox.getBoundingClientRect().height;
+  check(panelH > 0 && Math.abs(panelH - masterStrip.scopePanel[1].getBoundingClientRect().height) < 1,
+    "scope panels are a fixed, equal size", panelH.toFixed(1));
+
+  // "Hide this panel" drops THAT panel, not the strip.
+  const sel0 = masterStrip.scopeSel[0];
+  const kept = masterStrip.scopes[1];
+  sel0.value = "hide";
+  sel0.dispatchEvent(new win.Event("change"));
+  await sleep(120);
+  check(!strip.hidden, "hiding a panel leaves the strip up");
+  check(masterStrip.panelCount() === 1, "…and drops exactly one panel", String(masterStrip.panelCount()));
+  check(masterStrip.scopes[0] === kept, "…the one that was chosen, not its neighbour", masterStrip.scopes[0]);
+  check(masterStrip.meterBox.getBoundingClientRect().height > meterBefore,
+    "the meter takes over the freed room");
+
+  // A panel's CHOICE survives a song that cannot show it. (Regression: the
+  // strip is built before any song loads, so the model reads stereo, and the
+  // saved front/side choices used to be overwritten there and then — four
+  // configured panels came back as several copies of one view.)
+  const sorted = (a) => [...a].filter(Boolean).sort().join();
+  while (masterStrip.scopes.length < 4) masterStrip.addScope();
+  await sleep(120);
+  const wishes = masterStrip.scopes.join();
+  check(sorted(masterStrip.scopes) === "blobs,front,side,top",
+    "adding panels hands out four DIFFERENT views", wishes);
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
+  await sleep(120);
+  check(masterStrip.scopes.join() === wishes, "a stereo song does not rewrite them",
+    masterStrip.scopes.join());
+  check(sorted(masterStrip.effective) === "blobs,top" && masterStrip.effective.length === 4,
+    "…it just stops drawing the two it cannot show", String(masterStrip.effective));
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(120);
+  check(masterStrip.effective.join() === wishes,
+    "…and going spatial brings them straight back", masterStrip.effective.join());
+  // Back to one panel, leaving room for the "+" leg below.
+  while (masterStrip.scopes.length > 1) masterStrip.removeScope(masterStrip.scopes.length - 1);
+  await sleep(120);
+
+  // The + button puts one back.
+  check(!doc.getElementById("masterStrip").querySelector(".ms-head .icon-btn").hidden,
+    "the add button is available when there is room");
+  masterStrip.addScope();
+  await sleep(120);
+  check(masterStrip.panelCount() === 2, "+ adds a panel back", String(masterStrip.panelCount()));
+
+  // Dragging the divider resizes the meter panel.
+  const meterHBefore = masterStrip.meterH;
+  masterStrip._split = strip.getBoundingClientRect();
+  masterStrip.onSplitMove({ clientY: strip.getBoundingClientRect().bottom - 300 });
+  masterStrip.onSplitUp({ pointerId: 1 });
+  await sleep(120);
+  check(Math.abs(masterStrip.meterH - 297) < 6, "the divider sets the meter height",
+    `${meterHBefore} → ${masterStrip.meterH}`);
+  // Scope panels are fixed-size, so the meter is the elastic one: it never gets
+  // LESS than the dragged height, and takes any leftover a whole panel cannot use.
+  check(masterStrip.meterBox.getBoundingClientRect().height >= masterStrip.meterH - 1,
+    "…and the panel takes at least that much", masterStrip.meterBox.getBoundingClientRect().height.toFixed(1));
+  // A meter that big leaves room for fewer scopes.
+  check(masterStrip.panelCount() <= 2, "panels that no longer fit are not drawn",
+    String(masterStrip.panelCount()));
+
+  // Speaker targets: bars stand where the speakers do, and no LFE bar.
+  masterStrip.targetSel.value = "7.1";
+  masterStrip.targetSel.dispatchEvent(new win.Event("change"));
+  await sleep(600);
+  const bars71 = masterStrip.meterBars().map((b) => b.label).join(" ");
+  check(bars71 === "Lrs Lss L C R Rss Rrs", "7.1 bars are arranged like the speakers", bars71);
+  masterStrip.targetSel.value = "5.1";
+  masterStrip.targetSel.dispatchEvent(new win.Event("change"));
+  await sleep(600);
+  const bars51 = masterStrip.meterBars().map((b) => b.label).join(" ");
+  check(bars51 === "Ls L C R Rs", "5.1 likewise, with no LFE bar", bars51);
+  // Ls is channel 4 in the file's order (L R C LFE Ls Rs) — the leftmost BAR
+  // must still be reading that channel's meter, not the leftmost channel's.
+  check(masterStrip.meterBars()[0].meter === masterStrip.meters[4],
+    "…and the leftmost bar reads the Ls channel, not channel 0");
+  masterStrip.targetSel.value = "ambisonic";
+  masterStrip.targetSel.dispatchEvent(new win.Event("change"));
+  await sleep(300);
+
+  // ── 6. the clip lamp latches until the next take ─────────────────────────
+  masterStrip.meters[0].update(0.25, 1.0, true, 16); // as if a sample clipped
+  check(masterStrip.meters[0].clipping(), "a clipped sample lights the lamp");
+  await sleep(600); // many frames of silence, stopped
+  check(masterStrip.meters[0].clipping(), "…and it stays lit while stopped");
+  doc.getElementById("playSong").click();
+  await sleep(400);
+  check(!masterStrip.meters[0].clipping(), "starting playback again clears it");
+  doc.getElementById("stopBtn").click();
+  await sleep(200);
+
+  // ── 7. hiding drops the tap ──────────────────────────────────────────────
+  doc.getElementById("tbMaster").click();
+  await sleep(120);
+  check(strip.hidden, "the toolbox button hides the strip");
+  check(audio.analysisTarget === "off", "hiding drops the engine tap", String(audio.analysisTarget));
+  doc.getElementById("tbMaster").click();
+  await sleep(120);
+  check(!strip.hidden && audio.analysisTarget === "ambisonic", "…and turning it back on restores it");
+
+  log(fails ? `\nRESULT: FAIL (${fails})` : "\nRESULT: PASS");
+})().catch((e) => log("ERROR " + e.message + "\n" + e.stack));
+</script>

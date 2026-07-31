@@ -15,9 +15,11 @@
       console.log("SMOKE: " + line);
       document.getElementById("out").textContent = out.join("\n");
     };
-    const key = (win, code, key, opts = {}) => {
+    const keyDown = (win, code, key, opts = {}) =>
       win.dispatchEvent(new win.KeyboardEvent("keydown", { code, key, bubbles: true, ...opts }));
-      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key, bubbles: true, ...opts }));
+    const key = (win, code, key_, opts = {}) => {
+      keyDown(win, code, key_, opts);
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { code, key: key_, bubbles: true, ...opts }));
     };
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,6 +46,17 @@
         const cell = store.song.patterns[target.pat][target.rowInCue];
         log(`note entry: note=0x${cell.note.toString(16)} inst=${cell.instrment} cursorRow=${store.cursor.row}`);
         const entryOk = cell.note === 0x5000 && cell.instrment === 5 && store.cursor.row === 2;
+
+        // Holding a piano key is ONE note: hardware autorepeat must not spray
+        // the note down the rows (nor retrigger the audition).
+        const rowAfterEntry = store.cursor.row;
+        const nextTarget = timeline.cursorCell();          // where a repeat would land
+        const noteBefore = nextTarget.cell.note;
+        for (let i = 0; i < 6; i++) keyDown(win, "KeyA", "a", { repeat: true });
+        win.dispatchEvent(new win.KeyboardEvent("keyup", { code: "KeyA", key: "a", bubbles: true }));
+        const noteAfter = store.song.patterns[nextTarget.pat][nextTarget.rowInCue].note;
+        log(`autorepeat: cursorRow ${rowAfterEntry} → ${store.cursor.row}, next cell note 0x${noteBefore.toString(16)} → 0x${noteAfter.toString(16)}`);
+        const repeatOk = store.cursor.row === rowAfterEntry && noteAfter === noteBefore;
 
         key(win, "KeyZ", "z", { ctrlKey: true }); // undo
         const undone = store.song.patterns[target.pat][target.rowInCue];
@@ -89,8 +102,8 @@
           log("opfs unavailable in this browser profile");
         }
 
-        const pass = entryOk && undoOk && instOk && cueOk && store.doc.dirty && opfsOk;
-        log(pass ? "RESULT: PASS" : `RESULT: FAIL entry=${entryOk} undo=${undoOk} inst=${instOk} cue=${cueOk} opfs=${opfsOk}`);
+        const pass = entryOk && repeatOk && undoOk && instOk && cueOk && store.doc.dirty && opfsOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL entry=${entryOk} repeat=${repeatOk} undo=${undoOk} inst=${instOk} cue=${cueOk} opfs=${opfsOk}`);
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
       }

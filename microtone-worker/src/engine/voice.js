@@ -138,6 +138,9 @@ export class Voice {
     this.spatialSlideActive = false; // armed by Z for the current row
     // Mixer-side cache of the renderer gains: {az, el, chans, renderer, gains}.
     this.spatial = null;
+    // The same, for the master strip's analysis bus (item 98) — a separate slot
+    // so the two buses do not invalidate each other every sample.
+    this.analysisSpatial = null;
 
     // Anti-click volume ramp.
     this.currentMixVolume = 1.0;

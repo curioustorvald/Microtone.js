@@ -14,9 +14,18 @@ import {
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_V_AZIMUTH, SNAP_V_ELEVATION,
-  SNAP_VOICE_STRIDE,
+  SNAP_VOICE_STRIDE, SNAP_GLOBAL_VOLUME,
+  SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
+  SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
+  SNAP_METER_BASE, SNAP_METER_STRIDE,
+  SNAP_M_PEAK, SNAP_M_TRUE_PEAK, SNAP_M_MEAN_SQUARE, SNAP_M_CLIP,
+  SNAP_SCOPE_BASE,
 } from "./protocol.js";
 import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth } from "../engine/spatial.js";
+import { ANALYSIS_MAX_METERS, makeAnalysisReadout } from "../engine/analysis.js";
+
+/** Reused drain target — the snapshot path never allocates. */
+const analysisReadout = makeAnalysisReadout();
 
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
@@ -53,6 +62,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.SET_TRACKER_MIXER_FLAGS: eng.setTrackerMixerFlags(m.ph, m.flags); return true;
     case CMD.SET_SURROUND_MODEL: eng.setSurroundModel(m.ph, m.model); return true;
     case CMD.SET_MONITOR_MODE: eng.setMonitorMode(m.ph, m.mode); return true;
+    case CMD.SET_ANALYSIS: eng.setAnalysis(m.ph, m.target); return true;
     case CMD.PLAY: eng.play(m.ph); return true;
     case CMD.STOP: eng.stop(m.ph); return true;
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;
@@ -92,6 +102,7 @@ export function fillSnapshotInto(eng, playhead, f) {
   f[SNAP_TICK_RATE] = ph.tickRate;
   f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
   f[SNAP_CHANNEL_COUNT] = eng.channelCount();
+  f[SNAP_GLOBAL_VOLUME] = ph.globalVolume;
   for (let vi = 0; vi < MAX_VOICES; vi++) {
     const v = ts.voices[vi];
     const o = SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE;
@@ -150,4 +161,41 @@ export function fillSnapshotInto(eng, playhead, f) {
       f[o + SNAP_V_ENV_FILTER_IDX] = -1;
     }
   }
+  fillAnalysisInto(ts, f);
+}
+
+/**
+ * Master-strip block (item 98). Drains the analysis tap — meters, correlation
+ * sums, field energy and the B-format scope ring — into the snapshot. With the
+ * tap off, only the "no meters" marker is written; the ring keeps whatever it
+ * last held, which nothing reads.
+ */
+function fillAnalysisInto(ts, f) {
+  const tap = ts.analysis;
+  if (tap === null) {
+    f[SNAP_AN_METERS] = 0;
+    f[SNAP_AN_FRAMES] = 0;
+    f[SNAP_AN_FIELD] = 0;
+    f[SNAP_AN_CORR_LL] = 0;
+    f[SNAP_AN_CORR_RR] = 0;
+    f[SNAP_AN_CORR_LR] = 0;
+    return;
+  }
+  const r = tap.drain(analysisReadout);
+  f[SNAP_AN_METERS] = r.meterCount;
+  f[SNAP_AN_FRAMES] = r.frames;
+  f[SNAP_AN_FIELD] = r.fieldEnergy;
+  f[SNAP_AN_CORR_LL] = r.corrLL;
+  f[SNAP_AN_CORR_RR] = r.corrRR;
+  f[SNAP_AN_CORR_LR] = r.corrLR;
+  f[SNAP_AN_RING_WRITE] = r.ringWrite;
+  for (let c = 0; c < ANALYSIS_MAX_METERS; c++) {
+    const o = SNAP_METER_BASE + c * SNAP_METER_STRIDE;
+    const live = c < r.meterCount;
+    f[o + SNAP_M_PEAK] = live ? r.peak[c] : 0;
+    f[o + SNAP_M_TRUE_PEAK] = live ? r.truePeak[c] : 0;
+    f[o + SNAP_M_MEAN_SQUARE] = live ? r.meanSquare[c] : 0;
+    f[o + SNAP_M_CLIP] = live ? r.clip[c] : 0;
+  }
+  f.set(tap.ring, SNAP_SCOPE_BASE);
 }

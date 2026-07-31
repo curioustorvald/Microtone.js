@@ -1,8 +1,13 @@
 // Message protocol shared by the AudioWorklet processor and the main thread.
+// The master-strip block's geometry comes from the analysis tap itself, so the
+// wire layout cannot drift from what fills it.
+//
 // Commands (main → worklet) are plain {t, ...} messages, deliberately
 // isomorphic to the TSVM `audio.*` calls taut.js makes; bulk payloads ride as
 // transferred ArrayBuffers. Snapshots (worklet → main) are recycled
 // Float32Array buffers with the fixed layout below.
+
+import { ANALYSIS_MAX_METERS, SCOPE_FRAMES, SCOPE_CHANNELS } from "../engine/analysis.js";
 
 export const CMD = Object.freeze({
   INIT: "init",
@@ -25,6 +30,7 @@ export const CMD = Object.freeze({
   SET_TRACKER_MIXER_FLAGS: "setTrackerMixerFlags", // {ph, flags}
   SET_SURROUND_MODEL: "setSurroundModel",          // {ph, model} — #998 song flag
   SET_MONITOR_MODE: "setMonitorMode",              // {ph, mode} — #998.3 fold / binaural
+  SET_ANALYSIS: "setAnalysis",                     // {ph, target} — item 98 master-strip tap
   PLAY: "play",                                    // {ph}
   STOP: "stop",                                    // {ph}
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
@@ -58,7 +64,21 @@ export const SNAP_TICK_RATE = 4;
 export const SNAP_FLAGS = 5;          // bit0 isPlaying, bit1 jamActive
 export const SNAP_INTERRUPT_MASK = 6; // drained latch (edge-triggered)
 export const SNAP_CHANNEL_COUNT = 7;
-export const SNAP_HEADER_SIZE = 8;
+// Song global volume (0..255). Effects V and W move it DURING playback, which
+// is what the master fader follows (item 98).
+export const SNAP_GLOBAL_VOLUME = 8;
+// ── Master-strip analysis (item 98) ──
+// All of these are zero while the tap is off. The meter/correlation figures are
+// sums over SNAP_AN_FRAMES samples — one snapshot interval — and the UI owns
+// the ballistics.
+export const SNAP_AN_METERS = 9;      // metered channel count (0 = tap off)
+export const SNAP_AN_FRAMES = 10;     // samples integrated since the last snapshot
+export const SNAP_AN_FIELD = 11;      // Σ (W²+X²+Y²+Z²)/2 — acoustic energy density
+export const SNAP_AN_CORR_LL = 12;    // Σ L², Σ R², Σ L·R of the stereo (decode)
+export const SNAP_AN_CORR_RR = 13;
+export const SNAP_AN_CORR_LR = 14;
+export const SNAP_AN_RING_WRITE = 15; // next frame index in the scope ring
+export const SNAP_HEADER_SIZE = 16;
 
 // Per-voice block, stride SNAP_VOICE_STRIDE, MAX_VOICES blocks.
 export const SNAP_V_ACTIVE = 0;
@@ -82,7 +102,24 @@ export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 
 export const SNAP_VOICE_STRIDE = 18;
 
 export const SNAP_MAX_VOICES = 64;
-export const SNAP_FLOATS = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE; // 1160
+
+// ── Master-strip blocks (item 98), after the voice array ──
+// Per metered channel: peak, true peak (4× oversampled), mean square over the
+// interval, and the number of samples that hit full scale.
+export const SNAP_METER_BASE = SNAP_HEADER_SIZE + SNAP_MAX_VOICES * SNAP_VOICE_STRIDE;
+export const SNAP_M_PEAK = 0;
+export const SNAP_M_TRUE_PEAK = 1;
+export const SNAP_M_MEAN_SQUARE = 2;
+export const SNAP_M_CLIP = 3;
+export const SNAP_METER_STRIDE = 4;
+
+// The vectorscope ring: SCOPE_FRAMES frames of first-order B-format, frame
+// interleaved (W, Y, Z, X), written continuously and read backwards from
+// SNAP_AN_RING_WRITE. See src/engine/analysis.js for why the scopes are always
+// B-format whatever the metering target is.
+export const SNAP_SCOPE_BASE = SNAP_METER_BASE + ANALYSIS_MAX_METERS * SNAP_METER_STRIDE;
+
+export const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS; // 17584
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the

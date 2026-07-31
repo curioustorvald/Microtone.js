@@ -77,6 +77,19 @@ test("note column: piano key writes note + adopts current inst + jams", () => {
   assert.ok(a.advanceRow);
 });
 
+test("note column: autorepeat on a held piano key is swallowed", () => {
+  const cell = new TaudPlayData();
+  const rep = interpretEditKey({ code: "KeyA", key: "a", repeat: true }, SUB_NOTE, 0, cell, ctx);
+  assert.ok(rep, "consumed (nothing else may see the key)");
+  assert.equal(rep.fields, undefined, "no cell write");
+  assert.equal(rep.jamNote, undefined, "no retrigger");
+  assert.ok(!rep.advanceRow, "no row advance");
+  // Raw-hex entry is typing, not a piano: repeats still shift digits in.
+  const raw = interpretEditKey({ code: "KeyA", key: "a", repeat: true }, SUB_NOTE, 0, cell,
+    { ...ctx, rawHex: true });
+  assert.equal(raw.fields.note, 0x000a);
+});
+
 test("note column specials: keyoff/clear (Digit1/2/3 removed, item 47.3)", () => {
   const cell = new TaudPlayData();
   assert.equal(interpretEditKey({ code: "Backquote", key: "`" }, SUB_NOTE, 0, cell, ctx).fields.note, 1);

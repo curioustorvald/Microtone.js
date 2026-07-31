@@ -592,7 +592,7 @@ class PatternPane {
     const c = this.cursor;
     const cell = pattern[c.row];
     const action = interpretEditKey(
-      { code: e.code, key: e.key }, c.sub, c.nib, cell,
+      { code: e.code, key: e.key, repeat: e.repeat }, c.sub, c.nib, cell,
       { octave: this.jam.octave, currentInst: this.jam.currentInst, preset: this.store.pitchPreset,
         rawHex: rawNoteView(this.store.rawNoteView, this.store.pitchPreset),
         wideCells: this.store.doc?.wideCells === true });
@@ -600,8 +600,8 @@ class PatternPane {
     if (action.fields) {
       this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, c.row, action.fields));
     }
-    if (action.jamNote !== undefined && this.store.audio) {
-      this.store.audio.jamNote(0, 0, action.jamNote, this.jam.currentInst);
+    if (action.jamNote !== undefined) {
+      this.jam.hold(e.code, action.jamNote, 0);
     }
     if (action.advanceNib) this.moveSubCursor(1);
     else if (action.advanceRow) { c.nib = 0; this.moveCursor(this.store.editStep); }
