@@ -696,7 +696,7 @@ this way.
 What the extra room buys you:
 
 - **An 8-bit volume column.** Volumes run 00–FF instead of 00–3F, so the column has four times the resolution — and its own slides can move by a single unit per tick. Effect-column volume slides (`D`, `K`, `L`, `N`) keep their old arguments and their old speed.
-- **A panning column that holds a position.** Instead of one front-arc value, it carries the **height** (two digits, signed: `00` ear level, `40` = +45°, `C0` = −45°) followed by the **angle** (three digits: `000` left, `080` front, `100` right, `180` behind). The height is drawn in its own colour so the two numbers never read as one. A `Z` slide on the same row turns the column into that slide's *target*, so the source travels there instead of jumping.
+- **A panning column that holds a position.** Instead of one front-arc value, it carries the **height** (two digits, signed: `00` ear level, `40` = +45°, `C0` = −45°) followed by the **angle** (three digits: `000` left, `080` front, `100` right, `180` behind). The height is drawn in its own colour so the two numbers never read as one, and in a **spatial** song a placed source states its height even when it is `00` — on the sphere, ear level is a position you chose, not an absent value (a planar song has no height to state, and a slide leaves the field unused, so both show dots there). A `Z` slide on the same row turns the column into that slide's *target*, so the source travels there instead of jumping.
 - A second effect slot per cell, which converters can use so that two simultaneous commands from a source file no longer have to fight over one column. The editor does not show it.
 
 The **Panner…** dialog gains a **Column** button in such a project: it writes the

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>wide-cell columns visual harness</title></head>
+<body>
+  <!-- A spatial v3 project with a few positions written, for eyeballing the
+       wide columns (8-bit volume, elevation + azimuth):
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/wide.png \
+           --timeout=15000 "http://localhost:8932/test/browser/widecell-visual.html?theme=dark"
+       ?theme=light for the light theme, ?model=1 for a planar project (where an
+       ear-level elevation stays dotted). -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store, timeline } = win.__microtone;
+      for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      const { upgradeCellFormatOp, setCellOp } = await win.eval('import("/src/doc/ops.js")');
+      const model = parseInt(params.get("model") ?? "2", 10);
+      store.undo.apply(upgradeCellFormatOp(store.songIndex, model));
+      await sleep(80);
+
+      // A column of positions on the first channel's pattern: ear level, up,
+      // down, behind, plus a slide and an 8-bit volume.
+      const pat = store.song.cues[0][0] & 0x7fff;
+      const cells = [
+        { volume: 0xff, volumeEff: 0, azimuth: 0x080, elevation: 0, panEff: 0 },
+        { volume: 0xc0, volumeEff: 0, azimuth: 0x000, elevation: 64, panEff: 0 },
+        { volume: 0x80, volumeEff: 0, azimuth: 0x180, elevation: -64, panEff: 0 },
+        { volume: 0x40, volumeEff: 0, azimuth: 0x100, elevation: 0, panEff: 0 },
+        { volume: 0x20, volumeEff: 1, azimuth: 0x008, elevation: 0, panEff: 1 },
+      ];
+      cells.forEach((f, r) => store.undo.apply(setCellOp(store.songIndex, pat, r, f)));
+      await sleep(60);
+      win.document.querySelector('[data-view="timeline"]').click();
+      store.cursor = { row: 0, ch: 0, sub: 3, nib: 3 };
+      timeline.invalidate();
+    })();
+  </script>
+</body>
+</html>

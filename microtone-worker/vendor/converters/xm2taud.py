@@ -619,12 +619,20 @@ def encode_effect_xm(cmd: int, arg: int, ch: int = 0, row: int = 0,
         return (TOP_W, (arg & 0xFF) << 8, None, None)
 
     if cmd == 0x14:
-        # Key off (delayed): map to a note-off via SDx-like delay sub-effect.
-        # Taud doesn't have a direct delayed-key-off, so issue a key-off note
-        # immediately (loses delay parameter — most XMs use Kxx with arg=0).
-        if arg > 0:
-            vprint(f"    K{arg:02X} delay parameter lost at ch{ch} row{row}")
-        return (TOP_NONE, 0, None, None)   # caller forces note=NOTE_KEYOFF
+        # Key off (delayed): TAUD_NOTE_EFFECTS.md "S $Dxny" compat note —
+        # FastTracker Kxx maps to S $D00xx (x=0 no delay-to-trigger, n=0 note
+        # off, y=xx ticks after row start). The row keeps its own empty note
+        # column — the engine's $n follow-up action applies to whichever note
+        # is already sounding on the channel (see row.js's note===0 branch).
+        # K00 (arg=0) has no follow-up window at all (y=0 disables the S$D
+        # action per the "$y is zero" case), so it forces an immediate
+        # key-off note instead, same as before.
+        if arg == 0:
+            return (TOP_NONE, 0, None, None)   # caller forces note=NOTE_KEYOFF
+        y = min(arg, 0xF)
+        if arg > 0xF:
+            vprint(f"    K{arg:02X} clamped to y={y:X} (S $D range) at ch{ch} row{row}")
+        return (TOP_S, 0xD000 | y, None, None)
 
     if cmd == 0x15:
         vprint(f"    dropped L{arg:02X} (set envelope position) at ch{ch} row{row}")
@@ -1189,8 +1197,11 @@ def build_pattern_xm(chunk_grid: list, ch_idx: int, default_pan: int,
         op, arg16, vol_override, pan_override = encode_effect_xm(
             cell.effect, cell.effect_arg, ch_idx, r, amiga_mode=amiga_mode)
 
-        # XM K00 (0x14) = key off — force note to NOTE_KEYOFF
-        if cell.effect == 0x14:
+        # XM K00 (0x14, arg==0) = immediate key off — force note to
+        # NOTE_KEYOFF. Kxx with arg>0 is deferred via the S $D00xx effect
+        # encode_effect_xm already returned; leave the note column alone so
+        # that path (not this immediate one) does the work.
+        if cell.effect == 0x14 and cell.effect_arg == 0:
             cell.note = XM_NOTE_OFF
 
         # Fold vol-col aux into main slot if free
@@ -1250,6 +1261,16 @@ def build_pattern_xm(chunk_grid: list, ch_idx: int, default_pan: int,
                 vprint(f"    ch{ch_idx} row{r}: FT2 key-off zero overrides "
                        f"vol-col (sel={vol_sel}, val={vol_value})")
             vol_sel, vol_value = SEL_SET, 0
+        elif r in keyoff_zero_rows and cell.effect == 0x14:
+            # Delayed Kxx (arg>0) on a vol-env-off instrument: the row-start
+            # zero pairing above can't apply without also zeroing the delay
+            # away, so this narrow FT2 quirk (silence right after key-off
+            # with no volume envelope) isn't replicated for the deferred
+            # case — only the S $D00xx note-off itself fires, at the right
+            # tick, without the extra hard mute.
+            vprint(f"    ch{ch_idx} row{r}: delayed K{cell.effect_arg:02X} on "
+                   f"vol-env-off instrument — FT2 zero-on-keyoff quirk not "
+                   f"replicated for the deferred case")
 
         vol_byte = (vol_value & 0x3F) | ((vol_sel & 0x3) << 6)
         pan_byte = (pan_value & 0x3F) | ((pan_sel & 0x3) << 6)

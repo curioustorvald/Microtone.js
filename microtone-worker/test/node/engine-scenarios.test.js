@@ -144,6 +144,42 @@ test("S$Dxny: a zero $y schedules no action at all", () => {
   assert.equal(v.active, true, "nothing came along to cut it");
 });
 
+// item 97: FastTracker Kxx has no note column entry of its own — it acts on
+// whatever note is already sounding. TAUD_NOTE_EFFECTS.md's compat note
+// ("Kxx maps to S $D00xx") only works if the $n action can arm on a
+// note-less row; previously scheduleDxnyAction was only ever called from the
+// note-bearing branches (row.js note===0x0000 skipped it entirely).
+test("S$Dxny's $n action arms on a note-less row (Kxx-style deferred key-off)", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; } // vol/pan no-op
+  pat[0] = 0x00; pat[1] = 0x50;  // row0: note 0x5000
+  pat[2] = 1;                    // inst 1
+  // row1: no note, S $D002 (x=0, n=0 note-off, y=2) — the Kxx idiom.
+  pat[8 + 5] = 0x1c;             // OP_S
+  pat[8 + 6] = 0x02; pat[8 + 7] = 0xd0; // arg 0xD002
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125);
+  eng.setTickRate(0, 6);
+  eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+
+  renderSamples(eng, 5500); // past row0's trigger, before row1 tick2's 5760-sample fire point
+  assert.equal(v.active, true, "note from row0 still sounding");
+  assert.equal(v.keyOff, false, "row1 tick2 hasn't fired yet");
+  assert.equal(v.noteActionTick, 2, "armed at x+y = 0+2 even with no note on row1");
+
+  renderSamples(eng, 700); // cumulative 6200: past row1 tick2 (5760)
+  assert.equal(v.keyOff, true, "the $n=0 (note off) action fired on the currently-sounding voice");
+  assert.equal(v.noteActionTick, -1, "consumed, not re-armed");
+});
+
 test("applyKeyLift respects the instrument's Key-Lift flag; forceKeyLift (S$Dxny n=4) bypasses it", () => {
   const sustainWord = (1 << 8) | 3 | 0x20; // enable, start=1, end=3
   const makeVoice = () => { const v = new Voice(); v.activeVolEnvSustain = sustainWord; return v; };

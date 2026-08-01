@@ -463,15 +463,31 @@ export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palet
   let argX = x + charW;
   if (wide && isPan) {
     const el = palette.elevation | 0;
-    ctx.fillStyle = el === 0 ? palette.dim : (palette.elevationInk ?? palette.ink);
-    if (el === 0) ctx.globalAlpha = 0.4;
-    ctx.fillText(el === 0 ? "··" : hex2(el & 0xff), argX, midY);
+    const txt = elevationCellText(el, op, palette.spatial === true);
+    const stated = txt !== "··";
+    ctx.fillStyle = stated ? (palette.elevationInk ?? palette.ink) : palette.dim;
+    if (!stated) ctx.globalAlpha = 0.4;
+    ctx.fillText(txt, argX, midY);
     ctx.globalAlpha = 1;
     ctx.fillStyle = palette.ink;
     argX += 2 * charW;
   }
   const arg = volPanArg(value, sel, isPan, wide);
   ctx.fillText(digits === 3 ? hex3(arg) : hex2(arg), argX, midY);
+}
+
+/**
+ * What the wide panning column's elevation digits read as.
+ *
+ * On the sphere, ear level is a POSITION — as much a decision as any other
+ * height — so a spatial song states it: a placing column shows `00` rather than
+ * hiding it under the dots that mean "this field says nothing". A planar song
+ * has no height to state, and under a SLIDE selector the field is reserved, so
+ * both keep the dots.
+ */
+export function elevationCellText(el, op, spatial) {
+  if (el !== 0) return hex2(el & 0xff);
+  return spatial && op === "set" ? "00" : "··";
 }
 
 /** Three-digit hex, for the wide panning column's 9-bit azimuth. */

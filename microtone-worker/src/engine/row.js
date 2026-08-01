@@ -12,14 +12,16 @@ import { applyKeyLift } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
 
-/** S $Dxny (item 94): schedule the $n follow-up action at absolute tick
- *  $x+$y within the row (independent of whichever note-event branch deferred
- *  the trigger by $x, or fired it immediately when $x is 0). No-op unless
- *  $y is nonzero — a zero $y never carries an action (TAUD_NOTE_EFFECTS.md
- *  "S $Dxny" table: "If $y is zero" has no action row). A schedule past the
- *  row's tick count self-discards: tick.js only fires on an exact tickInRow
- *  match, and row entry unconditionally resets noteActionTick to -1 before
- *  the next row's ticks can reach it — the same trick sDelayTick relies on. */
+/** S $Dxny (item 94, extended item 97): schedule the $n follow-up action at
+ *  absolute tick $x+$y within the row (independent of whichever note-event
+ *  branch deferred the trigger by $x, or fired it immediately when $x is 0,
+ *  or — on a note-less row — deferred nothing at all, see the `note === 0`
+ *  caller). No-op unless $y is nonzero — a zero $y never carries an action
+ *  (TAUD_NOTE_EFFECTS.md "S $Dxny" table: "If $y is zero" has no action row).
+ *  A schedule past the row's tick count self-discards: tick.js only fires on
+ *  an exact tickInRow match, and row entry unconditionally resets
+ *  noteActionTick to -1 before the next row's ticks can reach it — the same
+ *  trick sDelayTick relies on. */
 function scheduleDxnyAction(voice, row, delayTick) {
   if (row.effect !== EffectOp.OP_S || ((row.effectArg >>> 12) & 0xf) !== 0xd) return;
   const y = row.effectArg & 0xf;
@@ -151,6 +153,11 @@ export function applyTrackerRow(eng, ts, playhead) {
         // applyActiveSample without retrigger (Schism csf_instrument_change).
         applyInstrumentChange(eng, ts, voice, newInst, newPatch);
       }
+      // A note-less row has nothing for S$D's $x to trigger, but the $n
+      // follow-up action still applies to whatever voice is already sounding
+      // (TAUD_NOTE_EFFECTS.md: FastTracker Kxx → S $D00xx, OpenMPT :xy →
+      // S $Dx1y — both act on the current note without a note column entry).
+      scheduleDxnyAction(voice, row, sDelayTick);
     } else if (note === 0x0001) {
       // Key-off (sub-row delay via S$Dx defers it).
       if (sDelayTick > 0) {

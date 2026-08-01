@@ -607,3 +607,20 @@ test("an empty wide panning column knows the elevation counts", async () => {
   cell.elevation = 30;
   assert.equal(E.subIsEmpty(E.SUB_PAN, cell), false, "a height alone is not nothing");
 });
+
+test("a spatial song states ear level instead of hiding it", async () => {
+  // On the sphere 00 is a POSITION — the composer chose ear level — so the
+  // column says so. A planar song has no height to state, and under a slide
+  // selector the elevation field is reserved, so both keep the dots.
+  const { elevationCellText } = await import("../../src/ui/glyphs.js");
+  assert.equal(elevationCellText(0, "set", true), "00", "spatial + placing → stated");
+  assert.equal(elevationCellText(0, "set", false), "··", "planar has no height");
+  assert.equal(elevationCellText(0, "none", true), "··", "an empty column stays empty");
+  assert.equal(elevationCellText(0, "up", true), "··", "reserved under a slide");
+  assert.equal(elevationCellText(0, "fineUp", true), "··");
+  // A real height is always shown, in every model — including a negative one,
+  // which is a signed byte on the wire.
+  assert.equal(elevationCellText(64, "set", false), "40");
+  assert.equal(elevationCellText(-64, "set", true), "C0");
+  assert.equal(elevationCellText(-1, "up", false), "FF");
+});

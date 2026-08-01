@@ -25,6 +25,7 @@ import {
 } from "../../doc/patterntools.js";
 import { dittoGhosts } from "../../doc/ditto.js";
 import { CUE_EMPTY } from "../../format/taud-const.js";
+import { SURROUND_SPATIAL } from "../../engine/spatial.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { showModal } from "../widgets/modal.js";
@@ -787,7 +788,9 @@ class PatternPane {
       const pan = ghost?.pan ?? [wide ? cell.azimuth : cell.pan, cell.panEff];
       paintVolPanCell(ctx, pan[0], pan[1], true, x0 + 12 * CHAR_W, y, CHAR_W, ROW_H,
         { ink: ghost?.pan ? C.ditto : C.colPan, dim: C.dim, wide,
-          elevation: wide ? cell.elevation : 0, elevationInk: C.accent2 });
+          elevation: wide ? cell.elevation : 0, elevationInk: C.accent2,
+        // On the sphere, ear level is a stated position, not an absent one.
+        spatial: (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) === SURROUND_SPATIAL });
       ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
       ctx.fillText(fxS, x0 + (wide ? 19 : 16) * CHAR_W, y + ROW_H / 2);
     }
