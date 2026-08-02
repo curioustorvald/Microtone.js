@@ -1,0 +1,239 @@
+<!doctype html><meta charset="utf-8"><title>Context menu on the Cues and Patterns views</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// The same icon-cell menu on the other two grids: the full set on Cues (the
+// clipboard, both channel inserts, New pattern on an empty slot) and the
+// clipboard on Patterns — where the point is that it works ACROSS columns,
+// i.e. copy inside one pane's selection and paste into another.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+window.addEventListener('error', (e) => log('ERROR ' + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, cuesView, patternView } = M;
+  const { cueInstructionWords } = await import("../../src/format/taud-parse.js");
+  const { cellToBytes } = await import("../../src/doc/clipboard.js");
+
+  const menuOn = async (canvas, x, y) => {
+    const r = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new win.PointerEvent("pointerdown", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, pointerId: 1, button: 2, buttons: 2 }));
+    canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2 }));
+    let dlg = null;
+    for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return dlg;
+  };
+  const ids = (dlg) => [...dlg.querySelectorAll(".ctx-cell")].map((c) => c.dataset.id);
+  const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
+  const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
+
+  // ══════════════════ CUES (F2) ══════════════════
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F2", bubbles: true }));
+  await sleep(120);
+  check(store.view === "cues", "switched to the Cues view", store.view);
+
+  const cueCv = doc.getElementById("cuesCanvas");
+  // cues.js layout: GUTTER_W 52, CMD_W ceil(9*7.9)=72, COL_W ceil(4*7.9)+8=40,
+  // HEADER_H 22, ROW_H 16.
+  const CUE_G = 52, CMD_W = 72, CUE_COLW = 40, CUE_HDR = 22, CUE_ROWH = 16;
+  const cueX = (ch) => CUE_G + 2 * CMD_W + (ch - cuesView.scrollCh) * CUE_COLW + 8;
+  const cueY = (row) => CUE_HDR + (row - cuesView.scrollCue) * CUE_ROWH + 8;
+  const cuePat = (cue, ch) => store.song.cues[cue][ch] & 0x7fff;
+  const cueInsts = () => store.song.cues.map((w) => cueInstructionWords(w).join(","));
+
+  cuesView.sel = null;
+  store.cueClipboard = null;
+  let dlg = await menuOn(cueCv, cueX(2), cueY(0));
+  check(!!dlg, "right-click on a cue cell opens the menu");
+  if (!dlg) { log(`\n${fails} FAILED`); return; }
+  check(ids(dlg).join() === "insLeft,insRight",
+    "a filled slot with nothing selected = the two channel inserts", ids(dlg).join());
+  await dismiss(dlg);
+
+  // The command columns belong to the cue, not to a channel: no menu there.
+  cueCv.dispatchEvent(new win.MouseEvent("contextmenu", {
+    clientX: cueCv.getBoundingClientRect().left + CUE_G + 10,
+    clientY: cueCv.getBoundingClientRect().top + cueY(0),
+    bubbles: true, cancelable: true, button: 2 }));
+  await sleep(80);
+  check(!doc.querySelector("dialog.ctxmenu"), "no menu over the Cmd1/Cmd2 columns");
+
+  // Channel insert, straight from the Cues view.
+  const c2 = cuePat(0, 2), c3 = cuePat(0, 3);
+  const instsBefore = cueInsts().join("|");
+  dlg = await menuOn(cueCv, cueX(2), cueY(0));
+  cell(dlg, "insLeft").click();
+  await sleep(80);
+  check(cuePat(0, 2) === 0x7fff && cuePat(0, 3) === c2 && cuePat(0, 4) === c3,
+    "Channel left inserts and shifts, seen from the Cues grid");
+  check(cueInsts().join("|") === instsBefore, "cue instruction words survive the shift");
+  store.undo.undo();
+  await sleep(60);
+  check(cuePat(0, 2) === c2, "…and undoes");
+
+  // Copy / Cut / Paste on cue words. Seed distinctive numbers first so every
+  // check below compares real values instead of two coincidental zeros.
+  const { setCuesOp: setCues } = await import("../../src/doc/ops.js");
+  store.undo.apply(setCues(store.songIndex, [
+    { cue: 0, ch: 0, value: (store.song.cues[0][0] & 0x8000) | 0x0123 },
+    { cue: 1, ch: 1, value: (store.song.cues[1][1] & 0x8000) | 0x0456 },
+  ]));
+  await sleep(60);
+  cuesView.sel = { aCue: 0, aCh: 0, cue: 1, ch: 1 };
+  dlg = await menuOn(cueCv, cueX(0), cueY(0));
+  check(ids(dlg).join() === "copy,cut,insLeft,insRight",
+    "a selection adds Copy and Cut", ids(dlg).join());
+  cell(dlg, "copy").click();
+  await sleep(80);
+  check(store.cueClipboard?.rows === 2 && store.cueClipboard?.chans === 2,
+    "the Copy cell filled the cue clipboard",
+    `${store.cueClipboard?.rows}×${store.cueClipboard?.chans}`);
+
+  dlg = await menuOn(cueCv, cueX(0), cueY(0));
+  check(ids(dlg).includes("paste"), "Paste appears once the cue clipboard has something",
+    ids(dlg).join());
+  await dismiss(dlg);
+
+  // Paste anchors on the selection, like the other grids.
+  cuesView.sel = { aCue: 6, aCh: 4, cue: 7, ch: 5 };
+  cuesView.cursor = { cue: 20, col: 10, nib: 0 }; // deliberately elsewhere
+  const decoy = cuePat(20, 8);
+  dlg = await menuOn(cueCv, cueX(4), cueY(6));
+  cell(dlg, "paste").click();
+  await sleep(80);
+  check(cuePat(6, 4) === 0x0123 && cuePat(7, 5) === 0x0456,
+    "paste landed on the selection's first cue/channel",
+    `$${cuePat(6, 4).toString(16)}/$${cuePat(7, 5).toString(16)}`);
+  check(cuePat(20, 8) === decoy, "…and NOT on the cursor");
+  store.undo.undo();
+  await sleep(60);
+  check(cuePat(6, 4) !== 0x0123, "…and the paste undoes");
+  store.undo.undo(); // drop the seeded numbers too
+  await sleep(60);
+
+  // New pattern on an empty cue slot.
+  const { setCuesOp } = await import("../../src/doc/ops.js");
+  cuesView.sel = null;
+  store.undo.apply(setCuesOp(store.songIndex, [{ cue: 0, ch: 1,
+    value: (store.song.cues[0][1] & 0x8000) | 0x7fff }]));
+  await sleep(60);
+  const free = store.song.firstFreePattern();
+  dlg = await menuOn(cueCv, cueX(1), cueY(0));
+  check(ids(dlg).join() === "paste,insLeft,insRight,newPat",
+    "an empty cue slot offers New pattern", ids(dlg).join());
+  cell(dlg, "newPat").click();
+  await sleep(80);
+  check(cuePat(0, 1) === free, "…which assigns the lowest free pattern number",
+    `$${cuePat(0, 1).toString(16)} vs $${free.toString(16)}`);
+  check(cuesView.cursor.col === 3, "…and puts the cursor on it", `col ${cuesView.cursor.col}`);
+  store.undo.undo();
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+
+  // A single-cell drag is a selection here too.
+  cuesView.sel = null;
+  cuesView._drag = { aCue: 3, aCh: 2 };
+  const cr = cueCv.getBoundingClientRect();
+  cueCv.dispatchEvent(new win.PointerEvent("pointermove", {
+    clientX: cr.left + cueX(2), clientY: cr.top + cueY(3), bubbles: true, pointerId: 1 }));
+  cuesView._drag = null;
+  check(cuesView.hasSelection(), "a drag that stays on one cue cell still selects");
+  cuesView.sel = null;
+
+  // ══════════════════ PATTERNS (F3) ══════════════════
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F3", bubbles: true }));
+  await sleep(200);
+  check(store.view === "pattern", "switched to the Patterns view", store.view);
+  check(patternView.panes.length >= 2, "at least two columns", `${patternView.panes.length}`);
+
+  // Two panes on two DIFFERENT patterns, so a cross-column paste is visible.
+  const paneA = patternView.panes[0], paneB = patternView.panes[1];
+  let pa = 0, pb = 0;
+  for (let p = 0; p < store.song.patterns.length; p++) {
+    if (store.song.patterns[p]?.slice(0, 8).some((c) => c.note >= 0x20)) {
+      if (!pa) { pa = p; continue; }
+      pb = p; break;
+    }
+  }
+  paneA.setPattern(pa);
+  paneB.setPattern(pb);
+  await sleep(120);
+  check(pa !== pb, "found two distinct non-empty patterns", `${pa}/${pb}`);
+
+  // pattern.js layout: GUTTER_W 34, CHAR_W 8.5, ROW_H 17 (no header).
+  const pX = (ch) => 34 + 4 + ch * 8.5 + 1;
+  const pY = (pane, row) => (row - pane.scrollRow) * 17 + 8;
+  const rowBytes = (pat, row) => [...cellToBytes(store.song.patterns[pat][row])];
+
+  patternView.setActiveIdx(1); // make B active, so the menu has to switch it
+  paneA.sel = { aRow: 0, row: 2, aSub: 0, sub: 5 };
+  const srcRows = [0, 1, 2].map((r) => rowBytes(pa, r));
+  dlg = await menuOn(paneA.canvas, pX(1), pY(paneA, 0));
+  check(!!dlg && ids(dlg).join() === "copy,cut", "a pattern column's menu is the clipboard only",
+    ids(dlg)?.join());
+  check(patternView.activeIdx === 0, "right-clicking a column focuses it");
+  cell(dlg, "copy").click();
+  await sleep(80);
+  check(store.clipboard?.rows === 3, "Copy took the selection from that column",
+    `${store.clipboard?.rows} rows`);
+
+  // Paste into the OTHER column — the cross-column case.
+  const dstBefore = rowBytes(pb, 40);
+  paneB.sel = null;
+  dlg = await menuOn(paneB.canvas, pX(1), pY(paneB, 40));
+  check(!!dlg && ids(dlg).join() === "paste",
+    "the other column offers Paste (nothing selected there)", ids(dlg)?.join());
+  cell(dlg, "paste").click();
+  await sleep(80);
+  check(patternView.activeIdx === 1, "…and focus moved to that column");
+  check(JSON.stringify(rowBytes(pb, 40)) === JSON.stringify(srcRows[0]) &&
+    JSON.stringify(rowBytes(pb, 42)) === JSON.stringify(srcRows[2]),
+    "the block crossed columns and landed on the right-clicked row",
+    `${rowBytes(pb, 40)} vs ${srcRows[0]}`);
+  check(JSON.stringify(dstBefore) !== JSON.stringify(srcRows[0]),
+    "…and it really changed something (guards the check above)");
+  store.undo.undo();
+  await sleep(60);
+  check(JSON.stringify(rowBytes(pb, 40)) === JSON.stringify(dstBefore), "undo puts it back");
+
+  // With a selection in the destination column, paste anchors on it.
+  paneB.sel = { aRow: 50, row: 51, aSub: 0, sub: 5 };
+  paneB.cursor.row = 10;
+  dlg = await menuOn(paneB.canvas, pX(1), pY(paneB, 20));
+  check(ids(dlg).join() === "copy,cut,paste", "a column with a selection offers all three",
+    ids(dlg).join());
+  cell(dlg, "paste").click();
+  await sleep(80);
+  check(JSON.stringify(rowBytes(pb, 50)) === JSON.stringify(srcRows[0]),
+    "paste anchored on the selection, not the cursor or the click");
+  store.undo.undo();
+  await sleep(60);
+
+  // The right button must not move the cursor.
+  paneB.sel = null;
+  paneB.cursor.row = 7;
+  dlg = await menuOn(paneB.canvas, pX(1), pY(paneB, 30));
+  check(paneB.cursor.row === 7, "the right button did not move the column's cursor",
+    `row ${paneB.cursor.row}`);
+  await dismiss(dlg);
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+ } catch (err) { log("THREW: " + err.message + "\n" + err.stack); }
+})();
+</script>

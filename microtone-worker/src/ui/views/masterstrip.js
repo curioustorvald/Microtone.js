@@ -32,7 +32,7 @@ import {
   availableTargets, meterDisplay, makeAnalysisReadout,
 } from "../../engine/analysis.js";
 import {
-  AZIMUTH_TURN, ELEVATION_QUARTER, SURROUND_STEREO, SURROUND_SPATIAL,
+  SURROUND_STEREO, SURROUND_SPATIAL, directionFromAngles,
 } from "../../engine/spatial.js";
 import { setSongScalarOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
@@ -41,8 +41,19 @@ import { t } from "../i18n.js";
 
 const PREF_KEY = "microtone-masterstrip";
 
-/** Scope kinds. HIDE is the chooser's own "drop this panel" entry. */
+/** Scratch for the blob dials' direction vectors — one per frame, not per dot. */
+const dirScratch = new Float64Array(3);
+
+/**
+ * Scope kinds. The blobs family draws the SOURCES (one dot per sounding
+ * channel) and the Lissajous family draws the SOUND, but both are the same
+ * three views of the same space — top, front and side — so a pair of panels can
+ * show you where the parts are and where the energy went, on matching axes.
+ * HIDE is the chooser's own "drop this panel" entry.
+ */
 export const SCOPE_BLOBS = "blobs";
+export const SCOPE_BLOBS_FRONT = "blobsfront";
+export const SCOPE_BLOBS_SIDE = "blobsside";
 export const SCOPE_TOP = "top";
 export const SCOPE_FRONT = "front";
 export const SCOPE_SIDE = "side";
@@ -60,8 +71,6 @@ export const SPLIT_H = 7;
 export const METER_MIN_H = 112;
 /** The strip's own padding, top and bottom (CSS .master-strip). */
 export const STRIP_PAD = 4;
-/** Enough panels for any plausible screen; they are built once and shown/hidden. */
-export const MAX_SCOPE_PANELS = 6;
 
 /** How much of the ring one cloud shows. The whole of it: 128 ms at 32 kHz. */
 const TRACE_FRAMES = SCOPE_FRAMES;
@@ -70,6 +79,11 @@ const CLOUD_K = 0.50;
 /** …calibrated for this many points, and scaled down when more are drawn, so
  *  widening the window makes the cloud FULLER rather than a solid disc. */
 const CLOUD_REF_FRAMES = 1024;
+/** Time constant of the vectorscope auto-gain, both directions. Long enough
+ *  that the dial BREATHES with the music instead of snapping at every
+ *  transient — the cloud's shape is the reading, and a gain that jumps makes
+ *  shapes impossible to compare from one moment to the next. */
+export const SCOPE_GAIN_SLEW_MS = 300;
 
 // ── pure helpers (unit-tested in test/node/analysis.test.js) ───────────────
 
@@ -101,11 +115,14 @@ export function scopePanelHeight(width) {
   return SCOPE_SELECT_H + Math.max(48, width) + SCOPE_CORR_H;
 }
 
-/** How many scope panels fit above a meter panel of `meterH`. */
+/**
+ * How many scope panels fit above a meter panel of `meterH` — pure geometry,
+ * with no upper limit of its own. What you actually get is this against the
+ * number of views the song HAS: min(what fits, what there is to show).
+ */
 export function scopePanelsThatFit(stripH, headH, meterH, panelH) {
   if (!(panelH > 0)) return 0;
-  return Math.max(0, Math.min(MAX_SCOPE_PANELS,
-    Math.floor((stripH - headH - meterH - SPLIT_H) / panelH)));
+  return Math.max(0, Math.floor((stripH - headH - meterH - SPLIT_H) / panelH));
 }
 
 /** "#rgb" / "#rrggbb" / "rgb(…)" → [r, g, b]; anything else → mid grey. */
@@ -129,18 +146,70 @@ export function densityAlpha(hits, k = CLOUD_K) {
   return hits <= 0 ? 0 : 1 - Math.exp(-k * hits);
 }
 
-/** Every scope kind, in the order a newly added panel is offered one. */
-export const SCOPE_KINDS = [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE];
+/**
+ * One display frame of the auto-gain's approach to `want`. Exponential, so the
+ * result after a given stretch of TIME is the same however many frames it was
+ * cut into — the dial moves at the same speed on a 30 fps machine as on a
+ * 144 fps one.
+ */
+export function slewGain(prev, want, dtMs, tauMs = SCOPE_GAIN_SLEW_MS) {
+  if (!(dtMs > 0)) return prev;
+  return prev + (want - prev) * (1 - Math.exp(-dtMs / tauMs));
+}
 
 /**
- * Which scope kinds a surround model can express. Z is identically zero unless
- * the song is spatial, so the two vertical-plane views would be flat lines —
- * item 98's "nonsensical options are hidden".
+ * Every scope kind, in the order a newly added panel is offered one. The two
+ * extra blob views come last on purpose: they are a CHOICE, not something the
+ * strip hands you on its own.
+ */
+export const SCOPE_KINDS = [
+  SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
+];
+
+/**
+ * How many scope panels can exist. There is no arbitrary limit: a panel per
+ * view is as many as there is anything to see, so the number of KINDS is the
+ * bound (the height decides the rest — see scopePanelsThatFit). The DOM panels
+ * are built once to this size and shown or hidden.
+ */
+export const MAX_SCOPE_PANELS = SCOPE_KINDS.length;
+
+/**
+ * Which scope kinds a surround model can express, in chooser order (the blobs
+ * family, then the Lissajous family). Z is identically zero unless the song is
+ * spatial, so every vertical-plane view would be a flat line — item 98's
+ * "nonsensical options are hidden".
  */
 export function availableScopes(model) {
   return model === SURROUND_SPATIAL
-    ? [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]
+    ? [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]
     : [SCOPE_BLOBS, SCOPE_TOP];
+}
+
+/** Which plane a blobs kind is drawn in, or null if it is not a blobs kind. */
+export function blobView(kind) {
+  switch (kind) {
+    case SCOPE_BLOBS: return "top";
+    case SCOPE_BLOBS_FRONT: return "front";
+    case SCOPE_BLOBS_SIDE: return "side";
+    default: return null;
+  }
+}
+
+/**
+ * The four edge labels for any kind. A blobs dial is a MAP, so its labels are
+ * the directions themselves; the Lissajous kinds carry theirs on the axes they
+ * plot. Both families use the same screen orientation per plane, which is what
+ * lets a blobs panel and a Lissajous panel sit next to each other and agree.
+ */
+export function scopeLabels(kind, stereoSong) {
+  const axes = scopeAxes(kind, stereoSong);
+  if (axes) return axes;
+  switch (blobView(kind)) {
+    case "front": return { left: "L", right: "R", top: "U", bottom: "D" };
+    case "side": return { left: "F", right: "B", top: "U", bottom: "D" };
+    default: return { left: "L", right: "R", top: "F", bottom: "B" };
+  }
 }
 
 /**
@@ -417,15 +486,13 @@ export class MasterStrip {
     const unused = SCOPE_KINDS.find((k) => !this.scopes.includes(k)) ?? SCOPE_TOP;
     this.scopes.push(unused);
     this.savePrefs();
-    this.refreshControls();
-    this.layout();
+    this.refreshControls(); // …which re-lays out the stack
   }
 
   removeScope(i) {
     this.scopes.splice(i, 1);
     this.savePrefs();
     this.refreshControls();
-    this.layout();
   }
 
   /** Rebuild the choosers for the current song's surround model. */
@@ -463,6 +530,10 @@ export class MasterStrip {
       }
       sel.value = this.effective[this.slots[p]];
     }
+    // The model decides which panels are drawable at all, so the stack has to
+    // be re-laid out here — otherwise a song going spatial gains views with
+    // nowhere to appear, and "+" keeps the answer it gave for the old model.
+    this.layout();
   }
 
   /** Default metering target for a freshly loaded song, or the saved one. */
@@ -685,6 +756,7 @@ export class MasterStrip {
     const now = performance.now();
     const dt = this.lastMs === 0 ? 16 : Math.min(now - this.lastMs, 250);
     this.lastMs = now;
+    this.dtMs = dt; // the scope painters slew against wall time too
 
     const audio = this.store.audio;
     if (audio) {
@@ -708,11 +780,15 @@ export class MasterStrip {
           this.meters[c].update(r.meanSquare[c], r.truePeak[c], r.clip[c] > 0, dt);
         }
         this.field.update(r.fieldEnergy / r.frames, worst, anyClip, dt);
-      } else {
-        // Nothing rendered this interval (stopped): let everything fall away.
+      } else if (!playing) {
+        // Stopped: let everything fall away.
         this.field.update(0, 0, false, dt);
         for (const m of this.meters) m.update(0, 0, false, dt);
       }
+      // Playing but nothing rendered in this interval: HOLD. When the engine
+      // runs off the audio thread (Tier 2) the worker tops its ring up in
+      // bursts and idles in between, so empty windows are normal and reading
+      // them as silence made the meters dip a few times a second.
     }
 
     const C = themeColors();
@@ -756,15 +832,14 @@ export class MasterStrip {
     const kind = this.effective?.[this.slots?.[i] ?? i] ?? this.scopes[i];
     const stereoSong = this.model() === SURROUND_STEREO;
     const axes = scopeAxes(kind, stereoSong);
-    if (kind === SCOPE_BLOBS) this.drawBlobs(ctx, C, cx, cy, r);
+    const blobs = blobView(kind);
+    if (blobs !== null) this.drawBlobs(ctx, C, cx, cy, r, blobs);
     else if (axes) this.drawCloud(ctx, C, cx, cy, r, axes, i);
 
     // Edge labels — which way is which (item 98: "all four label the direction").
     ctx.font = "9px system-ui, sans-serif";
     ctx.fillStyle = C.dim;
-    // The blobs dial is a MAP — its vertical is where the sources are, front to
-    // back, even in a stereo song (whose sources all sit on the front arc).
-    const lab = axes ?? { left: "L", right: "R", top: "F", bottom: "B" };
+    const lab = scopeLabels(kind, stereoSong);
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText(lab.left, cx - r - 10, cy);
@@ -784,7 +859,7 @@ export class MasterStrip {
    * actually has it, not a waveform. Same dial and the same height cue as the
    * Panner and the channel radars, so a source reads the same everywhere.
    */
-  drawBlobs(ctx, C, cx, cy, r) {
+  drawBlobs(ctx, C, cx, cy, r, view) {
     const audio = this.store.audio;
     if (!audio) return;
     const spatial = this.model() === SURROUND_SPATIAL;
@@ -795,12 +870,26 @@ export class MasterStrip {
       if (vol <= 0.002) continue;
       const az = audio.getVoiceAzimuth(ch);
       const el = audio.getVoiceElevation(ch);
-      const k = Math.cos((el * Math.PI) / (2 * ELEVATION_QUARTER));
-      const rad = ((az - 128) * 2 * Math.PI) / AZIMUTH_TURN;
-      const x = cx + Math.sin(rad) * k * r;
-      const y = cy - Math.cos(rad) * k * r;
+      // Orthographic projection of the source onto the dial's plane: the unit
+      // direction the engine has it at, with the axis we are looking ALONG
+      // dropped. +x front, +y left, +z up (spatial.js), and the screen mapping
+      // is the one the matching Lissajous view uses.
+      directionFromAngles(az, el, dirScratch);
+      let x, y;
+      if (view === "front") {        // left-right against height
+        x = cx - dirScratch[1] * r;
+        y = cy - dirScratch[2] * r;
+      } else if (view === "side") {  // front-back against height, front to the left
+        x = cx - dirScratch[0] * r;
+        y = cy - dirScratch[2] * r;
+      } else {                       // top: left-right against front-back
+        x = cx - dirScratch[1] * r;
+        y = cy - dirScratch[0] * r;
+      }
       const dotR = 1.5 + 4 * Math.min(vol * 2, 1);
-      if (spatial) paintSpatialDot(ctx, x, y, el, r, dotR, C.accent2);
+      // The height cue belongs to the TOP view alone — that is the one that
+      // cannot tell up from down. On the other two, height IS the vertical axis.
+      if (spatial && view === "top") paintSpatialDot(ctx, x, y, el, r, dotR, C.accent2);
       else {
         ctx.fillStyle = C.accent2;
         ctx.beginPath();
@@ -838,10 +927,12 @@ export class MasterStrip {
       if (a > peak) peak = a;
       if (b > peak) peak = b;
     }
-    // Fast down (a transient must not blow the cloud off the dial), slow up.
+    // One slew for both directions (~300 ms): a transient briefly overruns the
+    // dial rather than yanking the whole cloud smaller, which is the readable
+    // trade — you are looking at the SHAPE, and it has to hold still enough to
+    // be looked at.
     const want = Math.max(1, Math.min(0.92 / Math.max(peak, 1e-4), 64));
-    const prev = this.scopeGain[slot];
-    this.scopeGain[slot] = want < prev ? want : prev + (want - prev) * 0.05;
+    this.scopeGain[slot] = slewGain(this.scopeGain[slot], want, this.dtMs ?? 16);
 
     // The density buffer is built in CSS pixels and blitted through the canvas
     // transform, so the cloud looks the same on a HiDPI screen as on a plain

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timeline context menu visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Leaves the Timeline's right-click menu open over the grid, a layout
+       harness like panner-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/ctx.png \
+           --timeout=15000 "http://localhost:8932/test/browser/ctxmenu-visual.html?theme=dark"
+       ?theme=light for the light theme, ?where=header to open it on a channel
+       header (two cells), ?where=full for the widest case (a block selected and
+       something on the clipboard: five cells); the default is an empty cue slot
+       (three cells, including New pattern). -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store, timeline } = win.__microtone;
+      for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      const header = params.get("where") === "header";
+      const full = params.get("where") === "full";
+      const ch = 1;
+      if (full) {
+        // Selection + a filled clipboard: the widest the menu ever gets
+        // (Copy, Cut, Paste, Channel left, Channel right).
+        const { timeline: tl } = win.__microtone;
+        tl.sel = { aRow: 2, aCh: 1, aSub: 0, row: 5, ch: 2, sub: 5 };
+        tl.copySelection();
+      } else if (!header) {
+        // Blank one channel of cue 0 so the menu picks up its "New pattern" cell.
+        const { setCuesOp } = await win.eval('import("/src/doc/ops.js")');
+        store.undo.apply(setCuesOp(store.songIndex, [{ cue: 0, ch,
+          value: (store.song.cues[0][ch] & 0x8000) | 0x7fff }]));
+      }
+      await sleep(120);
+
+      const canvas = win.document.getElementById("timeline");
+      const r = canvas.getBoundingClientRect();
+      const colW = timeline.colW();
+      const x = r.left + 76 + ch * colW + colW / 2;
+      const y = r.top + (header ? 10 : timeline.headerH() + 6 * 16);
+      canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+        clientX: x, clientY: y, bubbles: true, cancelable: true, button: 2,
+      }));
+    })();
+  </script>
+</body>
+</html>

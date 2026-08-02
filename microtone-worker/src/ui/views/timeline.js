@@ -16,13 +16,16 @@ import {
   colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty,
   volPanStep, volPanState, elevationStep,
 } from "../edit.js";
-import { setCellOp, setCellsBytesOp } from "../../doc/ops.js";
+import { setCellOp, setCellsBytesOp, setCuesOp } from "../../doc/ops.js";
 import { dittoGhosts } from "../../doc/ditto.js";
 import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
 import { paintSpatialDot } from "../spatialdot.js";
+import { showContextMenu } from "../widgets/contextmenu.js";
+import { clipboardItems, channelItems, newPatternItem, insertChannelAt } from "../gridmenu.js";
+import { t } from "../i18n.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
 const CHAR_W = 7.9;
@@ -77,6 +80,7 @@ export class TimelineView {
     canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
     canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
+    canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
 
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     this.resize();
@@ -233,6 +237,10 @@ export class TimelineView {
   }
 
   onPointerDown(e) {
+    // Primary button only — the secondary one belongs to the context menu, and
+    // without this it would also move the cursor / toggle the header's mute
+    // underneath the menu it just opened.
+    if (e.button !== 0) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -269,14 +277,15 @@ export class TimelineView {
     const rect = this.canvas.getBoundingClientRect();
     const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (!hit) return;
-    if (hit.row !== this._drag.aRow || hit.ch !== this._drag.aCh || hit.sub !== this._drag.aSub) {
-      this.sel = {
-        aRow: this._drag.aRow, aCh: this._drag.aCh, aSub: this._drag.aSub,
-        row: hit.row, ch: hit.ch, sub: hit.sub,
-      };
-    } else {
-      this.sel = null; // dragged back to the origin cell — no block
-    }
+    // ANY drag makes a block — including one that never leaves the cell, or
+    // never leaves a single column. "Just the pan column of this row" is a
+    // selection worth copying, and a degenerate one is still a real answer to
+    // "what did I drag over". A plain click fires no pointermove at all, so
+    // that remains the way to have no selection.
+    this.sel = {
+      aRow: this._drag.aRow, aCh: this._drag.aCh, aSub: this._drag.aSub,
+      row: hit.row, ch: hit.ch, sub: hit.sub,
+    };
     const c = this.store.cursor;
     c.row = hit.row; c.ch = hit.ch; c.sub = hit.sub; c.nib = hit.nib;
     this.store.emit("cursor");
@@ -288,6 +297,94 @@ export class TimelineView {
       this.canvas.releasePointerCapture?.(e.pointerId);
       this._drag = null;
     }
+  }
+
+  // ── right-click context menu ──
+
+  /** Channel under a canvas x — the whole strip, header and grid alike — or -1
+   *  when x is in the gutter or past the last channel. */
+  channelAt(x) {
+    if (x < GUTTER_W) return -1;
+    const ch = this.scrollCh + Math.floor((x - GUTTER_W) / this.colW());
+    return ch >= 0 && ch < (this.store.doc?.channelCount ?? 0) ? ch : -1;
+  }
+
+  /**
+   * Context menu (icon-cell palette). Anywhere on a channel — its header or any
+   * row down its strip — offers the two channel inserts. On the grid it also
+   * offers the clipboard: copy/cut while a block is selected, paste onto a cell
+   * that has a pattern to paste into; a cell whose cue slot is EMPTY offers a
+   * fresh pattern instead (the two are mutually exclusive by construction).
+   */
+  async onContextMenu(e) {
+    e.preventDefault();
+    const store = this.store;
+    if (!store.doc || !store.song) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const ch = this.channelAt(x);
+    if (ch < 0) return;
+    const chans = store.doc.channelCount;
+
+    // The "no pattern here" target: a grid row (not the header) inside the song
+    // whose cue leaves this channel empty.
+    const hit = this.hitTest(x, y);
+    const loc = hit ? this.locate(hit.row) : null;
+    const emptySlot = loc !== null &&
+      (store.song.cues[loc.entry.cue][ch] & 0x7fff) === PATTERN_EMPTY;
+
+    const items = [
+      ...clipboardItems({
+        hasSelection: this.hasSelection(),
+        canPaste: !!store.clipboard && hit !== null && !emptySlot &&
+          this.cellAt(hit.row, ch) !== null,
+        selAnchored: this.hasSelection(),
+      }),
+      ...channelItems(ch, chans),
+    ];
+    if (emptySlot) items.push(newPatternItem());
+
+    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+      case "copy": this.copySelection(); break;
+      case "cut": this.cutSelection(); break;
+      case "paste":
+        // With no block selected, paste goes to the cursor — so put the cursor
+        // where the menu was opened, or the paste would land somewhere the user
+        // is not even looking. With a selection, its top-left already wins.
+        if (!this.hasSelection()) {
+          store.cursor.row = hit.row;
+          store.cursor.ch = ch;
+          store.emit("cursor");
+        }
+        this.paste();
+        break;
+      case "insLeft": this.insertChannel(ch); break;
+      case "insRight": this.insertChannel(ch + 1); break;
+      case "newPat": this.createPattern(loc.entry.cue, ch, hit.row); break;
+    }
+  }
+
+  insertChannel(at) {
+    if (insertChannelAt(this.store, at)) this.invalidate();
+  }
+
+  /** Point an empty cue slot at a brand-new pattern number (the lowest one
+   *  nothing in the song claims). The pattern itself materialises on its first
+   *  edit — item 48 — so this is one cue word. */
+  createPattern(cue, ch, row) {
+    const store = this.store;
+    const song = store.song;
+    const pat = song.firstFreePattern();
+    if (pat < 0) return;
+    const value = (song.cues[cue][ch] & 0x8000) | (pat & 0x7fff);
+    store.undo.apply(setCuesOp(store.songIndex, [{ cue, ch, value }]));
+    // Land the cursor on what was just created — the point of making it is to
+    // start typing into it.
+    store.cursor.row = row;
+    store.cursor.ch = ch;
+    store.emit("cursor");
+    this.invalidate();
   }
 
   // ── block selection + clipboard ──
@@ -426,15 +523,24 @@ export class TimelineView {
     }
   }
 
+  /** Where a paste lands: the TOP-LEFT of the block selection when there is
+   *  one — the corner you started the drag from, not the cursor, which sits
+   *  wherever the drag happened to end — otherwise the cursor. */
+  pasteAnchor() {
+    const b = this.selBounds();
+    const c = this.store.cursor;
+    return b ? { row: b.r0, ch: b.c0 } : { row: c.row, ch: c.ch };
+  }
+
   paste() {
     const block = this.store.clipboard;
     if (!block) return false;
     const cols = block.cols ?? ALL_COLS;
-    const c = this.store.cursor;
+    const a = this.pasteAnchor();
     const writes = this.dedupeWrites((push) => {
       for (let r = 0; r < block.rows; r++) {
         for (let ch = 0; ch < block.chans; ch++) {
-          const t = this.cellAt(c.row + r, c.ch + ch);
+          const t = this.cellAt(a.row + r, a.ch + ch);
           // merge only the block's columns onto the destination cell
           if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell, this.wide()), blockCell(block, r, ch), cols, this.wide()));
         }
@@ -445,9 +551,9 @@ export class TimelineView {
     const map = this.getMap();
     const chans = this.store.doc.channelCount;
     this.sel = {
-      aRow: c.row, aCh: c.ch, aSub: 0, sub: SUB_FX_ARG,
-      row: Math.min(c.row + block.rows - 1, map.totalRows - 1),
-      ch: Math.min(c.ch + block.chans - 1, chans - 1),
+      aRow: a.row, aCh: a.ch, aSub: 0, sub: SUB_FX_ARG,
+      row: Math.min(a.row + block.rows - 1, map.totalRows - 1),
+      ch: Math.min(a.ch + block.chans - 1, chans - 1),
     };
     this.invalidate();
     return true;
@@ -841,9 +947,15 @@ export class TimelineView {
         ctx.stroke();
       }
 
-      // gutter: "cue:row" (cue is 4-digit hex); beat rows highlighted
+      // gutter: "cue:row" (cue is 4-digit hex); beat rows highlighted; the
+      // cursor row gets its own background so it's findable at a glance
+      if (absRow === cursor.row) {
+        ctx.fillStyle = C.cursor;
+        ctx.fillRect(0, y, GUTTER_W - 4, ROW_H);
+      }
       ctx.textAlign = "left";
-      ctx.fillStyle = rowInCue === 0 ? C.accent
+      ctx.fillStyle = absRow === cursor.row ? C.fg
+        : rowInCue === 0 ? C.accent
         : rowInCue % beats.pri === 0 ? C.fg : C.dim;
       ctx.fillText(
         `${entry.cue.toString(16).toUpperCase().padStart(4, "0")}:${rowInCue.toString(16).toUpperCase().padStart(2, "0")}`,

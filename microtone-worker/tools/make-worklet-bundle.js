@@ -21,6 +21,10 @@ const FILES = [
   "src/engine/tables.js",
   "src/engine/spatial.js",
   "src/engine/binaural.js",
+  "src/engine/speakers.js",  // …which analysis.js needs
+  "src/engine/analysis.js",  // before state.js (TrackerState builds a tap) AND
+                             // before protocol.js (the snapshot layout sizes
+                             // its blocks from the tap's own constants)
   "src/engine/inst.js",
   "src/engine/voice.js",
   "src/engine/state.js",
@@ -55,6 +59,28 @@ for (const rel of FILES) {
 if (/^\s*(import|export)\s/m.test(out)) {
   const line = out.split("\n").find((l) => /^\s*(import|export)\s/.test(l));
   throw new Error(`unstripped module syntax: ${line}`);
+}
+
+// Sanity: every module the graph imports must actually BE in FILES. Stripping
+// the import lines hides a missing file completely — the bundle parses, then
+// dies on a ReferenceError inside AudioWorkletGlobalScope, where the only
+// symptom is "the node name is not defined". (That is exactly what a missing
+// analysis.js did to the fallback path.) So re-read the sources and check that
+// everything they import from is on the list.
+const listed = new Set(FILES);
+const missing = new Set();
+for (const rel of FILES) {
+  const src = await readFile(root + rel, "utf8");
+  const dir = rel.slice(0, rel.lastIndexOf("/"));
+  for (const m of src.matchAll(/^import\s[\s\S]*?from\s*"([^"]+)";/gm)) {
+    const spec = m[1];
+    if (!spec.startsWith(".")) continue;
+    const abs = new URL(spec, `file:///${dir}/`).pathname.replace(/^\/+/, "");
+    if (!listed.has(abs)) missing.add(`${rel} imports ${spec}`);
+  }
+}
+if (missing.size > 0) {
+  throw new Error(`module(s) missing from FILES:\n  ${[...missing].join("\n  ")}`);
 }
 
 await writeFile(root + "src/worklet/taud-processor.bundle.js", out);

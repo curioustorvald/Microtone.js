@@ -215,6 +215,9 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
   store.pitchPreset = presetForNotation(store.doc.meta.songMeta[0]?.notation ?? 120, store.doc);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
+    // A channel insert shifts the mute array along with the patterns; the tag
+    // is direction-free because UndoStack replays the forward op's tags.
+    if (dirty.some((tg) => tg.kind === "voices")) store.syncVoiceMutes();
     store.emit("edit", dirty);
     updateStatus();
   });
@@ -375,6 +378,9 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   store.pitchPreset = presetForNotation(result.notation, store.doc);
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
+    // A channel insert shifts the mute array along with the patterns; the tag
+    // is direction-free because UndoStack replays the forward op's tags.
+    if (dirty.some((tg) => tg.kind === "voices")) store.syncVoiceMutes();
     store.emit("edit", dirty);
     updateStatus();
   });
@@ -1079,7 +1085,18 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-window.addEventListener("keyup", (e) => jam.up(e.code));
+window.addEventListener("keyup", (e) => {
+  // Mirror the keydown guards (chords, focused inputs/dialogs) so a keyup
+  // whose keydown never reached jam.down/hold can't hit jam.up's safety net —
+  // that net calls audio.jamStop when nothing is held, which silences EVERY
+  // active voice on the playhead. Without this, releasing the letter of any
+  // Ctrl/Meta chord that doubles as a piano key (S = Save, A = Select All,
+  // G = Goto, Y = Redo) cut all currently playing notes.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" ||
+      e.target.closest?.("dialog")) return;
+  jam.up(e.code);
+});
 // Focus loss eats the keyup, which would leave the audition sounding for ever.
 window.addEventListener("blur", () => jam.allUp());
 

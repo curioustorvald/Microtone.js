@@ -22,9 +22,11 @@ import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine, renderSong } from "../../src/audio/offline-render.js";
 import {
   dbfs, meterFrac, correlation, availableScopes, effectiveScopes, SCOPE_KINDS,
-  scopeAxes, MeterBallistics,
+  scopeAxes, scopeLabels, blobView, MeterBallistics,
   scopePanelHeight, scopePanelsThatFit, parseInk, densityAlpha,
-  METER_MIN_DB, SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
+  slewGain, SCOPE_GAIN_SLEW_MS,
+  METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
+  SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
   SCOPE_SELECT_H, SCOPE_CORR_H, SPLIT_H, MAX_SCOPE_PANELS,
 } from "../../src/ui/views/masterstrip.js";
 
@@ -341,8 +343,9 @@ test("dBFS and the meter scale", () => {
 test("scopes on offer, and their axes", () => {
   assert.deepEqual(availableScopes(SURROUND_STEREO), [SCOPE_BLOBS, SCOPE_TOP]);
   assert.deepEqual(availableScopes(SURROUND_PLANAR), [SCOPE_BLOBS, SCOPE_TOP]);
+  // Spatial: both families, three planes each — blobs first, then Lissajous.
   assert.deepEqual(availableScopes(SURROUND_SPATIAL),
-    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
+    [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
 
   // A stereo song's top view is the mid/side goniometer; a surround song's is
   // left-right against front-back.
@@ -352,6 +355,34 @@ test("scopes on offer, and their axes", () => {
   assert.equal(scopeAxes(SCOPE_FRONT, false).v, SCOPE_Z);
   assert.equal(scopeAxes(SCOPE_SIDE, false).h, SCOPE_X);
   assert.equal(scopeAxes(SCOPE_BLOBS, false), null);
+});
+
+test("the blobs family draws the same three planes as the Lissajous one", () => {
+  assert.equal(blobView(SCOPE_BLOBS), "top");
+  assert.equal(blobView(SCOPE_BLOBS_FRONT), "front");
+  assert.equal(blobView(SCOPE_BLOBS_SIDE), "side");
+  assert.equal(blobView(SCOPE_TOP), null, "a Lissajous kind is not a blobs kind");
+
+  // A blobs panel and the Lissajous panel of the same plane must be oriented
+  // the same way, or a pair of them side by side would contradict each other.
+  for (const [blob, liss] of [[SCOPE_BLOBS_FRONT, SCOPE_FRONT], [SCOPE_BLOBS_SIDE, SCOPE_SIDE]]) {
+    const a = scopeLabels(blob, false);
+    const b = scopeLabels(liss, false);
+    assert.deepEqual(
+      [a.left, a.right, a.top, a.bottom], [b.left, b.right, b.top, b.bottom],
+      `${blob} vs ${liss}`,
+    );
+  }
+  // The top pair agrees too — for a surround song, where both have a front-back
+  // axis. (A stereo song's Lissajous top plots the mono sum instead, and says so.)
+  const bt = scopeLabels(SCOPE_BLOBS, false);
+  const lt = scopeLabels(SCOPE_TOP, false);
+  assert.deepEqual([bt.left, bt.right, bt.top, bt.bottom], [lt.left, lt.right, lt.top, lt.bottom]);
+  assert.equal(scopeLabels(SCOPE_BLOBS, true).top, "F", "a blobs dial is a map, whatever the song");
+
+  // The extra two are a CHOICE: a new panel is handed the original four first.
+  assert.deepEqual(SCOPE_KINDS.slice(0, 4), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
+  assert.deepEqual(SCOPE_KINDS.slice(4), [SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE]);
 });
 
 test("a panel's choice survives a song that cannot show it", () => {
@@ -374,7 +405,7 @@ test("a panel's choice survives a song that cannot show it", () => {
   assert.deepEqual(effectiveScopes([SCOPE_TOP, SCOPE_TOP], SURROUND_STEREO),
     [SCOPE_TOP, SCOPE_TOP]);
   // Every kind is offered to a new panel before any is repeated.
-  assert.deepEqual(SCOPE_KINDS, [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
+  assert.equal(new Set(SCOPE_KINDS).size, SCOPE_KINDS.length);
 });
 
 test("meter ballistics: RMS integrates, the peak holds then falls", () => {
@@ -425,9 +456,30 @@ test("a scope panel is a fixed size, so the viewport decides how many fit", () =
   assert.equal(scopePanelsThatFit(stripH, head, 200, panelH), 2);
   assert.equal(scopePanelsThatFit(stripH, head, 160, panelH), 2, "half a panel is not a panel");
   assert.equal(scopePanelsThatFit(stripH, head, 100, panelH), 3);
-  // Never negative, never unbounded.
-  assert.equal(scopePanelsThatFit(100, head, 200, panelH), 0);
-  assert.equal(scopePanelsThatFit(99999, head, 112, panelH), MAX_SCOPE_PANELS);
+  assert.equal(scopePanelsThatFit(100, head, 200, panelH), 0, "never negative");
+  // No arbitrary ceiling: a tall enough strip fits as many as it fits. What you
+  // GET is that against the views the song has — one panel per view, which the
+  // kind list bounds.
+  assert.ok(scopePanelsThatFit(99999, head, 112, panelH) > MAX_SCOPE_PANELS,
+    "geometry alone is not capped");
+  assert.equal(MAX_SCOPE_PANELS, SCOPE_KINDS.length,
+    "the panel ceiling IS the number of views, not a magic number");
+});
+
+test("the vectorscope auto-gain slews in wall time", () => {
+  // One time constant gets ~63% of the way there, in either direction.
+  assert.ok(Math.abs(slewGain(1, 11, SCOPE_GAIN_SLEW_MS) - (1 + 10 * 0.6321)) < 0.01);
+  assert.ok(Math.abs(slewGain(11, 1, SCOPE_GAIN_SLEW_MS) - (11 - 10 * 0.6321)) < 0.01,
+    "coming down is slewed too — it used to snap");
+  // Frame-rate independent: ten small steps land exactly where one big one does.
+  let a = 1;
+  for (let i = 0; i < 10; i++) a = slewGain(a, 11, 30);
+  assert.ok(Math.abs(a - slewGain(1, 11, 300)) < 1e-9, `${a}`);
+  // Converges, and a zero-length frame changes nothing.
+  let b = 1;
+  for (let i = 0; i < 500; i++) b = slewGain(b, 4, 16);
+  assert.ok(Math.abs(b - 4) < 1e-6, String(b));
+  assert.equal(slewGain(3, 9, 0), 3);
 });
 
 test("cloud ink parsing and the density curve", () => {

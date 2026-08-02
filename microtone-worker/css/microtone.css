@@ -531,6 +531,55 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   margin-left: 0.5rem;
 }
 .modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
+/* ── icon-cell context menu (widgets/contextmenu.js) ──
+   A <dialog> pinned to the pointer instead of centred, so it drops the default
+   margin/inset; the backdrop stays transparent because the menu is a transient
+   overlay, not a modal task. */
+.ctxmenu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0.4rem;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+.ctxmenu::backdrop { background: transparent; }
+.ctx-grid { display: flex; gap: 0.3rem; align-items: stretch; }
+.ctx-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.35rem;
+  width: 5.2rem;
+  padding: 0.5rem 0.3rem 0.4rem;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-align: center;
+}
+.ctx-cell:hover:not(:disabled),
+.ctx-cell:focus-visible {
+  background: var(--panel-2);
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.ctx-cell:disabled { color: var(--dim); cursor: default; opacity: 0.5; }
+.ctx-icon { display: block; height: 30px; }
+.ctx-icon svg { width: 30px; height: 30px; display: block; }
+.ctx-name { display: block; }
+.ctx-empty { padding: 0.6rem 0.8rem; color: var(--dim); font-size: 0.8rem; }
 .panner {
   min-width: 648px;
 }

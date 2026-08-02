@@ -74,10 +74,13 @@
         const { CELL_CHARS } = await import("../../src/ui/edit.js");
         const GUTTER_W = 76, COL_W = Math.ceil(CELL_CHARS * 7.9) + 10; // timeline.js layout (CHAR_W)
         const rect = timeline.canvas.getBoundingClientRect();
+        // `button: 0` is not decoration — onPointerDown ignores every other
+        // button so the secondary one can open the context menu without also
+        // toggling the mute underneath it.
         const hdrClick = (chVisIdx, ctrl) => timeline.onPointerDown({
           clientX: rect.left + GUTTER_W + chVisIdx * COL_W + 10,
           clientY: rect.top + 10,
-          ctrlKey: ctrl, metaKey: false,
+          button: 0, ctrlKey: ctrl, metaKey: false,
         });
         hdrClick(0, false);
         const clickMute = store.voiceMutes[timeline.scrollCh + 0] === true;

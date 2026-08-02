@@ -113,6 +113,25 @@ export class Song {
   }
 
   /**
+   * Lowest pattern number nothing in the song claims — neither a cue reference
+   * nor a materialised pattern (item 48: an index can be referenced without
+   * ever having been materialised, and a materialised one can sit unreferenced).
+   * This is what the Timeline's "New pattern" hands out. -1 when exhausted.
+   */
+  firstFreePattern() {
+    const used = new Set();
+    for (const w of this.cues) {
+      for (let ch = 0; ch < MAX_VOICES; ch++) {
+        const p = w[ch] & 0x7fff;
+        if (p !== CUE_EMPTY) used.add(p);
+      }
+    }
+    for (let p = 0; p < this.patterns.length; p++) if (this.patterns[p]) used.add(p);
+    for (let n = 0; n <= 0x7ffe; n++) if (!used.has(n)) return n;
+    return -1;
+  }
+
+  /**
    * Linear song map for the Timeline: sequential cues 0..lastUsedCue with each
    * cue's effective row count (flow instructions are shown, not followed).
    * Returns { entries: [{cue, startRow, rowLimit, info}], totalRows }.

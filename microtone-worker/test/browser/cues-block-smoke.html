@@ -97,13 +97,28 @@
         log(`selection+copy: sel=${selOk} clip=${clipOk}`);
 
         // ── 4. Paste onto voices 1..4 of cue 2 ──
+        // The selection goes first: a live block is now the paste TARGET (its
+        // top-left beats the cursor), which leg 4b checks on its own.
+        cuesView.clearSelection();
         cuesView.cursor = { cue: 2, col: 2 + 1, nib: 0 };
         key(win, "KeyV", "v", { ctrlKey: true });
         const pasteOk = eq([...song.cues[2].subarray(1, 5)], [0x0071, 0x0072, 0x0073, 0x0074]);
         log(`paste onto voices 1..4: ${pasteOk}`);
 
+        // ── 4b. With a block selected, the paste anchors on IT ──
+        cuesView.sel = { aCue: 4, aCh: 9, cue: 4, ch: 12 };
+        cuesView.cursor = { cue: 9, col: 2 + 20, nib: 0 }; // deliberately elsewhere
+        const anchorDecoy = song.cues[9] ? song.cues[9][20] : null;
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const anchorOk = eq([...song.cues[4].subarray(9, 13)], [0x0071, 0x0072, 0x0073, 0x0074]) &&
+          (song.cues[9] ? song.cues[9][20] : null) === anchorDecoy;
+        log(`paste anchors on the selection, not the cursor: ${anchorOk}`);
+        key(win, "KeyZ", "z", { ctrlKey: true });
+        cuesView.clearSelection();
+
         // ── 5. Paste past the last cue grows the list ──
         const lenNow = song.cues.length;
+        cuesView.clearSelection();
         cuesView.cursor = { cue: lenNow, col: 2 + 1, nib: 0 }; // phantom row
         key(win, "KeyV", "v", { ctrlKey: true });
         const grewOnPaste = song.cues.length === lenNow + 1 &&
@@ -149,9 +164,9 @@
         log(`draw phantom row + selection: ${drawOk}`);
 
         const pass = editRowsOk && grew && materialised && shrankBack && noBloat && grewFar &&
-          farUndo && selOk && clipOk && pasteOk && grewOnPaste && undoGrow && delBlanked &&
+          farUndo && selOk && clipOk && pasteOk && anchorOk && grewOnPaste && undoGrow && delBlanked &&
           cmdKept && escOk && kbOk && drawOk;
-        log(pass ? "RESULT: PASS" : `RESULT: FAIL edit=${editRowsOk}/${grew}/${materialised} undo=${shrankBack} noBloat=${noBloat} grewFar=${grewFar}/${farUndo} sel=${selOk} clip=${clipOk} paste=${pasteOk} growPaste=${grewOnPaste}/${undoGrow} del=${delBlanked}/${cmdKept} esc=${escOk} kb=${kbOk} draw=${drawOk}`);
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL edit=${editRowsOk}/${grew}/${materialised} undo=${shrankBack} noBloat=${noBloat} grewFar=${grewFar}/${farUndo} sel=${selOk} clip=${clipOk} paste=${pasteOk} anchor=${anchorOk} growPaste=${grewOnPaste}/${undoGrow} del=${delBlanked}/${cmdKept} esc=${escOk} kb=${kbOk} draw=${drawOk}`);
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
       }

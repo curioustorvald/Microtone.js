@@ -29,6 +29,8 @@ import { SURROUND_SPATIAL } from "../../engine/spatial.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { showModal } from "../widgets/modal.js";
+import { showContextMenu } from "../widgets/contextmenu.js";
+import { clipboardItems } from "../gridmenu.js";
 import { t } from "../i18n.js";
 
 const FONT_PX = 14; // family comes from --cv-font via fonts.js
@@ -124,6 +126,9 @@ class PatternPane {
     }, { passive: false });
 
     this.canvas.addEventListener("pointerdown", (e) => {
+      // Primary button only — the secondary one opens the context menu and
+      // must not move the cursor or drop the selection it is about to act on.
+      if (e.button !== 0) return;
       const hit = this.hitTest(e);
       if (!hit) return;
       this.container.setActivePane(this); // clicking a column focuses it
@@ -145,9 +150,9 @@ class PatternPane {
       if (this._drag === null) return;
       const hit = this.hitTest(e);
       if (!hit) return;
-      this.sel = (hit.row !== this._drag.row || hit.sub !== this._drag.sub)
-        ? { aRow: this._drag.row, row: hit.row, aSub: this._drag.sub, sub: hit.sub }
-        : null;
+      // Any drag is a block, degenerate ones included — a single row's single
+      // column is a selection worth copying (same rule as the Timeline).
+      this.sel = { aRow: this._drag.row, row: hit.row, aSub: this._drag.sub, sub: hit.sub };
       this.cursor.row = hit.row; this.cursor.sub = hit.sub; this.cursor.nib = hit.nib;
       this.invalidate();
       this.store.emit("cursor");
@@ -158,6 +163,7 @@ class PatternPane {
         this._drag = null;
       }
     });
+    this.canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
 
     // Interacting with the header — ◀/▶, the pattern-number field, or the name
     // field — focuses this column (item 46).
@@ -181,6 +187,42 @@ class PatternPane {
   }
 
   // ── row-range selection + clipboard ──
+  /**
+   * Right-click menu: the clipboard, and only the clipboard — a Taud pattern is
+   * a single channel, so there is no channel to insert one beside.
+   *
+   * It focuses the column it was opened on FIRST, which is what makes the
+   * clipboard work across columns: copy inside one column's selection, then
+   * right-click in another and paste, and the paste goes to the column you
+   * pointed at rather than to whichever one happened to be active.
+   */
+  async onContextMenu(e) {
+    e.preventDefault();
+    const store = this.store;
+    if (!store.doc) return;
+    const hit = this.hitTest(e);
+    if (!hit) return;
+    this.container.setActivePane(this);
+    const items = clipboardItems({
+      hasSelection: this.hasSelection(),
+      canPaste: !!store.clipboard && !!this.pattern(),
+      selAnchored: this.hasSelection(),
+    });
+    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+      case "copy": this.copySelection(); break;
+      case "cut": this.cutSelection(); break;
+      case "paste":
+        // No selection: paste at the row the menu was opened on, not at a
+        // cursor the user may have left in another part of the pattern.
+        if (!this.hasSelection()) {
+          this.cursor.row = hit.row;
+          this.store.emit("cursor");
+        }
+        this.paste();
+        break;
+    }
+  }
+
   hasSelection() { return this.sel !== null; }
   clearSelection() { if (this.sel) { this.sel = null; this.invalidate(); } }
 
@@ -281,7 +323,9 @@ class PatternPane {
     const pattern = this.pattern();
     if (!block || !pattern) return false;
     const cols = block.cols ?? ALL_COLS;
-    const start = this.cursor.row;
+    // A block selection is the target: paste lands on its FIRST row, not on the
+    // cursor (which sits wherever the drag ended).
+    const start = this.selRowBounds()?.r0 ?? this.cursor.row;
     const writes = [];
     for (let r = 0; r < block.rows; r++) {
       const row = start + r;

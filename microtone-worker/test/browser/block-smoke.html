@@ -33,7 +33,7 @@
         });
         const { store, timeline, patternView } = win.__microtone;
         const { cellToBytes } = await import("../../src/doc/clipboard.js");
-        const { SUB_VOL, COL_VOL, COL_PAN } = await import("../../src/ui/edit.js");
+        const { SUB_VOL, SUB_FX_ARG, COL_VOL, COL_PAN } = await import("../../src/ui/edit.js");
         const cap = (t) => (t ? [...cellToBytes(t.cell)] : null);
         log("app loaded, doc ready");
 
@@ -49,7 +49,10 @@
         const blockOk = block && block.rows === 3 && block.chans === 2;
         log(`copy: block ${block?.rows}×${block?.chans}`);
 
-        // Paste at row 10 / channel 3.
+        // Paste at row 10 / channel 3. The selection has to go first: a live
+        // block selection is now the paste TARGET (its top-left wins over the
+        // cursor), which the anchor leg further down checks on its own.
+        timeline.clearSelection();
         store.cursor = { row: 10, ch: 3, sub: 0, nib: 0 };
         key(win, "KeyV", "v", { ctrlKey: true }); // paste
         let pasteOk = true;
@@ -111,6 +114,7 @@
         const psrc = [];
         for (let r = 0; r < 4; r++) psrc.push([...cellToBytes(store.song.patterns[pat][r])]);
         key(win, "KeyC", "c", { ctrlKey: true });
+        patternView.clearSelection();
         patternView.cursor.row = 30;
         key(win, "KeyV", "v", { ctrlKey: true });
         let patPasteOk = true;
@@ -140,6 +144,7 @@
         patternView.sel = { aRow: 0, row: 1, aSub: 1, sub: 2 };
         key(win, "KeyC", "c", { ctrlKey: true });
         const colsOk = eq(store.clipboard.cols, [1, 2]); // COL_INST, COL_VOL
+        patternView.clearSelection();
         patternView.cursor.row = 40;
         key(win, "KeyV", "v", { ctrlKey: true });
         let subOk = true;
@@ -173,14 +178,66 @@
         const kbOk = kbRowsOk && kbVolOnly && kbWidened && kbCopyCols;
         log(`keyboard sub-column select: rows=${kbRowsOk} volOnly=${kbVolOnly} widened=${kbWidened} copyCols=${kbCopyCols}`);
 
+        // ── paste anchors on the SELECTION, not the cursor (both views) ──
+        // Copy two rows, then select somewhere else and paste: it lands on the
+        // selection's first row even though the cursor sits far away.
+        patternView.clearSelection();
+        patternView.sel = { aRow: 0, row: 1, aSub: 0, sub: SUB_FX_ARG };
+        key(win, "KeyC", "c", { ctrlKey: true });
+        const anchorSrc = [...cellToBytes(store.song.patterns[pat][0])];
+        patternView.sel = { aRow: 20, row: 21, aSub: 0, sub: SUB_FX_ARG };
+        patternView.cursor.row = 55; // deliberately elsewhere
+        const decoy = [...cellToBytes(store.song.patterns[pat][55])];
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const patAnchorOk = eq([...cellToBytes(store.song.patterns[pat][20])], anchorSrc) &&
+          eq([...cellToBytes(store.song.patterns[pat][55])], decoy);
+        log(`pattern paste anchors on the selection, not the cursor: ${patAnchorOk}`);
+
+        // Timeline: same rule, and with no selection it falls back to the cursor.
+        store.view = "timeline";
+        timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 1, ch: 0, sub: SUB_FX_ARG };
+        key(win, "KeyC", "c", { ctrlKey: true });
+        const tlSrc = cap(timeline.cellAt(0, 0));
+        timeline.sel = { aRow: 24, aCh: 2, aSub: 0, row: 25, ch: 2, sub: SUB_FX_ARG };
+        store.cursor = { row: 60, ch: 5, sub: 0, nib: 0 };
+        const tlDecoy = cap(timeline.cellAt(60, 5));
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const tlAnchorOk = eq(cap(timeline.cellAt(24, 2)), tlSrc) &&
+          eq(cap(timeline.cellAt(60, 5)), tlDecoy);
+        timeline.clearSelection();
+        store.cursor = { row: 60, ch: 5, sub: 0, nib: 0 };
+        key(win, "KeyV", "v", { ctrlKey: true });
+        const tlCursorOk = eq(cap(timeline.cellAt(60, 5)), tlSrc);
+        log(`timeline paste anchors on the selection (${tlAnchorOk}), cursor without one (${tlCursorOk})`);
+        const anchorOk = patAnchorOk && tlAnchorOk && tlCursorOk;
+        store.view = "pattern"; // Escape below must reach the pattern view
+
+        // ── a drag that never leaves one column is still a selection ──
+        // (pattern.js layout: GUTTER_W 34, CHAR_W 8.5, ROW_H 17; the volume
+        // column starts at char 8 — see edit.js COL_CHAR_RANGE.)
+        patternView.clearSelection();
+        const pane = patternView.active;
+        const pr = pane.canvas.getBoundingClientRect();
+        const pev = (type, ch, row) => pane.canvas.dispatchEvent(new win.PointerEvent(type, {
+          clientX: pr.left + 34 + 4 + ch * 8.5 + 1,
+          clientY: pr.top + (row - pane.scrollRow) * 17 + 8,
+          bubbles: true, pointerId: 1, button: 0 }));
+        pev("pointerdown", 9, 5);
+        pev("pointermove", 10, 5); // still inside the volume column
+        pev("pointerup", 10, 5);
+        const degenerateOk = patternView.hasSelection() &&
+          eq(pane.selCols(), [COL_VOL]) && pane.selRowBounds().r0 === pane.selRowBounds().r1;
+        log(`a drag inside a single column still selects: ${degenerateOk} cols=${JSON.stringify(pane.selCols())}`);
+        patternView.clearSelection();
+
         // Escape clears the selection.
         patternView.sel = { aRow: 0, row: 3 };
         key(win, "Escape", "Escape");
         const escOk = !patternView.hasSelection();
         log(`escape cleared pattern selection: ${escOk}`);
 
-        const pass = blockOk && pasteOk && cutCleared && tKbOk && patPasteOk && colsOk && subOk && kbOk && escOk;
-        log(pass ? "RESULT: PASS" : `RESULT: FAIL block=${blockOk} paste=${pasteOk} cut=${cutCleared} tKb=${tKbOk} patPaste=${patPasteOk} cols=${colsOk} sub=${subOk} kb=${kbOk} esc=${escOk}`);
+        const pass = blockOk && pasteOk && cutCleared && tKbOk && patPasteOk && colsOk && subOk && kbOk && escOk && anchorOk && degenerateOk;
+        log(pass ? "RESULT: PASS" : `RESULT: FAIL block=${blockOk} paste=${pasteOk} cut=${cutCleared} tKb=${tKbOk} patPaste=${patPasteOk} cols=${colsOk} sub=${subOk} kb=${kbOk} esc=${escOk} anchor=${anchorOk} degenerate=${degenerateOk}`);
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
       }

@@ -165,6 +165,33 @@ channel; pressing solo again unmutes everything. With the mouse: click a
 channel header to mute, **Ctrl+click** (⌘+click) to solo. Mutes are per-song
 and cleared when a file loads.
 
+### The right-click menu
+
+Right-clicking a channel — its header, or any row down its column — opens a
+palette of icon buttons:
+
+| Item | Action |
+|---|---|
+| **Copy** / **Cut** | Only with a block selected — the same as Ctrl+C / Ctrl+X |
+| **Paste** | Only on a cell that has a pattern, with something on the clipboard |
+| **Channel left** | Insert an empty channel *before* this one |
+| **Channel right** | Insert an empty channel *after* this one |
+| **New pattern** | Only on a cell whose cue leaves this channel empty: point the slot at the lowest unused pattern number and put the cursor there |
+
+The **Cues** view has the same menu — a column there is a channel too — except
+that *Paste* needs no pattern under it, because a cue cell holds the pattern
+*number*. The Cmd1/Cmd2 columns belong to the cue rather than to any channel, so
+right-clicking them offers nothing. The **Patterns** editor has the clipboard
+half only: a Taud pattern is a single channel, so there is no channel to insert
+one beside. There, right-clicking focuses the column you pointed at first, which
+is what lets you *Copy* in one column and *Paste* into another.
+
+Inserting slides the channel and everything to its right one place along. The
+song's channel count is fixed at 32 or 64, so the last channel falls off the
+end — you are asked first if it is carrying anything. Cue commands (pattern
+length, halt, jump) stay on the channel they were written on and are never moved
+by the shift. The whole insert is one **Ctrl+Z**.
+
 ### Picking up an instrument
 
 Turn on the **Instruments** lookup panel in the toolbox — a
@@ -180,7 +207,9 @@ strip, and while it is hidden it costs no processing at all.
 
 **The panels.** A scope panel is a fixed size — its chooser, a square dial and a
 correlation bar — so how many of them you get is a question about your screen:
-two by default, more on a tall window, fewer on a short one. Each panel's
+two by default, more on a tall window, fewer on a short one. There is no
+arbitrary limit; the ceiling is simply one panel per view the song has, which on
+a spatial song means all six. Each panel's
 chooser picks what it shows, and its last entry, *Hide this panel*, drops **that
 panel** (the strip stays). **+** in the header adds one back whenever there is
 room, and hands it a view none of the others is using. A panel set to a view the
@@ -192,14 +221,24 @@ scope panels cannot be squeezed, growing the meter eventually pushes one out and
 takes its room, and shrinking it lets one back in. Double-click the divider to
 reset it. Everything here is remembered between sessions.
 
-**The vectorscopes.** *Blobs (top)* is the tracker's own view: a dial seen from
-above with a dot for every sounding channel, drawn where the engine actually
-has it, the same reading as the Panner and the channel radars. The three
-*Lissajous* views trace the sound itself rather than the channels: **top** plots
-left–right against front–back, **front** plots left–right against height, and
-**side** plots front–back against height. Each labels its own edges, so there is
-never a question of which way round it is. A stereo song has no front–back axis
-and a planar song has no height, so those views are simply not offered.
+**The vectorscopes** come in two families, and both draw the same three views of
+the same space, on the same axes — **top** (left–right against front–back),
+**front** (left–right against height) and **side** (front–back against height).
+Each labels its own edges, so there is never a question of which way round it
+is, and a *Blobs* panel next to a *Lissajous* panel of the same view line up.
+
+*Blobs* shows the **sources**: a dot for every sounding channel, drawn where the
+engine actually has it — the same reading as the Panner and the channel radars.
+*Blobs (top)* is the tracker's own view and the one you will use most; *front*
+and *side* are there when you want to see the height of a mix at a glance. On
+the top view a dot carries the height cue (it grows as it rises and casts a
+shadow) because a dial seen from above cannot otherwise tell up from down; on
+the other two, height is the vertical axis and needs no cue.
+
+*Lissajous* traces the **sound** itself rather than the channels. A stereo song
+has no front–back axis and a planar song has no height, so every view that would
+be a flat line is simply not offered — which leaves a stereo song with the two
+top views.
 
 A Lissajous view draws the last eighth of a second as a **cloud of points**, one
 per sample, and where the trace passes again and again the ink builds up — so the
@@ -213,7 +252,10 @@ cloud is a mono-safe mix, a horizontal one is very wide, a diagonal one leans to
 that side. This is not a special case — for two speakers, left–right and
 front–back *are* side and mid — so the same display serves every song. It is
 auto-gained so a quiet mix still fills the dial, with the factor shown in the
-corner; the meters below it are the absolute reading.
+corner; the meters below it are the absolute reading. The gain glides over about
+a third of a second rather than snapping, so a transient briefly overruns the
+dial instead of yanking the whole cloud smaller — the shape has to hold still
+enough to compare from one moment to the next.
 
 Under each scope is the **correlation meter**, a thin bar growing out of the
 centre: nothing at all when the mix folds to mono cleanly, wider as the two
@@ -344,9 +386,10 @@ depth.
 
 Timeline and Patterns support rectangular selections:
 
-- **Drag** with the mouse to select rows × channels. A drag also records which *columns* (note / instrument / volume / pan / effect) it covers, so a narrow drag lets you copy just volumes, or just notes.
+- **Drag** with the mouse to select rows × channels. A drag also records which *columns* (note / instrument / volume / pan / effect) it covers, so a narrow drag lets you copy just volumes, or just notes. Any drag counts, including one that stays inside a single row or a single column — "just the panning of this row" is a selection you can copy.
 - **Shift+arrows** (and **Shift+PageUp/Down/Home/End**) extend a whole-cell selection from the cursor.
-- **Ctrl+C / Ctrl+X / Ctrl+V** copy, cut and paste; the block's top-left lands at the cursor. Pasting across views clips to what fits; a column-limited block overwrites only its columns.
+- **Ctrl+C / Ctrl+X / Ctrl+V** copy, cut and paste. A paste lands on the **start of the selection** when there is one — the corner you began the drag from, not the cursor, which sits wherever the drag ended — and on the cursor when there is not. Pasting across views clips to what fits; a column-limited block overwrites only its columns.
+- **Right-click** for the same three as buttons: *Copy* and *Cut* while a block is selected, *Paste* on any cell that can take one. See [the right-click menu](#the-right-click-menu); the Cues view carries the same clipboard cells over its cue words.
 - **Delete / Backspace** blanks the selection, **Esc** clears it.
 
 ## Cues (F2)

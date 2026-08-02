@@ -41,6 +41,15 @@ export class Store {
     this.emit("mutes");
   }
 
+  /** Re-push every channel's mute to the engine and repaint. Used when
+   *  something has rewritten the whole array rather than toggled one channel —
+   *  a channel insert shifts the mutes along with the patterns they belong to,
+   *  and its undo shifts them back. */
+  syncVoiceMutes() {
+    for (let i = 0; i < 64; i++) this.audio?.setVoiceMute(0, i, this.voiceMutes[i] === true);
+    this.emit("mutes");
+  }
+
   /** Song/project switch: clear all mutes (taut finishLoadCommon). */
   clearMutes() {
     for (let i = 0; i < 64; i++) {

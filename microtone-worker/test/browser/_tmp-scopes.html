@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><pre id="out">…</pre><img src="/hang" hidden>
+<script>localStorage.removeItem("microtone-masterstrip");</script>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1400px"></iframe>
+<script type="module">
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = [];
+const app = document.getElementById("app");
+await new Promise((r) => app.addEventListener("load", r));
+const win = app.contentWindow;
+for (let i = 0; i < 200 && !win.__microtone?.store.doc; i++) await sleep(50);
+const M = win.__microtone;
+const s = M.masterStrip;
+for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+await sleep(300);
+const addBtn = win.document.querySelector("#masterStrip .ms-head .icon-btn");
+log.push(`stereo song: fit=${s.fit} slots=${s.slots.length} addHidden=${addBtn.hidden}`);
+const { setSongScalarOp } = await import("/src/doc/ops.js");
+M.store.undo.apply(setSongScalarOp(M.store.songIndex, "surroundModel", 2));
+await sleep(300);
+log.push(`spatial song: fit=${s.fit} slots=${s.slots.length} addHidden=${addBtn.hidden}`);
+document.getElementById("out").textContent = log.join("\n");
+</script>

@@ -1,0 +1,285 @@
+<!doctype html><meta charset="utf-8"><title>Timeline right-click context menu (channel insert + new pattern)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Drives the REAL app: right-click the Timeline's channel header and its strip,
+// check the icon-cell menu that opens, and run each of its actions through the
+// undo stack. Also checks the two things that make the menu safe to have at all:
+// a secondary-button press must not move the cursor or toggle a mute, and the
+// channel shift must leave the cue instruction words alone.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, timeline } = M;
+  const { cueInstructionWords } = await import("../../src/format/taud-parse.js");
+
+  const canvas = doc.getElementById("timeline");
+  const rect = () => canvas.getBoundingClientRect();
+  /** Right-click at canvas-relative (x, y) and wait for the menu. */
+  const rightClick = async (x, y) => {
+    const r = rect();
+    canvas.dispatchEvent(new win.PointerEvent("pointerdown", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, pointerId: 1, button: 2, buttons: 2,
+    }));
+    canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2,
+    }));
+    let dlg = null;
+    for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return dlg;
+  };
+  const cells = (dlg) => [...dlg.querySelectorAll(".ctx-cell")];
+  const ids = (dlg) => cells(dlg).map((c) => c.dataset.id);
+  const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
+  const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
+
+  const GUTTER = 76;
+  const colW = timeline.colW();
+  /** Canvas x at the middle of visible channel column `i`. */
+  const colX = (i) => GUTTER + i * colW + colW / 2;
+  const pat = (cue, ch) => store.song.cues[cue][ch] & 0x7fff;
+  const insts = () => store.song.cues.map((w) => cueInstructionWords(w).join(","));
+
+  // ── 1. the header opens the channel menu, and the right button alone ─────
+  const cursorBefore = { ...store.cursor };
+  const mutesBefore = store.voiceMutes.slice(0, 8).join(",");
+  let dlg = await rightClick(colX(2), 10);
+  check(!!dlg, "right-click on a channel header opens the menu");
+  if (!dlg) { log(`\n${fails} FAILED`); return; }
+  check(cells(dlg).length === 2, "header menu = the two channel inserts", `${cells(dlg).length} cells`);
+  check(cells(dlg).every((c) => c.querySelector(".ctx-icon svg")), "every cell carries an SVG icon");
+  check(cells(dlg).every((c) => c.querySelector(".ctx-name").textContent.trim().length > 0),
+    "every cell carries a name");
+  check(store.cursor.row === cursorBefore.row && store.cursor.ch === cursorBefore.ch,
+    "the right button did NOT move the cursor");
+  check(store.voiceMutes.slice(0, 8).join(",") === mutesBefore,
+    "…and did NOT toggle the header's mute");
+  await dismiss(dlg);
+  check(!doc.querySelector("dialog.ctxmenu"), "Escape dismisses the menu");
+
+  // ── 2. the whole strip is a target, not just the header ─────────────────
+  const gridY = timeline.headerH() + 40;
+  dlg = await rightClick(colX(2), gridY);
+  check(!!dlg, "right-click down the channel strip opens the same menu");
+  const stripCells = cells(dlg).length;
+  check(stripCells >= 2, "…with the channel inserts on it", `${stripCells} cells`);
+  await dismiss(dlg);
+
+  // ── 3. "Channel right" shifts the patterns, not the cue instructions ─────
+  const ch2 = pat(0, 2), ch3 = pat(0, 3), ch4 = pat(0, 4);
+  const instsBefore = insts().join("|");
+  const undoDepth = store.undo.undoStack.length;
+  dlg = await rightClick(colX(2), 10);
+  const rightCell = cell(dlg, "insRight");
+  check(rightCell.querySelector(".ctx-name").textContent.includes("right"),
+    "second cell is the right-hand insert", rightCell.textContent);
+  rightCell.click();
+  await sleep(80);
+  check(!doc.querySelector("dialog.ctxmenu"), "choosing a cell closes the menu");
+  check(pat(0, 2) === ch2, "channel 3 kept its pattern (the insert went after it)");
+  check(pat(0, 3) === 0x7fff, "the inserted channel is empty");
+  check(pat(0, 4) === ch3 && pat(0, 5) === ch4, "everything to its right shifted one along",
+    `${pat(0, 4).toString(16)}/${pat(0, 5).toString(16)}`);
+  check(insts().join("|") === instsBefore, "cue instruction words are untouched by the shift");
+  check(store.undo.undoStack.length === undoDepth + 1, "the whole insert is ONE undo step");
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, 2) === ch2 && pat(0, 3) === ch3 && pat(0, 4) === ch4, "undo puts every channel back");
+
+  // ── 4. "Channel left" inserts before the clicked channel ────────────────
+  dlg = await rightClick(colX(2), 10);
+  cell(dlg, "insLeft").click();
+  await sleep(80);
+  check(pat(0, 2) === 0x7fff && pat(0, 3) === ch2 && pat(0, 4) === ch3,
+    "left insert lands before the clicked channel");
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, 2) === ch2, "…and undoes");
+
+  // ── 5. the last channel can't take an insert on its right ───────────────
+  const chans = store.doc.channelCount;
+  timeline.scrollCh = chans - 1;
+  timeline.invalidate();
+  await sleep(60);
+  dlg = await rightClick(colX(0), 10);
+  check(!!dlg && cell(dlg, "insRight").disabled, "the last channel's right-hand insert is disabled");
+  await dismiss(dlg);
+  timeline.scrollCh = 0;
+  timeline.invalidate();
+  await sleep(60);
+
+  // ── 6. an empty cue slot gains "New pattern" ────────────────────────────
+  // Blank one channel of cue 0 so the cell under it has no pattern at all.
+  const { setCuesOp } = await import("../../src/doc/ops.js");
+  const emptyCh = 1;
+  store.undo.apply(setCuesOp(store.songIndex, [{ cue: 0, ch: emptyCh,
+    value: (store.song.cues[0][emptyCh] & 0x8000) | 0x7fff }]));
+  await sleep(60);
+  check(pat(0, emptyCh) === 0x7fff, "the slot is empty now");
+  const free = store.song.firstFreePattern();
+  dlg = await rightClick(colX(emptyCh), gridY);
+  check(!!dlg && ids(dlg).join() === "insLeft,insRight,newPat",
+    "an empty slot's menu gains the new-pattern cell", ids(dlg).join());
+  const newPat = cell(dlg, "newPat");
+  check(newPat.querySelector(".ctx-name").textContent.toLowerCase().includes("pattern"),
+    "…and it is the new-pattern action", newPat.textContent);
+  newPat.click();
+  await sleep(80);
+  check(pat(0, emptyCh) === free, "the slot now points at the lowest free pattern number",
+    `$${pat(0, emptyCh).toString(16)} vs $${free.toString(16)}`);
+  check(store.cursor.ch === emptyCh, "the cursor moved onto what was just created");
+  check(timeline.cellAt(store.cursor.row, emptyCh) !== null, "…and that cell is editable");
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, emptyCh) === 0x7fff, "undo empties the slot again");
+
+  // ── 7. a filled slot does NOT offer it ──────────────────────────────────
+  dlg = await rightClick(colX(0), gridY);
+  check(!!dlg && ids(dlg).join() === "insLeft,insRight",
+    "a slot with a pattern and an empty clipboard keeps the 2-cell menu", ids(dlg).join());
+  await dismiss(dlg);
+
+  // ── 8. the gutter is not a channel ──────────────────────────────────────
+  const r = rect();
+  canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+    clientX: r.left + 20, clientY: r.top + gridY, bubbles: true, cancelable: true, button: 2,
+  }));
+  await sleep(80);
+  check(!doc.querySelector("dialog.ctxmenu"), "no menu over the row gutter");
+
+  // ── 9. clipboard cells: copy/cut with a selection, paste on a real pattern ─
+  store.clipboard = null;
+  // Rows 0-2 of the first two channels — the song's opening chord, so every
+  // check below compares real note words rather than two empty cells.
+  timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 2, ch: 1, sub: 5 };
+  dlg = await rightClick(colX(0), gridY);
+  check(!!dlg && ids(dlg).join() === "copy,cut,insLeft,insRight",
+    "a selection adds Copy and Cut (nothing on the clipboard yet, so no Paste)", ids(dlg).join());
+  cell(dlg, "copy").click();
+  await sleep(80);
+  check(store.clipboard?.rows === 3 && store.clipboard?.chans === 2,
+    "the Copy cell copied the block", `${store.clipboard?.rows}×${store.clipboard?.chans}`);
+
+  dlg = await rightClick(colX(0), gridY);
+  check(!!dlg && ids(dlg).join() === "copy,cut,paste,insLeft,insRight",
+    "with something on the clipboard the Paste cell appears", ids(dlg).join());
+  await dismiss(dlg);
+
+  // Paste lands on the START of the selection, not on the cursor.
+  const note = (row, ch) => timeline.cellAt(row, ch)?.cell.note;
+  const srcNote = note(0, 0);
+  check(srcNote > 0, "the copied block really carries a note (guards the checks below)",
+    `$${srcNote?.toString(16)}`);
+  timeline.sel = { aRow: 30, aCh: 3, aSub: 0, row: 32, ch: 4, sub: 5 };
+  store.cursor = { row: 44, ch: 6, sub: 0, nib: 0 }; // deliberately elsewhere
+  const decoyBefore = note(44, 6);
+  dlg = await rightClick(colX(3), gridY);
+  cell(dlg, "paste").click();
+  await sleep(80);
+  check(note(30, 3) === srcNote, "paste landed on the selection's first row/channel",
+    `${note(30, 3)} vs ${srcNote}`);
+  check(note(44, 6) === decoyBefore, "…and NOT on the cursor");
+  store.undo.undo();
+  await sleep(60);
+
+  // The keyboard path uses the same anchor.
+  timeline.sel = { aRow: 30, aCh: 3, aSub: 0, row: 32, ch: 4, sub: 5 };
+  store.cursor = { row: 44, ch: 6, sub: 0, nib: 0 };
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "KeyV", key: "v", ctrlKey: true, bubbles: true }));
+  await sleep(80);
+  check(note(30, 3) === srcNote, "Ctrl+V uses the same anchor as the menu button");
+  store.undo.undo();
+  await sleep(60);
+
+  // With NO selection the menu's Paste targets the cell it was opened on.
+  timeline.sel = null;
+  store.cursor = { row: 44, ch: 6, sub: 0, nib: 0 };
+  const rowUnder = timeline.hitTest(colX(3), gridY).row;
+  dlg = await rightClick(colX(3), gridY);
+  cell(dlg, "paste").click();
+  await sleep(80);
+  check(note(rowUnder, timeline.scrollCh + 3) === srcNote,
+    "with no selection, Paste lands where the menu was opened", `row ${rowUnder}`);
+  store.undo.undo();
+  await sleep(60);
+
+  // Cut clears what it copied.
+  timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 1, ch: 0, sub: 5 };
+  dlg = await rightClick(colX(0), gridY);
+  cell(dlg, "cut").click();
+  await sleep(80);
+  check(note(0, 0) === 0, "the Cut cell blanked the block it copied", `$${note(0, 0).toString(16)}`);
+  check(store.clipboard?.rows === 2 && store.clipboard?.chans === 1,
+    "…and put it on the clipboard first", `${store.clipboard?.rows}×${store.clipboard?.chans}`);
+  store.undo.undo();
+  await sleep(60);
+  check(note(0, 0) === srcNote, "…and undoing the cut brings it back");
+  timeline.sel = null;
+
+  // ── 10. a drag inside ONE column is a real selection ────────────────────
+  const CHAR_W = 7.9, ROW_H = 16;
+  const charX = (i, c) => GUTTER + i * colW + 2 + c * CHAR_W + 1;
+  const rowY = (i) => timeline.headerH() + i * ROW_H + 8;
+  const drag = async (x0, x1, y) => {
+    const rr = rect();
+    const ev = (type, x) => canvas.dispatchEvent(new win.PointerEvent(type, {
+      clientX: rr.left + x, clientY: rr.top + y, bubbles: true, pointerId: 1, button: 0 }));
+    ev("pointerdown", x0); await sleep(20);
+    ev("pointermove", x1); await sleep(20);
+    ev("pointerup", x1); await sleep(20);
+  };
+  timeline.sel = null;
+  await drag(charX(0, 13), charX(0, 15), rowY(3)); // both inside the pan column
+  check(timeline.hasSelection(), "a drag that never leaves the pan column still selects");
+  check(JSON.stringify(timeline.selCols()) === "[3]", "…and carries only the pan column",
+    JSON.stringify(timeline.selCols()));
+  const b1 = timeline.selBounds();
+  check(b1 && b1.r0 === b1.r1, "…on a single row", JSON.stringify(b1));
+  check(timeline.copySelection() && store.clipboard.rows === 1 &&
+    JSON.stringify(store.clipboard.cols) === "[3]", "…and copies as a 1-row pan-only block");
+
+  timeline.sel = null;
+  await drag(charX(0, 1), charX(0, 3), rowY(4)); // both inside the note column
+  check(JSON.stringify(timeline.selCols()) === "[0]", "the same holds for a note-only drag",
+    JSON.stringify(timeline.selCols()));
+  timeline.sel = null;
+
+  // ── 11. inserting a channel carries the mutes with the patterns ─────────
+  store.voiceMutes.fill(false);
+  store.setVoiceMute(2, true);
+  store.setVoiceMute(5, true);
+  dlg = await rightClick(colX(2), 10);
+  cell(dlg, "insLeft").click();
+  await sleep(80);
+  check(store.voiceMutes[2] === false && store.voiceMutes[3] === true &&
+    store.voiceMutes[6] === true, "mutes shifted with the channels they belong to",
+    store.voiceMutes.slice(0, 8).join(","));
+  store.undo.undo();
+  await sleep(80);
+  check(store.voiceMutes[2] === true && store.voiceMutes[5] === true &&
+    store.voiceMutes[3] === false, "undo shifts the mutes back",
+    store.voiceMutes.slice(0, 8).join(","));
+  store.voiceMutes.fill(false);
+  store.syncVoiceMutes();
+
+  // ── 12. back to where we started ────────────────────────────────────────
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, emptyCh) !== 0x7fff, "the blanked slot is restored");
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

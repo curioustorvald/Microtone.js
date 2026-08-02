@@ -86,7 +86,8 @@ function painted(cv) {
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(80);
-  check(scopes().join() === "blobs,top,front,side,hide", "a spatial song offers all four scopes", scopes().join());
+  check(scopes().join() === "blobs,blobsfront,blobsside,top,front,side,hide",
+    "a spatial song offers both families in all three planes", scopes().join());
   check(masterStrip.target === "ambisonic", "spatial defaults to the ambisonic field", masterStrip.target);
 
   // ── 3. the tap reaches the engine, and the strip draws live ──────────────
@@ -98,7 +99,14 @@ function painted(cv) {
   check(!!audio && audio.isPlaying(), "song is playing");
   check(audio?.analysisTarget === "ambisonic", "the engine got the ambisonic tap", String(audio?.analysisTarget));
 
-  const r = audio.readAnalysis(masterStrip.readout);
+  // A snapshot covers ~16 ms, but when the engine runs off the audio thread the
+  // worker renders in bursts — so some windows legitimately carry no frames.
+  // Sample until one does (the strip HOLDS its meters through the gaps).
+  let r = audio.readAnalysis(masterStrip.readout);
+  for (let i = 0; i < 60 && r.frames === 0; i++) {
+    await sleep(30);
+    r = audio.readAnalysis(masterStrip.readout);
+  }
   check(r.frames > 0, "the tap reported rendered frames", String(r.frames));
   check(r.meterCount === 4, "spatial ambisonic meters W Y X Z", String(r.meterCount));
   check(masterStrip.meterBars().map((b) => b.label).join(" ") === "E W Y X Z",
@@ -115,6 +123,16 @@ function painted(cv) {
   check(painted(masterStrip.scopeCanvas[0]), "scope A painted");
   check(painted(masterStrip.scopeCanvas[1]), "scope B painted");
   check(painted(masterStrip.meterCanvas), "meter/fader painted");
+
+  // The vectorscope auto-gain slews (~300 ms) instead of snapping: shove it far
+  // from where the music wants it and it has to walk back, not jump.
+  masterStrip.scopeGain[1] = 50;
+  await sleep(50);
+  const gain50 = masterStrip.scopeGain[1];
+  await sleep(700);
+  const gain750 = masterStrip.scopeGain[1];
+  check(gain50 > 20, "the scope gain does not snap in one frame", gain50.toFixed(1));
+  check(gain750 < gain50 / 2, "…but it does get there", `${gain50.toFixed(1)} → ${gain750.toFixed(1)}`);
 
   // ── 4. the fader is the SONG's global volume, one undo step per drag ─────
   const before = store.song.globalVolume;
@@ -187,6 +205,21 @@ function painted(cv) {
   masterStrip.addScope();
   await sleep(120);
   check(masterStrip.panelCount() === 2, "+ adds a panel back", String(masterStrip.panelCount()));
+
+  // "+" follows the MODEL as well as the room — the ceiling is one panel per
+  // view the song has, not a fixed number. (Regression: changing the model
+  // re-picked which panels are drawable but never re-laid the stack out, so the
+  // button kept the answer it gave for the previous model.)
+  const addBtn = strip.querySelector(".ms-head .icon-btn");
+  masterStrip.meterH = 112; // make room, without laying out by hand
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
+  await sleep(150);
+  check(masterStrip.fit > masterStrip.slots.length, "…room to spare",
+    `${masterStrip.fit} vs ${masterStrip.slots.length}`);
+  check(addBtn.hidden, "a stereo song has both its views up, so + steps aside");
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(150);
+  check(!addBtn.hidden, "…and a spatial song has four more, so + comes back");
 
   // Dragging the divider resizes the meter panel.
   const meterHBefore = masterStrip.meterH;

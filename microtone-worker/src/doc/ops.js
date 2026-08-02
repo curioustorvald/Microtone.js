@@ -143,6 +143,121 @@ function restoreCuesOp(song, prevWrites, truncateTo, gestureId = null) {
   };
 }
 
+// ── channel insert/remove (Timeline channel context menu) ──
+// A cue word is `pattern (15 bits) | command bit (bit 15)`, and the command
+// bits of channels 0-31 together SPELL the cue's two instruction words
+// (taud-parse cueInstructionWords). So shifting channels moves the PATTERN
+// half only — bit 15 belongs to the channel POSITION, not to its contents, and
+// carrying it along would rewrite the cue's LEN/HALT/jump instructions.
+const PAT_MASK = 0x7fff;
+const CMD_BIT = 0x8000;
+
+/** True when channel `ch` plays anything anywhere in the song. Insert drops the
+ *  LAST channel (the channel count is a fixed 32 or 64), so the caller uses this
+ *  to warn before the drop. */
+export function channelHasContent(songObj, ch) {
+  return songObj.cues.some((w) => (w[ch] & PAT_MASK) !== CUE_EMPTY);
+}
+
+// A channel's MUTE rides along with the content, because that is what the mute
+// is about — you silenced a part, not a position on screen. `mutes` is the live
+// boolean[] (mutated in place; null skips the whole concern, which is what the
+// Node tests and any non-UI caller do), and the mute pushed off the end travels
+// in the inverse exactly like the patterns do, so undo puts it back. The
+// {kind:"voices"} dirty tag tells the app to re-push the array to the engine —
+// it is direction-free, which matters because UndoStack replays the FORWARD
+// op's tags when it undoes.
+
+/**
+ * Insert an empty channel at index `at`: every channel from `at` on shifts one
+ * to the right, and the last one falls off the end. `restore` (undo only) is
+ * `{pats, mute}` — the per-cue pattern number and the mute to put back at `at`
+ * instead of an empty, unmuted slot.
+ * Dirty: one cue tag per cue the shift actually changed (+ voices).
+ */
+export function insertChannelOp(song, at, restore = null, mutes = null, gestureId = null) {
+  return {
+    type: "insertChannel",
+    song, at, restore, mutes, gestureId,
+    apply(doc) {
+      const chans = doc.channelCount;
+      const s = doc.songs[song];
+      const dropped = new Array(s.cues.length);
+      const touched = [];
+      for (let c = 0; c < s.cues.length; c++) {
+        const w = s.cues[c];
+        dropped[c] = w[chans - 1] & PAT_MASK;
+        let changed = false;
+        for (let ch = chans - 1; ch > at; ch--) {
+          const v = (w[ch] & CMD_BIT) | (w[ch - 1] & PAT_MASK);
+          if (v !== w[ch]) { w[ch] = v; changed = true; }
+        }
+        const fill = restore?.pats ? restore.pats[c] & PAT_MASK : CUE_EMPTY;
+        const v0 = (w[at] & CMD_BIT) | fill;
+        if (v0 !== w[at]) { w[at] = v0; changed = true; }
+        if (changed) touched.push(c);
+      }
+      let droppedMute = null;
+      if (mutes) {
+        droppedMute = mutes[chans - 1] === true;
+        for (let ch = chans - 1; ch > at; ch--) mutes[ch] = mutes[ch - 1] === true;
+        mutes[at] = restore?.mute === true;
+      }
+      this._touched = touched;
+      doc.dirty = true;
+      return removeChannelOp(song, at, { pats: dropped, mute: droppedMute }, mutes, gestureId);
+    },
+    dirty() {
+      const tags = (this._touched ?? []).map((cue) => ({ kind: "cue", song, cue }));
+      if (mutes) tags.push({ kind: "voices" });
+      return tags;
+    },
+  };
+}
+
+/** Inverse of insertChannelOp: shift `at`+1… back left and put `restoreLast`
+ *  (the patterns and mute the insert pushed off the end) back on the last
+ *  channel. */
+export function removeChannelOp(song, at, restoreLast = null, mutes = null, gestureId = null) {
+  return {
+    type: "removeChannel",
+    song, at, restoreLast, mutes, gestureId,
+    apply(doc) {
+      const chans = doc.channelCount;
+      const s = doc.songs[song];
+      const removed = new Array(s.cues.length);
+      const touched = [];
+      for (let c = 0; c < s.cues.length; c++) {
+        const w = s.cues[c];
+        removed[c] = w[at] & PAT_MASK;
+        let changed = false;
+        for (let ch = at; ch < chans - 1; ch++) {
+          const v = (w[ch] & CMD_BIT) | (w[ch + 1] & PAT_MASK);
+          if (v !== w[ch]) { w[ch] = v; changed = true; }
+        }
+        const fill = restoreLast?.pats ? restoreLast.pats[c] & PAT_MASK : CUE_EMPTY;
+        const vLast = (w[chans - 1] & CMD_BIT) | fill;
+        if (vLast !== w[chans - 1]) { w[chans - 1] = vLast; changed = true; }
+        if (changed) touched.push(c);
+      }
+      let removedMute = null;
+      if (mutes) {
+        removedMute = mutes[at] === true;
+        for (let ch = at; ch < chans - 1; ch++) mutes[ch] = mutes[ch + 1] === true;
+        mutes[chans - 1] = restoreLast?.mute === true;
+      }
+      this._touched = touched;
+      doc.dirty = true;
+      return insertChannelOp(song, at, { pats: removed, mute: removedMute }, mutes, gestureId);
+    },
+    dirty() {
+      const tags = (this._touched ?? []).map((cue) => ({ kind: "cue", song, cue }));
+      if (mutes) tags.push({ kind: "voices" });
+      return tags;
+    },
+  };
+}
+
 /** Instrument-scope field (TaudInst property, e.g. instGlobalVolume, defaultPan,
  *  instrumentFlag, volumeFadeoutLow…). Dirty {kind:"inst", slot} → uploadInstrument. */
 export function setInstFieldOp(slot, key, value, gestureId = null) {

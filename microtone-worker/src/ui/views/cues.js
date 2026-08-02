@@ -11,6 +11,8 @@ import { setCuesOp } from "../../doc/ops.js";
 import { lookahead } from "../edit.js";
 import { makeCueBlock, cueBlockIndex, mergeCueWord } from "../../doc/clipboard.js";
 import { showModal } from "../widgets/modal.js";
+import { showContextMenu } from "../widgets/contextmenu.js";
+import { clipboardItems, channelItems, newPatternItem, insertChannelAt } from "../gridmenu.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
@@ -80,6 +82,7 @@ export class CuesView {
     canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
     canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
+    canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
     canvas.addEventListener("dblclick", () => this.openCmdEditor());
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
   }
@@ -125,6 +128,9 @@ export class CuesView {
   }
 
   onPointerDown(e) {
+    // Primary button only — the secondary one opens the context menu, and must
+    // not move the cursor or drop the selection the menu is about to act on.
+    if (e.button !== 0) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -160,11 +166,10 @@ export class CuesView {
     if (col < 2) return;
     const chans = this.store.doc.channelCount;
     const ch = clampInt(col - 2, 0, chans - 1);
-    if (cue !== this._drag.aCue || ch !== this._drag.aCh) {
-      this.sel = { aCue: this._drag.aCue, aCh: this._drag.aCh, cue, ch };
-    } else {
-      this.sel = null; // dragged back to the origin cell — no block
-    }
+    // Any drag is a block, single-cell ones included (same rule as the other
+    // two grids). A plain click fires no pointermove, so that is still how you
+    // end up with no selection.
+    this.sel = { aCue: this._drag.aCue, aCh: this._drag.aCh, cue, ch };
     this.cursor = { cue, col: ch + 2, nib: 0 };
     this.invalidate();
   }
@@ -273,19 +278,28 @@ export class CuesView {
     }
   }
 
+  /** Where a paste lands: the top-left of the block selection when there is
+   *  one — the corner the drag started from, not the cursor, which ends up
+   *  wherever the drag stopped — otherwise the cursor. Same rule as the other
+   *  two grids. */
+  pasteAnchor() {
+    const b = this.selBounds();
+    const c = this.cursor;
+    return b ? { cue: b.r0, ch: b.c0 } : { cue: c.cue, ch: Math.max(0, c.col - 2) };
+  }
+
   paste() {
     const block = this.store.cueClipboard;
     if (!block) return false;
-    const c = this.cursor;
+    const a = this.pasteAnchor();
     const chans = this.store.doc.channelCount;
     const limit = this.store.doc.is64Channel ? NUM_CUES_64 : NUM_CUES;
-    const baseCh = Math.max(0, c.col - 2);
     const writes = [];
     for (let r = 0; r < block.rows; r++) {
-      const cue = c.cue + r;
+      const cue = a.cue + r;
       if (cue >= limit) break;
       for (let ch = 0; ch < block.chans; ch++) {
-        const dch = baseCh + ch;
+        const dch = a.ch + ch;
         if (dch >= chans) break; // clip past the last channel
         const src = block.words[cueBlockIndex(block, r, ch)];
         writes.push({ cue, ch: dch, value: mergeCueWord(this.wordAt(cue, dch), src) });
@@ -294,12 +308,80 @@ export class CuesView {
     if (!writes.length) return false;
     this.store.undo.apply(setCuesOp(this.store.songIndex, writes));
     this.sel = {
-      aCue: c.cue, aCh: baseCh,
-      cue: Math.min(c.cue + block.rows - 1, limit - 1),
-      ch: Math.min(baseCh + block.chans - 1, chans - 1),
+      aCue: a.cue, aCh: a.ch,
+      cue: Math.min(a.cue + block.rows - 1, limit - 1),
+      ch: Math.min(a.ch + block.chans - 1, chans - 1),
     };
     this.invalidate();
     return true;
+  }
+
+  // ── right-click context menu ──
+
+  /**
+   * The same palette the Timeline shows, over the order list: the clipboard
+   * cells, the two channel inserts (a Cues column IS a channel), and a fresh
+   * pattern for an empty slot. The Cmd1/Cmd2 columns belong to the cue rather
+   * than to any channel, so a right-click there offers nothing.
+   */
+  async onContextMenu(e) {
+    e.preventDefault();
+    const store = this.store;
+    if (!store.doc || !store.song) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (y < HEADER_H) return;
+    const col = this.hitCol(x);
+    if (col < 2) return; // gutter or a command word — not a channel
+    const chans = store.doc.channelCount;
+    const ch = col - 2;
+    if (ch >= chans) return;
+    const cue = this.scrollCue + Math.floor((y - HEADER_H) / ROW_H);
+    if (cue >= this.editRows()) return;
+    // An unmaterialised row past the cue list reads as empty, which is exactly
+    // what "no pattern here" means — writing to it materialises the cue.
+    const emptySlot = (this.wordAt(cue, ch) & 0x7fff) === CUE_EMPTY;
+
+    const items = [
+      ...clipboardItems({
+        hasSelection: this.hasSelection(),
+        canPaste: !!store.cueClipboard,
+        selAnchored: this.hasSelection(),
+      }),
+      ...channelItems(ch, chans),
+    ];
+    if (emptySlot) items.push(newPatternItem());
+
+    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+      case "copy": this.copySelection(); break;
+      case "cut": this.cutSelection(); break;
+      case "paste":
+        // No selection: paste where the menu was opened, not wherever the
+        // cursor happens to be sitting.
+        if (!this.hasSelection()) { this.cursor = { cue, col, nib: 0 }; }
+        this.paste();
+        break;
+      case "insLeft": this.insertChannel(ch); break;
+      case "insRight": this.insertChannel(ch + 1); break;
+      case "newPat": this.createPattern(cue, ch); break;
+    }
+  }
+
+  insertChannel(at) {
+    if (insertChannelAt(this.store, at)) this.invalidate();
+  }
+
+  /** Point an empty cue slot at a brand-new pattern number (the lowest one
+   *  nothing in the song claims) and put the cursor on it. */
+  createPattern(cue, ch) {
+    const store = this.store;
+    const pat = store.song.firstFreePattern();
+    if (pat < 0) return;
+    const value = (this.wordAt(cue, ch) & 0x8000) | (pat & 0x7fff);
+    store.undo.apply(setCuesOp(store.songIndex, [{ cue, ch, value }]));
+    this.cursor = { cue, col: ch + 2, nib: 0 };
+    this.invalidate();
   }
 
   /** Cue-view key handling. Returns true when consumed. */
@@ -422,8 +504,16 @@ export class CuesView {
     ctx.fillText("Cmd2", GUTTER_W + CMD_W + 4, HEADER_H / 2);
     const visCh = Math.min(Math.floor((W - this.chanX(0)) / COL_W) + 1, chans - this.scrollCh);
     for (let i = 0; i < visCh; i++) {
-      ctx.fillStyle = C.dim;
-      ctx.fillText(String(this.scrollCh + i + 1).padStart(2, "0"), this.chanX(i) + 4, HEADER_H / 2);
+      const ch = this.scrollCh + i;
+      // highlight the selected channel's voice header too, same idea as the
+      // leftmost row number: findable at a glance regardless of cue row
+      const selected = this.cursor.col === ch + 2;
+      if (selected) {
+        ctx.fillStyle = C.cursor;
+        ctx.fillRect(this.chanX(i) - 2, 0, COL_W - 2, HEADER_H);
+      }
+      ctx.fillStyle = selected ? C.fg : C.dim;
+      ctx.fillText(String(ch + 1).padStart(2, "0"), this.chanX(i) + 4, HEADER_H / 2);
     }
 
     const playCue = store.audio?.isPlaying() ? store.audio.getCuePosition() : -1;
@@ -455,6 +545,10 @@ export class CuesView {
         }
       }
       if (this.cursor.cue === cueIdx) {
+        // leftmost row number gets its own background so the cursor row is
+        // findable at a glance, regardless of which column is selected
+        ctx.fillStyle = C.cursor;
+        ctx.fillRect(0, y, GUTTER_W - 2, ROW_H);
         const cx = this.cursor.col === 0 ? GUTTER_W :
                    this.cursor.col === 1 ? GUTTER_W + CMD_W :
                    this.chanX(this.cursor.col - 2 - this.scrollCh);
@@ -467,7 +561,7 @@ export class CuesView {
         }
       }
 
-      ctx.fillStyle = C.accent;
+      ctx.fillStyle = this.cursor.cue === cueIdx ? C.fg : C.accent;
       ctx.fillText(cueIdx.toString(16).toUpperCase().padStart(4, "0"), 6, y + ROW_H / 2);
       ctx.fillStyle = info.inst0.type !== INST_NOP ? C.accent2 : C.dim;
       if (info.inst0.type === INST_NOP) ctx.globalAlpha = 0.35;
