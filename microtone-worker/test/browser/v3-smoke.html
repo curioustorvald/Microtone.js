@@ -166,6 +166,91 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   const pane = M.patternView.panes?.[0];
   check(pane ? pane.cellChars() === 24 : false, "…with the wide cell layout",
     String(pane?.cellChars?.()));
+  // ── 7c. the Patterns view's BULK TOOLS on a wide pattern ────────────────
+  // These are pure byte transforms over a whole pattern image, so they have to
+  // know the cell stride: at the 8-byte one they silently edited the wrong row
+  // (or, for Lengthen/Shorten, handed back a half-length image).
+  const bulkPane = M.patternView.panes[0];
+  M.patternView.setActiveIdx(0);
+  bulkPane.setPattern(0);
+  await sleep(80);
+  const cellOf = (row) => store.doc.songs[0].patterns[bulkPane.patIdx][row];
+  // Seed row 4 with values only a wide cell can hold.
+  const { setCellOp } = await import("../../src/doc/ops.js");
+  store.undo.apply(setCellOp(0, bulkPane.patIdx, 4,
+    { volume: 0x64, volumeEff: 0, azimuth: 300, panEff: 0, elevation: -32 }));
+  await sleep(60);
+
+  /** Fill a showModal dialog's number fields and press its OK button. */
+  const runModal = async (open, values) => {
+    open();
+    let m = null;
+    for (let i = 0; i < 100 && !m; i++) { m = doc.querySelector("dialog.modal"); await sleep(30); }
+    if (!m) return null;
+    for (const [name, v] of Object.entries(values)) {
+      const input = m.querySelector(`[name="${name}"]`);
+      if (input) { input.value = String(v); input.dispatchEvent(new win.Event("input", { bubbles: true })); }
+    }
+    const ok = m.querySelector(".modal-buttons button");
+    ok.click();
+    await sleep(120);
+    return m;
+  };
+
+  // A row this smoke has not written to — earlier legs typed into rows 0 and 1.
+  let blankRow = -1;
+  for (let r = 0; r < 64; r++) {
+    if (cellOf(r).volumeEff === 3 && cellOf(r).volume === 0) { blankRow = r; break; }
+  }
+  check(blankRow >= 0, "found an untouched row to watch", String(blankRow));
+
+  const volModal = await runModal(() => bulkPane.volumeOp(), { mult: 2, add: 0 });
+  check(!!volModal, "the Volume tool opens on a wide project");
+  check(cellOf(4).volume === 0xc8, "volume ×2 scaled the row it named, as a whole byte",
+    String(cellOf(4).volume));
+  check(cellOf(4).azimuth === 300 && cellOf(4).elevation === -32,
+    "…and left the panning column alone", `${cellOf(4).azimuth}/${cellOf(4).elevation}`);
+  check(cellOf(blankRow).volumeEff === 3 && cellOf(blankRow).volume === 0,
+    "…and blank rows stayed blank",
+    `${cellOf(blankRow).volumeEff}/${cellOf(blankRow).volume}`);
+  store.undo.undo();
+  await sleep(60);
+  check(cellOf(4).volume === 0x64, "Volume undoes");
+
+  // The offset field's range follows the format — ±63 would be a quarter of
+  // the move it used to be on a 6-bit column.
+  await runModal(() => bulkPane.volumeOp(), { mult: 1, add: 100 });
+  check(cellOf(4).volume === 0xc8, "a +100 offset is accepted on an 8-bit column",
+    String(cellOf(4).volume));
+  store.undo.undo();
+  await sleep(60);
+
+  await runModal(() => bulkPane.panOp(), { mult: 1, shift: 100 });
+  check(cellOf(4).azimuth === 400, "the panning tool moves the 9-bit azimuth",
+    String(cellOf(4).azimuth));
+  check(cellOf(4).volume === 0x64, "…and leaves the volume alone", String(cellOf(4).volume));
+  store.undo.undo();
+  await sleep(60);
+
+  await runModal(() => bulkPane.panOp(), { mult: 1, shift: -400 });
+  check(cellOf(4).azimuth === 412, "…wrapping round the circle rather than clamping",
+    String(cellOf(4).azimuth));
+  store.undo.undo();
+  await sleep(60);
+
+  const lenBefore = store.doc.patternBytes(0, bulkPane.patIdx).length;
+  await runModal(() => bulkPane.lengthenOp(), { factor: 2 });
+  check(store.doc.patternBytes(0, bulkPane.patIdx).length === lenBefore,
+    "Lengthen keeps the image 1024 bytes",
+    String(store.doc.patternBytes(0, bulkPane.patIdx).length));
+  check(cellOf(8).volume === 0x64 && cellOf(8).azimuth === 300,
+    "…and row 4 moved to row 8 whole", `${cellOf(8).volume}/${cellOf(8).azimuth}`);
+  store.undo.undo();
+  await sleep(60);
+  check(cellOf(4).volume === 0x64 && cellOf(8).volume === 0, "Lengthen undoes");
+  store.undo.undo(); // drop the seeded cell
+  await sleep(60);
+
   doc.querySelector('[data-view="timeline"]').click();
   await sleep(120);
 

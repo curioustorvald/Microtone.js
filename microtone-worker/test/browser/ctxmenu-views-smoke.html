@@ -38,7 +38,10 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
     for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
     return dlg;
   };
-  const ids = (dlg) => [...dlg.querySelectorAll(".ctx-cell")].map((c) => c.dataset.id);
+  // The FIRST row only — the second row (the column tools) has its own smoke,
+  // test/browser/ctxtools-smoke.html.
+  const ids = (dlg) => [...dlg.querySelectorAll(".ctx-row:first-child .ctx-cell")]
+    .map((c) => c.dataset.id);
   const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
   const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
 

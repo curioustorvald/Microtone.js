@@ -178,13 +178,33 @@ palette of icon buttons:
 | **Channel right** | Insert an empty channel *after* this one |
 | **New pattern** | Only on a cell whose cue leaves this channel empty: point the slot at the lowest unused pattern number and put the cursor there |
 
+A **second row** underneath carries the Patterns-view edit tools, aimed at the
+column you clicked (or, with a block selected, at the columns the block covers):
+
+| Column | Tool |
+|---|---|
+| Note | **Transpose** — the same notation-aware shift as the Patterns toolbar |
+| Instrument | **Instrument** — replace instrument numbers |
+| Volume | **Volume** — rescale volumes |
+| Panning | **Panning** — widen / narrow / shift |
+| Effect | the eight most-used effect commands: **S** Special, **D** Volume slide, **G** Tone portamento, **H** Vibrato, **E** / **F** Pitch slide down / up, **O** Sample offset, **A** Set tick rate. Picking one writes the opcode and leaves the argument alone; everything else is in the command palette at the foot of the screen. |
+
+Each tool acts on the **selected block** — which on the Timeline may span
+channels and cross several patterns — or on the single cell you clicked when
+nothing is selected, in one undo step either way. A selection covering several
+columns offers one tool per column but never the effect palette: picking an
+effect is a write, not a transform, and stamping one across a band that merely
+happens to include the effect column is never what was meant.
+
 The **Cues** view has the same menu — a column there is a channel too — except
 that *Paste* needs no pattern under it, because a cue cell holds the pattern
 *number*. The Cmd1/Cmd2 columns belong to the cue rather than to any channel, so
 right-clicking them offers nothing. The **Patterns** editor has the clipboard
 half only: a Taud pattern is a single channel, so there is no channel to insert
 one beside. There, right-clicking focuses the column you pointed at first, which
-is what lets you *Copy* in one column and *Paste* into another.
+is what lets you *Copy* in one column and *Paste* into another. Its second row
+is the same as the Timeline's. The Cues grid has no second row at all — it holds
+pattern numbers, not note cells.
 
 Inserting slides the channel and everything to its right one place along. The
 song's channel count is fixed at 32 or 64, so the last channel falls off the
@@ -447,6 +467,12 @@ editing a shared pattern changes every place it plays.
 
 The volume/pan/instrument tools honour an active row selection; otherwise they
 act on the whole pattern.
+
+On a **version-3 (surround) project** these tools work in that format's own
+units: volume runs 00–FF rather than 00–3F, so *add* reaches ±255; and the
+panning column is a whole angle, so *shift* reaches a full turn, the centre it
+widens about is **front**, and a move past hard left carries on round behind you
+instead of stopping there — on a circle, hard left is a direction, not an edge.
 
 ## Samples (F4)
 

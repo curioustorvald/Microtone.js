@@ -1,0 +1,269 @@
+<!doctype html><meta charset="utf-8"><title>Context menu second row: the column tools</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// The right-click menu's second row: which tools a column offers, that a
+// multi-column band drops the effect palette, and that every one of them acts
+// on the SELECTED BLOCK (which on the Timeline crosses patterns) in one undo
+// step.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+window.addEventListener("error", (e) => log("ERROR " + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, timeline, patternView } = M;
+  const E = await import("../../src/ui/edit.js");
+  const { QUICK_FX } = await import("../../src/ui/blocktools.js");
+
+  const canvas = doc.getElementById("timeline");
+  const menuAt = async (x, y) => {
+    const r = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2 }));
+    let dlg = null;
+    for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return dlg;
+  };
+  const rows = (dlg) => [...dlg.querySelectorAll(".ctx-row")]
+    .map((r) => [...r.querySelectorAll(".ctx-cell")].map((c) => c.dataset.id));
+  const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
+  const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
+
+  const CHAR_W = 7.9, GUTTER = 76, ROW_H = 16;
+  const colW = timeline.colW();
+  const charX = (ch, c) => GUTTER + (ch - timeline.scrollCh) * colW + 2 + c * CHAR_W + 1;
+  const rowY = (r) => timeline.headerH() + (r - Math.floor(timeline.scrollRow)) * ROW_H + 8;
+  // Character offsets into a narrow cell: note 0-4, inst 5-7, vol 8-11,
+  // pan 12-15, fx 16-20 (edit.js COL_CHAR_RANGE).
+  const COL_X = { note: 1, inst: 6, vol: 9, pan: 13, fx: 17 };
+
+  /** Fill a showModal dialog and press OK. */
+  const runModal = async (values) => {
+    let m = null;
+    for (let i = 0; i < 100 && !m; i++) { m = doc.querySelector("dialog.modal"); await sleep(30); }
+    if (!m) return false;
+    for (const [name, v] of Object.entries(values)) {
+      const input = m.querySelector(`[name="${name}"]`);
+      if (input) { input.value = String(v); input.dispatchEvent(new win.Event("input", { bubbles: true })); }
+    }
+    m.querySelector(".modal-buttons button").click();
+    await sleep(140);
+    return true;
+  };
+
+  // ── 1. one column → that column's tool ─────────────────────────────────
+  timeline.sel = null;
+  let dlg = await menuAt(charX(0, COL_X.note), rowY(0));
+  check(rows(dlg).length === 2, "the menu now has two rows", String(rows(dlg).length));
+  check(rows(dlg)[1].join() === "transpose", "note column → Transpose", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  dlg = await menuAt(charX(0, COL_X.inst), rowY(0));
+  check(rows(dlg)[1].join() === "instrument", "instrument column → Instrument", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  dlg = await menuAt(charX(0, COL_X.vol), rowY(0));
+  check(rows(dlg)[1].join() === "volume", "volume column → Volume", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
+  check(rows(dlg)[1].join() === "pan", "panning column → Panning", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  // ── 2. the effect column → the quick effect palette ────────────────────
+  dlg = await menuAt(charX(0, COL_X.fx), rowY(0));
+  const fxIds = rows(dlg)[1];
+  check(fxIds.length === QUICK_FX.length && fxIds.every((id) => id.startsWith("fx:")),
+    "effect column → the quick effect palette", fxIds.join());
+  check(fxIds.join() === QUICK_FX.map((n) => "fx:" + n).join(),
+    "…in the surveyed order (most-used first)", fxIds.join());
+  const gCell = cell(dlg, "fx:16"); // 0x10 = G, tone portamento
+  check(!!gCell && gCell.querySelector(".ctx-name").textContent === "Tone portamento",
+    "…each named after the effect", gCell?.querySelector(".ctx-name")?.textContent);
+  check(!!gCell?.querySelector("svg text"), "…and drawn as its own opcode letter");
+  await dismiss(dlg);
+
+  // ── 3. a multi-column band offers each tool but NOT the effects ────────
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_PAN, row: 3, ch: 0, sub: E.SUB_FX_ARG };
+  dlg = await menuAt(charX(0, COL_X.pan), rowY(1));
+  check(rows(dlg)[1].join() === "pan",
+    "pan + effects selected → only the pan tool", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_NOTE, row: 3, ch: 0, sub: E.SUB_FX_ARG };
+  dlg = await menuAt(charX(0, COL_X.note), rowY(1));
+  check(rows(dlg)[1].join() === "transpose,instrument,volume,pan",
+    "the whole cell selected → all four, effects still excluded", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  // ── 4. the tools act on the BLOCK, not the whole pattern ───────────────
+  const noteAt = (r, c) => timeline.cellAt(r, c)?.cell.note;
+  const volAt = (r, c) => timeline.cellAt(r, c)?.cell.volume;
+  const instAt = (r, c) => timeline.cellAt(r, c)?.cell.instrment;
+
+  // Give rows 0..1 of channel 0 known values, and leave row 4 as the control.
+  const { setCellOp } = await import("../../src/doc/ops.js");
+  const t0 = timeline.cellAt(0, 0), t1 = timeline.cellAt(1, 0), t4 = timeline.cellAt(4, 0);
+  check(!!t0 && !!t1 && !!t4, "found three cells on channel 0 to work with");
+  for (const [tgt, note] of [[t0, 0x5000], [t1, 0x5100], [t4, 0x5200]]) {
+    store.undo.apply(setCellOp(0, tgt.pat, tgt.rowInCue,
+      { note, instrment: 3, volume: 20, volumeEff: 0, pan: 40, panEff: 0, effect: 0, effectArg: 0 }));
+  }
+  await sleep(60);
+  const depth0 = store.undo.undoStack.length;
+
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_VOL, row: 1, ch: 0, sub: E.SUB_VOL };
+  dlg = await menuAt(charX(0, COL_X.vol), rowY(0));
+  cell(dlg, "volume").click();
+  check(await runModal({ mult: 2, add: 0 }), "the Volume dialog opened from the menu");
+  check(volAt(0, 0) === 40 && volAt(1, 0) === 40, "volume ×2 hit both selected rows",
+    `${volAt(0, 0)}/${volAt(1, 0)}`);
+  check(volAt(4, 0) === 20, "…and NOT the row outside the block", String(volAt(4, 0)));
+  check(store.undo.undoStack.length === depth0 + 1, "…in one undo step");
+  store.undo.undo();
+  await sleep(60);
+  check(volAt(0, 0) === 20, "…which undoes");
+
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_NOTE, row: 1, ch: 0, sub: E.SUB_NOTE };
+  dlg = await menuAt(charX(0, COL_X.note), rowY(0));
+  cell(dlg, "transpose").click();
+  check(await runModal({ fine: 1, coarse: 0 }), "the Transpose dialog opened from the menu");
+  check(noteAt(0, 0) > 0x5000 && noteAt(1, 0) > 0x5100, "transpose moved both selected notes",
+    `$${noteAt(0, 0).toString(16)}/$${noteAt(1, 0).toString(16)}`);
+  check(noteAt(4, 0) === 0x5200, "…and left the row outside the block alone",
+    `$${noteAt(4, 0).toString(16)}`);
+  store.undo.undo();
+  await sleep(60);
+  check(noteAt(0, 0) === 0x5000, "…which undoes");
+
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_INST, row: 1, ch: 0, sub: E.SUB_INST };
+  dlg = await menuAt(charX(0, COL_X.inst), rowY(0));
+  cell(dlg, "instrument").click();
+  check(await runModal({ from: "3", to: "7" }), "the Instrument dialog opened from the menu");
+  check(instAt(0, 0) === 7 && instAt(1, 0) === 7, "instrument 3 → 7 across the block",
+    `${instAt(0, 0)}/${instAt(1, 0)}`);
+  check(instAt(4, 0) === 3, "…and not outside it", String(instAt(4, 0)));
+  store.undo.undo();
+  await sleep(60);
+
+  // ── 5. a quick effect writes straight through, keeping the argument ────
+  const t0cell = () => timeline.cellAt(0, 0).cell;
+  store.undo.apply(setCellOp(0, t0.pat, t0.rowInCue, { effect: 0, effectArg: 0x1234 }));
+  await sleep(60);
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_FX_OP, row: 1, ch: 0, sub: E.SUB_FX_ARG };
+  dlg = await menuAt(charX(0, COL_X.fx), rowY(0));
+  cell(dlg, "fx:16").click();
+  await sleep(120);
+  check(t0cell().effect === 0x10, "picking G writes the opcode", String(t0cell().effect));
+  check(t0cell().effectArg === 0x1234, "…and keeps the argument that was there",
+    "$" + t0cell().effectArg.toString(16));
+  check(timeline.cellAt(1, 0).cell.effect === 0x10, "…across the whole selected block");
+  store.undo.undo();
+  await sleep(60);
+  check(t0cell().effect === 0, "…and undoes");
+  store.undo.undo();
+  await sleep(60);
+
+  // ── 6. no selection → the tool acts on the clicked cell only ───────────
+  timeline.sel = null;
+  dlg = await menuAt(charX(0, COL_X.vol), rowY(1));
+  cell(dlg, "volume").click();
+  check(await runModal({ mult: 1, add: 5 }), "the Volume dialog opened with no selection");
+  check(volAt(1, 0) === 25, "…and moved only the clicked cell", String(volAt(1, 0)));
+  check(volAt(0, 0) === 20, "…leaving its neighbour alone", String(volAt(0, 0)));
+  store.undo.undo();
+  await sleep(60);
+  for (let i = 0; i < 3; i++) { store.undo.undo(); await sleep(40); } // drop the seeds
+
+  // ── 7. the Patterns view carries the same second row ───────────────────
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F3", bubbles: true }));
+  await sleep(250);
+  const pane = patternView.panes[0];
+  patternView.setActiveIdx(0);
+  pane.setPattern(1);
+  await sleep(120);
+  const pCanvas = pane.canvas;
+  const pMenu = async (col, row) => {
+    const r = pCanvas.getBoundingClientRect();
+    pCanvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+      clientX: r.left + 34 + 4 + col * 8.5 + 1,
+      clientY: r.top + (row - pane.scrollRow) * 17 + 8,
+      bubbles: true, cancelable: true, button: 2 }));
+    let d = null;
+    for (let i = 0; i < 60 && !d; i++) { d = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return d;
+  };
+  // With nothing selected and an empty clipboard the FIRST row has nothing in
+  // it, and the widget drops empty rows — so the tools stand alone.
+  pane.sel = null;
+  store.clipboard = null;
+  dlg = await pMenu(9, 3); // volume column
+  check(JSON.stringify(rows(dlg)) === '[["volume"]]',
+    "a Patterns column offers the volume tool, alone when there is nothing to copy",
+    JSON.stringify(rows(dlg)));
+  await dismiss(dlg);
+
+  // With a selection, both rows are there.
+  pane.sel = { aRow: 2, row: 5, aSub: E.SUB_VOL, sub: E.SUB_VOL };
+  dlg = await pMenu(9, 3);
+  check(JSON.stringify(rows(dlg)) === '[["copy","cut"],["volume"]]',
+    "…and with a block selected, the clipboard row joins it", JSON.stringify(rows(dlg)));
+  await dismiss(dlg);
+
+  pane.sel = null;
+  dlg = await pMenu(17, 3); // effect column
+  const pFx = rows(dlg)[rows(dlg).length - 1];
+  check(pFx.length === QUICK_FX.length, "…including the effect palette", String(pFx.length));
+  await dismiss(dlg);
+
+  // …and it really edits the pattern it was opened on.
+  pane.sel = { aRow: 2, row: 3, aSub: E.SUB_VOL, sub: E.SUB_VOL };
+  const pCell = (r) => store.doc.songs[0].patterns[pane.patIdx][r];
+  store.undo.apply(setCellOp(0, pane.patIdx, 2, { volume: 30, volumeEff: 0 }));
+  store.undo.apply(setCellOp(0, pane.patIdx, 9, { volume: 30, volumeEff: 0 }));
+  await sleep(60);
+  dlg = await pMenu(9, 2);
+  cell(dlg, "volume").click();
+  check(await runModal({ mult: 1, add: 10 }), "the Patterns volume tool opened");
+  check(pCell(2).volume === 40, "…and moved the selected row", String(pCell(2).volume));
+  check(pCell(9).volume === 30, "…but not one outside the selection", String(pCell(9).volume));
+  store.undo.undo();
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+  pane.sel = null;
+
+  // ── 8. the Cues view has no second row ─────────────────────────────────
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F2", bubbles: true }));
+  await sleep(200);
+  const cueCv = doc.getElementById("cuesCanvas");
+  const cr = cueCv.getBoundingClientRect();
+  cueCv.dispatchEvent(new win.MouseEvent("contextmenu", {
+    clientX: cr.left + 52 + 144 + 8, clientY: cr.top + 22 + 8,
+    bubbles: true, cancelable: true, button: 2 }));
+  let cueDlg = null;
+  for (let i = 0; i < 60 && !cueDlg; i++) { cueDlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+  check(!!cueDlg && rows(cueDlg).length === 1,
+    "the Cues grid keeps a single row (it has no note columns)",
+    String(rows(cueDlg ?? doc.createElement("div")).length));
+  await dismiss(cueDlg);
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+ } catch (err) { log("THREW: " + err.message + "\n" + err.stack); }
+})();
+</script>

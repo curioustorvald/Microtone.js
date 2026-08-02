@@ -503,7 +503,7 @@ export function retuneNearest(song, newPreset, percSlots) {
  * cells; returns [{pat, row, prev}] for restoreNotesOp (via bulkNotesOp).
  */
 export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coarse,
-                                      rowLo = 0, rowHi = Infinity) {
+                                      rowLo = 0, rowHi = Infinity, rowFilter = null) {
   const ptn = song.patterns[patIdx];
   const useTable = preset && preset.table.length > 0;
   const interval = preset?.interval || 0x1000;
@@ -517,8 +517,11 @@ export function transposePatternNotes(song, patIdx, preset, percSlots, fine, coa
     const eInst = cell.instrment !== 0 ? cell.instrment : runningInst;
     if (percSlots && eInst >= 1 && percSlots[eInst]) continue;
     // Row window (a block selection): rows outside it still feed running-inst
-    // above, but are not transposed (item 58).
+    // above, but are not transposed (item 58). `rowFilter` is the same idea for
+    // a set of rows rather than a span — a Timeline block can reach one pattern
+    // through several cues, so its rows need not be contiguous.
     if (row < rowLo || row > rowHi) continue;
+    if (rowFilter !== null && !rowFilter(row)) continue;
 
     let out;
     if (!useTable) {

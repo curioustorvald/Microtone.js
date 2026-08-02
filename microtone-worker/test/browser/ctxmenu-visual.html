@@ -12,7 +12,8 @@
        ?theme=light for the light theme, ?where=header to open it on a channel
        header (two cells), ?where=full for the widest case (a block selected and
        something on the clipboard: five cells); the default is an empty cue slot
-       (three cells, including New pattern). -->
+       (three cells, including New pattern). ?col=note|inst|vol|pan|fx picks
+       which column the pointer lands on, i.e. which SECOND row is drawn. -->
   <img src="/hang" hidden>
   <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
   <script type="module">
@@ -38,7 +39,14 @@
         // Selection + a filled clipboard: the widest the menu ever gets
         // (Copy, Cut, Paste, Channel left, Channel right).
         const { timeline: tl } = win.__microtone;
-        tl.sel = { aRow: 2, aCh: 1, aSub: 0, row: 5, ch: 2, sub: 5 };
+        // The selection's COLUMN BAND is what picks the second row, so keep it
+        // to the column ?col names — otherwise a whole-cell selection always
+        // shows all four tools whatever the pointer is on.
+        const SUB = { note: 0, inst: 1, vol: 2, pan: 3, fx: 5 };
+        const sub = SUB[params.get("col")];
+        tl.sel = sub === undefined
+          ? { aRow: 2, aCh: 1, aSub: 0, row: 5, ch: 2, sub: 5 }
+          : { aRow: 2, aCh: 1, aSub: sub, row: 5, ch: 1, sub };
         tl.copySelection();
       } else if (!header) {
         // Blank one channel of cue 0 so the menu picks up its "New pattern" cell.
@@ -51,7 +59,12 @@
       const canvas = win.document.getElementById("timeline");
       const r = canvas.getBoundingClientRect();
       const colW = timeline.colW();
-      const x = r.left + 76 + ch * colW + colW / 2;
+      // Character offsets into a narrow cell (edit.js COL_CHAR_RANGE).
+      const COL_X = { note: 1, inst: 6, vol: 9, pan: 13, fx: 17 };
+      const col = COL_X[params.get("col")];
+      const x = col === undefined
+        ? r.left + 76 + ch * colW + colW / 2
+        : r.left + 76 + ch * colW + 2 + col * 7.9 + 1;
       const y = r.top + (header ? 10 : timeline.headerH() + 6 * 16);
       canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
         clientX: x, clientY: y, bubbles: true, cancelable: true, button: 2,

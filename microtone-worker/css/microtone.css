@@ -549,7 +549,12 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
 }
 .ctxmenu::backdrop { background: transparent; }
-.ctx-grid { display: flex; gap: 0.3rem; align-items: stretch; }
+.ctx-grid { display: flex; flex-direction: column; gap: 0.3rem; }
+/* One row per group; the second one (the column tools) is ruled off from the
+   first so the two read as "what to do with the block" and "what to do with
+   this column" rather than one long strip. */
+.ctx-row { display: flex; gap: 0.3rem; align-items: stretch; flex-wrap: wrap; }
+.ctx-row + .ctx-row { border-top: 1px solid var(--border); padding-top: 0.35rem; }
 .ctx-cell {
   display: flex;
   flex-direction: column;

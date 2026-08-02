@@ -492,9 +492,15 @@ function removeLastPatternOp(song, gestureId = null) {
     coalesceKey: `addpat:${song}`,
     apply(doc) {
       const removed = doc.songs[song].patterns.pop();
-      const bytes = new Uint8Array(512);
+      // The image has to be captured in the document's OWN cell layout (§5.5),
+      // or redo would feed appendPatternOp half an image and read past its end.
+      const wide = doc.wideCells === true;
+      const n = wide ? 16 : 8;
+      const bytes = new Uint8Array(64 * n);
       for (let r = 0; r < 64; r++) {
-        for (let b = 0; b < 8; b++) bytes[r * 8 + b] = removed[r].getByte(b);
+        for (let b = 0; b < n; b++) {
+          bytes[r * n + b] = wide ? removed[r].getByteWide(b) : removed[r].getByte(b);
+        }
       }
       doc.dirty = true;
       return appendPatternOp(song, bytes, gestureId);

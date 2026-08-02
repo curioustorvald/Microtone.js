@@ -31,6 +31,10 @@ import { canvasFont } from "../fonts.js";
 import { showModal } from "../widgets/modal.js";
 import { showContextMenu } from "../widgets/contextmenu.js";
 import { clipboardItems } from "../gridmenu.js";
+import {
+  blockToolItems, runBlockTool, isBlockTool,
+  volumeDialog, panDialog, transposeDialog, instrumentDialog,
+} from "../blocktools.js";
 import { t } from "../i18n.js";
 
 const FONT_PX = 14; // family comes from --cv-font via fonts.js
@@ -208,7 +212,22 @@ class PatternPane {
       canPaste: !!store.clipboard && !!this.pattern(),
       selAnchored: this.hasSelection(),
     });
-    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+    // Second row: the same column tools the toolbar carries, aimed at the
+    // selection's column band or at the single column under the pointer.
+    const cells = this.toolCells(hit);
+    const tools = this.pattern() && cells.length > 0
+      ? blockToolItems(this.hasSelection() ? this.selCols() : [subToCol(hit.sub)])
+      : [];
+
+    const pick = await showContextMenu(e.clientX, e.clientY, [items, tools]);
+    if (isBlockTool(pick)) {
+      if (await runBlockTool(pick, { store, cells, scope: this.toolScope() })) {
+        this.refreshHeader();
+        this.invalidate();
+      }
+      return;
+    }
+    switch (pick) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
       case "paste":
@@ -221,6 +240,22 @@ class PatternPane {
         this.paste();
         break;
     }
+  }
+
+  /** [{pat, row}] the second row's tools act on: the row-range selection, else
+   *  the single row under the pointer. */
+  toolCells(hit) {
+    const b = this.selRowBounds();
+    const rows = b ? [b.r0, b.r1] : [hit.row, hit.row];
+    const out = [];
+    for (let r = rows[0]; r <= rows[1]; r++) out.push({ pat: this.patIdx, row: r });
+    return out;
+  }
+
+  /** Human label for the modals' "this applies to …" line. */
+  toolScope() {
+    const b = this.selRowBounds();
+    return b ? t("pat.scopeSel", { r0: b.r0, r1: b.r1 }) : t("ctx.scopeCell", { n: 1 });
   }
 
   hasSelection() { return this.sel !== null; }
@@ -447,7 +482,7 @@ class PatternPane {
     if (!result) return;
     const n = clampInt(parseInt(result.factor || "2", 10) | 0, 2, 63);
     const fn = kind === "lengthen" ? expandPatternBytes : shrinkPatternBytes;
-    this.applyPatternBytes((src) => fn(src, n));
+    this.applyPatternBytes((src) => fn(src, n, this.wide()));
   }
 
   lengthenOp() { return this._resizeOp("lengthen"); }
@@ -461,21 +496,9 @@ class PatternPane {
     const store = this.store;
     if (!store.doc || !this.pattern()) return;
     const preset = store.pitchPreset;
-    const units = transposeUnitKeys(preset);
-    const fineLabel = t(units.fine), coarseLabel = t(units.coarse);
-    const result = await showModal({
-      title: t("pat.transposeModalTitle", { pat: this._titlePat() }),
-      body: t("pat.transposeBody", { scope: this._opScope().scope }),
-      fields: [
-        { name: "fine", label: fineLabel, type: "number", value: 0, min: -4096, max: 4096 },
-        { name: "coarse", label: coarseLabel, type: "number", value: 0, min: -10, max: 10 },
-      ],
-      okLabel: t("common.apply"),
-    });
-    if (!result) return;
-    const fine = parseInt(result.fine || "0", 10) | 0;
-    const coarse = parseInt(result.coarse || "0", 10) | 0;
-    if (fine === 0 && coarse === 0) return;
+    const v = await transposeDialog(store, this._opScope().scope, this._titlePat());
+    if (!v) return;
+    const { fine, coarse } = v;
     // Percussion slots skip the shift (retune semantics — a kit piece's pitch
     // selects the drum, it isn't melodic).
     const percSlots = new Uint8Array(1024);
@@ -507,40 +530,18 @@ class PatternPane {
   async volumeOp() {
     if (!this.pattern()) return;
     const { rows, scope } = this._opScope();
-    const result = await showModal({
-      title: t("pat.volModalTitle", { pat: this._titlePat() }),
-      body: t("pat.volBody", { scope }),
-      fields: [
-        { name: "mult", label: t("pat.multiply"), type: "number", value: 1, min: -8, max: 8 },
-        { name: "add", label: t("pat.add"), type: "number", value: 0, min: -63, max: 63 },
-      ],
-      okLabel: t("common.apply"),
-    });
-    if (!result) return;
-    const mult = parseFloat(result.mult ?? "1");
-    const add = parseInt(result.add || "0", 10) | 0;
-    if (mult === 1 && add === 0) return;
-    this._applyBytes((src) => scaleVolumeBytes(src, mult, add, rows));
+    const v = await volumeDialog(this.store, scope, this._titlePat());
+    if (!v) return;
+    this._applyBytes((src) => scaleVolumeBytes(src, v.mult, v.add, rows, this.wide()));
   }
 
   /** Pan widen/narrow (signed mult about centre) + shift (add). */
   async panOp() {
     if (!this.pattern()) return;
     const { rows, scope } = this._opScope();
-    const result = await showModal({
-      title: t("pat.panModalTitle", { pat: this._titlePat() }),
-      body: t("pat.panBody", { scope }),
-      fields: [
-        { name: "mult", label: t("pat.widen"), type: "number", value: 1, min: -4, max: 4 },
-        { name: "shift", label: t("pat.shift"), type: "number", value: 0, min: -63, max: 63 },
-      ],
-      okLabel: t("common.apply"),
-    });
-    if (!result) return;
-    const mult = parseFloat(result.mult ?? "1");
-    const shift = parseInt(result.shift || "0", 10) | 0;
-    if (mult === 1 && shift === 0) return;
-    this._applyBytes((src) => transformPanBytes(src, mult, shift, rows));
+    const v = await panDialog(this.store, scope, this._titlePat());
+    if (!v) return;
+    this._applyBytes((src) => transformPanBytes(src, v.mult, v.add, rows, this.wide()));
   }
 
   /** Change instrument: From blank → every non-empty inst becomes To. The
@@ -549,29 +550,14 @@ class PatternPane {
   async instrumentOp() {
     if (!this.pattern()) return;
     const { rows, scope } = this._opScope();
-    const result = await showModal({
-      title: t("pat.instModalTitle", { pat: this._titlePat() }),
-      body: t("pat.instBody", { scope }),
-      fields: [
-        { name: "from", label: t("pat.instFrom"), type: "text", value: "", placeholder: t("pat.instAll") },
-        { name: "to", label: t("pat.instTo"), type: "text", value: "" },
-        { name: "target", label: t("pat.instScope"), type: "select", value: "here",
-          options: [
-            { value: "here", label: t("pat.instScopeHere", { scope }) },
-            { value: "song", label: t("pat.instScopeSong") },
-          ] },
-      ],
-      okLabel: t("common.apply"),
-    });
+    const result = await instrumentDialog(scope, this._titlePat(), true);
     if (!result) return;
-    const fromStr = (result.from ?? "").trim();
-    const from = fromStr === "" ? null : (parseInt(fromStr, 16) & 0xff);
-    const to = parseInt((result.to ?? "").trim() || "0", 16) & 0xff;
+    const { from, to } = result;
     if (result.target === "song") {
       this.store.undo.apply(changeInstrumentOp(from, to, [this.store.songIndex]));
       this.invalidate();
     } else {
-      this._applyBytes((src) => changeInstrumentBytes(src, from, to, rows));
+      this._applyBytes((src) => changeInstrumentBytes(src, from, to, rows, this.wide()));
     }
   }
 

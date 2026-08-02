@@ -42,4 +42,39 @@ export const ICON = {
     '<rect x="3.5" y="4.5" width="17" height="17" rx="2"/>' +
     '<path d="M7.5 11h9M7.5 15.5h6"/>' +
     '<rect x="8" y="1.8" width="8" height="4.4" rx="1.3" fill="currentColor" stroke="none"/>'),
+
+  // ── the second row's column tools ──
+  /** Transpose: a note head with an up/down arrow beside it. */
+  transpose: SVG(
+    '<ellipse cx="7.5" cy="17" rx="4" ry="3.2" transform="rotate(-20 7.5 17)" ' +
+    'fill="currentColor" stroke="none"/>' +
+    '<path d="M11.2 15.8V3.5"/>' +
+    '<path d="M18 3.5v17M14.75 6.75 18 3.5l3.25 3.25M14.75 17.25 18 20.5l3.25-3.25"/>'),
+  /** Change instrument: two number plates, one becoming the other. */
+  instrument: SVG(
+    '<rect x="1.5" y="6" width="8.5" height="12" rx="1.5"/>' +
+    '<rect x="14" y="6" width="8.5" height="12" rx="1.5" stroke-dasharray="3 2.4"/>' +
+    '<path d="M10.75 12h2.5"/>'),
+  /** Volume tool: a fader ramp. */
+  volume: SVG(
+    '<path d="M2.5 20.5 20.5 4.5v16z" />' +
+    '<path d="M8.5 20.5v-5.3M14.5 20.5v-10.6"/>'),
+  /** Panning tool: a left/right balance arc. */
+  pan: SVG(
+    '<path d="M2.5 17a9.5 9.5 0 0 1 19 0"/>' +
+    '<path d="M12 17V8"/>' +
+    '<circle cx="12" cy="19.5" r="1.8" fill="currentColor" stroke="none"/>' +
+    '<path d="M2.5 20.5h3M18.5 20.5h3"/>'),
 };
+
+/**
+ * An effect cell's "icon" is its own base-36 opcode letter — the thing you
+ * would type, and the thing the grid prints. Drawn as SVG text rather than a
+ * styled span so it sits on the same 30 px baseline as the real glyphs and
+ * inherits the cell's colour the same way.
+ */
+export function fxGlyph(letter) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="12" ` +
+    `text-anchor="middle" dominant-baseline="central" font-size="19" ` +
+    `font-weight="600" fill="currentColor">${letter}</text></svg>`;
+}

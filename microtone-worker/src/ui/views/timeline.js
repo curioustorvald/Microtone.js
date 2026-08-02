@@ -25,6 +25,7 @@ import { unescapeName } from "../names.js";
 import { paintSpatialDot } from "../spatialdot.js";
 import { showContextMenu } from "../widgets/contextmenu.js";
 import { clipboardItems, channelItems, newPatternItem, insertChannelAt } from "../gridmenu.js";
+import { blockToolItems, runBlockTool, isBlockTool } from "../blocktools.js";
 import { t } from "../i18n.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
@@ -345,7 +346,19 @@ export class TimelineView {
     ];
     if (emptySlot) items.push(newPatternItem());
 
-    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+    // Second row: the column tools, aimed at the selection's column band or at
+    // the single column under the pointer. Only where there are cells to act on.
+    const cells = this.toolCells(hit, ch);
+    const tools = cells.length > 0 ? blockToolItems(this.toolCols(hit)) : [];
+
+    const pick = await showContextMenu(e.clientX, e.clientY, [items, tools]);
+    if (isBlockTool(pick)) {
+      if (await runBlockTool(pick, { store, cells, scope: this.toolScope(cells) })) {
+        this.invalidate();
+      }
+      return;
+    }
+    switch (pick) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
       case "paste":
@@ -363,6 +376,38 @@ export class TimelineView {
       case "insRight": this.insertChannel(ch + 1); break;
       case "newPat": this.createPattern(loc.entry.cue, ch, hit.row); break;
     }
+  }
+
+  /** Logical columns the second row's tools should cover: the selection's
+   *  column band, else the single column under the pointer. */
+  toolCols(hit) {
+    if (this.hasSelection()) return this.selCols();
+    return hit ? [subToCol(hit.sub)] : [];
+  }
+
+  /** Deduped [{pat, row}] the tools act on: every cell of the block selection,
+   *  else the one cell under the pointer. Channels sharing a pattern would
+   *  otherwise yield the same (pat,row) twice and corrupt the undo capture. */
+  toolCells(hit, ch) {
+    const seen = new Map();
+    const push = (t) => { if (t) seen.set(`${t.pat}:${t.rowInCue}`, { pat: t.pat, row: t.rowInCue }); };
+    const b = this.selBounds();
+    if (b) {
+      for (let r = b.r0; r <= b.r1; r++) {
+        for (let c = b.c0; c <= b.c1; c++) push(this.cellAt(r, c));
+      }
+    } else if (hit) {
+      push(this.cellAt(hit.row, ch));
+    }
+    return [...seen.values()];
+  }
+
+  /** Human label for the modals' "this applies to …" line. */
+  toolScope(cells) {
+    const b = this.selBounds();
+    return b
+      ? t("ctx.scopeBlock", { rows: b.r1 - b.r0 + 1, chans: b.c1 - b.c0 + 1 })
+      : t("ctx.scopeCell", { n: cells.length });
   }
 
   insertChannel(at) {

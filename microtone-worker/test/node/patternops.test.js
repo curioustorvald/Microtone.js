@@ -306,6 +306,124 @@ test("bulk transforms: rows span limits the edit", () => {
   assert.equal(out[9 * 8 + 3] & 63, 20, "row 9 outside span untouched");
 });
 
+// ── the same transforms on format version 3's 16-byte cell (§5.5) ──
+// Every one of these read/wrote at an 8-byte stride before, so on a wide image
+// they hit whatever byte happened to sit there: the volume op silently did
+// nothing to the row it named, the pan op wrote a 2-bit selector into the
+// azimuth's low byte of a DIFFERENT row, and expand/shrink handed back a
+// 512-byte image for a 1024-byte pattern.
+
+/** Wide pattern image with one row filled in. `vol`/`az` are the full-width
+ *  values (0..255 / 0..511); selectors default to SET. */
+function widePatWith(row, { vol, az, inst, volSel = 0, panSel = 0 } = {}) {
+  const b = emptyPatternBytes(true);
+  const o = row * 16;
+  if (vol !== undefined) b[o + 3] = vol & 0xff;
+  if (az !== undefined) b[o + 4] = az & 0xff;
+  if (inst !== undefined) b[o + 2] = inst & 0xff;
+  b[o + 8] = (((az ?? 0) >>> 8) & 1) << 7 | ((volSel & 7) << 4) | (panSel & 0xf);
+  return b;
+}
+const wideVol = (b, row) => b[row * 16 + 3];
+const wideAz = (b, row) => b[row * 16 + 4] | ((b[row * 16 + 8] & 0x80) << 1);
+const wideSels = (b, row) => b[row * 16 + 8] & 0x7f;
+
+test("wide cell: emptyPatternBytes is 1024 bytes of FINE-0 sentinels", () => {
+  const b = emptyPatternBytes(true);
+  assert.equal(b.length, 1024);
+  for (let r = 0; r < 64; r++) {
+    assert.equal(b[r * 16 + 8], 0x33, `row ${r} selectors`);
+    for (const off of [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12]) {
+      assert.equal(b[r * 16 + off], 0, `row ${r} byte ${off}`);
+    }
+  }
+});
+
+test("wide cell: scaleVolumeBytes works on the FULL byte, at the right row", () => {
+  const src = widePatWith(3, { vol: 0x40 });
+  const out = scaleVolumeBytes(src, 2, 0, null, true);
+  assert.equal(out.length, 1024);
+  assert.equal(wideVol(out, 3), 0x80, "0x40 × 2 = 0x80 — a whole byte, not 6 bits");
+  assert.equal(wideSels(out, 3), 0, "the selector byte is untouched");
+  // clamps at 255, not 63
+  assert.equal(wideVol(scaleVolumeBytes(widePatWith(0, { vol: 200 }), 2, 0, null, true), 0), 0xff);
+  assert.equal(wideVol(scaleVolumeBytes(widePatWith(0, { vol: 100 }), 2, 0, null, true), 0), 200,
+    "…and a value a narrow column could not even hold scales normally");
+  // the no-op sentinel (FINE with 0) is still skipped, everywhere
+  const blank = scaleVolumeBytes(emptyPatternBytes(true), 2, 40, null, true);
+  assert.deepEqual([...blank], [...emptyPatternBytes(true)], "blank pattern stays blank");
+});
+
+test("wide cell: transformPanBytes moves the 9-bit azimuth about front", () => {
+  // centre is 128 (front): 144 is 16 right of front, ×2 → 160
+  assert.equal(wideAz(transformPanBytes(widePatWith(0, { az: 144 }), 2, 0, null, true), 0), 160);
+  // narrow ×0.5 back again
+  assert.equal(wideAz(transformPanBytes(widePatWith(0, { az: 160 }), 0.5, 0, null, true), 0), 144);
+  // negative mult swaps L/R about front
+  assert.equal(wideAz(transformPanBytes(widePatWith(0, { az: 144 }), -1, 0, null, true), 0), 112);
+  // the ninth bit survives a round trip through the shared selector byte
+  const hi = transformPanBytes(widePatWith(0, { az: 400 }), 1, 0, null, true);
+  assert.equal(wideAz(hi, 0), 400, "an azimuth behind the listener is preserved");
+  assert.equal(hi[8] & 0x80, 0x80, "…including its bit 8");
+  // it WRAPS rather than clamping — the column is an angle, not an arc
+  assert.equal(wideAz(transformPanBytes(widePatWith(0, { az: 40 }), 1, -100, null, true), 0), 452,
+    "40 − 100 wraps round to 452, not to hard left");
+  assert.equal(wideAz(transformPanBytes(widePatWith(0, { az: 500 }), 1, 100, null, true), 0), 88);
+  // sentinel skipped
+  assert.deepEqual([...transformPanBytes(emptyPatternBytes(true), 2, 5, null, true)],
+    [...emptyPatternBytes(true)]);
+});
+
+test("wide cell: transformPanBytes leaves the other columns of byte 8 alone", () => {
+  // volume selector 2 (slide down) + panning selector 1 (slide right)
+  const src = widePatWith(0, { az: 144, vol: 0x30, volSel: 2, panSel: 1 });
+  const out = transformPanBytes(src, 2, 0, null, true);
+  assert.equal((out[8] >>> 4) & 7, 2, "the volume selector survived");
+  assert.equal(out[8] & 0xf, 1, "…and so did the panning selector");
+  assert.equal(wideVol(out, 0), 0x30, "the volume value is not a pan op's business");
+});
+
+test("wide cell: changeInstrumentBytes and expand/shrink use the 16-byte stride", () => {
+  const src = widePatWith(3, { vol: 0x40, az: 300, inst: 5 });
+  assert.equal(changeInstrumentBytes(src, 5, 0x0a, null, true)[3 * 16 + 2], 0x0a);
+  assert.equal(changeInstrumentBytes(src, 9, 0x0a, null, true)[3 * 16 + 2], 5, "non-matching kept");
+
+  const ex = expandPatternBytes(src, 2, true);
+  assert.equal(ex.length, 1024, "a wide pattern expands to a WIDE image");
+  assert.equal(wideVol(ex, 6), 0x40, "row 3 → row 6");
+  assert.equal(wideAz(ex, 6), 300, "…carrying its whole azimuth");
+  assert.equal(ex[3 * 16 + 8], 0x33, "the row it vacated is a blank wide cell");
+
+  const sh = shrinkPatternBytes(ex, 2, true);
+  assert.equal(sh.length, 1024);
+  assert.equal(wideVol(sh, 3), 0x40, "…and shrinking ×2 puts it back");
+  assert.equal(wideAz(sh, 3), 300);
+});
+
+test("wide cell: the row span still limits the edit", () => {
+  const src = widePatWith(2, { vol: 20 });
+  src.set(widePatWith(9, { vol: 20 }).subarray(9 * 16, 10 * 16), 9 * 16);
+  const out = scaleVolumeBytes(src, 2, 0, [0, 5], true);
+  assert.equal(wideVol(out, 2), 40, "row 2 in span scaled");
+  assert.equal(wideVol(out, 9), 20, "row 9 outside span untouched");
+});
+
+test("wide cell: appendPattern's undo captures a WIDE image (redo is exact)", () => {
+  const doc = loadWhen();
+  doc.upgradeToWideCells();
+  const n = doc.songs[0].patterns.length;
+  const src = widePatWith(5, { vol: 0x9c, az: 333, inst: 7 });
+  const undo = new UndoStack(doc);
+  undo.apply(appendPatternOp(0, src));
+  assert.deepEqual([...doc.patternBytes(0, n)], [...src], "the appended image is what we gave it");
+  undo.undo();
+  assert.equal(doc.songs[0].patterns.length, n);
+  undo.redo();
+  assert.equal(doc.songs[0].patterns.length, n + 1);
+  assert.deepEqual([...doc.patternBytes(0, n)], [...src],
+    "redo must reproduce the whole 1024-byte image, not the first 512 bytes");
+});
+
 test("bulkNotesOp: transpose one pattern on WHEN, single undo step, byte-exact", () => {
   const doc = loadWhen();
   const before = Buffer.from(doc.toBytes());

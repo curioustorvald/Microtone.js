@@ -15,16 +15,19 @@ const MARGIN = 6; // keep the menu this far from the viewport edge
 /**
  * Show a context menu at viewport coordinates (x, y).
  *
- * `items` is [{id, label, icon, title?, disabled?}] — `icon` is inline SVG
- * markup (see icons.js), `title` the hover tooltip. Resolves with the chosen
+ * `groups` is an array of ROWS, each row an array of
+ * [{id, label, icon, title?, disabled?}] — `icon` is inline SVG markup (see
+ * icons.js), `title` the hover tooltip. Empty rows are skipped, so a caller can
+ * pass a row it may or may not have anything for. Resolves with the chosen
  * item's id, or null when dismissed.
  */
-export function showContextMenu(x, y, items) {
+export function showContextMenu(x, y, groups) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
     dlg.className = "ctxmenu";
     const grid = document.createElement("div");
     grid.className = "ctx-grid";
+    const rows = groups.filter((g) => g.length > 0);
 
     const finish = (result) => {
       if (!dlg.isConnected) return;
@@ -36,24 +39,29 @@ export function showContextMenu(x, y, items) {
     };
     const onScroll = () => finish(null);
 
-    for (const item of items) {
-      const cell = document.createElement("button");
-      cell.className = "ctx-cell";
-      cell.type = "button";
-      cell.dataset.id = item.id; // how tests (and any caller) find a cell
-      cell.disabled = item.disabled === true;
-      if (item.title) cell.title = item.title;
-      const art = document.createElement("span");
-      art.className = "ctx-icon";
-      art.innerHTML = item.icon ?? "";
-      const name = document.createElement("span");
-      name.className = "ctx-name";
-      name.textContent = item.label;
-      cell.append(art, name);
-      cell.addEventListener("click", () => finish(item.id));
-      grid.appendChild(cell);
+    for (const items of rows) {
+      const rowEl = document.createElement("div");
+      rowEl.className = "ctx-row";
+      for (const item of items) {
+        const cell = document.createElement("button");
+        cell.className = "ctx-cell";
+        cell.type = "button";
+        cell.dataset.id = item.id; // how tests (and any caller) find a cell
+        cell.disabled = item.disabled === true;
+        if (item.title) cell.title = item.title;
+        const art = document.createElement("span");
+        art.className = "ctx-icon";
+        art.innerHTML = item.icon ?? "";
+        const name = document.createElement("span");
+        name.className = "ctx-name";
+        name.textContent = item.label;
+        cell.append(art, name);
+        cell.addEventListener("click", () => finish(item.id));
+        rowEl.appendChild(cell);
+      }
+      grid.appendChild(rowEl);
     }
-    if (items.length === 0) {
+    if (rows.length === 0) {
       const none = document.createElement("div");
       none.className = "ctx-empty";
       none.textContent = t("ctx.empty");
@@ -75,8 +83,8 @@ export function showContextMenu(x, y, items) {
     dlg.addEventListener("keydown", (e) => {
       e.stopPropagation(); // keep the piano/transport keys out of the menu
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-      // The cells are a row, so ←/→ walk them (Tab does the same thing; this is
-      // just what the shape leads you to press).
+      // ←/→ walk every cell in reading order, rows included (Tab does the same
+      // thing; this is just what the shape leads you to press).
       const cells = [...grid.querySelectorAll(".ctx-cell:not(:disabled)")];
       const i = cells.indexOf(document.activeElement);
       if (cells.length === 0) return;

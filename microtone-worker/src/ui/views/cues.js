@@ -353,7 +353,9 @@ export class CuesView {
     ];
     if (emptySlot) items.push(newPatternItem());
 
-    switch (await showContextMenu(e.clientX, e.clientY, items)) {
+    // The Cues grid holds pattern NUMBERS, not note cells, so it has no second
+    // row: none of the column tools has anything to act on here.
+    switch (await showContextMenu(e.clientX, e.clientY, [items])) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
       case "paste":
