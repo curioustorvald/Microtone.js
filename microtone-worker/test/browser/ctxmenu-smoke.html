@@ -150,6 +150,12 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   check(pat(0, emptyCh) === 0x7fff, "undo empties the slot again");
 
   // ── 7. a filled slot does NOT offer it ──────────────────────────────────
+  // Restore the slot we blanked first: from here on the menu-shape checks want
+  // a song with nothing free, since "New pattern" now appears whenever ANY slot
+  // the block covers is empty.
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, emptyCh) !== 0x7fff, "the blanked slot is restored");
   dlg = await rightClick(colX(0), gridY);
   check(!!dlg && ids(dlg).join() === "insLeft,insRight",
     "a slot with a pattern and an empty clipboard keeps the 2-cell menu", ids(dlg).join());
@@ -278,7 +284,19 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   store.voiceMutes.fill(false);
   store.syncVoiceMutes();
 
-  // ── 12. back to where we started ────────────────────────────────────────
+  // ── 12. a block that COVERS an empty slot offers New pattern ────────────
+  store.undo.apply(setCuesOp(store.songIndex, [{ cue: 0, ch: emptyCh,
+    value: (store.song.cues[0][emptyCh] & 0x8000) | 0x7fff }]));
+  await sleep(60);
+  timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 2, ch: emptyCh, sub: 5 };
+  dlg = await rightClick(colX(0), gridY);
+  check(ids(dlg).includes("newPat"),
+    "a block reaching an empty slot offers New pattern from a FILLED cell",
+    ids(dlg).join());
+  check(ids(dlg).includes("paste"),
+    "…and the clicked cell still has a pattern, so Paste stays", ids(dlg).join());
+  await dismiss(dlg);
+  timeline.sel = null;
   store.undo.undo();
   await sleep(60);
   check(pat(0, emptyCh) !== 0x7fff, "the blanked slot is restored");

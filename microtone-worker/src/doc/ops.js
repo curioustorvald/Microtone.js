@@ -32,6 +32,61 @@ export function setCellOp(song, pat, row, fields, gestureId = null) {
   };
 }
 
+/** The same decoded fields written to MANY cells in one undo step — what a
+ *  dialog that produces one answer (the panner's Place / Target / Slide /
+ *  Column) does to a block selection. `cells` is [{pat, row}]; the inverse
+ *  restores each cell's previous values of exactly the keys `fields` names. */
+export function setCellsFieldsOp(song, cells, fields, gestureId = null) {
+  return {
+    type: "setCellsFields",
+    song, cells, fields, gestureId,
+    coalesceKey: `cellsfields:${song}:${Object.keys(fields).join(",")}`,
+    apply(doc) {
+      const inverse = new Array(cells.length);
+      for (let i = 0; i < cells.length; i++) {
+        const { pat, row } = cells[i];
+        doc.ensurePattern(song, pat); // materialise an arbitrary-number pattern (item 48)
+        const cell = doc.songs[song].patterns[pat][row];
+        const prev = {};
+        for (const k of Object.keys(fields)) {
+          prev[k] = cell[k];
+          cell[k] = fields[k];
+        }
+        inverse[i] = { pat, row, prev };
+      }
+      doc.dirty = true;
+      return restoreCellsFieldsOp(song, inverse, gestureId);
+    },
+    dirty() {
+      const pats = new Set(cells.map((c) => c.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
+  };
+}
+
+/** Inverse of setCellsFieldsOp: put each cell's captured fields back. */
+function restoreCellsFieldsOp(song, saved, gestureId = null) {
+  return {
+    type: "restoreCellsFields",
+    song, saved, gestureId,
+    coalesceKey: `cellsfields:${song}:restore`,
+    apply(doc) {
+      const forward = saved.map(({ pat, row, prev }) => {
+        const cell = doc.songs[song].patterns[pat][row];
+        const cur = {};
+        for (const k of Object.keys(prev)) { cur[k] = cell[k]; cell[k] = prev[k]; }
+        return { pat, row, prev: cur };
+      });
+      doc.dirty = true;
+      return restoreCellsFieldsOp(song, forward, gestureId);
+    },
+    dirty() {
+      const pats = new Set(saved.map((c) => c.pat));
+      return [...pats].map((pat) => ({ kind: "pattern", song, pat }));
+    },
+  };
+}
+
 export function setCueWordOp(song, cue, ch, value, gestureId = null) {
   return {
     type: "setCueWord",

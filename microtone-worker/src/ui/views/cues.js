@@ -340,8 +340,12 @@ export class CuesView {
     const cue = this.scrollCue + Math.floor((y - HEADER_H) / ROW_H);
     if (cue >= this.editRows()) return;
     // An unmaterialised row past the cue list reads as empty, which is exactly
-    // what "no pattern here" means — writing to it materialises the cue.
-    const emptySlot = (this.wordAt(cue, ch) & 0x7fff) === CUE_EMPTY;
+    // what "no pattern here" means — writing to it materialises the cue. Over a
+    // block, "New pattern" fills every empty slot it covers, so the cell is
+    // offered whenever ANY of them is free.
+    const slots = this.slotsInBlock(cue, ch);
+    const emptySlots = slots.filter((s) => (this.wordAt(s.cue, s.ch) & 0x7fff) === CUE_EMPTY);
+    const emptySlot = emptySlots.length > 0;
 
     const items = [
       ...clipboardItems({
@@ -366,7 +370,7 @@ export class CuesView {
         break;
       case "insLeft": this.insertChannel(ch); break;
       case "insRight": this.insertChannel(ch + 1); break;
-      case "newPat": this.createPattern(cue, ch); break;
+      case "newPat": this.createPattern(cue, ch, emptySlots); break;
     }
   }
 
@@ -374,14 +378,36 @@ export class CuesView {
     if (insertChannelAt(this.store, at)) this.invalidate();
   }
 
-  /** Point an empty cue slot at a brand-new pattern number (the lowest one
-   *  nothing in the song claims) and put the cursor on it. */
-  createPattern(cue, ch) {
+  /** The (cue, channel) slots a block covers — the selection, else the one cell
+   *  under the pointer. Clipped to the channel count; rows past the stored cue
+   *  list are fine, since writing one materialises it. */
+  slotsInBlock(cue, ch) {
+    const chans = this.store.doc.channelCount;
+    const b = this.selBounds();
+    if (!b) return [{ cue, ch }];
+    const out = [];
+    for (let c = b.r0; c <= Math.min(b.r1, this.editRows() - 1); c++) {
+      for (let v = b.c0; v <= Math.min(b.c1, chans - 1); v++) out.push({ cue: c, ch: v });
+    }
+    return out;
+  }
+
+  /** Point every EMPTY slot in `targets` at a brand-new pattern number, one
+   *  each, lowest first — over a block that is one fresh pattern per slot, in a
+   *  single undo step. The patterns themselves materialise on their first edit
+   *  (item 48), so this is only cue words. */
+  createPattern(cue, ch, targets = null) {
     const store = this.store;
-    const pat = store.song.firstFreePattern();
-    if (pat < 0) return;
-    const value = (this.wordAt(cue, ch) & 0x8000) | (pat & 0x7fff);
-    store.undo.apply(setCuesOp(store.songIndex, [{ cue, ch, value }]));
+    const list = (targets ?? [{ cue, ch }])
+      .filter((s) => (this.wordAt(s.cue, s.ch) & 0x7fff) === CUE_EMPTY);
+    if (list.length === 0) return;
+    const nums = store.song.freePatternNumbers(list.length);
+    const writes = list.slice(0, nums.length).map((s, i) => ({
+      cue: s.cue, ch: s.ch,
+      value: (this.wordAt(s.cue, s.ch) & 0x8000) | (nums[i] & 0x7fff),
+    }));
+    if (!writes.length) return;
+    store.undo.apply(setCuesOp(store.songIndex, writes));
     this.cursor = { cue, col: ch + 2, nib: 0 };
     this.invalidate();
   }

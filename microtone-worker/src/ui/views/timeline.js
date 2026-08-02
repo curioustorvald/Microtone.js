@@ -327,33 +327,43 @@ export class TimelineView {
     const ch = this.channelAt(x);
     if (ch < 0) return;
     const chans = store.doc.channelCount;
+    const surroundModel = store.doc.songs[store.songIndex]?.surroundModel ?? 0;
 
     // The "no pattern here" target: a grid row (not the header) inside the song
     // whose cue leaves this channel empty.
     const hit = this.hitTest(x, y);
     const loc = hit ? this.locate(hit.row) : null;
-    const emptySlot = loc !== null &&
+    // Two different questions, and conflating them once cost Paste its cell:
+    // whether the CLICKED cell has a pattern (Paste needs somewhere to write
+    // cells into), and whether ANY slot the block covers is free (what "New
+    // pattern" would fill).
+    const clickedEmpty = loc !== null &&
       (store.song.cues[loc.entry.cue][ch] & 0x7fff) === PATTERN_EMPTY;
+    const emptySlots = this.slotsInBlock(hit, ch).filter((s) =>
+      (store.song.cues[s.cue][s.ch] & 0x7fff) === PATTERN_EMPTY);
 
     const items = [
       ...clipboardItems({
         hasSelection: this.hasSelection(),
-        canPaste: !!store.clipboard && hit !== null && !emptySlot &&
+        canPaste: !!store.clipboard && hit !== null && !clickedEmpty &&
           this.cellAt(hit.row, ch) !== null,
         selAnchored: this.hasSelection(),
       }),
       ...channelItems(ch, chans),
     ];
-    if (emptySlot) items.push(newPatternItem());
+    if (loc !== null && emptySlots.length > 0) items.push(newPatternItem());
 
     // Second row: the column tools, aimed at the selection's column band or at
     // the single column under the pointer. Only where there are cells to act on.
     const cells = this.toolCells(hit, ch);
-    const tools = cells.length > 0 ? blockToolItems(this.toolCols(hit)) : [];
+    const tools = cells.length > 0
+      ? blockToolItems(this.toolCols(hit), { surround: surroundModel !== 0 })
+      : [];
 
     const pick = await showContextMenu(e.clientX, e.clientY, [items, tools]);
     if (isBlockTool(pick)) {
-      if (await runBlockTool(pick, { store, cells, scope: this.toolScope(cells) })) {
+      const anchor = this.toolAnchor(hit, ch);
+      if (await runBlockTool(pick, { store, cells, anchor, scope: this.toolScope(cells) })) {
         this.invalidate();
       }
       return;
@@ -374,7 +384,7 @@ export class TimelineView {
         break;
       case "insLeft": this.insertChannel(ch); break;
       case "insRight": this.insertChannel(ch + 1); break;
-      case "newPat": this.createPattern(loc.entry.cue, ch, hit.row); break;
+      case "newPat": this.createPattern(loc.entry.cue, ch, hit.row, emptySlots); break;
     }
   }
 
@@ -402,6 +412,18 @@ export class TimelineView {
     return [...seen.values()];
   }
 
+  /** The cell a tool reads its STARTING state from (the panner's dial): the
+   *  block's top-left when there is a selection, else the clicked cell. */
+  toolAnchor(hit, ch) {
+    const b = this.selBounds();
+    const row = b ? b.r0 : hit.row;
+    const channel = b ? b.c0 : ch;
+    const t0 = this.cellAt(row, channel);
+    return t0
+      ? { pat: t0.pat, row: t0.rowInCue, channel, rowLabel: String(row) }
+      : { pat: -1, row: 0, channel, rowLabel: String(row) };
+  }
+
   /** Human label for the modals' "this applies to …" line. */
   toolScope(cells) {
     const b = this.selBounds();
@@ -414,16 +436,40 @@ export class TimelineView {
     if (insertChannelAt(this.store, at)) this.invalidate();
   }
 
-  /** Point an empty cue slot at a brand-new pattern number (the lowest one
-   *  nothing in the song claims). The pattern itself materialises on its first
-   *  edit — item 48 — so this is one cue word. */
-  createPattern(cue, ch, row) {
+  /** The (cue, ch) slots the tools' block covers — a Timeline selection is
+   *  rows × channels, and many rows map onto the same cue, so this collapses
+   *  them. Deduped, in reading order. */
+  slotsInBlock(hit, ch) {
+    const b = this.selBounds();
+    const seen = new Map();
+    const add = (row, c) => {
+      const loc = this.locate(row);
+      if (loc) seen.set(`${loc.entry.cue}:${c}`, { cue: loc.entry.cue, ch: c });
+    };
+    if (b) {
+      for (let r = b.r0; r <= b.r1; r++) for (let c = b.c0; c <= b.c1; c++) add(r, c);
+    } else if (hit) {
+      add(hit.row, ch);
+    }
+    return [...seen.values()];
+  }
+
+  /** Point every EMPTY cue slot the block covers at a brand-new pattern number,
+   *  one each, lowest first. The patterns themselves materialise on their first
+   *  edit — item 48 — so this is just cue words, in one undo step. */
+  createPattern(cue, ch, row, slots = null) {
     const store = this.store;
     const song = store.song;
-    const pat = song.firstFreePattern();
-    if (pat < 0) return;
-    const value = (song.cues[cue][ch] & 0x8000) | (pat & 0x7fff);
-    store.undo.apply(setCuesOp(store.songIndex, [{ cue, ch, value }]));
+    const targets = (slots ?? [{ cue, ch }])
+      .filter((s) => (song.cues[s.cue][s.ch] & 0x7fff) === PATTERN_EMPTY);
+    if (targets.length === 0) return;
+    const nums = song.freePatternNumbers(targets.length);
+    const writes = targets.slice(0, nums.length).map((s, i) => ({
+      cue: s.cue, ch: s.ch,
+      value: (song.cues[s.cue][s.ch] & 0x8000) | (nums[i] & 0x7fff),
+    }));
+    if (!writes.length) return;
+    store.undo.apply(setCuesOp(store.songIndex, writes));
     // Land the cursor on what was just created — the point of making it is to
     // start typing into it.
     store.cursor.row = row;

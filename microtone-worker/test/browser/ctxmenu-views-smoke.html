@@ -149,6 +149,49 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
   store.undo.undo();
   await sleep(60);
 
+  // ── New pattern over a BLOCK: one fresh number per empty slot ──────────
+  cuesView.sel = null;
+  // Blank a 2 × 3 patch of cue 1-2 × channels 4-6.
+  const blankWrites = [];
+  for (let c = 1; c <= 2; c++) for (let v = 4; v <= 6; v++) {
+    blankWrites.push({ cue: c, ch: v, value: (store.song.cues[c][v] & 0x8000) | 0x7fff });
+  }
+  store.undo.apply(setCues(store.songIndex, blankWrites));
+  await sleep(60);
+  // …then put ONE real pattern back in the middle of it, so the block has a
+  // non-empty slot the tool must leave alone.
+  store.undo.apply(setCues(store.songIndex,
+    [{ cue: 1, ch: 5, value: (store.song.cues[1][5] & 0x8000) | 0x0042 }]));
+  await sleep(60);
+
+  const wantNums = store.song.freePatternNumbers(5);
+  cuesView.sel = { aCue: 1, aCh: 4, cue: 2, ch: 6 };
+  const depthB = store.undo.undoStack.length;
+  dlg = await menuOn(cueCv, cueX(4), cueY(1));
+  check(ids(dlg).includes("newPat"), "a block with empty slots still offers New pattern",
+    ids(dlg).join());
+  cell(dlg, "newPat").click();
+  await sleep(120);
+  const got = [];
+  for (let c = 1; c <= 2; c++) for (let v = 4; v <= 6; v++) {
+    if (!(c === 1 && v === 5)) got.push(cuePat(c, v));
+  }
+  check(got.join() === wantNums.join(),
+    "every empty slot in the block got its own fresh pattern number",
+    `${got.join()} vs ${wantNums.join()}`);
+  check(new Set(got).size === got.length, "…all distinct");
+  check(cuePat(1, 5) === 0x0042, "…and the slot that already had one is untouched",
+    `$${cuePat(1, 5).toString(16)}`);
+  check(store.undo.undoStack.length === depthB + 1, "…in one undo step");
+  store.undo.undo();
+  await sleep(60);
+  check(cuePat(1, 4) === 0x7fff, "…which undoes");
+  store.undo.undo();
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+  cuesView.sel = null;
+
   // A single-cell drag is a selection here too.
   cuesView.sel = null;
   cuesView._drag = { aCue: 3, aCh: 2 };

@@ -65,6 +65,14 @@ export const ICON = {
     '<path d="M12 17V8"/>' +
     '<circle cx="12" cy="19.5" r="1.8" fill="currentColor" stroke="none"/>' +
     '<path d="M2.5 20.5h3M18.5 20.5h3"/>'),
+  /** Panner: the surround dial seen from above — listener at the centre, front
+   *  tick at the top, a source placed off to one side. */
+  panner: SVG(
+    '<circle cx="12" cy="12" r="9.5"/>' +
+    '<path d="M12 1.2v3.4"/>' +
+    '<circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>' +
+    '<path d="M12 12 17.6 7.4"/>' +
+    '<circle cx="18" cy="7" r="2.4" fill="currentColor" stroke="none"/>'),
 };
 
 /**

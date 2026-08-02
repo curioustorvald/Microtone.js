@@ -24,7 +24,7 @@ import {
   dbfs, meterFrac, correlation, availableScopes, effectiveScopes, SCOPE_KINDS,
   scopeAxes, scopeLabels, blobView, MeterBallistics,
   scopePanelHeight, scopePanelsThatFit, parseInk, densityAlpha,
-  slewGain, SCOPE_GAIN_SLEW_MS,
+  slewTowards, integrateCorrelation, SCOPE_GAIN_SLEW_MS, CORR_INTEGRATE_MS,
   METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
   SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
   SCOPE_SELECT_H, SCOPE_CORR_H, SPLIT_H, MAX_SCOPE_PANELS,
@@ -401,9 +401,26 @@ test("a panel's choice survives a song that cannot show it", () => {
   // An unshowable wish borrows a view nothing else is showing…
   assert.deepEqual(effectiveScopes([SCOPE_FRONT, SCOPE_SIDE], SURROUND_STEREO),
     [SCOPE_BLOBS, SCOPE_TOP]);
-  // …and a DELIBERATE duplicate is honoured, because it was asked for.
-  assert.deepEqual(effectiveScopes([SCOPE_TOP, SCOPE_TOP], SURROUND_STEREO),
-    [SCOPE_TOP, SCOPE_TOP]);
+
+  // ONE PANEL PER VIEW is a hard ceiling: a stereo or planar song draws two,
+  // whatever is configured and however tall the window is. A third panel would
+  // only repeat what the one beside it is already showing.
+  for (const model of [SURROUND_STEREO, SURROUND_PLANAR]) {
+    for (const wish of [
+      [SCOPE_BLOBS, SCOPE_TOP, SCOPE_TOP],           // a duplicate…
+      [SCOPE_TOP, SCOPE_TOP, SCOPE_TOP, SCOPE_TOP],  // …several of them
+      [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE],
+      SCOPE_KINDS,
+    ]) {
+      const drawn = effectiveScopes(wish, model).filter((k) => k !== null);
+      assert.equal(drawn.length, availableScopes(model).length,
+        `model ${model}, wishes ${wish}: drew ${drawn}`);
+    }
+  }
+  // A spatial song has six views, so six panels is its ceiling.
+  assert.equal(
+    effectiveScopes([...SCOPE_KINDS, SCOPE_TOP], SURROUND_SPATIAL).filter((k) => k !== null).length,
+    availableScopes(SURROUND_SPATIAL).length);
   // Every kind is offered to a new panel before any is repeated.
   assert.equal(new Set(SCOPE_KINDS).size, SCOPE_KINDS.length);
 });
@@ -466,20 +483,49 @@ test("a scope panel is a fixed size, so the viewport decides how many fit", () =
     "the panel ceiling IS the number of views, not a magic number");
 });
 
+test("correlation is integrated over a window of AUDIO, not one interval", () => {
+  const sums = { ll: 0, rr: 0, lr: 0 };
+  // 16 ms intervals of a mono signal: the reading settles at +1.
+  const chunk = 512; // frames per interval at 32 kHz ≈ 16 ms
+  let c = 0;
+  for (let i = 0; i < 60; i++) c = integrateCorrelation(sums, 100, 100, 100, chunk);
+  assert.ok(Math.abs(c - 1) < 1e-9, `mono ${c}`);
+
+  // One anti-phase interval cannot yank the bar across — that twitchiness is
+  // exactly what the window is for. The raw reading for that interval is −1.
+  const after = integrateCorrelation(sums, 100, 100, -100, chunk);
+  assert.equal(correlation(100, 100, -100), -1, "the interval itself is anti-phase");
+  assert.ok(after > 0.8, `one bad interval moved it to ${after}`);
+
+  // Sustained anti-phase does get there, over roughly the window length.
+  let d = after;
+  for (let i = 0; i < 200; i++) d = integrateCorrelation(sums, 100, 100, -100, chunk);
+  assert.ok(d < -0.99, `sustained ${d}`);
+
+  // The window is a length of AUDIO: the same total, delivered in one big
+  // interval or many small ones, weights the history the same way.
+  const a = { ll: 1, rr: 1, lr: 1 };
+  const b = { ll: 1, rr: 1, lr: 1 };
+  integrateCorrelation(a, 0, 0, 0, 3200);
+  for (let i = 0; i < 10; i++) integrateCorrelation(b, 0, 0, 0, 320);
+  assert.ok(Math.abs(a.ll - b.ll) < 1e-12, `${a.ll} vs ${b.ll}`);
+  assert.ok(CORR_INTEGRATE_MS >= 300, "the window is long enough to be a statistic");
+});
+
 test("the vectorscope auto-gain slews in wall time", () => {
   // One time constant gets ~63% of the way there, in either direction.
-  assert.ok(Math.abs(slewGain(1, 11, SCOPE_GAIN_SLEW_MS) - (1 + 10 * 0.6321)) < 0.01);
-  assert.ok(Math.abs(slewGain(11, 1, SCOPE_GAIN_SLEW_MS) - (11 - 10 * 0.6321)) < 0.01,
+  assert.ok(Math.abs(slewTowards(1, 11, SCOPE_GAIN_SLEW_MS, SCOPE_GAIN_SLEW_MS) - (1 + 10 * 0.6321)) < 0.01);
+  assert.ok(Math.abs(slewTowards(11, 1, SCOPE_GAIN_SLEW_MS, SCOPE_GAIN_SLEW_MS) - (11 - 10 * 0.6321)) < 0.01,
     "coming down is slewed too — it used to snap");
   // Frame-rate independent: ten small steps land exactly where one big one does.
   let a = 1;
-  for (let i = 0; i < 10; i++) a = slewGain(a, 11, 30);
-  assert.ok(Math.abs(a - slewGain(1, 11, 300)) < 1e-9, `${a}`);
+  for (let i = 0; i < 10; i++) a = slewTowards(a, 11, 30, 300);
+  assert.ok(Math.abs(a - slewTowards(1, 11, 300, 300)) < 1e-9, `${a}`);
   // Converges, and a zero-length frame changes nothing.
   let b = 1;
-  for (let i = 0; i < 500; i++) b = slewGain(b, 4, 16);
+  for (let i = 0; i < 500; i++) b = slewTowards(b, 4, 16, 300);
   assert.ok(Math.abs(b - 4) < 1e-6, String(b));
-  assert.equal(slewGain(3, 9, 0), 3);
+  assert.equal(slewTowards(3, 9, 0, 300), 3);
 });
 
 test("cloud ink parsing and the density curve", () => {

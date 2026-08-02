@@ -34,6 +34,7 @@ import {
 import {
   SURROUND_STEREO, SURROUND_SPATIAL, directionFromAngles,
 } from "../../engine/spatial.js";
+import { SAMPLING_RATE } from "../../engine/constants.js";
 import { setSongScalarOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
 import { paintSpatialDot } from "../spatialdot.js";
@@ -84,6 +85,15 @@ const CLOUD_REF_FRAMES = 1024;
  *  transient — the cloud's shape is the reading, and a gain that jumps makes
  *  shapes impossible to compare from one moment to the next. */
 export const SCOPE_GAIN_SLEW_MS = 300;
+/**
+ * Correlation is a STATISTIC, and one snapshot interval (~16 ms) is far too
+ * short a sample of one: read that raw and the bar dances on every transient
+ * while telling you nothing. The sums are integrated over this much audio
+ * first — near enough a bar of music — and the result is then slewed, so the
+ * bar moves at the speed of the mix rather than the speed of the frame rate.
+ */
+export const CORR_INTEGRATE_MS = 600;
+export const CORR_SLEW_MS = 150;
 
 // ── pure helpers (unit-tested in test/node/analysis.test.js) ───────────────
 
@@ -147,14 +157,28 @@ export function densityAlpha(hits, k = CLOUD_K) {
 }
 
 /**
- * One display frame of the auto-gain's approach to `want`. Exponential, so the
- * result after a given stretch of TIME is the same however many frames it was
- * cut into — the dial moves at the same speed on a 30 fps machine as on a
- * 144 fps one.
+ * One display frame of an exponential approach to `want`, so the result after a
+ * given stretch of TIME is the same however many frames it was cut into — the
+ * display moves at the same speed on a 30 fps machine as on a 144 fps one.
  */
-export function slewGain(prev, want, dtMs, tauMs = SCOPE_GAIN_SLEW_MS) {
+export function slewTowards(prev, want, dtMs, tauMs) {
   if (!(dtMs > 0)) return prev;
   return prev + (want - prev) * (1 - Math.exp(-dtMs / tauMs));
+}
+
+/**
+ * Fold one interval's correlation sums into an exponentially-weighted running
+ * pair and read the correlation off THAT — a proper windowed statistic rather
+ * than 16 ms of guesswork. `sums` is mutated; `frames` is what the interval
+ * covered, so the window is a length of AUDIO and does not change with the
+ * frame rate or with how the host chunks its rendering.
+ */
+export function integrateCorrelation(sums, ll, rr, lr, frames, tauMs = CORR_INTEGRATE_MS) {
+  const k = Math.exp(-frames / ((tauMs / 1000) * SAMPLING_RATE));
+  sums.ll = sums.ll * k + ll;
+  sums.rr = sums.rr * k + rr;
+  sums.lr = sums.lr * k + lr;
+  return correlation(sums.ll, sums.rr, sums.lr);
 }
 
 /**
@@ -222,18 +246,22 @@ export function scopeLabels(kind, stereoSong) {
  * when a spatial song finally arrives. Overwriting the wishes was the bug where
  * four configured panels came back from a reload as several copies of one view.
  *
- * A wish the model cannot express falls back to the first kind no earlier panel
- * is showing; once those run out the panel is dropped (null) rather than
- * repeating a view — a stereo song has exactly two things worth looking at.
- * A wish that IS expressible is always shown, so two panels can deliberately
- * show the same thing if that is what was asked for.
+ * There is never more than ONE PANEL PER VIEW the song has: a stereo or planar
+ * song has exactly two things worth looking at, so it draws at most two panels
+ * however many are configured (a duplicate would only tell you what the panel
+ * beside it already does). A wish the model cannot express falls back to the
+ * first view no earlier panel is showing; once the views are used up, the
+ * remaining panels are dropped (null) and wait for a song that has more.
  */
 export function effectiveScopes(scopes, model) {
   const kinds = availableScopes(model);
   const out = [];
+  let drawn = 0;
   for (const wish of scopes) {
-    if (kinds.includes(wish)) out.push(wish);
-    else out.push(kinds.find((k) => !out.includes(k)) ?? null);
+    if (drawn >= kinds.length) { out.push(null); continue; }
+    const kind = kinds.includes(wish) ? wish : kinds.find((k) => !out.includes(k));
+    if (kind === undefined) out.push(null);
+    else { out.push(kind); drawn++; }
   }
   return out;
 }
@@ -335,6 +363,7 @@ export class MasterStrip {
     this.meters = Array.from({ length: 10 }, () => new MeterBallistics());
     this.field = new MeterBallistics();
     this.corr = 1;
+    this.corrSums = { ll: 0, rr: 0, lr: 0 }; // exponentially-weighted window
     // What each panel shows, and the panel → wish map; refreshControls owns both.
     this.effective = this.scopes.slice();
     this.slots = this.scopes.map((_, i) => i);
@@ -567,6 +596,7 @@ export class MasterStrip {
     for (const m of this.meters) m.reset();
     this.field.reset();
     this.corr = 1;
+    this.corrSums.ll = this.corrSums.rr = this.corrSums.lr = 0;
   }
 
   /** The one thing that puts the clip lamps out: starting playback again. */
@@ -768,7 +798,9 @@ export class MasterStrip {
 
       const r = audio.readAnalysis(this.readout);
       if (r.frames > 0) {
-        this.corr = correlation(r.corrLL, r.corrRR, r.corrLR);
+        const wantCorr = integrateCorrelation(
+          this.corrSums, r.corrLL, r.corrRR, r.corrLR, r.frames);
+        this.corr = slewTowards(this.corr, wantCorr, dt, CORR_SLEW_MS);
         // The field bar reads item 98's pair literally: RMS is the energy
         // density of the encoded field, peak is the worst true peak any encoded
         // channel reached (that is what would clip the exported file).
@@ -932,7 +964,8 @@ export class MasterStrip {
     // trade — you are looking at the SHAPE, and it has to hold still enough to
     // be looked at.
     const want = Math.max(1, Math.min(0.92 / Math.max(peak, 1e-4), 64));
-    this.scopeGain[slot] = slewGain(this.scopeGain[slot], want, this.dtMs ?? 16);
+    this.scopeGain[slot] = slewTowards(
+      this.scopeGain[slot], want, this.dtMs ?? 16, SCOPE_GAIN_SLEW_MS);
 
     // The density buffer is built in CSS pixels and blitted through the canvas
     // transform, so the cloud looks the same on a HiDPI screen as on a plain

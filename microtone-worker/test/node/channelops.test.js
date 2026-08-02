@@ -218,3 +218,33 @@ test("firstFreePattern: a cue reference alone claims a number (item 48)", () => 
   song.cues[0][0] = (song.cues[0][0] & 0x8000) | free;
   assert.notEqual(song.firstFreePattern(), free);
 });
+
+// ── "New pattern" over a block ──
+
+test("freePatternNumbers: N lowest unclaimed numbers, none of them in use", () => {
+  const doc = loadWhen();
+  const song = doc.songs[0];
+  const used = song.usedPatternNumbers();
+  const nums = song.freePatternNumbers(5);
+  assert.equal(nums.length, 5);
+  assert.deepEqual(nums, [...nums].sort((a, b) => a - b), "ascending");
+  assert.equal(new Set(nums).size, 5, "all distinct — a block wants one each");
+  for (const n of nums) assert.equal(used.has(n), false, `pattern ${n} was already claimed`);
+  assert.equal(nums[0], song.firstFreePattern(), "the first is what firstFreePattern gives");
+});
+
+test("usedPatternNumbers counts cue references AND materialised patterns", () => {
+  const doc = loadWhen();
+  const song = doc.songs[0];
+  const free = song.firstFreePattern();
+  assert.equal(song.usedPatternNumbers().has(free), false);
+  // A bare cue reference claims it (item 48) …
+  song.cues[0][0] = (song.cues[0][0] & 0x8000) | free;
+  assert.equal(song.usedPatternNumbers().has(free), true);
+  // … and so does a materialised pattern nothing points at.
+  const doc2 = loadWhen();
+  const free2 = doc2.songs[0].firstFreePattern();
+  doc2.ensurePattern(0, free2);
+  assert.equal(doc2.songs[0].usedPatternNumbers().has(free2), true);
+  assert.notEqual(doc2.songs[0].firstFreePattern(), free2);
+});

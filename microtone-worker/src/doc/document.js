@@ -113,12 +113,12 @@ export class Song {
   }
 
   /**
-   * Lowest pattern number nothing in the song claims — neither a cue reference
-   * nor a materialised pattern (item 48: an index can be referenced without
-   * ever having been materialised, and a materialised one can sit unreferenced).
-   * This is what the Timeline's "New pattern" hands out. -1 when exhausted.
+   * Every pattern number the song claims — referenced by a cue, or materialised
+   * in the pattern list. Item 48 makes those two independent: an index can be
+   * referenced without ever having been materialised, and a materialised one can
+   * sit unreferenced, so "free" has to mean neither.
    */
-  firstFreePattern() {
+  usedPatternNumbers() {
     const used = new Set();
     for (const w of this.cues) {
       for (let ch = 0; ch < MAX_VOICES; ch++) {
@@ -127,8 +127,24 @@ export class Song {
       }
     }
     for (let p = 0; p < this.patterns.length; p++) if (this.patterns[p]) used.add(p);
-    for (let n = 0; n <= 0x7ffe; n++) if (!used.has(n)) return n;
-    return -1;
+    return used;
+  }
+
+  /** Lowest pattern number nothing claims, or -1 when exhausted. */
+  firstFreePattern() {
+    return this.freePatternNumbers(1)[0] ?? -1;
+  }
+
+  /** The `count` lowest unclaimed pattern numbers, ascending — what "New
+   *  pattern" hands out when it is filling a whole block of empty slots and
+   *  each one wants its own. Short when the address space runs out. */
+  freePatternNumbers(count) {
+    const used = this.usedPatternNumbers();
+    const out = [];
+    for (let n = 0; n <= 0x7ffe && out.length < count; n++) {
+      if (!used.has(n)) out.push(n);
+    }
+    return out;
   }
 
   /**

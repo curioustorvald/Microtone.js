@@ -32,6 +32,14 @@
 
       const { store, timeline } = win.__microtone;
       for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      // ?surround=1|2 declares a panning model, which is what puts the Panner
+      // on the panning column's second row.
+      const model = parseInt(params.get("surround") ?? "0", 10);
+      if (model) {
+        const { setSongScalarOp } = await win.eval('import("/src/doc/ops.js")');
+        store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", model));
+        await sleep(80);
+      }
       const header = params.get("where") === "header";
       const full = params.get("where") === "full";
       const ch = 1;

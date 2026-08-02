@@ -215,13 +215,18 @@ class PatternPane {
     // Second row: the same column tools the toolbar carries, aimed at the
     // selection's column band or at the single column under the pointer.
     const cells = this.toolCells(hit);
+    const surround = (store.doc.songs[store.songIndex]?.surroundModel ?? 0) !== 0;
     const tools = this.pattern() && cells.length > 0
-      ? blockToolItems(this.hasSelection() ? this.selCols() : [subToCol(hit.sub)])
+      ? blockToolItems(this.hasSelection() ? this.selCols() : [subToCol(hit.sub)], { surround })
       : [];
 
     const pick = await showContextMenu(e.clientX, e.clientY, [items, tools]);
     if (isBlockTool(pick)) {
-      if (await runBlockTool(pick, { store, cells, scope: this.toolScope() })) {
+      const anchor = {
+        pat: this.patIdx, row: cells[0].row,
+        channel: this.cursor.ch ?? 0, rowLabel: String(cells[0].row),
+      };
+      if (await runBlockTool(pick, { store, cells, anchor, scope: this.toolScope() })) {
         this.refreshHeader();
         this.invalidate();
       }

@@ -188,6 +188,53 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   await sleep(60);
   for (let i = 0; i < 3; i++) { store.undo.undo(); await sleep(40); } // drop the seeds
 
+  // ── 6b. the Panner joins the panning column in a surround song ─────────
+  const { setSongScalarOp } = await import("../../src/doc/ops.js");
+  timeline.sel = null;
+  dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
+  check(rows(dlg)[1].join() === "pan",
+    "a stereo song's panning column offers the pan tool alone", rows(dlg)[1].join());
+  await dismiss(dlg);
+
+  store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
+  await sleep(120);
+  dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
+  check(rows(dlg)[1].join() === "pan,panner",
+    "a surround song adds the Panner beside it", rows(dlg)[1].join());
+  check(!win.document.getElementById("tbPanner").hidden,
+    "…on the same condition as the toolbox button");
+
+  // It opens the real popup and writes to the whole block.
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_PAN, row: 1, ch: 0, sub: E.SUB_PAN };
+  await dismiss(dlg);
+  dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
+  cell(dlg, "panner").click();
+  let pdlg = null;
+  for (let i = 0; i < 100 && !pdlg; i++) { pdlg = doc.querySelector("dialog.panner"); await sleep(30); }
+  check(!!pdlg, "the Panner popup opens from the menu");
+  if (pdlg) {
+    pdlg.__panner.setAngles(256, 0);
+    const placeBtn = [...pdlg.querySelectorAll("button")].find((b) => /^Place/.test(b.textContent));
+    const depth = store.undo.undoStack.length;
+    placeBtn.click();
+    await sleep(80);
+    const fx = (r) => timeline.cellAt(r, 0)?.cell;
+    check(fx(0).effect === 0x21 && fx(1).effect === 0x21,
+      "…and Place wrote the X command to BOTH selected rows",
+      `${fx(0).effect}/${fx(1).effect}`);
+    check(fx(4).effect !== 0x21, "…but not outside the block", String(fx(4).effect));
+    check(store.undo.undoStack.length === depth + 1, "…in one undo step");
+    pdlg.__panner.close();
+    await sleep(60);
+    store.undo.undo();
+    await sleep(60);
+    check(timeline.cellAt(0, 0).cell.effect !== 0x21, "…which undoes");
+  }
+  store.undo.undo(); // back to stereo
+  await sleep(120);
+  check((store.song.surroundModel ?? 0) === 0, "song back to stereo");
+  timeline.sel = null;
+
   // ── 7. the Patterns view carries the same second row ───────────────────
   win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F3", bubbles: true }));
   await sleep(250);

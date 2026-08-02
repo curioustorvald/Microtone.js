@@ -17,9 +17,9 @@
 import { ICON, fxGlyph } from "./icons.js";
 import { t } from "./i18n.js";
 import { showModal } from "./widgets/modal.js";
-import { COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX } from "./edit.js";
+import { COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, SUB_PAN } from "./edit.js";
 import { scaleVolumeAt, transformPanAt, changeInstrumentAt } from "../doc/patterntools.js";
-import { setCellsBytesOp, bulkNotesOp } from "../doc/ops.js";
+import { setCellsBytesOp, setCellsFieldsOp, bulkNotesOp } from "../doc/ops.js";
 import { cellToBytes } from "../doc/clipboard.js";
 import { transposePatternNotes, transposeUnitKeys } from "./pitchtables.js";
 import { FX_INFO } from "./palette.js";
@@ -56,14 +56,21 @@ const TOOL_ITEM = {
   volume: () => ({ id: "volume", label: t("ctx.volume"), icon: ICON.volume,
     title: t("ctx.volumeTitle") }),
   pan: () => ({ id: "pan", label: t("ctx.pan"), icon: ICON.pan, title: t("ctx.panTitle") }),
+  panner: () => ({ id: "panner", label: t("toolbox.panner").replace(/…$/, ""),
+    icon: ICON.panner, title: t("toolbox.pannerTitle") }),
 };
 
 /**
  * The second row for a set of logical columns (edit.js COL_*). One column gets
  * that column's tool — the effect column gets the quick palette instead. Several
  * columns get one tool each, effects excluded.
+ *
+ * `surround` adds the Panner beside the panning tool, on exactly the condition
+ * the toolbox button uses (the song declares a surround model): the two are the
+ * same popup, so they should appear and disappear together. A stereo song has
+ * no circle to place anything on.
  */
-export function blockToolItems(cols) {
+export function blockToolItems(cols, { surround = false } = {}) {
   if (cols.length === 1 && cols[0] === COL_FX) {
     return QUICK_FX.map((op) => {
       const info = FX_INFO[op];
@@ -75,6 +82,7 @@ export function blockToolItems(cols) {
   for (const col of cols) {
     const tool = TOOL_FOR_COL[col];
     if (tool) items.push(TOOL_ITEM[tool]());
+    if (col === COL_PAN && surround) items.push(TOOL_ITEM.panner());
   }
   return items;
 }
@@ -115,10 +123,11 @@ function applyCellBytes(ctx, fn) {
 /**
  * Run one second-row action.
  *
- * `ctx` is `{ store, cells, scope }` — `cells` a DEDUPED `[{pat, row}]` list
- * (the view builds it from its selection, or from the one clicked cell) and
- * `scope` the human label the modals put in their body text. Resolves true when
- * the document changed.
+ * `ctx` is `{ store, cells, scope, anchor }` — `cells` a DEDUPED `[{pat, row}]`
+ * list (the view builds it from its selection, or from the one clicked cell),
+ * `scope` the human label the modals put in their body text, and `anchor` the
+ * `{pat, row, channel, rowLabel}` the panner reads its starting position off.
+ * Resolves true when the document changed.
  */
 export async function runBlockTool(id, ctx) {
   if (id.startsWith("fx:")) return applyQuickFx(ctx, parseInt(id.slice(3), 10));
@@ -127,8 +136,36 @@ export async function runBlockTool(id, ctx) {
     case "instrument": return instrumentTool(ctx);
     case "volume": return volumeTool(ctx);
     case "pan": return panTool(ctx);
+    case "panner": return pannerTool(ctx);
   }
   return false;
+}
+
+/**
+ * Open the same Panner the toolbox opens, reading its starting position off the
+ * anchor cell — but writing to the whole block. Its four buttons each produce
+ * ONE answer (a placement, a target, a slide speed, a column position), so
+ * every cell in the block gets that same answer in one undo step, which is what
+ * a `Z` slide wants anyway: it has to be re-issued on every row it moves over.
+ */
+async function pannerTool(ctx) {
+  const { store, cells, anchor } = ctx;
+  const cell = store.doc.patternAt(store.songIndex, anchor.pat)?.[anchor.row];
+  if (!cell) return false;
+  const { showPanner } = await import("./popups/panner.js");
+  let changed = false;
+  await showPanner(store, {
+    sub: SUB_PAN,
+    channel: anchor.channel,
+    rowLabel: anchor.rowLabel,
+    wide: store.doc.wideCells === true,
+    cell,
+    apply: (fields) => {
+      store.undo.apply(setCellsFieldsOp(store.songIndex, cells, fields));
+      changed = true;
+    },
+  });
+  return changed;
 }
 
 /** Write an effect opcode across the cells, keeping each one's argument — the

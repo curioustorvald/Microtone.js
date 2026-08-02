@@ -176,7 +176,7 @@ palette of icon buttons:
 | **Paste** | Only on a cell that has a pattern, with something on the clipboard |
 | **Channel left** | Insert an empty channel *before* this one |
 | **Channel right** | Insert an empty channel *after* this one |
-| **New pattern** | Only on a cell whose cue leaves this channel empty: point the slot at the lowest unused pattern number and put the cursor there |
+| **New pattern** | Where the cue leaves a channel empty: point the slot at the lowest unused pattern number and put the cursor there. Over a block it fills **every** empty slot the block covers, one fresh pattern each, leaving the slots that already have one alone |
 
 A **second row** underneath carries the Patterns-view edit tools, aimed at the
 column you clicked (or, with a block selected, at the columns the block covers):
@@ -186,12 +186,15 @@ column you clicked (or, with a block selected, at the columns the block covers):
 | Note | **Transpose** — the same notation-aware shift as the Patterns toolbar |
 | Instrument | **Instrument** — replace instrument numbers |
 | Volume | **Volume** — rescale volumes |
-| Panning | **Panning** — widen / narrow / shift |
+| Panning | **Panning** — widen / narrow / shift; in a surround song a **Panner** cell sits beside it, opening the same dial as the toolbox button |
 | Effect | the eight most-used effect commands: **S** Special, **D** Volume slide, **G** Tone portamento, **H** Vibrato, **E** / **F** Pitch slide down / up, **O** Sample offset, **A** Set tick rate. Picking one writes the opcode and leaves the argument alone; everything else is in the command palette at the foot of the screen. |
 
 Each tool acts on the **selected block** — which on the Timeline may span
 channels and cross several patterns — or on the single cell you clicked when
-nothing is selected, in one undo step either way. A selection covering several
+nothing is selected, in one undo step either way. The Panner reads its starting
+position off the block's first cell and writes its answer to every cell in it,
+which is what a `Z` slide wants anyway: it has to be re-issued on every row it
+moves over. A selection covering several
 columns offers one tool per column but never the effect palette: picking an
 effect is a write, not a transform, and stamping one across a band that merely
 happens to include the effect column is never what was meant.
@@ -228,8 +231,9 @@ strip, and while it is hidden it costs no processing at all.
 **The panels.** A scope panel is a fixed size — its chooser, a square dial and a
 correlation bar — so how many of them you get is a question about your screen:
 two by default, more on a tall window, fewer on a short one. There is no
-arbitrary limit; the ceiling is simply one panel per view the song has, which on
-a spatial song means all six. Each panel's
+arbitrary limit; the ceiling is simply one panel per view the song has — all six
+on a spatial song, two on a stereo or planar one, since a third could only
+repeat what the panel beside it is already showing. Each panel's
 chooser picks what it shows, and its last entry, *Hide this panel*, drops **that
 panel** (the strip stays). **+** in the header adds one back whenever there is
 room, and hands it a view none of the others is using. A panel set to a view the
@@ -279,7 +283,10 @@ enough to compare from one moment to the next.
 
 Under each scope is the **correlation meter**, a thin bar growing out of the
 centre: nothing at all when the mix folds to mono cleanly, wider as the two
-sides disagree, full width when they are in anti-phase.
+sides disagree, full width when they are in anti-phase. It is measured over
+about half a second of audio and then eased, because correlation is a statistic
+and a fraction of a second is not enough of one — the bar moves at the speed of
+the music rather than twitching at every transient.
 
 **The meter** shows RMS and peak in one bar — the fill is the RMS, the line
 across it is the peak, held for a moment before it falls — with a clip light on
