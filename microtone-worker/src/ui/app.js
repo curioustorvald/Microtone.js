@@ -34,7 +34,7 @@ import { convertToTaud, converterFor, CONVERT_ACCEPT } from "../convert/convert.
 import { showImportProgress } from "./popups/importlog.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
-import { initTheme, toggleTheme, onThemeChange } from "./theme.js";
+import { initTheme, toggleTheme, onThemeChange, THEMES } from "./theme.js";
 import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
 import { unescapeName } from "./names.js";
 import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
@@ -43,9 +43,9 @@ initTheme(); // before any canvas paints (saved choice ?? OS preference)
 await initI18n(); // strings before any UI is built
 applyDom(); // translate the static index.html chrome
 {
-  // ?theme=dark|light overrides for this load (and persists like the toggle)
+  // ?theme=dark|dim|light overrides for this load (and persists like the toggle)
   const t = new URLSearchParams(location.search).get("theme");
-  if (t === "dark" || t === "light") {
+  if (THEMES.includes(t)) {
     const { applyTheme } = await import("./theme.js");
     applyTheme(t);
   }

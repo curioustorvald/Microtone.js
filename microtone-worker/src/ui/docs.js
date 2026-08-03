@@ -1,7 +1,8 @@
 // Documentation viewer controller (docs.html) — item 30. A standalone page in
 // the app's design language: a left TOC (document switcher + the current
-// document's headings) and centred content (max-width 960px). Light/dark theme
-// matches the main app (shared `microtone-theme` localStorage + data-theme).
+// document's headings) and centred content (max-width 960px). The theme
+// matches the main app — shared `microtone-theme` localStorage + data-theme,
+// the same three-way cycle and the same default.
 //
 // Six documents, all fetched from assets/ and rendered live: the User Manual
 // (USER_MANUAL.md), the Note Effects reference (TAUD_NOTE_EFFECTS.md), the
@@ -14,6 +15,8 @@
 import { renderMarkdown, extractToc } from "./markdown.js";
 
 // ── theme (mirror src/ui/theme.js, standalone) ──
+const THEMES = ["dark", "dim", "light"]; // cycle order, as in theme.js
+const DEFAULT_THEME = "dim";
 function applyTheme(name) {
   document.documentElement.dataset.theme = name;
   try { localStorage.setItem("microtone-theme", name); } catch { /* private mode */ }
@@ -21,8 +24,11 @@ function applyTheme(name) {
 function initTheme() {
   let saved = null;
   try { saved = localStorage.getItem("microtone-theme"); } catch { /* private mode */ }
-  applyTheme(saved ??
-    (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+  applyTheme(THEMES.includes(saved) ? saved : DEFAULT_THEME);
+}
+function cycleTheme() {
+  const i = THEMES.indexOf(document.documentElement.dataset.theme);
+  applyTheme(THEMES[(i + 1) % THEMES.length]);
 }
 
 const fetchDoc = (path) => async () => {
@@ -116,9 +122,7 @@ function fromHash() {
 
 // ── boot ──
 initTheme();
-document.getElementById("themeBtn").addEventListener("click", () => {
-  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-});
+document.getElementById("themeBtn").addEventListener("click", cycleTheme);
 const start = fromHash();
 selectDoc(start.id, start.anchor);
 window.addEventListener("hashchange", () => {

@@ -30,7 +30,7 @@ export default {
   "topbar.donateTitle": "Ko-fi로 개발을 후원하기",
   "topbar.sponsor": "스폰서",
   "topbar.sponsorTitle": "GitHub 스폰서 되기",
-  "topbar.themeTitle": "어두운/밝은 테마 전환",
+  "topbar.themeTitle": "테마 전환: 어두움 → 중간 → 밝음",
   "topbar.langTitle": "언어",
   "topbar.reloadTitle": "앱 새로고침 (페이지 다시 불러오기)",
   "topbar.helpTitle": "키보드 단축키 (?)",

@@ -33,7 +33,7 @@ export default {
   "topbar.donateTitle": "Support development on Ko-fi",
   "topbar.sponsor": "Sponsor",
   "topbar.sponsorTitle": "Become a GitHub Sponsor",
-  "topbar.themeTitle": "Toggle dark/light theme",
+  "topbar.themeTitle": "Cycle theme: dark → dim → light",
   "topbar.langTitle": "Language",
   "topbar.reloadTitle": "Reload the app (refresh the page)",
   "topbar.helpTitle": "Keyboard shortcuts (?)",

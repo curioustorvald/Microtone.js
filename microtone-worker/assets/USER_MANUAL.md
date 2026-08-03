@@ -1102,7 +1102,7 @@ hear, exactly as if you had played through the arming row.
 ## Tips
 
 - **No sound?** Click anywhere or press a key — browsers keep audio suspended until a user gesture. The top-bar badge shows the running sample rate.
-- **Interface language and theme** — the globe and theme buttons in the top bar; both persist. `?theme=dark` / `?theme=light` in the URL forces a theme.
+- **Interface language and theme** — the globe and theme buttons in the top bar; both persist. The theme button cycles dark → dim → light — dim is the default — and `?theme=dark` / `?theme=dim` / `?theme=light` in the URL forces one.
 - **Deep links** — `index.html?load=<url>` opens a `.taud` from a URL, and `player.html` is a minimal stand-alone player.
 - **Everything is local.** Clearing the browser's site data deletes your OPFS projects — export `.taud` files of anything you care about.
 

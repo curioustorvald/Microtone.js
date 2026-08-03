@@ -41,7 +41,7 @@
         // removed the element by the first poll; __splash.shown is the proof.
         log(`splash element present during boot: ${!!doc.getElementById("splash")}`);
         const theme = doc.documentElement.dataset.theme;
-        const themed = theme === "dark" || theme === "light";
+        const themed = ["dark", "dim", "light"].includes(theme);
         log(`early theme applied: ${themed} (${theme})`);
 
         await new Promise((resolve) => {

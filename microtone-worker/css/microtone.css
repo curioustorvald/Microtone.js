@@ -59,6 +59,60 @@
   --brand2: #eeeeee;
 }
 
+/* ── THEME: DIM — neutral grey, midway between dark and light ──────────
+ * Not "dark but lighter": the slate/blue cast is dropped so the ground reads
+ * as plain grey, which is what tells the two dark-ish themes apart at a
+ * glance. Ink stays light, so every accent is the dark theme's (they all keep
+ * enough contrast on a mid grey); only the tinted GROUNDS are re-mixed, each
+ * lifted by the same amount as the background. */
+:root[data-theme="dim"] {
+  /* chrome */
+  --bg: #2f3136;
+  --panel: #3a3d45;
+  --panel-2: #444753;
+  --fg: #e8e9ec;
+  --fg2: #bcc1cb;  /* lifted with --dim: key-offs must stay clear of empty cells */
+  --dim: #a4aab5;  /* +18% — a mid grey ground eats more of the inactive ink */
+  --accent: #ffc043;
+  --accent-2: #78DCE7;
+  --meter: #8be400;
+  --meter-bg: #4b4f55;
+  --border: #565b62;
+
+  /* status colours */
+  --ok-bg: #2e5c38;   --ok-fg: #9df0ae;
+  --err-bg: #6b3838;  --err-fg: #ffb0b0;
+  --rec-fg: #ff5c5c;  --rec-border: #8a4141;
+
+  /* canvas: pattern grids (Timeline / Cues / Patterns) */
+  --cv-bg: #34363b;
+  --cv-row-beat: #36393f;   /* less L* steps off the ground as the dark theme */
+  --cv-row-bar: #3f434b;    /* (−0.5 and +3.4): a mid grey shows a step MORE */
+  --cv-playhead: #4d4329;
+  --cv-cursor: #3a4f6b;
+  --cv-caret: #7d6224;
+  --cv-caret-nav: #3d6088;
+  --cv-cue-line: #656b74;
+  --cv-col-pan: #d495ff;
+  --cv-sel: #46617f;
+  --cv-ditto: #868c95;
+
+  /* canvas: samples / instruments */
+  --cv-wave: #4ddd7d;
+  --cv-wave-loop: #3e4557;
+  --cv-wave-mid: #5d636e;
+  --cv-wave-funk: #f5a623;
+  --cv-play-cursor: #f5a623;
+  --cv-env-line: #4aa3ff;
+  --cv-env-node: #f5a623;
+  --cv-env-sus: #3a4b3e;
+  --cv-env-loop: #4a476644;
+  --cv-live: #4ddd7d;
+
+  --brand: #ff4362;
+  --brand2: #eeeeee;
+}
+
 /* ── THEME: LIGHT (preliminary — tune freely) ─────────────────────────── */
 :root[data-theme="light"] {
   /* chrome */

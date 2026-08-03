@@ -8,9 +8,10 @@
   <meta name="description" content="A free browser music tracker for microtonal and spatial music — any tuning on a 4096-step pitch grid, sources anywhere on the sphere, ambisonic and stereo export.">
   <title>Microtone</title>
   <link rel="canonical" href="https://microtone.cc/">
-  <!-- Address-bar tint: the two --bg values from css/microtone.css. -->
-  <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#fafbfd" media="(prefers-color-scheme: light)">
+  <!-- Address-bar tint: the default theme's --bg from css/microtone.css. One
+       tag, because the OS preference no longer picks the theme; applyTheme()
+       rewrites it with the active --bg for whoever saved another one. -->
+  <meta name="theme-color" content="#2f3134">
   <!-- Link previews (Bluesky/Mastodon/Discord/Slack). og:image must be an
        ABSOLUTE URL and must live inside this directory — the deploy root is
        microtone-worker/, so the repo-root Screenshot1.png is not reachable;
@@ -52,14 +53,13 @@
   <script>
   (function () {
     "use strict";
-    // Early theme — the saved choice, else the OS preference (the same rule
-    // as theme.js initTheme, which re-applies the same value once the app
-    // boots), so neither the splash nor the first app paint flashes the
-    // wrong palette.
+    // Early theme — the saved choice, else "dim" (the same rule as theme.js
+    // initTheme, which re-applies the same value once the app boots), so
+    // neither the splash nor the first app paint flashes the wrong palette.
     var theme = null;
     try { theme = localStorage.getItem("microtone-theme"); } catch (e) { /* private mode */ }
-    document.documentElement.dataset.theme = theme ||
-      (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    if (["dark", "dim", "light"].indexOf(theme) < 0) theme = null; // THEMES
+    document.documentElement.dataset.theme = theme || "dim"; // DEFAULT_THEME
 
     var el = document.getElementById("splash");
     var grid = document.getElementById("splashGrid");

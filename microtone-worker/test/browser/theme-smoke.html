@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>theme cycle smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud&theme=dim" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Three themes (dark → dim → light): the ◐ button CYCLES rather than
+    // toggles, the choice persists, ?theme= accepts every name, the cached
+    // canvas palette re-reads on each switch (a stale cache would paint the
+    // grid in the old theme's colours) and the address-bar tint follows the
+    // ground. With nothing saved — or something unknown — the boot theme is
+    // DEFAULT_THEME, not the OS preference.
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const doc = win.document;
+        const root = doc.documentElement;
+        const theme = await win.eval('import("/src/ui/theme.js")');
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        // ?theme=dim reached the DOM and localStorage
+        const urlOk = root.dataset.theme === "dim" &&
+          win.localStorage.getItem("microtone-theme") === "dim";
+        log(`?theme=dim applied + persisted: ${urlOk ? "ok" : `FAIL (${root.dataset.theme})`}`);
+
+        // the button cycles dim → light → dark → dim, one step per click
+        const seen = [];
+        const grounds = new Set([theme.themeColors().cvBg]);
+        for (let i = 0; i < 3; i++) {
+          doc.getElementById("themeBtn").click();
+          await sleep(20);
+          seen.push(root.dataset.theme);
+          grounds.add(theme.themeColors().cvBg);
+        }
+        const cycleOk = seen.join(",") === "light,dark,dim";
+        log(`button cycles three themes: ${cycleOk ? "ok" : "FAIL"} (${seen.join(" → ")})`);
+
+        // every theme has its own canvas ground, and the cache followed
+        const cacheOk = grounds.size === 3;
+        log(`canvas palette re-read per theme: ${cacheOk ? "ok" : "FAIL"} (${[...grounds].join(" ")})`);
+
+        // <meta theme-color> carries the active background (both copies: the
+        // OS-preference media queries cannot express three themes)
+        const metas = [...doc.querySelectorAll('meta[name="theme-color"]')];
+        const bg = theme.themeColors().bg;
+        const metaOk = metas.length > 0 && metas.every((m) => m.content === bg);
+        log(`meta theme-color follows the ground: ${metaOk ? "ok" : "FAIL"} (${bg} vs ${metas.map((m) => m.content).join(",")})`);
+
+        // no saved value (and a garbage one) boots the default, whatever the
+        // OS asks for — the headless host reports prefers-color-scheme: light
+        win.localStorage.removeItem("microtone-theme");
+        theme.initTheme();
+        const defaultOk = root.dataset.theme === theme.DEFAULT_THEME && theme.DEFAULT_THEME === "dim";
+        log(`no saved theme boots the default: ${defaultOk ? "ok" : "FAIL"} (${root.dataset.theme})`);
+
+        win.localStorage.setItem("microtone-theme", "chartreuse");
+        theme.initTheme();
+        const fallbackOk = root.dataset.theme === theme.DEFAULT_THEME;
+        log(`unknown saved theme falls back: ${fallbackOk ? "ok" : "FAIL"} (${root.dataset.theme})`);
+
+        // leave the tree as we found it
+        theme.applyTheme("dark");
+
+        const pass = urlOk && cycleOk && cacheOk && metaOk && defaultOk && fallbackOk;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

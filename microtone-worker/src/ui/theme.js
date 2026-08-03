@@ -1,8 +1,17 @@
 // Theme system. ALL colours — DOM and canvas — live in css/microtone.css as
-// custom properties under the two clearly-marked THEME blocks; edit them
-// there. This module reads the variables once per theme switch into a cached
-// object the canvas views use every frame (getComputedStyle is too slow for
-// per-frame reads).
+// custom properties under the clearly-marked THEME blocks; edit them there.
+// This module reads the variables once per theme switch into a cached object
+// the canvas views use every frame (getComputedStyle is too slow for per-frame
+// reads).
+//
+// THEMES is the cycle order of the ◐ button, ordered by ground lightness
+// (dark → dim → light → dark), and is also the whitelist for the saved value
+// and the ?theme= URL override. `dim` is the DEFAULT and a light-ink theme
+// like `dark`, which is what isDarkTheme() answers for anything that shades
+// against the ground.
+
+export const THEMES = ["dark", "dim", "light"];
+export const DEFAULT_THEME = "dim";
 
 const VAR_KEYS = {
   // DOM palette (also used by canvas for text/accents)
@@ -41,7 +50,13 @@ const _listeners = new Set();
 export function onThemeChange(fn) { _listeners.add(fn); }
 
 export function currentTheme() {
-  return document.documentElement.dataset.theme ?? "dark";
+  const name = document.documentElement.dataset.theme;
+  return THEMES.includes(name) ? name : "dark";
+}
+
+/** True for the light-ink themes (dark and dim) — see the header note. */
+export function isDarkTheme() {
+  return currentTheme() !== "light";
 }
 
 export function applyTheme(name) {
@@ -49,18 +64,27 @@ export function applyTheme(name) {
   try { localStorage.setItem("microtone-theme", name); } catch { /* private mode */ }
   _cache = null;
   themeColors(); // re-read eagerly
+  // The address-bar tint follows the ground. The two <meta> tags are keyed to
+  // the OS preference, which cannot express three themes — so both carry the
+  // active background and whichever one matches is right.
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    meta.content = _cache.bg;
+  }
   for (const fn of _listeners) fn(name);
 }
 
+/** Advance one step along THEMES (wraps). */
 export function toggleTheme() {
-  applyTheme(currentTheme() === "dark" ? "light" : "dark");
+  applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]);
 }
 
-/** Boot-time theme: saved choice, else the OS preference. */
+/**
+ * Boot-time theme: the saved choice, else DEFAULT_THEME. The OS preference is
+ * deliberately not consulted — dim is the app's look, and every visitor should
+ * see the same one until they pick otherwise (2026-08-03).
+ */
 export function initTheme() {
   let saved = null;
   try { saved = localStorage.getItem("microtone-theme"); } catch { /* private mode */ }
-  const name = saved ??
-    (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
-  applyTheme(name);
+  applyTheme(THEMES.includes(saved) ? saved : DEFAULT_THEME);
 }
