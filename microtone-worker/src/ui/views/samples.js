@@ -7,6 +7,9 @@ import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
+import { encodeU8Wav } from "../../audio/wavwrite.js";
+import { download } from "../../storage/import-export.js";
+import { sanitiseName } from "../../audio/stem-export.js";
 import { t } from "../i18n.js";
 
 /** Waveform canvas height PER CHANNEL (px). */
@@ -76,7 +79,14 @@ export class SamplesView {
     this.chordBtn.textContent = t("smp.chord");
     this.chordBtn.title = t("smp.chordTitle");
     this.chordBtn.addEventListener("click", () => this.openInLab(true));
-    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.chordBtn, this.newInstBtn);
+    // "Export" downloads the selected pooled sample as a WAV file — its
+    // current committed bytes, 8-bit PCM straight out of the pool (bit-exact,
+    // no requantisation).
+    this.exportBtn = document.createElement("button");
+    this.exportBtn.textContent = t("smp.export");
+    this.exportBtn.title = t("smp.exportTitle");
+    this.exportBtn.addEventListener("click", () => this.exportSample());
+    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.chordBtn, this.exportBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);
@@ -115,6 +125,15 @@ export class SamplesView {
       openChord,
     });
     if (res) this.cb.onNewInstrument?.(res.firstSlot);
+  }
+
+  exportSample() {
+    const s = this.list?.[this.selected];
+    const doc = this.store.doc;
+    if (!s || !doc?.sampleBin) return;
+    const chans = sampleSpans(s).map((sp) => doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len));
+    const bytes = encodeU8Wav(chans, s.rate);
+    download(bytes, `${sanitiseName(s.name, `sample_${String(s.index).padStart(3, "0")}`)}.wav`);
   }
 
   refresh() {

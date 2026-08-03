@@ -150,3 +150,54 @@ export function encodeWavBuffer(f32, opts) {
   for (const b of blocks) { out.set(b, o); o += b.length; }
   return out;
 }
+
+/**
+ * Encode a pooled sample's channel bytes (already unsigned 8-bit PCM, centre
+ * 0x80) as a complete WAV file — bit-exact, no requantisation. `channels` is
+ * one Uint8Array per channel (mono, or L/R for a stereo pair), all the same
+ * length. Used by the sample export buttons (Samples view, sample editor).
+ */
+export function encodeU8Wav(channels, rate) {
+  const nCh = channels.length;
+  const frames = channels[0]?.length ?? 0;
+  const data = new Uint8Array(frames * nCh);
+  if (nCh === 1) {
+    data.set(channels[0]);
+  } else {
+    for (let c = 0; c < nCh; c++) {
+      const ch = channels[c];
+      for (let i = 0; i < frames; i++) data[i * nCh + c] = ch[i];
+    }
+  }
+  const fmt = riffChunk("fmt ", fmtPayload({ channels: nCh, sampleRate: rate, bits: 8 }));
+  const dataChunk = riffChunk("data", data);
+  const head = new Uint8Array(12);
+  head.set(ascii("RIFF"), 0);
+  new DataView(head.buffer).setUint32(4, 4 + fmt.length + dataChunk.length, true);
+  head.set(ascii("WAVE"), 8);
+  const out = new Uint8Array(head.length + fmt.length + dataChunk.length);
+  out.set(head, 0);
+  out.set(fmt, head.length);
+  out.set(dataChunk, head.length + fmt.length);
+  return out;
+}
+
+/**
+ * Encode channels (array of Float32Array, nominal ±1) as a WAV file at `bits`
+ * depth (16 or 24) — for editors whose working buffer is float (the Sample
+ * Lab's original/edited take).
+ */
+export function encodeFloatWav(channels, rate, bits = 16) {
+  const nCh = channels.length;
+  const frames = channels[0]?.length ?? 0;
+  const interleaved = new Float32Array(frames * nCh);
+  if (nCh === 1) {
+    interleaved.set(channels[0]);
+  } else {
+    for (let c = 0; c < nCh; c++) {
+      const ch = channels[c];
+      for (let i = 0; i < frames; i++) interleaved[i * nCh + c] = ch[i];
+    }
+  }
+  return encodeWavBuffer(interleaved, { channels: nCh, sampleRate: rate, bits });
+}

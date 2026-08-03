@@ -12,6 +12,9 @@
 import { setInstBytesOp, setSampleBytesOp, multiSampleBytesOp, setSectionOp } from "../../doc/ops.js";
 import { normalise, fadeIn, fadeOut, reverse, invert, removeDC, applyChannels } from "../../doc/sampledsp.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
+import { encodeU8Wav } from "../../audio/wavwrite.js";
+import { download } from "../../storage/import-export.js";
+import { sanitiseName } from "../../audio/stem-export.js";
 import { themeColors } from "../theme.js";
 import { hex2 } from "../notenames.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -29,6 +32,9 @@ const MARKERS = [
 export function openSampleDspEditor(store, sample) {
   return new Promise((resolve) => {
     const doc = store.doc;
+    // Snapshot BEFORE any DSP op runs this session — pool bytes mutate live as
+    // the buttons below are clicked, so "export original" needs its own copy.
+    const originalBytes = sampleSpans(sample).map((sp) => doc.sampleBin.slice(sp.ptr, sp.ptr + sp.len));
     const shell = buildShell(store, {
       title: `Sample ${String(sample.index).padStart(3, "0")} — ${unescapeName(sample.name) || "(unnamed)"}`,
       info: t("smp.dspNote", { len: sample.len, rate: sample.rate }) +
@@ -99,6 +105,25 @@ export function openSampleDspEditor(store, sample) {
       loopStart: sample.loopStart, loopEnd: sample.loopEnd, loopMode: sample.loopMode,
       chanPtr2: sample.chanPtrs?.[0] ?? 0, chanMode: sample.chanMode ?? 0,
     })));
+
+    // Export: original = the pre-session snapshot above; edited = the pool's
+    // current bytes at this sample's spans (whatever the DSP buttons left it as).
+    const exportOrigBtn = document.createElement("button");
+    exportOrigBtn.textContent = t("smp.exportOriginal");
+    exportOrigBtn.title = t("smp.exportOriginalTitle");
+    exportOrigBtn.addEventListener("click", () => {
+      const bytes = encodeU8Wav(originalBytes, sample.rate);
+      download(bytes, `${sanitiseName(sample.name, "sample")}-original.wav`);
+    });
+    const exportEditedBtn = document.createElement("button");
+    exportEditedBtn.textContent = t("smp.exportEdited");
+    exportEditedBtn.title = t("smp.exportEditedTitle");
+    exportEditedBtn.addEventListener("click", () => {
+      const chans = sampleSpans(sample).map((sp) => doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len));
+      const bytes = encodeU8Wav(chans, sample.rate);
+      download(bytes, `${sanitiseName(sample.name, "sample")}-edited.wav`);
+    });
+    opRow.append(exportOrigBtn, exportEditedBtn);
 
     shell.dlg.insertBefore(nameRow, shell.btnRow);
     shell.dlg.insertBefore(opRow, shell.btnRow);

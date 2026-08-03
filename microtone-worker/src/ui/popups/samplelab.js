@@ -29,6 +29,9 @@ import {
   detectTransients, chunksFromSplits, planFit, fitToBudget, quantiseU8,
   TARGET_RATE_MAX,
 } from "../../doc/wavelab.js";
+import { encodeFloatWav } from "../../audio/wavwrite.js";
+import { download } from "../../storage/import-export.js";
+import { sanitiseName } from "../../audio/stem-export.js";
 import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
 import { escapeNonAscii } from "../names.js";
@@ -75,6 +78,9 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     // length question, since the channels are always the same length.
     let chans = srcChans.slice(0, 2).map((c) => Float32Array.from(c));
     let buf = chans[0];
+    // Fixed snapshot of the take as it was opened — "export original" stays
+    // this regardless of edits made to `chans` for the rest of the session.
+    const originalChans = chans.map((c) => Float32Array.from(c));
     const setChans = (next) => { chans = next; buf = chans[0]; };
     const isStereo = () => chans.length === 2;
     const srcRate = Math.max(1, Math.round(rate));
@@ -147,6 +153,9 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         <button class="lab-chord" title="${esc(t("lab.chordTitle"))}">${esc(t("lab.chord"))}</button>
         <span class="lab-sep"></span>
         <button class="lab-chans" title="${esc(t("lab.channelsTitle"))}"></button>
+        <span class="lab-sep"></span>
+        <button class="lab-exp-orig" title="${esc(t("lab.exportOriginalTitle"))}">${esc(t("lab.exportOriginal"))}</button>
+        <button class="lab-exp-edit" title="${esc(t("lab.exportEditedTitle"))}">${esc(t("lab.exportEdited"))}</button>
       </div>
       <div class="lab-eq" hidden>
         <div class="lab-eqbands"></div>
@@ -712,6 +721,15 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       e.preventDefault();
       setChannelCount(isStereo() ? 1 : 2);
     });
+
+    // ── export (download the working buffer as a WAV, original or edited) ──
+    function exportTake(chansArg, suffix) {
+      const nm = nameInput.value.trim() || name || t("lab.untitled");
+      const bytes = encodeFloatWav(chansArg, srcRate, 16);
+      download(bytes, `${sanitiseName(nm)}-${suffix}.wav`);
+    }
+    $(".lab-exp-orig").addEventListener("click", (e) => { e.preventDefault(); exportTake(originalChans, "original"); });
+    $(".lab-exp-edit").addEventListener("click", (e) => { e.preventDefault(); exportTake(chans, "edited"); });
 
     // ── audition (Web Audio on the working buffer — it is not pooled yet) ──
     function playPos() {

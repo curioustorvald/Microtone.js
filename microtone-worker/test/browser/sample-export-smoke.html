@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sample export smoke: Samples view / sample editor / Sample Lab download buttons</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- No AudioContext needed here (no audition/playback exercised), but the
+       app still boots through the worklet path, so give it real time:
+         python3 tools/test-server.py &   # repo server + /hang on :8932
+         chromium --headless=new --autoplay-policy=no-user-gesture-required \
+           --dump-dom --timeout=45000 \
+           http://localhost:8932/test/browser/sample-export-smoke.html -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, name) => log(`${name}: ${cond ? "ok" : "FAIL"}`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const waitFor = async (fn, ms = 15000) => {
+      const t0 = Date.now();
+      for (;;) {
+        const v = fn();
+        if (v) return v;
+        if (Date.now() - t0 > ms) throw new Error("waitFor timeout");
+        await sleep(50);
+      }
+    };
+    const findBtn = (root, re) => [...root.querySelectorAll("button")].find((b) => re.test(b.textContent));
+    const bytesEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    // Minimal RIFF/WAVE reader for the fmt/data chunks the export buttons emit.
+    function parseWav(bytes) {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let offset = 12, fmt = null, data = null;
+      while (offset + 8 <= bytes.length) {
+        const id = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+        const size = dv.getUint32(offset + 4, true);
+        const payload = offset + 8;
+        if (id === "fmt ") {
+          fmt = { channels: dv.getUint16(payload + 2, true), rate: dv.getUint32(payload + 4, true), bits: dv.getUint16(payload + 14, true) };
+        } else if (id === "data") {
+          data = bytes.slice(payload, payload + size);
+        }
+        offset = payload + size + (size & 1);
+      }
+      return { fmt, data };
+    }
+    function interleaveU8(chans) {
+      const nCh = chans.length, frames = chans[0].length;
+      const out = new Uint8Array(frames * nCh);
+      if (nCh === 1) out.set(chans[0]);
+      else for (let c = 0; c < nCh; c++) for (let i = 0; i < frames; i++) out[i * nCh + c] = chans[c][i];
+      return out;
+    }
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        }, 30000);
+        const { store } = win.__microtone;
+        win.alert = () => {};
+        win.confirm = () => true;
+        log("app loaded");
+
+        // capture downloads instead of letting them hit the filesystem
+        let captured = null;
+        const realCreate = win.URL.createObjectURL;
+        win.URL.createObjectURL = (blob) => { captured = blob; return "blob:stub"; };
+
+        const { sampleSpans } = await win.eval('import("/src/doc/document.js")');
+        const { openSampleDspEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
+        const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+
+        // ── leg A: Samples view "Export ⬇" button ──────────────────────────
+        win.document.querySelector('#tabs button[data-view="samples"]').click();
+        await sleep(200);
+        const list = store.doc.sampleList();
+        ok(list.length > 0, "a0 corpus has samples");
+        const s0 = list[0];
+
+        const exportBtn = findBtn(win.document.querySelector(".smp-toolbar"), /Export/i);
+        ok(!!exportBtn, "a1 Samples view has an Export button");
+        captured = null;
+        exportBtn.click();
+        ok(!!captured, "a2 clicking it produced a downloadable blob");
+        const bytesA = new Uint8Array(await captured.arrayBuffer());
+        const parsedA = parseWav(bytesA);
+        ok(parsedA.fmt && parsedA.fmt.bits === 8 && parsedA.fmt.rate === s0.rate,
+          `a3 8-bit PCM at the sample's own rate (got ${JSON.stringify(parsedA.fmt)})`);
+        const expectedA = interleaveU8(sampleSpans(s0).map((sp) => store.doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)));
+        ok(bytesEqual(parsedA.data, expectedA), "a4 exported bytes are bit-exact with the pool");
+
+        // ── leg B: sample editor's Export original / Export edited ─────────
+        const beforeB = win.eval("__microtone.store.doc.toBytes()");
+        const pEditor = openSampleDspEditor(store, s0);
+        const dlg = await waitFor(() => win.document.querySelector(".sample-editor"));
+        const origBtn = findBtn(dlg, /Export original/i);
+        const editedBtn = findBtn(dlg, /Export edited/i);
+        ok(!!origBtn && !!editedBtn, "b1 sample editor has both export buttons");
+
+        captured = null;
+        origBtn.click();
+        const origBytesB = new Uint8Array(await captured.arrayBuffer());
+        const parsedOrigB = parseWav(origBytesB);
+        ok(bytesEqual(parsedOrigB.data, expectedA), "b2 export-original matches the pre-edit pool bytes");
+
+        const invertBtn = findBtn(dlg, /^Invert$/);
+        ok(!!invertBtn, "b3 found the Invert DSP button");
+        invertBtn.click();
+
+        captured = null;
+        editedBtn.click();
+        const editedBytesB = new Uint8Array(await captured.arrayBuffer());
+        const parsedEditedB = parseWav(editedBytesB);
+        const liveChansB = interleaveU8(sampleSpans(s0).map((sp) => store.doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)));
+        ok(bytesEqual(parsedEditedB.data, liveChansB), "b4 export-edited matches the live pool bytes after Invert");
+        ok(!bytesEqual(parsedEditedB.data, parsedOrigB.data), "b5 edited export differs from the original export");
+
+        // export-original stays fixed even after the in-session edit
+        captured = null;
+        origBtn.click();
+        const origBytesB2 = new Uint8Array(await captured.arrayBuffer());
+        ok(bytesEqual(origBytesB2, origBytesB), "b6 export-original is unaffected by the later Invert");
+
+        const cancelBtn = findBtn(dlg, /^Cancel$/);
+        cancelBtn.click();
+        await pEditor;
+        const afterB = win.eval("__microtone.store.doc.toBytes()");
+        ok(afterB.length === beforeB.length && afterB.every((v, i) => v === beforeB[i]),
+          "b7 Cancel rolled the Invert back — doc byte-identical to before the editor opened");
+
+        // ── leg C: Sample Lab's Export original / Export edited ────────────
+        const rate = 8000;
+        const data = new win.Float32Array(200);
+        for (let i = 0; i < data.length; i++) data[i] = Math.sin((2 * Math.PI * 5 * i) / data.length) * 0.5;
+        const pLab = openSampleLab(store, { data, rate, name: "export-smoke" });
+        const labDlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const lab = labDlg.__lab;
+
+        const origLabBtn = findBtn(labDlg, /Export original/i);
+        const editedLabBtn = findBtn(labDlg, /Export edited/i);
+        ok(!!origLabBtn && !!editedLabBtn, "c1 Sample Lab has both export buttons");
+
+        captured = null;
+        origLabBtn.click();
+        const origBytesC = new Uint8Array(await captured.arrayBuffer());
+        const parsedOrigC = parseWav(origBytesC);
+        ok(parsedOrigC.fmt && parsedOrigC.fmt.bits === 16 && parsedOrigC.fmt.channels === 1 && parsedOrigC.fmt.rate === rate,
+          `c2 16-bit mono WAV at the take's own rate (got ${JSON.stringify(parsedOrigC.fmt)})`);
+        ok(parsedOrigC.data.length === data.length * 2, "c3 correct byte length for 16-bit mono");
+
+        lab.gainDb(-6); // mutate the working buffer
+        captured = null;
+        editedLabBtn.click();
+        const editedBytesC = new Uint8Array(await captured.arrayBuffer());
+        ok(!bytesEqual(editedBytesC, origBytesC), "c4 edited export differs after a gain change");
+
+        captured = null;
+        origLabBtn.click();
+        const origBytesC2 = new Uint8Array(await captured.arrayBuffer());
+        ok(bytesEqual(origBytesC2, origBytesC), "c5 export-original stays fixed regardless of the later edit");
+
+        lab.cancel();
+        await pLab;
+
+        win.URL.createObjectURL = realCreate;
+
+        log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
+      } catch (err) {
+        log("ERROR: " + err.message + "\n" + err.stack);
+      }
+    })();
+  </script>
+</body>
+</html>

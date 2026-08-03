@@ -1210,7 +1210,10 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   border: 1px solid var(--border);
   border-radius: 4px;
 }
-.smp-toolbar { padding: 0.3rem 0.6rem 0; }
+.smp-toolbar {
+  display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
+  padding: 0.3rem 0.6rem; margin: 0 0 0.5rem;
+}
 
 /* ── Sample Lab (items 83/84) ── */
 .samplelab-modal { max-width: min(1280px, 94vw); }

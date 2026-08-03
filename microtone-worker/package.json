@@ -1,7 +1,7 @@
 {
   "name": "microtone-js",
-  "version": "0.1.0",
-  "description": "Web port of the TSVM Taud tracker engine and the Microtone tracker",
+  "version": "1.0.16",
+  "description": "A microtonal and spatial music tracker for your web browser",
   "type": "module",
   "private": true,
   "scripts": {
