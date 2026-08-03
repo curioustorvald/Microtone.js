@@ -12,7 +12,10 @@ import { lookahead } from "../edit.js";
 import { makeCueBlock, cueBlockIndex, mergeCueWord } from "../../doc/clipboard.js";
 import { showModal } from "../widgets/modal.js";
 import { showContextMenu } from "../widgets/contextmenu.js";
-import { clipboardItems, channelItems, newPatternItem, insertChannelAt } from "../gridmenu.js";
+import {
+  clipboardItems, channelItems, newPatternItem, insertChannelAt,
+  patternSlotItems, isPatternSlotItem, moveSlots, duplicateSlots,
+} from "../gridmenu.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
@@ -356,10 +359,15 @@ export class CuesView {
       ...channelItems(ch, chans),
     ];
     if (emptySlot) items.push(newPatternItem());
+    // …and a slot that HAS one can send it sideways or unshare it (item 103.1),
+    // which here is the same cue-word arithmetic the Timeline does.
+    items.push(...patternSlotItems(store, slots));
 
     // The Cues grid holds pattern NUMBERS, not note cells, so it has no second
     // row: none of the column tools has anything to act on here.
-    switch (await showContextMenu(e.clientX, e.clientY, [items])) {
+    const pick = await showContextMenu(e.clientX, e.clientY, [items]);
+    if (isPatternSlotItem(pick)) { this.runSlotItem(pick, slots); return; }
+    switch (pick) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
       case "paste":
@@ -376,6 +384,27 @@ export class CuesView {
 
   insertChannel(at) {
     if (insertChannelAt(this.store, at)) this.invalidate();
+  }
+
+  /** Move / duplicate the patterns in `slots` (item 103.1). A move carries the
+   *  selection along so the block can be walked channel by channel — clamped,
+   *  because only the block's FILLED slots had to have somewhere to go, and a
+   *  selection can reach past them into empty channels. */
+  runSlotItem(id, slots) {
+    const dir = id === "movLeft" ? -1 : 1;
+    const ok = id === "dupPat"
+      ? duplicateSlots(this.store, slots)
+      : moveSlots(this.store, slots, dir);
+    if (!ok) return;
+    if (id !== "dupPat" && this.sel) {
+      const last = this.store.doc.channelCount - 1;
+      this.sel = {
+        ...this.sel,
+        aCh: clampInt(this.sel.aCh + dir, 0, last),
+        ch: clampInt(this.sel.ch + dir, 0, last),
+      };
+    }
+    this.invalidate();
   }
 
   /** The (cue, channel) slots a block covers — the selection, else the one cell

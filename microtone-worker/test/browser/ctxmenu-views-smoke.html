@@ -42,6 +42,10 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
   // test/browser/ctxtools-smoke.html.
   const ids = (dlg) => [...dlg.querySelectorAll(".ctx-row:first-child .ctx-cell")]
     .map((c) => c.dataset.id);
+  // The filled-slot cells (item 103.1) ride along on every menu opened over a
+  // slot with a pattern in it; they get their own leg below, so the clipboard
+  // and insert checks look at the row only as far as the channel inserts.
+  const clipIds = (dlg) => { const a = ids(dlg); return a.slice(0, a.indexOf("insRight") + 1); };
   const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
   const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
 
@@ -64,7 +68,7 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
   let dlg = await menuOn(cueCv, cueX(2), cueY(0));
   check(!!dlg, "right-click on a cue cell opens the menu");
   if (!dlg) { log(`\n${fails} FAILED`); return; }
-  check(ids(dlg).join() === "insLeft,insRight",
+  check(clipIds(dlg).join() === "insLeft,insRight",
     "a filled slot with nothing selected = the two channel inserts", ids(dlg).join());
   await dismiss(dlg);
 
@@ -99,7 +103,7 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
   await sleep(60);
   cuesView.sel = { aCue: 0, aCh: 0, cue: 1, ch: 1 };
   dlg = await menuOn(cueCv, cueX(0), cueY(0));
-  check(ids(dlg).join() === "copy,cut,insLeft,insRight",
+  check(clipIds(dlg).join() === "copy,cut,insLeft,insRight",
     "a selection adds Copy and Cut", ids(dlg).join());
   cell(dlg, "copy").click();
   await sleep(80);
@@ -191,6 +195,50 @@ window.addEventListener('error', (e) => log('ERROR ' + e.message));
   store.undo.undo();
   await sleep(60);
   cuesView.sel = null;
+
+  // ── Move / Duplicate from the Cues grid (item 103.1) ───────────────────
+  // The same cue-word arithmetic as the Timeline, driven from the other view.
+  cuesView.sel = null;
+  const seedCue = async (nums) => {
+    store.undo.apply(setCues(store.songIndex, nums.map((n, ch) => ({
+      cue: 3, ch, value: (store.song.cues[3][ch] & 0x8000) | (n === null ? 0x7fff : n),
+    }))));
+    await sleep(60);
+  };
+  await seedCue([0x0011, null, 0x0022]);
+
+  dlg = await menuOn(cueCv, cueX(0), cueY(3));
+  check(ids(dlg).includes("movRight") && !ids(dlg).includes("movLeft"),
+    "channel 0 of a cue can only move right", ids(dlg).join());
+  const cueInstsBefore = cueInsts().join("|");
+  cell(dlg, "movRight").click();
+  await sleep(80);
+  check(cuePat(3, 1) === 0x0011 && cuePat(3, 0) === 0x7fff,
+    "the pattern moved one channel right",
+    `${cuePat(3, 0).toString(16)}/${cuePat(3, 1).toString(16)}`);
+  check(cueInsts().join("|") === cueInstsBefore, "cue instruction words survive the move");
+  store.undo.undo();
+  await sleep(60);
+  check(cuePat(3, 0) === 0x0011, "…and it undoes");
+
+  const cueFree = store.song.firstFreePattern();
+  dlg = await menuOn(cueCv, cueX(2), cueY(3));
+  cell(dlg, "dupPat").click();
+  await sleep(100);
+  check(cuePat(3, 2) === cueFree, "Duplicate points the slot at a fresh pattern number",
+    `$${cuePat(3, 2).toString(16)} vs $${cueFree.toString(16)}`);
+  store.undo.undo();
+  await sleep(60);
+  check(cuePat(3, 2) === 0x0022, "…and the duplicate undoes");
+
+  // The empty slot between them offers neither.
+  dlg = await menuOn(cueCv, cueX(1), cueY(3));
+  check(!ids(dlg).includes("movLeft") && !ids(dlg).includes("movRight") &&
+    !ids(dlg).includes("dupPat"),
+    "an empty slot has nothing to move or duplicate", ids(dlg).join());
+  await dismiss(dlg);
+  store.undo.undo(); // drop the seed
+  await sleep(60);
 
   // A single-cell drag is a selection here too.
   cuesView.sel = null;

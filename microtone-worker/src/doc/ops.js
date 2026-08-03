@@ -12,6 +12,38 @@ import { parsePatchesBlob } from "../engine/inst.js";
 import { TaudPlayData } from "../engine/state.js";
 import { CUE_EMPTY, MAX_VOICES, NUM_CUES, NUM_CUES_64 } from "../format/taud-const.js";
 
+/**
+ * Run several ops as ONE undo step — the combinator, not an op of its own.
+ *
+ * Each sub-op's `dirty` is collected DURING the pass, immediately after that
+ * op's own apply, because some of them read the post-apply document (a pattern
+ * append reports `length - 1`); collecting them all at the end would ask the
+ * later ops' questions of an already-further-changed doc. The inverse is the
+ * sub-inverses in reverse order, which is the only order that unwinds an op
+ * whose target was created by an earlier one.
+ *
+ * `coalesceKey` is null and the gesture id defaults to null, so a composite
+ * never merges into the step before it — the whole point is that it IS one step.
+ */
+export function compositeOp(ops, gestureId = null) {
+  return {
+    type: "composite",
+    ops, gestureId,
+    coalesceKey: null,
+    apply(doc) {
+      const inverses = [];
+      const tags = [];
+      for (const op of ops) {
+        inverses.push(op.apply(doc));
+        tags.push(...op.dirty(doc));
+      }
+      this._tags = tags;
+      return compositeOp(inverses.reverse(), gestureId);
+    },
+    dirty() { return this._tags ?? []; },
+  };
+}
+
 export function setCellOp(song, pat, row, fields, gestureId = null) {
   return {
     type: "setCell",
@@ -520,18 +552,7 @@ export function appendPatternOp(song, bytes, gestureId = null) {
     song, bytes, gestureId,
     coalesceKey: `addpat:${song}`,
     apply(doc) {
-      const rows = new Array(64);
-      const wide = doc.wideCells === true;
-      const n = wide ? 16 : 8;
-      for (let r = 0; r < 64; r++) {
-        const cell = new TaudPlayData();
-        for (let b = 0; b < n; b++) {
-          if (wide) cell.setByteWide(b, bytes[r * n + b]);
-          else cell.setByte(b, bytes[r * n + b]);
-        }
-        rows[r] = cell;
-      }
-      doc.songs[song].patterns.push(rows);
+      doc.songs[song].patterns.push(decodePatternImage(doc, bytes));
       doc.dirty = true;
       return removeLastPatternOp(song, gestureId);
     },
@@ -563,6 +584,73 @@ function removeLastPatternOp(song, gestureId = null) {
     // post-apply: the removed index (patternBytes serves an empty image for
     // it, so the sync flush blanks the worklet's copy)
     dirty: (doc) => [{ kind: "pattern", song, pat: doc.songs[song].patterns.length }],
+  };
+}
+
+/** Decode a whole-pattern image into 64 cells, in the doc's own layout (§5.5). */
+function decodePatternImage(doc, bytes) {
+  const wide = doc.wideCells === true;
+  const n = wide ? 16 : 8;
+  const rows = new Array(64);
+  for (let r = 0; r < 64; r++) {
+    const cell = new TaudPlayData();
+    for (let b = 0; b < n; b++) {
+      if (wide) cell.setByteWide(b, bytes[r * n + b]);
+      else cell.setByte(b, bytes[r * n + b]);
+    }
+    rows[r] = cell;
+  }
+  return rows;
+}
+
+/**
+ * Materialise pattern `pat` — any number, not just the next one — with a whole
+ * 64-cell image. This is the grid's Duplicate: it hands a cue slot its own copy
+ * of a shared pattern, and the copy's number comes from freePatternNumbers(),
+ * which with item 48's null gaps is generally NOT `patterns.length`.
+ *
+ * Create/destroy, not overwrite, which is what sets it apart from
+ * setPatternBytesOp: the inverse takes the pattern back OUT of the array and
+ * pops the null padding this added, so undoing a duplicate leaves the document
+ * byte-identical instead of leaving an empty pattern behind for the serialiser
+ * to write out.
+ */
+export function createPatternOp(song, pat, bytes, gestureId = null) {
+  return {
+    type: "createPattern",
+    song, pat, bytes, gestureId,
+    coalesceKey: `mkpat:${song}:${pat}`,
+    apply(doc) {
+      const pats = doc.songs[song].patterns;
+      const oldLen = pats.length;
+      const prev = pats[pat] ?? null;
+      for (let i = pats.length; i < pat; i++) pats[i] = null;
+      pats[pat] = decodePatternImage(doc, bytes);
+      doc.dirty = true;
+      return dropPatternOp(song, pat, prev, oldLen, gestureId);
+    },
+    dirty: () => [{ kind: "pattern", song, pat }],
+  };
+}
+
+/** Inverse of createPatternOp: put back whatever index `pat` held (a pattern,
+ *  or the null gap it was), then shrink the array to the length it had. */
+function dropPatternOp(song, pat, prev, oldLen, gestureId = null) {
+  return {
+    type: "dropPattern",
+    song, pat, oldLen, gestureId,
+    coalesceKey: `mkpat:${song}:${pat}`,
+    apply(doc) {
+      const pats = doc.songs[song].patterns;
+      const bytes = doc.patternBytes(song, pat); // capture for redo
+      pats[pat] = prev;
+      while (pats.length > oldLen) pats.pop();
+      doc.dirty = true;
+      return createPatternOp(song, pat, bytes, gestureId);
+    },
+    // post-apply: patternBytes now serves the empty image for `pat`, so the
+    // sync flush blanks the worklet's copy of it
+    dirty: () => [{ kind: "pattern", song, pat }],
   };
 }
 

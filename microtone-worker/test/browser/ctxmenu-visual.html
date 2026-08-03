@@ -10,10 +10,12 @@
          chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/ctx.png \
            --timeout=15000 "http://localhost:8932/test/browser/ctxmenu-visual.html?theme=dark"
        ?theme=light for the light theme, ?where=header to open it on a channel
-       header (two cells), ?where=full for the widest case (a block selected and
-       something on the clipboard: five cells); the default is an empty cue slot
-       (three cells, including New pattern). ?col=note|inst|vol|pan|fx picks
-       which column the pointer lands on, i.e. which SECOND row is drawn. -->
+       header (the two channel inserts over the mute row), ?where=full for the
+       widest case (a block selected and something on the clipboard); the
+       default is an empty cue slot (Channel left/right + New pattern).
+       ?col=note|inst|vol|pan|fx picks which column the pointer lands on, i.e.
+       which SECOND row is drawn over the grid; ?muted=1 mutes a channel first,
+       which is what adds "Unmute all" to a header's mute row. -->
   <img src="/hang" hidden>
   <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
   <script type="module">
@@ -43,6 +45,7 @@
       const header = params.get("where") === "header";
       const full = params.get("where") === "full";
       const ch = 1;
+      if (params.get("muted")) { store.toggleMute(ch === 0 ? 1 : 0); await sleep(60); }
       if (full) {
         // Selection + a filled clipboard: the widest the menu ever gets
         // (Copy, Cut, Paste, Channel left, Channel right).

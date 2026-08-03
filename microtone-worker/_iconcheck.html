@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="css/microtone.css">
+<body data-theme="dark" style="background:#1f232b;padding:20px">
+<div class="ctxmenu" style="position:static;display:block"><div class="ctx-grid"><div class="ctx-row" id="r"></div></div></div>
+<script type="module">
+import { ICON } from "./src/ui/icons.js";
+const r = document.getElementById("r");
+for (const k of ["moveLeft","moveRight","duplicate","solo","mute","unmute","unmuteAll","channelLeft","channelRight","copy"]) {
+  const b = document.createElement("button");
+  b.className = "ctx-cell"; b.type = "button";
+  b.innerHTML = `<span class="ctx-icon">${ICON[k]}</span><span class="ctx-name">${k}</span>`;
+  r.appendChild(b);
+}
+</script>

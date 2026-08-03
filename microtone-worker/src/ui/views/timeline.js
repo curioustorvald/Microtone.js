@@ -24,7 +24,11 @@ import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
 import { paintSpatialDot } from "../spatialdot.js";
 import { showContextMenu } from "../widgets/contextmenu.js";
-import { clipboardItems, channelItems, newPatternItem, insertChannelAt } from "../gridmenu.js";
+import {
+  clipboardItems, channelItems, newPatternItem, insertChannelAt,
+  patternSlotItems, isPatternSlotItem, moveSlots, duplicateSlots,
+  muteItems, runMuteItem,
+} from "../gridmenu.js";
 import { blockToolItems, runBlockTool, isBlockTool } from "../blocktools.js";
 import { t } from "../i18n.js";
 
@@ -315,7 +319,12 @@ export class TimelineView {
    * row down its strip — offers the two channel inserts. On the grid it also
    * offers the clipboard: copy/cut while a block is selected, paste onto a cell
    * that has a pattern to paste into; a cell whose cue slot is EMPTY offers a
-   * fresh pattern instead (the two are mutually exclusive by construction).
+   * fresh pattern instead (the two are mutually exclusive by construction), and
+   * one that is FILLED offers to move or duplicate what is in it (item 103.1).
+   *
+   * The second row depends on where the pointer is: over the grid it is the
+   * column tools, over the HEADER — where there are no cells for them to act on
+   * — it is that channel's mute/solo (item 103.2).
    */
   async onContextMenu(e) {
     e.preventDefault();
@@ -339,7 +348,8 @@ export class TimelineView {
     // pattern" would fill).
     const clickedEmpty = loc !== null &&
       (store.song.cues[loc.entry.cue][ch] & 0x7fff) === PATTERN_EMPTY;
-    const emptySlots = this.slotsInBlock(hit, ch).filter((s) =>
+    const slots = this.slotsInBlock(hit, ch);
+    const emptySlots = slots.filter((s) =>
       (store.song.cues[s.cue][s.ch] & 0x7fff) === PATTERN_EMPTY);
 
     const items = [
@@ -352,15 +362,22 @@ export class TimelineView {
       ...channelItems(ch, chans),
     ];
     if (loc !== null && emptySlots.length > 0) items.push(newPatternItem());
+    items.push(...patternSlotItems(store, slots));
 
-    // Second row: the column tools, aimed at the selection's column band or at
-    // the single column under the pointer. Only where there are cells to act on.
-    const cells = this.toolCells(hit, ch);
-    const tools = cells.length > 0
-      ? blockToolItems(this.toolCols(hit), { surround: surroundModel !== 0 })
-      : [];
+    // Second row: over the grid, the column tools aimed at the selection's
+    // column band or at the single column under the pointer; over the HEADER,
+    // that channel's mutes (item 103.2). The header is about the channel, not
+    // about a block someone left selected elsewhere, so it wins outright rather
+    // than only when there happens to be nothing for the tools to act on.
+    const onHeader = y < this.headerH();
+    const cells = onHeader ? [] : this.toolCells(hit, ch);
+    const second = onHeader
+      ? muteItems(store, ch)
+      : (cells.length > 0
+          ? blockToolItems(this.toolCols(hit), { surround: surroundModel !== 0 })
+          : []);
 
-    const pick = await showContextMenu(e.clientX, e.clientY, [items, tools]);
+    const pick = await showContextMenu(e.clientX, e.clientY, [items, second]);
     if (isBlockTool(pick)) {
       const anchor = this.toolAnchor(hit, ch);
       if (await runBlockTool(pick, { store, cells, anchor, scope: this.toolScope(cells) })) {
@@ -368,6 +385,8 @@ export class TimelineView {
       }
       return;
     }
+    if (isPatternSlotItem(pick)) { this.runSlotItem(pick, slots); return; }
+    if (runMuteItem(store, pick, ch)) return;
     switch (pick) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
@@ -434,6 +453,28 @@ export class TimelineView {
 
   insertChannel(at) {
     if (insertChannelAt(this.store, at)) this.invalidate();
+  }
+
+  /** Move / duplicate the patterns in `slots` (item 103.1). A move takes the
+   *  block selection with it, so the same block can be walked across several
+   *  channels without re-selecting it after every step — clamped, because only
+   *  the block's FILLED slots had to have somewhere to go, and a selection can
+   *  reach past them into empty channels. */
+  runSlotItem(id, slots) {
+    const dir = id === "movLeft" ? -1 : 1;
+    const ok = id === "dupPat"
+      ? duplicateSlots(this.store, slots)
+      : moveSlots(this.store, slots, dir);
+    if (!ok) return;
+    if (id !== "dupPat" && this.sel) {
+      const last = this.store.doc.channelCount - 1;
+      this.sel = {
+        ...this.sel,
+        aCh: clampInt(this.sel.aCh + dir, 0, last),
+        ch: clampInt(this.sel.ch + dir, 0, last),
+      };
+    }
+    this.invalidate();
   }
 
   /** The (cue, ch) slots the tools' block covers — a Timeline selection is

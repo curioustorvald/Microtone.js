@@ -42,10 +42,17 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
     return dlg;
   };
   const cells = (dlg) => [...dlg.querySelectorAll(".ctx-cell")];
-  // The FIRST row only — the second row (the column tools) has its own smoke,
-  // test/browser/ctxtools-smoke.html.
+  // The FIRST row only — the second row (the column tools over the grid, the
+  // mutes over the header) has its own smoke, test/browser/ctxtools-smoke.html,
+  // and its own section at the foot of this one.
   const ids = (dlg) => [...dlg.querySelectorAll(".ctx-row:first-child .ctx-cell")]
     .map((c) => c.dataset.id);
+  const rowIds = (dlg, n) => [...dlg.querySelectorAll(`.ctx-row:nth-child(${n}) .ctx-cell`)]
+    .map((c) => c.dataset.id);
+  // The filled-slot cells (item 103.1) ride along on every menu opened over a
+  // slot that has a pattern in it. They have their own section below, so the
+  // clipboard/insert checks look at the row only as far as the channel inserts.
+  const clipIds = (dlg) => { const a = ids(dlg); return a.slice(0, a.indexOf("insRight") + 1); };
   const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
   const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
 
@@ -62,7 +69,8 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   let dlg = await rightClick(colX(2), 10);
   check(!!dlg, "right-click on a channel header opens the menu");
   if (!dlg) { log(`\n${fails} FAILED`); return; }
-  check(cells(dlg).length === 2, "header menu = the two channel inserts", `${cells(dlg).length} cells`);
+  check(rowIds(dlg, 1).join() === "insLeft,insRight",
+    "header menu's first row = the two channel inserts", rowIds(dlg, 1).join());
   check(cells(dlg).every((c) => c.querySelector(".ctx-icon svg")), "every cell carries an SVG icon");
   check(cells(dlg).every((c) => c.querySelector(".ctx-name").textContent.trim().length > 0),
     "every cell carries a name");
@@ -135,7 +143,8 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   const free = store.song.firstFreePattern();
   dlg = await rightClick(colX(emptyCh), gridY);
   check(!!dlg && ids(dlg).join() === "insLeft,insRight,newPat",
-    "an empty slot's menu gains the new-pattern cell", ids(dlg).join());
+    "an empty slot's menu gains the new-pattern cell — and none of the filled-slot ones",
+    ids(dlg).join());
   const newPat = cell(dlg, "newPat");
   check(newPat.querySelector(".ctx-name").textContent.toLowerCase().includes("pattern"),
     "…and it is the new-pattern action", newPat.textContent);
@@ -157,8 +166,10 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   await sleep(60);
   check(pat(0, emptyCh) !== 0x7fff, "the blanked slot is restored");
   dlg = await rightClick(colX(0), gridY);
-  check(!!dlg && ids(dlg).join() === "insLeft,insRight",
-    "a slot with a pattern and an empty clipboard keeps the 2-cell menu", ids(dlg).join());
+  check(!!dlg && clipIds(dlg).join() === "insLeft,insRight" && !ids(dlg).includes("newPat"),
+    "a slot with a pattern and an empty clipboard offers no clipboard and no New pattern",
+    ids(dlg).join());
+  check(ids(dlg).includes("dupPat"), "…but it can be duplicated", ids(dlg).join());
   await dismiss(dlg);
 
   // ── 8. the gutter is not a channel ──────────────────────────────────────
@@ -175,7 +186,7 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   // check below compares real note words rather than two empty cells.
   timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 2, ch: 1, sub: 5 };
   dlg = await rightClick(colX(0), gridY);
-  check(!!dlg && ids(dlg).join() === "copy,cut,insLeft,insRight",
+  check(!!dlg && clipIds(dlg).join() === "copy,cut,insLeft,insRight",
     "a selection adds Copy and Cut (nothing on the clipboard yet, so no Paste)", ids(dlg).join());
   cell(dlg, "copy").click();
   await sleep(80);
@@ -183,7 +194,7 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
     "the Copy cell copied the block", `${store.clipboard?.rows}×${store.clipboard?.chans}`);
 
   dlg = await rightClick(colX(0), gridY);
-  check(!!dlg && ids(dlg).join() === "copy,cut,paste,insLeft,insRight",
+  check(!!dlg && clipIds(dlg).join() === "copy,cut,paste,insLeft,insRight",
     "with something on the clipboard the Paste cell appears", ids(dlg).join());
   await dismiss(dlg);
 
@@ -300,6 +311,165 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   store.undo.undo();
   await sleep(60);
   check(pat(0, emptyCh) !== 0x7fff, "the blanked slot is restored");
+
+  // ── 13. moving a filled slot sideways (item 103.1) ──────────────────────
+  // Seed cue 0's first five channels so the menu's shape is decided by this
+  // test rather than by whatever the corpus happens to have there.
+  const seed = async (nums) => {
+    store.undo.apply(setCuesOp(store.songIndex, nums.map((n, ch) => ({
+      cue: 0, ch, value: (store.song.cues[0][ch] & 0x8000) | (n === null ? 0x7fff : n),
+    }))));
+    await sleep(60);
+  };
+  timeline.sel = null;
+  timeline.scrollCh = 0;
+  timeline.invalidate();
+  const realPat = pat(0, 0); // a pattern the corpus actually filled in
+  await seed([0x0011, null, 0x0022, 0x0033, 0x0044]);
+
+  dlg = await rightClick(colX(0), gridY);
+  check(!ids(dlg).includes("movLeft") && ids(dlg).includes("movRight"),
+    "channel 0 can only go right — there is nothing to its left", ids(dlg).join());
+  await dismiss(dlg);
+
+  dlg = await rightClick(colX(2), gridY);
+  check(ids(dlg).includes("movLeft") && !ids(dlg).includes("movRight"),
+    "and a slot boxed in on the right is offered the left move only", ids(dlg).join());
+  const instsBeforeMove = insts().join("|");
+  const bitsBefore = [0, 1, 2].map((ch) => store.song.cues[0][ch] & 0x8000).join(",");
+  const moveDepth = store.undo.undoStack.length;
+  cell(dlg, "movLeft").click();
+  await sleep(80);
+  check(pat(0, 1) === 0x0022 && pat(0, 2) === 0x7fff,
+    "the pattern moved one channel left and vacated its slot",
+    `${pat(0, 1).toString(16)}/${pat(0, 2).toString(16)}`);
+  check([0, 1, 2].map((ch) => store.song.cues[0][ch] & 0x8000).join(",") === bitsBefore,
+    "each position kept its own command bit");
+  check(insts().join("|") === instsBeforeMove, "…so the cue instructions are unchanged");
+  check(store.undo.undoStack.length === moveDepth + 1, "one undo step");
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, 2) === 0x0022 && pat(0, 1) === 0x7fff, "…and it undoes");
+
+  // A solid block slides as a unit, and the selection follows it.
+  await seed([null, 0x0011, 0x0022, 0x0033, 0x0044]);
+  timeline.sel = { aRow: 0, aCh: 1, aSub: 0, row: 2, ch: 3, sub: 5 };
+  dlg = await rightClick(colX(1), gridY);
+  check(ids(dlg).includes("movLeft") && !ids(dlg).includes("movRight"),
+    "a block up against a filled channel 4 can only go left", ids(dlg).join());
+  cell(dlg, "movLeft").click();
+  await sleep(80);
+  check([0, 1, 2, 3].map((ch) => pat(0, ch)).join() === [0x11, 0x22, 0x33, 0x7fff].join(),
+    "the whole block slid one channel left",
+    [0, 1, 2, 3].map((ch) => pat(0, ch).toString(16)).join());
+  check(timeline.sel.aCh === 0 && timeline.sel.ch === 2,
+    "…and the selection came with it", `${timeline.sel.aCh}-${timeline.sel.ch}`);
+  store.undo.undo();
+  await sleep(60);
+
+  // A selection reaching PAST the filled slots must not be shifted off the
+  // grid: only the filled ones needed somewhere to go.
+  await seed([null, 0x0011, null, null, 0x0044]);
+  timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 2, ch: 2, sub: 5 };
+  dlg = await rightClick(colX(1), gridY);
+  cell(dlg, "movLeft").click();
+  await sleep(80);
+  check(pat(0, 0) === 0x0011, "the one filled slot moved to channel 0");
+  check(timeline.sel.aCh === 0, "…and the selection's left edge stopped at channel 0",
+    `${timeline.sel.aCh}-${timeline.sel.ch}`);
+  store.undo.undo();
+  await sleep(60);
+  timeline.sel = null;
+  store.undo.undo(); // drop this leg's seed
+  await sleep(60);
+
+  // ── 14. Duplicate unshares a pattern (item 103.1) ───────────────────────
+  // Channels 0 and 1 SHARE a pattern the corpus actually filled in, so the
+  // "the copy carries the cells" check below compares real note data.
+  await seed([realPat, realPat, null, 0x0033]);
+  const bytesOf = (p) => [...store.doc.patternBytes(store.songIndex, p)].join();
+  const srcBytes = bytesOf(realPat);
+  check(srcBytes.split(",").some((b) => b !== "0"),
+    "the shared pattern has cells in it (guards the copy check)", `pattern $${realPat.toString(16)}`);
+  const freeNums = store.song.freePatternNumbers(2);
+  const dupDepth = store.undo.undoStack.length;
+  dlg = await rightClick(colX(0), gridY);
+  cell(dlg, "dupPat").click();
+  await sleep(120);
+  check(pat(0, 0) === freeNums[0], "the slot points at a brand-new pattern number",
+    `$${pat(0, 0).toString(16)} vs $${freeNums[0].toString(16)}`);
+  check(pat(0, 1) === realPat, "…and the OTHER slot still points at the original");
+  check(store.undo.undoStack.length === dupDepth + 1, "one undo step");
+  check(bytesOf(pat(0, 0)) === srcBytes, "the copy carries the original's cells");
+  store.undo.undo();
+  await sleep(60);
+  check(pat(0, 0) === realPat, "…and the duplicate undoes");
+  check(bytesOf(realPat) === srcBytes, "…leaving the original exactly as it was");
+
+  // Over a block, every filled slot gets its OWN copy.
+  timeline.sel = { aRow: 0, aCh: 0, aSub: 0, row: 2, ch: 3, sub: 5 };
+  const blockNums = store.song.freePatternNumbers(3);
+  dlg = await rightClick(colX(0), gridY);
+  cell(dlg, "dupPat").click();
+  await sleep(120);
+  check([pat(0, 0), pat(0, 1), pat(0, 3)].join() === blockNums.join(),
+    "every filled slot in the block got its own fresh number",
+    [pat(0, 0), pat(0, 1), pat(0, 3)].map((p) => p.toString(16)).join());
+  check(pat(0, 2) === 0x7fff, "…and the empty one stayed empty");
+  store.undo.undo();
+  await sleep(60);
+  timeline.sel = null;
+  store.undo.undo(); // drop the seed
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+  store.undo.undo();
+  await sleep(60);
+
+  // ── 15. the header's mute row (item 103.2) ──────────────────────────────
+  store.voiceMutes.fill(false);
+  store.syncVoiceMutes();
+  await sleep(60);
+  dlg = await rightClick(colX(2), 10);
+  check(rowIds(dlg, 2).join() === "solo,mute",
+    "an unmuted header offers Solo and Mute, and no Unmute all", rowIds(dlg, 2).join());
+  const muteDepth = store.undo.undoStack.length;
+  cell(dlg, "mute").click();
+  await sleep(80);
+  const mutedCh = timeline.scrollCh + 2;
+  check(store.voiceMutes[mutedCh] === true, "the Mute cell silenced that channel");
+  check(store.undo.undoStack.length === muteDepth, "…without touching the undo stack");
+
+  dlg = await rightClick(colX(2), 10);
+  check(rowIds(dlg, 2).join() === "solo,mute,unmuteAll",
+    "a muted song's header gains Unmute all", rowIds(dlg, 2).join());
+  check(cell(dlg, "mute").textContent.toLowerCase().includes("unmute"),
+    "…and the same cell now reads Unmute", cell(dlg, "mute").textContent);
+  cell(dlg, "mute").click();
+  await sleep(80);
+  check(store.voiceMutes[mutedCh] === false, "…which unmutes it again");
+
+  dlg = await rightClick(colX(3), 10);
+  cell(dlg, "solo").click();
+  await sleep(80);
+  const soloCh = timeline.scrollCh + 3;
+  check(store.voiceMutes[soloCh] === false &&
+    store.voiceMutes.slice(0, store.doc.channelCount).filter(Boolean).length ===
+      store.doc.channelCount - 1,
+    "Solo mutes every channel but that one",
+    store.voiceMutes.slice(0, 8).join(","));
+
+  dlg = await rightClick(colX(0), 10);
+  cell(dlg, "unmuteAll").click();
+  await sleep(80);
+  check(store.voiceMutes.every((m) => !m), "Unmute all brings everything back",
+    store.voiceMutes.slice(0, 8).join(","));
+
+  // Over the GRID the second row is the column tools, not the mutes.
+  dlg = await rightClick(colX(0), gridY);
+  check(!rowIds(dlg, 2).includes("solo"), "the mutes are a header-only row",
+    rowIds(dlg, 2).join());
+  await dismiss(dlg);
 
   log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
 })();

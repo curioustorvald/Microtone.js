@@ -18,6 +18,12 @@ const bar = (x) => `<rect x="${x}" y="4" width="4" height="16" rx="1" ` +
 const ghostAt = (x) =>
   `<rect x="${x}" y="4" width="9" height="16" rx="1.5" stroke-dasharray="3 2.4"/>` +
   `<path d="M${x + 4.5} 9.5v5M${x + 2} 12h5"/>`;
+// A bar-width EMPTY slot — the place a moved pattern lands. Same footprint as
+// bar(), dashed instead of filled, so the pair reads as "this goes there".
+const slot = (x) => `<rect x="${x}" y="4" width="4" height="16" rx="1" ` +
+                    `stroke-dasharray="3 2.4"/>`;
+// A speaker cone, for the mute pair. Left-facing wave/cross drawn separately.
+const speaker = '<path d="M2.5 9.5H6l5-4v13l-5-4H2.5z"/>';
 
 export const ICON = {
   /** Insert a channel to the LEFT of this one. */
@@ -29,6 +35,32 @@ export const ICON = {
     '<rect x="2.5" y="2.5" width="12" height="19" rx="1.5"/>' +
     '<path d="M5.5 7.5h6M5.5 12h6M5.5 16.5h3.5"/>' +
     '<path d="M18.5 13v7.5M14.75 16.75h7.5"/>'),
+  /** Move this slot's pattern one channel LEFT, into the empty slot there. */
+  moveLeft: SVG(slot(2) + '<path d="M15.5 12h-7M11 9.5 8.5 12l2.5 2.5"/>' + bar(18)),
+  /** Move this slot's pattern one channel RIGHT. */
+  moveRight: SVG(bar(2) + '<path d="M8.5 12h7M13 9.5l2.5 2.5-2.5 2.5"/>' + slot(18)),
+  /** Duplicate: a second pattern card in front of the one it was copied from. */
+  duplicate: SVG(
+    '<rect x="8.5" y="5.5" width="13" height="16" rx="1.5"/>' +
+    '<path d="M11.5 10h7M11.5 13.5h7M11.5 17h4"/>' +
+    '<path d="M15.5 2.5H4.5a2 2 0 0 0-2 2v11"/>'),
+
+  // ── the channel header's mute row ──
+  /** Solo: headphones — listen to this channel on its own. Not another bar
+   *  triple: the channel inserts already own that shape, and the two rows are
+   *  on screen together. */
+  solo: SVG(
+    '<path d="M3.5 16.5V12a8.5 8.5 0 0 1 17 0v4.5"/>' +
+    '<rect x="1.5" y="14" width="5" height="7.5" rx="2.2" fill="currentColor" stroke="none"/>' +
+    '<rect x="17.5" y="14" width="5" height="7.5" rx="2.2" fill="currentColor" stroke="none"/>'),
+  /** Mute this channel: speaker with a cross. */
+  mute: SVG(speaker + '<path d="M15 9.5 20.5 15M20.5 9.5 15 15"/>'),
+  /** Unmute this channel: speaker with its waves back. */
+  unmute: SVG(speaker +
+    '<path d="M14.5 9.4a4.2 4.2 0 0 1 0 5.2M17.6 7a8 8 0 0 1 0 10"/>'),
+  /** Unmute everything: every channel standing again. */
+  unmuteAll: SVG(bar(2) + bar(10) + bar(18)),
+
   /** Copy the block selection: the usual two stacked sheets. */
   copy: SVG(
     '<rect x="8.5" y="2.5" width="13" height="15" rx="2"/>' +
