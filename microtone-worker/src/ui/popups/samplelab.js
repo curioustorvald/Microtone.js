@@ -279,18 +279,15 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       const yOf = (v) => mid - v * (h / 2 - 4);
       ctx.fillStyle = C.dim;
       ctx.fillRect(0, Math.round(mid), W, 1);
-      ctx.strokeStyle = C.wave;
       ctx.fillStyle = C.wave;
       if (spp <= 1) {
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
+        const rectW = Math.max(1, Math.ceil(1 / spp));
         const i0 = Math.max(0, Math.floor(scroll));
         const i1 = Math.min(data.length - 1, Math.ceil(scroll + W * spp));
         for (let i = i0; i <= i1; i++) {
-          const x = xOf(i), y = yOf(data[i]);
-          i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          const x = Math.floor(xOf(i)), y = yOf(data[i]);
+          ctx.fillRect(x, Math.min(mid, y), rectW, Math.max(1, Math.abs(mid - y)));
         }
-        ctx.stroke();
       } else {
         for (let col = 0; col < W; col++) {
           const a = Math.floor(scroll + col * spp);
@@ -303,8 +300,11 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
             if (v < mn) mn = v;
             if (v > mx) mx = v;
           }
+          // mx >= mn ⟹ yOf(mx) <= yOf(mn) always — no need to (wrongly) clamp
+          // the top against `mid`, which used to flatten all-negative columns
+          // onto the zero line instead of drawing them below it.
           const yT = yOf(mx), yB = yOf(mn);
-          ctx.fillRect(col, Math.min(yT, mid), 1, Math.max(1, Math.abs(yB - yT)));
+          ctx.fillRect(col, yT, 1, Math.max(1, yB - yT));
         }
       }
     }

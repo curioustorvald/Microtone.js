@@ -246,17 +246,31 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       if (!buf || buf.length === 0) return;
       ctx.fillStyle = C.wave;
       const spp = buf.length / waveW;
-      for (let col = 0; col < waveW; col++) {
-        const a = Math.floor(col * spp), b = Math.min(buf.length, Math.floor((col + 1) * spp));
-        if (b <= a) continue;
-        const step = Math.max(1, ((b - a) / 8) | 0);
-        let mn = Infinity, mx = -Infinity;
-        for (let p = a; p < b; p += step) {
-          if (buf[p] < mn) mn = buf[p];
-          if (buf[p] > mx) mx = buf[p];
+      if (spp <= 1) {
+        // Fewer samples than pixels (a short one-shot, or a voice pitched
+        // WAY up shrinking the mix): one bar per sample, or min/max columns
+        // degenerate to a single point every few columns — a scatter of dots.
+        const rectW = Math.max(1, Math.ceil(1 / spp));
+        for (let i = 0; i < buf.length; i++) {
+          const x = Math.floor(i / spp), y = mid - buf[i] * (mid - 2);
+          ctx.fillRect(x, Math.min(mid, y), rectW, Math.max(1, Math.abs(mid - y)));
         }
-        const yT = mid - mx * (mid - 2), yB = mid - mn * (mid - 2);
-        ctx.fillRect(col, Math.min(yT, mid), 1, Math.max(1, Math.abs(yB - yT)));
+      } else {
+        for (let col = 0; col < waveW; col++) {
+          const a = Math.floor(col * spp), b = Math.min(buf.length, Math.floor((col + 1) * spp));
+          if (b <= a) continue;
+          const step = Math.max(1, ((b - a) / 8) | 0);
+          let mn = Infinity, mx = -Infinity;
+          for (let p = a; p < b; p += step) {
+            if (buf[p] < mn) mn = buf[p];
+            if (buf[p] > mx) mx = buf[p];
+          }
+          // mx >= mn ⟹ yT <= yB always — clamping the top against `mid` (as
+          // this used to) flattened all-negative columns onto the zero line
+          // instead of drawing them below it.
+          const yT = mid - mx * (mid - 2), yB = mid - mn * (mid - 2);
+          ctx.fillRect(col, yT, 1, Math.max(1, yB - yT));
+        }
       }
       if (playing) {
         const pos = playPos();
