@@ -604,6 +604,225 @@ export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new 
   };
 }
 
+// ── in-place sample replace (item 109) ──
+
+/** Remove [ptr, ptr+len) from a free-extent list; false when no single extent
+ *  covers it. Mutates `extents` (splitting the coverer in two). */
+function carveExtent(extents, ptr, len) {
+  const i = extents.findIndex((x) => x.ptr <= ptr && x.ptr + x.len >= ptr + len);
+  if (i < 0) return false;
+  const e = extents[i];
+  const parts = [];
+  if (ptr > e.ptr) parts.push({ ptr: e.ptr, len: ptr - e.ptr });
+  const tail = e.ptr + e.len - (ptr + len);
+  if (tail > 0) parts.push({ ptr: ptr + len, len: tail });
+  extents.splice(i, 1, ...parts);
+  return true;
+}
+
+/** First-fit `len` bytes out of the free-extent list; null when nothing fits. */
+function carveFirstFit(extents, len) {
+  const e = extents.find((x) => x.len >= len);
+  if (!e) return null;
+  const ptr = e.ptr;
+  carveExtent(extents, ptr, len);
+  return ptr;
+}
+
+/** [ptr, ptr+len) minus the `holes` intervals, as a list of {ptr, len}. */
+function rangeMinus(ptr, len, holes) {
+  let parts = [{ ptr, len }];
+  for (const [ha, hb] of holes) {
+    const next = [];
+    for (const p of parts) {
+      const a = p.ptr, b = p.ptr + p.len;
+      if (hb <= a || ha >= b) { next.push(p); continue; }
+      if (ha > a) next.push({ ptr: a, len: ha - a });
+      if (hb < b) next.push({ ptr: hb, len: b - hb });
+    }
+    parts = next;
+  }
+  return parts;
+}
+
+/**
+ * Plan replacing a POOLED sample's audio IN PLACE (item 109) — the Sample Lab's
+ * other commit, next to planMultiSampleImport's "import as new". Every
+ * instrument and Ixmp patch bound to the sample follows it, so this is the edit
+ * that reaches the music already written with it.
+ *
+ * The length may change (that is the whole point of doing it from the Lab): the
+ * new bytes reuse the old span when they fit and first-fit a free extent when
+ * they don't, and every reference is rewritten — base records' bytes 0..13 and
+ * the matching patches' ptr/len/rate/markers, including a stereo patch's second
+ * channel pointer. `mapPos` carries the play/loop markers through whatever the
+ * Lab did to the waveform (crop shifts them, cut closes over them); the default
+ * scales them proportionally, which is exactly right for a pure resample.
+ *
+ * Refused, rather than guessed at:
+ *   * turning a MONO pooled sample stereo — an instrument only plays a pair
+ *     through an Ixmp 's' patch, and synthesising a full-range patch for a slot
+ *     that had none would silently take over its vibrato and pan defaults.
+ *     Import as new does this properly.
+ *   * a length change under a pool where some OTHER sample's span overlaps this
+ *     one — moving or shortening these bytes would corrupt that sample.
+ * Going the other way (stereo → mono) is fine: the 's' block is simply dropped.
+ *
+ * Returns {error} or a planImport-shaped plan — apply it with importBankOp, so
+ * one undo step puts every pointer, byte and name back.
+ */
+export function planReplaceSample(destDoc, sample, { pcm, pcmR = null, rate, nameBytes = null, mapPos = null }) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  if (!sample || !(sample.len > 0)) return { error: "The selected sample is empty." };
+  if (!pcm || pcm.length === 0) return { error: "The edited sample is empty." };
+  if (pcm.length > 0xffff) {
+    return { error: `Sample too long: ${pcm.length} bytes (65535 max) — resample it first.` };
+  }
+  if (pcmR && pcmR.length !== pcm.length) return { error: "Stereo channels must be the same length." };
+
+  const oldSpans = sampleSpans(sample);
+  const oldLen = sample.len;
+  const newLen = pcm.length;
+  const newChanCount = pcmR ? 2 : 1;
+  if (newChanCount > oldSpans.length) {
+    return { error: "A mono sample can't be replaced by a stereo one in place — import it as a new instrument instead." };
+  }
+  const newRate = Math.max(1, Math.min(0xffff, Math.round(rate) || 0));
+  const moves = newLen !== oldLen || newChanCount !== oldSpans.length;
+
+  // ── pool: the old spans go back to the free list, then the new ones are
+  //    carved out of it (preferring the addresses they already had) ──
+  const census = destDoc.sampleList();
+  const isTarget = (e) => e.ptr === sample.ptr && e.len === oldLen;
+  const others = census.filter((e) => !isTarget(e));
+  const oldIvs = oldSpans.map((sp) => [sp.ptr, sp.ptr + sp.len]);
+  if (moves && others.some((e) => sampleSpans(e).some((sp) =>
+    oldIvs.some(([a, b]) => sp.ptr < b && a < sp.ptr + sp.len)))) {
+    return { error: "Another sample shares these pool bytes — only an edit that keeps the length can be applied in place." };
+  }
+  const extents = freeExtents(others);
+  const alloc = (preferPtr) =>
+    (carveExtent(extents, preferPtr, newLen) ? preferPtr : carveFirstFit(extents, newLen));
+  const newPtrs = [alloc(sample.ptr)];
+  if (newChanCount === 2) newPtrs.push(alloc(oldSpans[1].ptr));
+  if (newPtrs.some((p) => p === null)) {
+    return { error: `Sample pool full: needs ${newLen * newChanCount} bytes and no free extent is large enough.` };
+  }
+
+  // Pool writes: free (zero) whatever the old spans keep that the new ones do
+  // not cover, THEN lay the new bytes down — applyPlan writes in order.
+  const newIvs = newPtrs.map((p) => [p, p + newLen]);
+  const samples = [];
+  for (const sp of oldSpans) {
+    for (const gap of rangeMinus(sp.ptr, sp.len, newIvs)) {
+      samples.push({ ptr: gap.ptr, bytes: new Uint8Array(gap.len), srcKeys: [], nameBytes: new Uint8Array(0) });
+    }
+  }
+  const chanBytes = pcmR ? [pcm, pcmR] : [pcm];
+  newPtrs.forEach((ptr, i) => {
+    samples.push({ ptr, bytes: Uint8Array.from(chanBytes[i]), srcKeys: [], nameBytes: new Uint8Array(0) });
+  });
+
+  // ── markers: original frame index → new frame index ──
+  const map = mapPos ?? ((p) => (p * newLen) / oldLen);
+  const mark = (p) => Math.max(0, Math.min(newLen, Math.round(map(Math.max(0, Math.min(oldLen, p))))));
+
+  // ── references: base records and Ixmp patches bound to the old span ──
+  const bindsOld = (o) => o.samplePtr === sample.ptr && o.sampleLength === oldLen;
+  const insts = [];
+  const userSlots = [];
+  let clampedLoops = 0;
+  for (const slot of destDoc.usedInstrumentSlots()) {
+    const inst = destDoc.instruments[slot];
+    const baseHit = !inst.isMeta && bindsOld(inst);
+    const patches = inst.extraPatches ?? [];
+    const patchHits = patches.filter(bindsOld);
+    if (!baseHit && patchHits.length === 0) continue;
+    userSlots.push(slot);
+
+    const record = destDoc.instRecordBytes(slot);
+    if (baseHit) {
+      const u32 = (o, v) => {
+        record[o] = v & 0xff; record[o + 1] = (v >>> 8) & 0xff;
+        record[o + 2] = (v >>> 16) & 0xff; record[o + 3] = (v >>> 24) & 0xff;
+      };
+      const u16 = (o, v) => { record[o] = v & 0xff; record[o + 1] = (v >>> 8) & 0xff; };
+      const loopStart = mark(inst.sampleLoopStart);
+      const loopEnd = Math.max(loopStart, mark(inst.sampleLoopEnd));
+      if ((inst.loopMode & 3) !== 0 && loopEnd <= loopStart) clampedLoops++;
+      u32(0, newPtrs[0]);
+      u16(4, newLen);
+      u16(6, newRate);
+      u16(8, mark(inst.samplePlayStart));
+      u16(10, loopStart);
+      u16(12, loopEnd);
+    }
+
+    // A slot listed here has its WHOLE patch list replaced by applyPlan, so an
+    // untouched list is passed back verbatim rather than re-encoded.
+    const entry = [...destDoc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === slot);
+    let ixmpBlob = entry ? Uint8Array.from(entry.blob) : null;
+    let ixmpCount = entry?.count ?? 0;
+    if (patchHits.length > 0) {
+      const next = patches.map((p) => ({ ...p, chanPtrs: [...p.chanPtrs] }));
+      for (const p of next) {
+        if (!bindsOld(p)) continue;
+        const loopStart = mark(p.loopStart);
+        const loopEnd = Math.max(loopStart, mark(p.loopEnd));
+        if ((p.loopMode & 3) !== 0 && loopEnd <= loopStart) clampedLoops++;
+        p.samplePtr = newPtrs[0];
+        p.sampleLength = newLen;
+        p.samplingRate = newRate;
+        p.playStart = mark(p.playStart);
+        p.loopStart = loopStart;
+        p.loopEnd = loopEnd;
+        // Only a patch that ALREADY carried an 's' block follows the channel
+        // count — a mono patch on the same span stays mono.
+        if (p.hasChanBlock) {
+          if (newChanCount === 2) p.chanPtrs = [newPtrs[1], ...p.chanPtrs.slice(1)];
+          else { p.hasChanBlock = false; p.chanCount = 1; p.chanPtrs = []; }
+        }
+      }
+      ixmpBlob = writePatchesBlob(next);
+      ixmpCount = next.length;
+    }
+    insts.push({ srcSlot: -(insts.length + 1), destSlot: slot, topLevel: true, record, ixmpBlob, ixmpCount });
+  }
+
+  // ── SNam: the census keys by (ptr:len), so a moved or resized sample carries
+  //    its name across to the new identity (and takes a rename with it) ──
+  const snamNames = new Map();
+  const destSnamPayload = sectionPayload(destDoc, "SNam");
+  const destSnam = splitNameTable(destSnamPayload);
+  census.forEach((e, i) => snamNames.set(sampleKey(e.ptr, e.len), destSnam[i] ?? new Uint8Array(0)));
+  const oldName = snamNames.get(sampleKey(sample.ptr, oldLen)) ?? new Uint8Array(0);
+  const name = nameBytes ?? oldName;
+  snamNames.set(sampleKey(newPtrs[0], newLen), name);
+
+  return {
+    insts,
+    samples,
+    inamPayload: null,
+    snamNames,
+    writeSnam: name.length > 0 || destSnamPayload !== null,
+    slotMap: new Map(),
+    newSampleBytes: newLen * newChanCount,
+    dedupedSamples: 0,
+    // report (the Lab's confirm dialog)
+    ptr: newPtrs[0],
+    chanPtrs: newPtrs.slice(1),
+    len: newLen,
+    rate: newRate,
+    oldLen,
+    moved: newPtrs[0] !== sample.ptr,
+    droppedChannel: newChanCount < oldSpans.length,
+    userSlots,
+    clampedLoops,
+  };
+}
+
 /**
  * Plan a new metainstrument built from instruments already in this project
  * (item 72). Each pick is COPIED into a fresh sub-instrument slot ($100+, which

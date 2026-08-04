@@ -124,6 +124,31 @@ function painted(cv) {
   check(painted(masterStrip.scopeCanvas[1]), "scope B painted");
   check(painted(masterStrip.meterCanvas), "meter/fader painted");
 
+  // ── 3a. the Lissajous panel is a CRT beam (item 106) ─────────────────────
+  // The scope keeps its phosphor between frames and sweeps only the samples
+  // that arrived since the last one, so what is on screen is a continuous
+  // trace with energy behind it rather than a window's worth of dots.
+  const beamCell = masterStrip.beams[1];
+  check(!!beamCell && beamCell.beam.totalEnergy() > 0, "the Lissajous panel has a lit beam",
+    beamCell ? beamCell.beam.totalEnergy().toFixed(1) : "no beam");
+  check(masterStrip.beams[0] === null, "…and a blobs panel does not pay for one");
+  check(masterStrip.freshFrames > 0 && masterStrip.freshFrames < 4096,
+    "…swept with the samples since the last frame, not the whole ring every time",
+    String(masterStrip.freshFrames));
+  // Density reads as brightness: the hottest pixel is well past the faint ones.
+  const hot = beamCell.beam.peakEnergy();
+  check(hot > 0.5, "the trace has a hot core", hot.toFixed(2));
+  // Stop feeding it and it dies away instead of freezing on the last window.
+  const litWhilePlaying = beamCell.beam.totalEnergy();
+  doc.getElementById("stopBtn").click();
+  await sleep(600);
+  const litAfterStop = beamCell.beam.totalEnergy();
+  check(litAfterStop < litWhilePlaying * 0.1, "…and the phosphor fades once the music stops",
+    `${litWhilePlaying.toFixed(1)} → ${litAfterStop.toFixed(1)}`);
+  doc.getElementById("playSong").click();
+  await sleep(600);
+  check(masterStrip.beams[1].beam.totalEnergy() > 0, "…and lights again when it starts");
+
   // The vectorscope auto-gain slews (~300 ms) instead of snapping: shove it far
   // from where the music wants it and it has to walk back, not jump.
   masterStrip.scopeGain[1] = 50;

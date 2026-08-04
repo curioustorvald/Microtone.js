@@ -4,6 +4,25 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-07
+
+- **The vectorscopes are a CRT beam now.** A *Lissajous* panel used to plot one dot per sample; it now drags a beam from each sample to the next, the way the instrument it is named after did, and the difference is most of what makes such a display readable.
+  - The trace is **connected**. A signal that moves right across the dial in one sample is a streak rather than two unrelated specks, so a bright or high-pitched moment reads as a shape instead of a fog.
+  - **Brightness is dwell.** The beam lays down the same charge every sample however far it travels, so it burns where it lingers and thins where it races — the bright part of the figure is where the sound actually is, not merely where it reached. A hard slew dims it a little further, as a real deflection amplifier would.
+  - **Light adds up, and keeps adding up.** Twenty passes over one spot really are twenty times the energy of one; once ink can get no more opaque the spot starts going white instead (dark, on the light theme), so density still reads.
+  - **The screen fades instead of being wiped.** Each frame adds what arrived since the last one and lets the rest decay over about a tenth of a second, so the figure looks the same whatever frame rate your machine manages, and stopping the song lets the trace die away rather than freezing it on the last window.
+
+## 2026-08-06
+
+- **One sample editor.** The Samples view's *Edit…* and *Lab…* buttons are now a single **Edit…** that opens the Sample Lab. Everything the Lab could already do to an imported take — crop, cut, EQ, chop, chord, normalise, fades, gain, mono/stereo — it now does to a sample already in your project.
+- **Replace a sample in place.** The Lab, opened on a sample from the Samples view, commits two ways: **Import as new** as before, or **Replace**, which writes the edit back over the pooled sample so every instrument using it plays the new audio. Replacing asks first and lists the instruments it will reach, and one Ctrl+Z puts everything back.
+  - The length may change. A crop, a cut or a resample re-places the sample in the pool and every instrument and patch bound to it follows, with each one's play and loop points carried through the edits you made — crop the front off a looping sample and its loop moves with the sound instead of pointing at the wrong place.
+  - Rename it in the same step: type in the Lab's **Name** field before pressing Replace.
+  - **→ Mono** then Replace folds a stereo sample down to one channel and hands the right channel's bytes back to the sample pool.
+  - Two things Replace refuses rather than guess at: turning a mono sample stereo (import that as new, so the instrument gets a proper stereo patch), and changing the length of a sample whose bytes overlap another sample's.
+  - When the Lab opens on a sample in the project, its loop region is shaded on the waveform and moves as you edit, so you can see where Replace will leave it.
+- **Fixed: zoomed-out waveforms in the Sample Lab and the chord maker were drawn as floating hairlines.** Wherever a whole column of the waveform sat on one side of the zero line — a decay tail, anything with an offset — the display drew only the thin span between that column's loudest and quietest sample, hanging in space. Every sample display now fills each column from the zero line out to its peak, as the Samples view always did. The waveform thumbnail on the Instruments view's Zones tab is drawn the same way now.
+
 ## 2026-08-05
 
 - **Surround panning.** A song can now declare a **panning model** in the Project view: *Stereo* as before, *Planar* to pan all the way round the listener, or *Spatial* to place sources anywhere on the sphere. The model is a property of the song — it decides what the pan commands mean.

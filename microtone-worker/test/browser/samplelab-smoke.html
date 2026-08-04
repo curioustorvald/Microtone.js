@@ -142,6 +142,81 @@
         ok(after.length === before.length && after.every((v, i) => v === before[i]),
           "t11 ONE undo step, byte-exact");
 
+        // ── item 109: opened on a POOLED sample, Replace writes the edit back
+        //    and every instrument bound to it follows the new length ──────────
+        {
+          const { u8ToFloat } = await win.eval('import("/src/doc/wavelab.js")');
+          const doc = store.doc;
+          const s = doc.sampleList().find((e) => e.users.some((u) =>
+            !doc.instruments[u].isMeta && doc.instruments[u].samplePtr === e.ptr &&
+            doc.instruments[u].sampleLength === e.len));
+          const slot = s.users.find((u) => !doc.instruments[u].isMeta &&
+            doc.instruments[u].samplePtr === s.ptr && doc.instruments[u].sampleLength === s.len);
+          // give the slot a forward loop over the back half, so the marker
+          // remap has something to prove
+          doc.instruments[slot].sampleLoopStart = Math.floor(s.len / 2);
+          doc.instruments[slot].sampleLoopEnd = s.len;
+          doc.instruments[slot].loopMode = 1;
+          doc.markInstUsed(slot);
+          const entry = doc.sampleList().find((e) => e.ptr === s.ptr && e.len === s.len);
+          const beforeR = win.eval("__microtone.store.doc.toBytes()");
+
+          const pRep = openSampleLab(store, {
+            data: [u8ToFloat(doc.sampleBin.subarray(s.ptr, s.ptr + s.len))],
+            rate: s.rate, name: "pooled", replaceTarget: entry,
+          });
+          const repDlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+          const repLab = repDlg.__lab;
+          ok(repLab.state().canReplace, "t15 Replace is offered for a pooled sample");
+          ok(!!repLab.state().loop, "t15b the pooled loop region is drawn");
+
+          // crop the first quarter away: the loop must move with the audio
+          const cut = Math.floor(s.len / 4);
+          repLab.setSelection(cut, s.len);
+          repLab.tool("crop");
+          const newLen = s.len - cut;
+          ok(repLab.state().len === newLen, "t16 crop shortened the take");
+          ok(repLab.mapPos(entry.loopStart) === entry.loopStart - cut,
+            "t16b the position map followed the crop");
+
+          repLab.replace();
+          const resR = await pRep;
+          const cur = doc.sampleList().find((e) => e.len === newLen);
+          ok(resR?.replaced === true && !!cur, "t17 Replace committed the shorter sample");
+          ok(doc.instruments[slot].sampleLength === newLen &&
+             doc.instruments[slot].sampleLoopStart === entry.loopStart - cut &&
+             doc.instruments[slot].sampleLoopEnd === newLen,
+            `t17b the instrument followed (len ${doc.instruments[slot].sampleLength}, ` +
+            `loop ${doc.instruments[slot].sampleLoopStart}..${doc.instruments[slot].sampleLoopEnd})`);
+          store.undo.undo();
+          const afterR = win.eval("__microtone.store.doc.toBytes()");
+          ok(afterR.length === beforeR.length && afterR.every((v, i) => v === beforeR[i]),
+            "t18 ONE undo step puts the pooled sample back byte-exactly");
+        }
+
+        // ── item 109.2: every column is a BAR off the centre line, even when
+        //    the whole column sits on one side of zero (a hairline floating in
+        //    space is what this replaced) ──────────────────────────────────────
+        {
+          const n = 40000; // ≫ canvas width, so the min/max column path runs
+          const dc = new win.Float32Array(n);
+          for (let i = 0; i < n; i++) dc[i] = 0.55 + 0.3 * Math.sin(i / 40); // never ≤ 0
+          const pDc = openSampleLab(store, { data: dc, rate: 32000, name: "dc" });
+          const dcDlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+          const cv = dcDlg.querySelector(".lab-wave");
+          const g = cv.getContext("2d");
+          const scale = cv.width / parseFloat(cv.style.width);
+          const midY = Math.round((parseFloat(cv.style.height) / 2) * scale);
+          const px = (x, y) => Array.from(g.getImageData(Math.round(x), y, 1, 1).data);
+          const atMid = px(cv.width / 2, midY - Math.round(2 * scale));
+          const atTop = px(cv.width / 2, Math.round(6 * scale));
+          ok(atMid[3] > 0 && (atMid[0] + atMid[1] + atMid[2]) > 0 &&
+             atMid.join() !== atTop.join(),
+            `t19 an all-positive waveform still fills down to the zero line (mid ${atMid.slice(0, 3)}, top ${atTop.slice(0, 3)})`);
+          dcDlg.__lab.cancel();
+          await pDc;
+        }
+
         // ── mic record leg (item 83.1): fake a mic with an oscillator stream ──
         const ac = new win.AudioContext();
         await ac.resume();

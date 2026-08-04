@@ -1,136 +1,26 @@
-// Sample editor modals (v2) — split per tab, both with Apply / Cancel:
-//   openSampleDspEditor  (Samples tab)     — length-preserving DSP over the
-//     pool span (normalise / fade in / fade out / reverse). Pool bytes are
-//     shared, so the edit reaches EVERY instrument using the sample; the
-//     waveform shows the census loop region read-only.
-//   openInstSampleEditor (Instruments tab) — play / loop / sustain markers of
-//     ONE instrument's record (draggable markers + spinners + loop mode),
-//     written through setInstBytesOp on bytes 8..14 of that slot only.
+// Instrument sample-marker editor (Instruments tab) — play / loop / sustain
+// markers of ONE instrument's record (draggable markers + spinners + loop
+// mode), written through setInstBytesOp on bytes 8..14 of that slot only.
 // Edits go through the undo stack as they happen (so playback hears them);
 // Apply keeps them, Cancel (or Esc) rolls the stack back to the open depth.
+//
+// The AUDIO of a sample is not edited here — that is the Sample Lab's job
+// (samplelab.js), the one editor for waveform content since item 109. This
+// modal only moves the markers of the slot it was opened on, which is per
+// instrument and therefore not something the Lab can own.
 
-import { setInstBytesOp, setSampleBytesOp, multiSampleBytesOp, setSectionOp } from "../../doc/ops.js";
-import { normalise, fadeIn, fadeOut, reverse, invert, removeDC, applyChannels } from "../../doc/sampledsp.js";
-import { sampleSpans, isStereoSample } from "../../doc/document.js";
-import { encodeU8Wav } from "../../audio/wavwrite.js";
-import { download } from "../../storage/import-export.js";
-import { sanitiseName } from "../../audio/stem-export.js";
+import { setInstBytesOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
-import { hex2 } from "../notenames.js";
-import { escapeNonAscii, unescapeName } from "../names.js";
+import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
-const W = 720, H = 200;   // H is PER CHANNEL — a stereo sample gets a lane each
+const W = 720, H = 200;
 
 const MARKERS = [
   { key: "playStart", labelKey: "smp.play", lo: 8, colorKey: "accent2" },
   { key: "loopStart", labelKey: "smp.loopStart", lo: 10, colorKey: "accent" },
   { key: "loopEnd", labelKey: "smp.loopEnd", lo: 12, colorKey: "accent" },
 ];
-
-/** Samples-tab editor for a sampleList() census entry. Resolves when closed. */
-export function openSampleDspEditor(store, sample) {
-  return new Promise((resolve) => {
-    const doc = store.doc;
-    // Snapshot BEFORE any DSP op runs this session — pool bytes mutate live as
-    // the buttons below are clicked, so "export original" needs its own copy.
-    const originalBytes = sampleSpans(sample).map((sp) => doc.sampleBin.slice(sp.ptr, sp.ptr + sp.len));
-    const shell = buildShell(store, {
-      title: `Sample ${String(sample.index).padStart(3, "0")} — ${unescapeName(sample.name) || "(unnamed)"}`,
-      info: t("smp.dspNote", { len: sample.len, rate: sample.rate }) +
-        ` · $${sample.users.map(hex2).join(" $")}`,
-      className: "sample-editor",
-      resolve,
-    });
-
-    const paint = () => {
-      const hasLoop = (sample.loopMode & 3) !== 0 && sample.loopEnd > sample.loopStart;
-      paintWaveform(shell.canvas, doc.sampleBin, sampleSpans(sample).map((sp) => sp.ptr), sample.len, {
-        loopStart: hasLoop ? sample.loopStart : 0,
-        loopEnd: hasLoop ? sample.loopEnd : 0,
-        markers: [],
-      });
-    };
-
-    // Rename row: edits the SNam entry for this census index (undoable, so the
-    // Cancel button rolls it back with everything else).
-    const nameRow = document.createElement("div");
-    nameRow.className = "smp-fields";
-    const nameLab = document.createElement("label");
-    nameLab.append(t("smp.name") + " ");
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.value = unescapeName(sample.name) || "";
-    nameInput.placeholder = t("smp.namePlaceholder");
-    nameInput.addEventListener("change", () => {
-      const escaped = escapeNonAscii(nameInput.value.trim());
-      if (escaped === (sample.name ?? "")) return;
-      store.undo.apply(setSectionOp("SNam", doc.buildSampleNames(sample.index, escaped)));
-      sample.name = escaped;
-      const h = shell.dlg.querySelector("h3");
-      if (h) h.textContent = `Sample ${String(sample.index).padStart(3, "0")} — ${unescapeName(escaped) || "(unnamed)"}`;
-    });
-    nameLab.appendChild(nameInput);
-    nameRow.appendChild(nameLab);
-
-    // DSP row: each button rewrites the pool span through one undoable op.
-    const opRow = document.createElement("div");
-    opRow.className = "smp-ops";
-    const DSP = [
-      [t("smp.normalise"), normalise],
-      [t("smp.fadeIn"), fadeIn],
-      [t("smp.fadeOut"), fadeOut],
-      [t("smp.reverse"), reverse],
-      [t("smp.invert"), invert],
-      [t("smp.removeDC"), removeDC],
-    ];
-    for (const [name, fn] of DSP) {
-      const b = document.createElement("button");
-      b.textContent = name;
-      b.addEventListener("click", () => {
-        // A stereo sample is two pool spans edited as one gesture (normalise
-        // shares its peak across them — see applyChannels).
-        const spans = sampleSpans(sample);
-        const views = spans.map((sp) => doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len));
-        const results = applyChannels(fn, views);
-        store.undo.apply(spans.length === 1
-          ? setSampleBytesOp(spans[0].ptr, results[0])
-          : multiSampleBytesOp(spans.map((sp, i) => ({ ptr: sp.ptr, bytes: results[i] }))));
-        paint();
-      });
-      opRow.appendChild(b);
-    }
-    opRow.appendChild(shell.makeAuditionButton(() => ({
-      ptr: sample.ptr, len: sample.len, rate: sample.rate, playStart: 0,
-      loopStart: sample.loopStart, loopEnd: sample.loopEnd, loopMode: sample.loopMode,
-      chanPtr2: sample.chanPtrs?.[0] ?? 0, chanMode: sample.chanMode ?? 0,
-    })));
-
-    // Export: original = the pre-session snapshot above; edited = the pool's
-    // current bytes at this sample's spans (whatever the DSP buttons left it as).
-    const exportOrigBtn = document.createElement("button");
-    exportOrigBtn.textContent = t("smp.exportOriginal");
-    exportOrigBtn.title = t("smp.exportOriginalTitle");
-    exportOrigBtn.addEventListener("click", () => {
-      const bytes = encodeU8Wav(originalBytes, sample.rate);
-      download(bytes, `${sanitiseName(sample.name, "sample")}-original.wav`);
-    });
-    const exportEditedBtn = document.createElement("button");
-    exportEditedBtn.textContent = t("smp.exportEdited");
-    exportEditedBtn.title = t("smp.exportEditedTitle");
-    exportEditedBtn.addEventListener("click", () => {
-      const chans = sampleSpans(sample).map((sp) => doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len));
-      const bytes = encodeU8Wav(chans, sample.rate);
-      download(bytes, `${sanitiseName(sample.name, "sample")}-edited.wav`);
-    });
-    opRow.append(exportOrigBtn, exportEditedBtn);
-
-    shell.dlg.insertBefore(nameRow, shell.btnRow);
-    shell.dlg.insertBefore(opRow, shell.btnRow);
-    paint();
-    shell.show();
-  });
-}
 
 /** Instruments-tab editor for slot's play/loop/sustain record fields. */
 export function openInstSampleEditor(store, slot) {
@@ -346,81 +236,64 @@ function buildShell(store, { title, info, className, resolve }) {
   return { dlg, canvas, btnRow, makeAuditionButton, show: () => dlg.showModal() };
 }
 
-// ── shared waveform painter (centre-anchored bars, loop shading, markers) ──
+// ── waveform painter (centre-anchored bars, loop shading, markers) ──
 /**
- * Draw a pooled sample. `ptrs` is one pool pointer per channel (a plain number
- * for the mono case): each gets a FULL-height lane, stacked, so a stereo pair
- * is read at the same amplitude resolution a mono sample gets. Loop shading and
- * markers span every lane — they are positions in time, shared by the channels.
+ * Draw the pool span at `ptr`. One lane: this editor shows a slot's BASE record,
+ * and a base record has no channel block — a stereo pair only exists through an
+ * Ixmp patch, which the Instruments tab's patch panel and the Sample Lab draw.
+ * Every column is a bar off the centre line, as every sample display draws.
  */
-function paintWaveform(canvas, bin, ptrs, len, { loopStart, loopEnd, markers }) {
-  const lanes = Array.isArray(ptrs) ? ptrs : [ptrs];
+function paintWaveform(canvas, bin, ptr, len, { loopStart, loopEnd, markers }) {
   const C = themeColors();
   const dpr = window.devicePixelRatio || 1;
-  const totalH = H * lanes.length;
   canvas.width = W * dpr;
-  canvas.height = totalH * dpr;
+  canvas.height = H * dpr;
   canvas.style.width = W + "px";
-  canvas.style.height = totalH + "px";
+  canvas.style.height = H + "px";
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = C.cvBg;
-  ctx.fillRect(0, 0, W, totalH);
+  ctx.fillRect(0, 0, W, H);
   if (len <= 0) return;
 
   if (loopEnd > loopStart) {
     ctx.fillStyle = C.waveLoop;
-    ctx.fillRect((loopStart / len) * W, 0, ((loopEnd - loopStart) / len) * W, totalH);
+    ctx.fillRect((loopStart / len) * W, 0, ((loopEnd - loopStart) / len) * W, H);
   }
-  lanes.forEach((ptr, li) => {
-    const top = li * H;
-    const baseY = top + H / 2;
-    const yOf = (v) => top + (H * (255 - v)) / 255;
-    ctx.fillStyle = C.dim;
-    ctx.fillRect(0, Math.round(baseY), W, 1);
-    if (li > 0) {
-      ctx.globalAlpha = 0.6;
-      ctx.fillRect(0, Math.round(top), W, 1);
-      ctx.globalAlpha = 1;
+  const baseY = H / 2;
+  const yOf = (v) => (H * (255 - v)) / 255;
+  ctx.fillStyle = C.waveMid ?? C.dim;
+  ctx.fillRect(0, Math.round(baseY), W, 1);
+  ctx.fillStyle = C.wave;
+  if (len <= W) {
+    const rectW = Math.max(1, Math.ceil(W / len));
+    for (let i = 0; i < len; i++) {
+      const yv = yOf(bin[ptr + i]);
+      ctx.fillRect(Math.floor((i * W) / len), Math.min(baseY, yv),
+        rectW, Math.max(1, Math.abs(baseY - yv)));
     }
-    ctx.fillStyle = C.wave;
-    if (len <= W) {
-      const rectW = Math.max(1, Math.ceil(W / len));
-      for (let i = 0; i < len; i++) {
-        const yv = yOf(bin[ptr + i]);
-        ctx.fillRect(Math.floor((i * W) / len), Math.min(baseY, yv),
-          rectW, Math.max(1, Math.abs(baseY - yv)));
+  } else {
+    for (let col = 0; col < W; col++) {
+      const start = Math.floor((col * len) / W);
+      const end = Math.min(len, Math.floor(((col + 1) * len) / W));
+      if (end <= start) continue;
+      const step = Math.max(1, ((end - start) / 8) | 0);
+      let mn = 255, mx = 0;
+      for (let p = start; p < end; p += step) {
+        const v = bin[ptr + p];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
       }
-    } else {
-      for (let col = 0; col < W; col++) {
-        const start = Math.floor((col * len) / W);
-        const end = Math.min(len, Math.floor(((col + 1) * len) / W));
-        if (end <= start) continue;
-        const step = Math.max(1, ((end - start) / 8) | 0);
-        let mn = 255, mx = 0;
-        for (let p = start; p < end; p += step) {
-          const v = bin[ptr + p];
-          if (v < mn) mn = v;
-          if (v > mx) mx = v;
-        }
-        const yTop = Math.min(baseY, yOf(mx));
-        const yBot = Math.max(baseY, yOf(mn));
-        ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
-      }
+      const yTop = Math.min(baseY, yOf(mx));
+      const yBot = Math.max(baseY, yOf(mn));
+      ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
     }
-    if (lanes.length > 1) {
-      ctx.fillStyle = C.fg2 ?? C.fg;
-      ctx.globalAlpha = 0.85;
-      ctx.font = "10px sans-serif";
-      ctx.fillText(t(li === 0 ? "lab.chanL" : "lab.chanR"), 3, top + 11);
-      ctx.globalAlpha = 1;
-    }
-  });
+  }
   for (const m of markers) {
     const x = (m.pos / len) * W;
     ctx.fillStyle = C[m.colorKey];
-    ctx.fillRect(x - 1, 0, 2, totalH);
+    ctx.fillRect(x - 1, 0, 2, H);
     ctx.font = "10px sans-serif";
-    ctx.fillText(t(m.labelKey), Math.min(W - 30, x + 3), m.key === "loopEnd" ? totalH - 4 : 11);
+    ctx.fillText(t(m.labelKey), Math.min(W - 30, x + 3), m.key === "loopEnd" ? H - 4 : 11);
   }
 }

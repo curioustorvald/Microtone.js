@@ -1215,9 +1215,13 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   padding: 0.3rem 0.6rem; margin: 0 0 0.5rem;
 }
 
-/* ── Sample Lab (items 83/84) ── */
+/* ── Sample Lab (items 83/84/109) ── */
 .samplelab-modal { max-width: min(1280px, 94vw); }
 .samplelab-modal .lab-info { margin: 0.2rem 0 0.4rem; font-size: 0.85rem; }
+/* Replace overwrites a sample the song is already playing — it reads as the
+   weightier of the two commits, and greys out when a chop makes it meaningless. */
+.lab-replace { border-color: var(--accent); color: var(--accent); }
+.lab-replace:disabled { border-color: var(--border); color: var(--dim); }
 .lab-tools {
   display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;
   margin: 0.35rem 0; color: var(--dim); font-size: 0.85rem;

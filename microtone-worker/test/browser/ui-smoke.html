@@ -123,11 +123,13 @@
         log(`File-tab song list + rename buttons (topbar ✎ gone): ${songListOk ? "ok" : "FAIL"}`);
         log(`File-tab Import MIDI… button: ${midiBtnFiles ? "ok" : "FAIL"}`);
 
-        // ── sample DSP editor (Samples tab): Apply keeps, Cancel rolls back ──
+        // ── the Sample Lab as THE sample editor (item 109): Replace writes the
+        //    edit back over the pooled sample, Cancel leaves the doc alone ──
         {
           const doc = store.doc;
-          const { openSampleDspEditor, openInstSampleEditor } =
-            await win.eval('import("/src/ui/popups/sampleeditor.js")');
+          const { openInstSampleEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
+          const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
+          const { u8ToFloat } = await win.eval('import("/src/doc/wavelab.js")');
           const census = doc.sampleList();
           const s = census.find((e) => e.users.some((u) =>
             !doc.instruments[u].isMeta && doc.instruments[u].samplePtr === e.ptr &&
@@ -135,58 +137,53 @@
           const span = () => Array.from(doc.sampleBin.subarray(s.ptr, Math.min(s.ptr + 64, s.ptr + s.len)));
           const before = span();
           const depth0 = store.undo.undoStack.length;
+          const openLab = () => {
+            const p = openSampleLab(store, {
+              data: [u8ToFloat(doc.sampleBin.subarray(s.ptr, s.ptr + s.len))],
+              rate: s.rate, name: "smoke", replaceTarget: s,
+            });
+            return { p, dlg: win.document.querySelector("dialog.samplelab-modal") };
+          };
 
-          // Cancel path
-          let closed = openSampleDspEditor(store, s);
-          let dlg = win.document.querySelector("dialog.sample-editor");
-          const dspButtons = [...dlg.querySelectorAll(".smp-ops button")].map((b) => b.textContent);
-          const hasDsp = ["Normalise", "Fade in", "Fade out", "Reverse", "Invert"].every((x) => dspButtons.includes(x));
-          // DSP-only tab: no marker spinners (number inputs); a rename text field IS present.
-          const noMarkers = dlg.querySelectorAll(".smp-fields input[type=number]").length === 0;
-          const nameInput = dlg.querySelector(".smp-fields input[type=text]");
-          const hasRename = !!nameInput;
+          // headless auto-dismisses dialogs (a confirm would read as "no")
+          const realConfirm = win.confirm, realAlert = win.alert;
+          win.confirm = () => true;
+          win.alert = (m) => log(`Sample Lab alert: ${m}`);
+
+          // Cancel path: an edit in the Lab reaches nothing until it is committed
+          let { p: closed, dlg } = openLab();
           const btns = [...dlg.querySelectorAll(".modal-buttons button")].map((b) => b.textContent);
-          const btnOk = btns[0] === "Apply" && btns[1] === "Cancel";
-          // rename (undoable): edit the SNam entry, then Cancel must roll it back
-          const nameBefore = doc.sampleName(s.index);
-          nameInput.value = "SmokeRenamed";
-          nameInput.dispatchEvent(new win.Event("change", { bubbles: true }));
-          const renamed = doc.sampleName(s.index) === "SmokeRenamed";
-          // invert twice = identity (polarity involution away from 0x00 clamp)
-          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Invert").click();
-          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Normalise").click();
-          const changed = span().some((v, i) => v !== before[i]);
-          // bug #65: the audition button previews the EXACT census sample via
-          // jamSample (ptr/len on screen), not jamNote-through-the-owning-inst.
-          // Stub the audio system to capture the spec without a real device.
-          const realAudio = store.audio, realEnsure = win.__microtoneEnsureAudio;
-          let auditionSpec = null;
-          win.__microtoneEnsureAudio = async () => {};
-          store.audio = { jamSample: (ph, v, note, spec) => { auditionSpec = spec; }, jamStop: () => {} };
-          const auditionBtn = [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "▶ C4");
-          auditionBtn?.click();
-          await new Promise((r) => win.setTimeout(r, 0));
-          const auditionOk = !!auditionBtn && !!auditionSpec &&
-            auditionSpec.ptr === s.ptr && auditionSpec.len === s.len;
-          store.audio = realAudio; win.__microtoneEnsureAudio = realEnsure;
-          log(`DSP editor audition previews the exact census sample (bug #65): ${auditionOk ? "ok" : "FAIL"}`);
-          [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
+          const btnOk = btns[0] === "Replace" && btns[1] === "Import as new" && btns[2] === "Cancel";
+          const opButtons = [...dlg.querySelectorAll(".lab-ops button")].map((b) => b.textContent);
+          const hasOps = ["Normalise", "Fade in", "Fade out", "Reverse", "Invert", "Remove DC", "Crop", "Cut"]
+            .every((x) => opButtons.includes(x));
+          const preBuf = Array.from(dlg.__lab.buffer());
+          dlg.__lab.tool("invert");
+          const labEdited = dlg.__lab.buffer().some((v, i) => v !== preBuf[i]) &&
+            span().every((v, i) => v === before[i]); // pool untouched so far
+          dlg.__lab.cancel();
           await closed;
           const rolledBack = span().every((v, i) => v === before[i]) &&
-            doc.sampleName(s.index) === nameBefore &&
             store.undo.undoStack.length === depth0;
-          log(`DSP editor (DSP-only + rename/invert, Apply/Cancel rolls back): ${hasDsp && noMarkers && hasRename && btnOk && renamed && changed && rolledBack ? "ok" : "FAIL"}`);
+          log(`Sample Lab is the sample editor (ops + Replace/Import as new, cancel changes nothing): ${btnOk && hasOps && labEdited && rolledBack ? "ok" : "FAIL"}`);
 
-          // Apply path
-          closed = openSampleDspEditor(store, s);
-          dlg = win.document.querySelector("dialog.sample-editor");
-          [...dlg.querySelectorAll(".smp-ops button")].find((b) => b.textContent === "Reverse").click();
-          [...dlg.querySelectorAll(".modal-buttons button")][0].click(); // Apply
-          await closed;
-          const kept = span().some((v, i) => v !== before[i]) &&
+          // Replace path: one undo step, and every user of the sample follows
+          ({ p: closed, dlg } = openLab());
+          dlg.__lab.setName("SmokeReplaced");
+          dlg.__lab.tool("reverse");
+          dlg.__lab.replace();
+          const res = await closed;
+          win.confirm = realConfirm; win.alert = realAlert;
+          const users = s.users.filter((u) => !doc.instruments[u].isMeta);
+          const kept = res?.replaced === true &&
+            span().some((v, i) => v !== before[i]) &&
+            doc.sampleName(s.index) === "SmokeReplaced" &&
+            users.every((u) => doc.instruments[u].sampleLength === s.len) &&
             store.undo.undoStack.length === depth0 + 1;
           store.undo.undo();
-          log(`DSP editor Apply keeps the edit (1 undo step): ${kept ? "ok" : "FAIL"}`);
+          const undone = span().every((v, i) => v === before[i]) &&
+            doc.sampleName(s.index) === s.name;
+          log(`Sample Lab Replace rewrites the pooled sample (1 undo step, reversible): ${kept && undone ? "ok" : "FAIL"}`);
 
           // ── instrument sample editor (Instruments tab): markers, one slot ──
           const slot = s.users.find((u) => !doc.instruments[u].isMeta &&

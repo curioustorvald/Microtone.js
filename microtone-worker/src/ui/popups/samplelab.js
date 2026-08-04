@@ -1,18 +1,26 @@
-// Sample Lab (items 83/84/999) — the import-time sample editor, "a tiny
-// Audacity running inside": a zoomable waveform over a FLOAT working buffer
-// with drag selection, length-changing edits (crop/cut — legal here and only
-// here, before pool allocation), fades/gain/normalise/etc over the selection,
-// an oversampled parametric EQ with a live response graph, and a transient
-// chopper (item 84) that splits the take into per-hit chunks the user can
-// merge/split/discard. Commit funnels every kept chunk through
-// planMultiSampleImport + ONE importBankOp (full undo). Length is only
-// finalised at commit: each chunk is Kaiser-resampled to the target rate and,
-// if still over the 65535-frame budget, squeezed with the rate following —
-// the info line shows that fate BEFORE the irreversible step.
+// Sample Lab (items 83/84/109/999) — THE sample editor, "a tiny Audacity
+// running inside": a zoomable waveform over a FLOAT working buffer with drag
+// selection, length-changing edits (crop/cut), fades/gain/normalise/etc over
+// the selection, an oversampled parametric EQ with a live response graph, and a
+// transient chopper (item 84) that splits the take into per-hit chunks the user
+// can merge/split/discard. Length is only finalised at commit: each chunk is
+// Kaiser-resampled to the target rate and, if still over the 65535-frame
+// budget, squeezed with the rate following — the info line shows that fate
+// BEFORE the irreversible step.
 //
-// Entry points (all resolve {firstSlot, count} | null):
+// TWO commits, both ONE undo step (item 109 — there is no second, lesser
+// editor; this one does everything):
+//   * Import as new — every kept chunk through planMultiSampleImport, minting
+//     fresh samples and instruments. The only option for a take that came from
+//     a file, the microphone or the chord maker.
+//   * Replace — planReplaceSample writes the edit back over the POOLED sample
+//     it was opened on, so every instrument already playing it follows, length
+//     changes and all. Offered only when the Lab was opened on a pooled sample
+//     (`replaceTarget`), and only for a single kept chunk.
+//
+// Entry points (resolve {firstSlot, count} | {replaced:true} | null):
 //   file import (importsample.js) · mic recording (recordsample.js) ·
-//   Samples-view "Lab…" (a pooled sample's copy — the original is untouched).
+//   Samples-view "Edit…" / "Chord…" (a pooled sample, replaceable in place).
 //
 // The working buffer is a CHANNEL LIST (item 90): one Float32Array for mono,
 // two for a stereo take. Every op maps over the channels — normalise is the
@@ -20,7 +28,7 @@
 // detection runs on the mono fold. Committing a stereo take allocates two pool
 // spans and an Ixmp 's' patch (planMultiSampleImport).
 
-import { planMultiSampleImport } from "../../doc/bankmerge.js";
+import { planMultiSampleImport, planReplaceSample } from "../../doc/bankmerge.js";
 import { importBankOp } from "../../doc/ops.js";
 import {
   crop, cut, silenceRange, fadeInRange, fadeOutRange, gainRange,
@@ -67,8 +75,11 @@ const DEFAULT_BANDS = () => ([
  * @param openChord open the chord maker straight away (the Samples view's
  *        "Chord…" button lands here — the Lab is where the result gets named,
  *        auditioned and committed)
+ * @param replaceTarget the sampleList() census entry `data` was read out of
+ *        (item 109). Its presence is what offers "Replace": the edit is written
+ *        back over those pool bytes and every instrument bound to them follows.
  */
-export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", confirmDiscard = false, openChord = false }) {
+export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", confirmDiscard = false, openChord = false, replaceTarget = null }) {
   const srcChans = (Array.isArray(data) ? data : [data]).filter((c) => c && c.length > 0);
   if (!store.doc || srcChans.length === 0) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -93,6 +104,12 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     const nyquist = Math.max(1, Math.floor(srcRate / 2));
     let bands = DEFAULT_BANDS().map((b) => ({ ...b, freq: Math.min(b.freq, nyquist - 1) }));
     let eqOpen = false;
+    // Where a frame of the TAKE AS OPENED sits in the working buffer now.
+    // Length-changing edits compose a step onto it, so a Replace can carry the
+    // pooled sample's play/loop markers through whatever was done to the
+    // waveform (item 109) instead of guessing at them afterwards.
+    let posMap = (p) => p;
+    const composeMap = (step) => { const prev = posMap; posMap = (p) => step(prev(p)); };
     const undoStack = [], redoStack = [];
     let edited = false;
     let playing = null;        // {src, gain, t0, from}
@@ -172,7 +189,8 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       </div>
       <p class="dim lab-hint">${esc(t("lab.hint"))}</p>
       <div class="modal-buttons">
-        <button class="lab-ok">${esc(t("lab.import"))}</button>
+        ${replaceTarget ? `<button class="lab-replace" title="${esc(t("lab.replaceTitle"))}">${esc(t("lab.replace"))}</button>` : ""}
+        <button class="lab-ok">${esc(t(replaceTarget ? "lab.importNew" : "lab.import"))}</button>
         <button class="lab-cancel">${esc(t("common.cancel"))}</button>
       </div>`;
     document.body.appendChild(dlg);
@@ -186,6 +204,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     const playBtn = $(".lab-play");
     const chanBtn = $(".lab-chans");
     const okBtn = $(".lab-ok");
+    const replaceBtn = $(".lab-replace");
     const dpr = window.devicePixelRatio || 1;
     canvas.width = W * dpr; canvas.height = WAVE_H * dpr;
     canvas.style.width = W + "px"; canvas.style.height = WAVE_H + "px";
@@ -200,8 +219,9 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       return Number.isFinite(v) && v >= 1 ? Math.min(TARGET_RATE_MAX, v) : null;
     };
 
+    const snapshot = () => ({ chans, splits: [...splits], discarded: new Set(discarded), posMap });
     function pushUndo() {
-      undoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
+      undoStack.push(snapshot());
       if (undoStack.length > UNDO_CAP) undoStack.shift();
       redoStack.length = 0;
       edited = true;
@@ -210,18 +230,19 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       setChans(s.chans);
       splits = [...s.splits];
       discarded = new Set(s.discarded);
+      posMap = s.posMap;
       sel = null;
       clampView();
       refresh();
     }
     const labUndo = () => {
       if (!undoStack.length) return;
-      redoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
+      redoStack.push(snapshot());
       restore(undoStack.pop());
     };
     const labRedo = () => {
       if (!redoStack.length) return;
-      undoStack.push({ chans, splits: [...splits], discarded: new Set(discarded) });
+      undoStack.push(snapshot());
       restore(redoStack.pop());
     };
 
@@ -244,6 +265,10 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
           const shift = (p) => (p <= a ? null : p >= b ? null : p - a);
           splits = remapPositions(splits, shift);
           discarded = new Set(remapPositions([...discarded], shift));
+          // Markers keep the ends they were pinned to (the split/discard remap
+          // above DROPS what falls outside; a loop point must survive as the
+          // nearest surviving frame instead).
+          composeMap((p) => Math.max(0, Math.min(b - a, p - a)));
           sel = null; scroll = 0; spp = fitSpp();
           break;
         }
@@ -252,6 +277,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
           const shift = (p) => (p < a ? p : p < b ? null : p - (b - a));
           splits = remapPositions(splits, shift);
           discarded = new Set(remapPositions([...discarded], shift));
+          composeMap((p) => (p < a ? p : p < b ? a : p - (b - a)));
           sel = null;
           break;
         }
@@ -286,7 +312,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
     function paintChannel(ctx, C, data, top, h) {
       const mid = top + h / 2;
       const yOf = (v) => mid - v * (h / 2 - 4);
-      ctx.fillStyle = C.dim;
+      ctx.fillStyle = C.waveMid ?? C.dim;
       ctx.fillRect(0, Math.round(mid), W, 1);
       ctx.fillStyle = C.wave;
       if (spp <= 1) {
@@ -298,6 +324,12 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
           ctx.fillRect(x, Math.min(mid, y), rectW, Math.max(1, Math.abs(mid - y)));
         }
       } else {
+        // Every column is a BAR anchored to the centre line, exactly like the
+        // Samples view (item 109): the fill runs from the zero line out to the
+        // column's peak on each side, so a column whose min and max sit on the
+        // SAME side of zero still reads as a bar growing off the axis. Drawing
+        // the bare min..max envelope instead leaves a hairline floating in
+        // space, which is what a resampled waveform is hardest to read as.
         for (let col = 0; col < W; col++) {
           const a = Math.floor(scroll + col * spp);
           const b = Math.min(data.length, Math.floor(scroll + (col + 1) * spp));
@@ -309,13 +341,23 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
             if (v < mn) mn = v;
             if (v > mx) mx = v;
           }
-          // mx >= mn ⟹ yOf(mx) <= yOf(mn) always — no need to (wrongly) clamp
-          // the top against `mid`, which used to flatten all-negative columns
-          // onto the zero line instead of drawing them below it.
-          const yT = yOf(mx), yB = yOf(mn);
+          // mx >= mn ⟹ yOf(mx) <= yOf(mn); clamping BOTH ends against `mid`
+          // grows the bar from the axis. (Clamping only the top — as this once
+          // did — is the bug that flattened all-negative columns onto zero.)
+          const yT = Math.min(mid, yOf(mx)), yB = Math.max(mid, yOf(mn));
           ctx.fillRect(col, yT, 1, Math.max(1, yB - yT));
         }
       }
+    }
+
+    /** The pooled sample's loop region, followed through this session's edits —
+     *  where Replace will leave it. Null when there is nothing to show. */
+    function loopRegion() {
+      const s = replaceTarget;
+      if (!s || (s.loopMode & 3) === 0 || s.loopEnd <= s.loopStart) return null;
+      const a = Math.max(0, Math.min(buf.length, posMap(s.loopStart)));
+      const b = Math.max(0, Math.min(buf.length, posMap(s.loopEnd)));
+      return b > a ? { a, b } : null;
     }
 
     function paintWave() {
@@ -324,6 +366,13 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = C.cvBg;
       ctx.fillRect(0, 0, W, WAVE_H);
+
+      // loop region of the pooled sample, under everything
+      const loop = loopRegion();
+      if (loop) {
+        ctx.fillStyle = C.waveLoop;
+        ctx.fillRect(xOf(loop.a), 0, Math.max(1, xOf(loop.b) - xOf(loop.a)), WAVE_H);
+      }
 
       // selection under the wave
       if (sel) {
@@ -457,6 +506,11 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       let line = t("lab.info", { frames: buf.length, rate: srcRate, secs: secs(buf.length) });
       line += " · " + t(isStereo() ? "lab.stereo" : "lab.mono");
       if (sel) line += t("lab.selInfo", { frames: sel.b - sel.a, secs: secs(sel.b - sel.a) });
+      if (replaceTarget) {
+        line += " · " + t("lab.pooledUsers", {
+          list: replaceTarget.users.map((u) => "$" + u.toString(16).toUpperCase().padStart(2, "0")).join(" "),
+        });
+      }
       $(".lab-info").textContent = line;
       chanBtn.textContent = t(isStereo() ? "lab.toMono" : "lab.toStereo");
 
@@ -474,8 +528,15 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       }
       $(".lab-fit").textContent = fitStr;
       okBtn.textContent = chopOn && kept.length > 1
-        ? t("lab.importN", { n: kept.length }) : t("lab.import");
+        ? t("lab.importN", { n: kept.length })
+        : t(replaceTarget ? "lab.importNew" : "lab.import");
       okBtn.disabled = kept.length === 0;
+      if (replaceBtn) {
+        // Replace writes ONE sample back over ONE pooled sample: a chop that
+        // keeps several chunks is an import, not a replacement.
+        replaceBtn.disabled = kept.length !== 1;
+        replaceBtn.title = kept.length !== 1 ? t("lab.replaceOneOnly") : t("lab.replaceTitle");
+      }
     }
 
     function refreshChunkStrip() {
@@ -790,22 +851,38 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
 
     // ── commit / close ──
     const enc = new TextEncoder();
+    const finalName = () => nameInput.value.trim() || name || t("lab.untitled");
+    // What the Name field said on arrival. A Replace only writes SNam when the
+    // user actually typed something else: the field of an UNNAMED pooled sample
+    // is pre-filled with a placeholder ("sample 7") that would otherwise become
+    // its name just for having been read.
+    const openedWithName = nameInput.value;
+    /** One kept chunk, resampled + quantised: {pcm, pcmR, rate, ratio, clipped}. */
+    function renderChunk(c) {
+      // planFit depends only on the frame count, so every channel of a chunk
+      // resamples by the same ratio to the same length and rate.
+      const fitted = chans.map((ch) => fitToBudget(ch.slice(c.a, c.b), srcRate, targetRate()));
+      const q = fitted.map((f) => quantiseU8(f.data));
+      return {
+        pcm: q[0].pcm,
+        pcmR: q.length > 1 ? q[1].pcm : null,
+        rate: fitted[0].rate,
+        ratio: fitted[0].data.length / Math.max(1, c.b - c.a),
+        clipped: q.some((x) => x.clipped),
+      };
+    }
+
     function commit() {
       const kept = keptChunks();
       if (kept.length === 0) { alert(t("lab.noChunks")); return; }
-      const nm = nameInput.value.trim() || name || t("lab.untitled");
+      const nm = finalName();
       let clippedCount = 0;
       const items = kept.map((c, i) => {
-        // planFit depends only on the frame count, so every channel of a chunk
-        // resamples by the same ratio to the same length and rate.
-        const fitted = chans.map((ch) => fitToBudget(ch.slice(c.a, c.b), srcRate, targetRate()));
-        const q = fitted.map((f) => quantiseU8(f.data));
-        if (q.some((x) => x.clipped)) clippedCount++;
+        const r = renderChunk(c);
+        if (r.clipped) clippedCount++;
         return {
           nameBytes: enc.encode(escapeNonAscii(kept.length > 1 ? `${nm} ${i + 1}` : nm)),
-          pcm: q[0].pcm,
-          pcmR: q.length > 1 ? q[1].pcm : null,
-          rate: fitted[0].rate,
+          pcm: r.pcm, pcmR: r.pcmR, rate: r.rate,
         };
       });
       if (clippedCount > 0 && !confirm(t("lab.clipWarn", { n: clippedCount }))) return;
@@ -813,6 +890,41 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       if (plan.error) { alert(plan.error); return; }
       store.undo.apply(importBankOp(plan));
       finish({ firstSlot: plan.insts[0].destSlot, count: plan.insts.length });
+    }
+
+    /**
+     * Write the edit back over the pooled sample the Lab was opened on (item
+     * 109). The markers of every instrument bound to it are carried through by
+     * the session's position map composed with the chunk crop and the final
+     * resample ratio, so a loop still lands on the sound it looped.
+     */
+    function commitReplace() {
+      if (!replaceTarget) return;
+      const kept = keptChunks();
+      if (kept.length !== 1) { alert(t("lab.replaceOneOnly")); return; }
+      const c = kept[0];
+      const r = renderChunk(c);
+      if (r.clipped && !confirm(t("lab.clipWarn", { n: 1 }))) return;
+      const renamed = nameInput.value !== openedWithName;
+      const plan = planReplaceSample(store.doc, replaceTarget, {
+        pcm: r.pcm,
+        pcmR: r.pcmR,
+        rate: r.rate,
+        nameBytes: renamed ? enc.encode(escapeNonAscii(finalName())) : null,
+        mapPos: (p) => (Math.max(c.a, Math.min(c.b, posMap(p))) - c.a) * r.ratio,
+      });
+      if (plan.error) { alert(plan.error); return; }
+      const users = replaceTarget.users.map((u) => "$" + u.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+      let ask = t("lab.replaceAsk", {
+        frames: plan.len, rate: plan.rate, list: users, n: replaceTarget.users.length,
+      });
+      if (plan.len !== plan.oldLen) ask += "\n" + t("lab.replaceLenNote", { from: plan.oldLen, to: plan.len });
+      if (plan.rate !== replaceTarget.rate) ask += "\n" + t("lab.replaceRateNote", { from: replaceTarget.rate, to: plan.rate });
+      if (plan.droppedChannel) ask += "\n" + t("lab.replaceMonoNote");
+      if (plan.clampedLoops > 0) ask += "\n" + t("lab.replaceLoopNote", { n: plan.clampedLoops });
+      if (!confirm(ask)) return;
+      store.undo.apply(importBankOp(plan));
+      finish({ replaced: true, ptr: plan.ptr, len: plan.len });
     }
     function finish(result) {
       stopPlay();
@@ -826,6 +938,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       finish(null);
     }
     okBtn.addEventListener("click", (e) => { e.preventDefault(); commit(); });
+    replaceBtn?.addEventListener("click", (e) => { e.preventDefault(); commitReplace(); });
     $(".lab-cancel").addEventListener("click", (e) => { e.preventDefault(); requestCancel(); });
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); requestCancel(); });
     dlg.addEventListener("keydown", (e) => {
@@ -853,7 +966,10 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         len: buf.length, rate: srcRate, sel: sel && { ...sel },
         splits: [...splits], chop: chopOn, channels: chans.length,
         discarded: [...discarded], undoDepth: undoStack.length,
+        canReplace: !!replaceBtn && !replaceBtn.disabled,
+        loop: loopRegion(),
       }),
+      mapPos: (p) => posMap(p),
       buffer: () => buf,
       buffers: () => chans,
       setChannelCount,
@@ -887,6 +1003,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       setName: (s) => { nameInput.value = s; },
       setTargetRate: (v) => { rateInput.value = v; refreshInfo(); },
       commit,
+      replace: commitReplace,
       cancel: () => finish(null),
     };
 

@@ -38,12 +38,16 @@ import { SAMPLING_RATE } from "../../engine/constants.js";
 import { setSongScalarOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
 import { paintSpatialDot } from "../spatialdot.js";
+import { CrtBeam, beamCoreInk } from "../crtbeam.js";
 import { t } from "../i18n.js";
 
 const PREF_KEY = "microtone-masterstrip";
 
 /** Scratch for the blob dials' direction vectors — one per frame, not per dot. */
 const dirScratch = new Float64Array(3);
+/** Scratch for one panel's projected trace, refilled per panel per frame. */
+const traceX = new Float32Array(SCOPE_FRAMES);
+const traceY = new Float32Array(SCOPE_FRAMES);
 
 /**
  * Scope kinds. The blobs family draws the SOURCES (one dot per sounding
@@ -73,16 +77,9 @@ export const METER_MIN_H = 112;
 /** The strip's own padding, top and bottom (CSS .master-strip). */
 export const STRIP_PAD = 4;
 
-/** How much of the ring one cloud shows. The whole of it: 128 ms at 32 kHz. */
-const TRACE_FRAMES = SCOPE_FRAMES;
-/** Density curve — alpha = 1 − e^(−k·hits), so one hit is faint and a dozen saturate. */
-const CLOUD_K = 0.50;
-/** …calibrated for this many points, and scaled down when more are drawn, so
- *  widening the window makes the cloud FULLER rather than a solid disc. */
-const CLOUD_REF_FRAMES = 1024;
 /** Time constant of the vectorscope auto-gain, both directions. Long enough
  *  that the dial BREATHES with the music instead of snapping at every
- *  transient — the cloud's shape is the reading, and a gain that jumps makes
+ *  transient — the trace's shape is the reading, and a gain that jumps makes
  *  shapes impossible to compare from one moment to the next. */
 export const SCOPE_GAIN_SLEW_MS = 300;
 /**
@@ -149,11 +146,6 @@ export function parseInk(css) {
     if (p.length >= 3 && p.every((x) => Number.isFinite(x))) return p.slice(0, 3);
   }
   return [128, 128, 128];
-}
-
-/** Hits landing on one pixel → ink alpha. Saturating, so density reads as density. */
-export function densityAlpha(hits, k = CLOUD_K) {
-  return hits <= 0 ? 0 : 1 - Math.exp(-k * hits);
 }
 
 /**
@@ -369,7 +361,13 @@ export class MasterStrip {
     this.slots = this.scopes.map((_, i) => i);
     this._wasPlaying = false;
     this.scopeGain = new Array(MAX_SCOPE_PANELS).fill(1); // auto-gain per panel
-    this.cloud = new Array(MAX_SCOPE_PANELS).fill(null);  // density buffers per panel
+    this.beams = new Array(MAX_SCOPE_PANELS).fill(null);  // CRT beam per panel
+    // The scopes draw the samples that arrived SINCE THE LAST FRAME and let the
+    // phosphor hold the rest, so the strip has to remember where in the ring it
+    // stopped. −1 is "no idea", which draws nothing and joins nothing.
+    this._lastWrite = -1;
+    this.freshFrames = 0;
+    this.traceGap = true;
     this.lastMs = 0;
     this._tapAudio = null;
     this._tapTarget = null;
@@ -620,7 +618,19 @@ export class MasterStrip {
     this.el.hidden = !show;
     this.shown = show;
     if (show) this.resize();
+    // A hidden strip stops consuming the ring, so what it knows about the beam
+    // goes stale: wipe the screens rather than come back with a frozen trace
+    // from whenever it was last on, and pick the ring up fresh.
+    if (!show) this.resetBeams();
     this.syncTap();
+  }
+
+  /** Blank every scope's phosphor and forget where in the ring the beam was. */
+  resetBeams() {
+    for (const cell of this.beams) cell?.beam.clear();
+    this._lastWrite = -1;
+    this.freshFrames = 0;
+    this.traceGap = true;
   }
 
   /**
@@ -821,6 +831,18 @@ export class MasterStrip {
       // runs off the audio thread (Tier 2) the worker tops its ring up in
       // bursts and idles in between, so empty windows are normal and reading
       // them as silence made the meters dip a few times a second.
+
+      // How much of the ring is new since the last frame — the span every scope
+      // sweeps its beam through. A snapshot can carry none of it (the ring is
+      // topped up in bursts) or, after a stall, most of it; more than half the
+      // ring means the beam's remembered position is stale, so the trace is
+      // drawn without joining it to one.
+      const write = this.readout.ringWrite | 0;
+      const fresh = this._lastWrite < 0
+        ? 0 : (write - this._lastWrite + SCOPE_FRAMES) % SCOPE_FRAMES;
+      this.traceGap = this._lastWrite < 0 || fresh > SCOPE_FRAMES / 2;
+      this.freshFrames = fresh;
+      this._lastWrite = write;
     }
 
     const C = themeColors();
@@ -866,7 +888,7 @@ export class MasterStrip {
     const axes = scopeAxes(kind, stereoSong);
     const blobs = blobView(kind);
     if (blobs !== null) this.drawBlobs(ctx, C, cx, cy, r, blobs);
-    else if (axes) this.drawCloud(ctx, C, cx, cy, r, axes, i);
+    else if (axes) this.drawTrace(ctx, C, cx, cy, r, axes, i, kind);
 
     // Edge labels — which way is which (item 98: "all four label the direction").
     ctx.font = "9px system-ui, sans-serif";
@@ -932,76 +954,66 @@ export class MasterStrip {
   }
 
   /**
-   * The vectorscope proper: the ring's samples as a CLOUD, one point each,
-   * accumulated into a density buffer so that where the trace passes again and
-   * again the ink builds up — a phosphor screen's own way of saying "most of
-   * the energy is here". Each sample is splatted bilinearly, so the cloud stays
-   * smooth instead of aliasing onto whole pixels.
+   * The vectorscope proper: a CRT beam dragged through the ring's samples (item
+   * 106, src/ui/crtbeam.js). Every frame sweeps the beam through the samples
+   * that arrived since the last one and lets the phosphor hold the rest, so the
+   * trace is CONTINUOUS — a connected figure rather than a fog of dots — and
+   * where it passes again and again the energy builds up, which is what tells
+   * you where the sound actually sits.
    *
    * Auto-gained the way a hardware vectorscope is: the display is about SHAPE —
    * where the energy sits and whether the two sides agree — and a mix sitting at
    * a sane −20 dBFS would otherwise be a speck in the middle. The meters are the
    * absolute reading, so the gain is shown rather than hidden.
    */
-  drawCloud(ctx, C, cx, cy, r, axes, slot) {
+  drawTrace(ctx, C, cx, cy, r, axes, slot, kind) {
     const audio = this.store.audio;
     if (!audio) return;
     const ring = audio.scopeRing();
     const write = this.readout.ringWrite;
-    const count = Math.min(TRACE_FRAMES, SCOPE_FRAMES);
     const hSign = axes.flipH ? 1 : -1; // +Y is LEFT on screen, +X is FRONT (up)
 
+    // The gain is a WINDOW statistic, so it reads the whole ring however few
+    // samples this frame draws: measured over the 16 ms just gone it would
+    // wobble with every transient.
     let peak = 0;
-    for (let k = 0; k < count; k++) {
-      const o = ((write - count + k + SCOPE_FRAMES * 2) % SCOPE_FRAMES) * SCOPE_CHANNELS;
+    for (let k = 0; k < SCOPE_FRAMES; k++) {
+      const o = k * SCOPE_CHANNELS;
       const a = Math.abs(ring[o + axes.h]);
       const b = Math.abs(ring[o + axes.v]);
       if (a > peak) peak = a;
       if (b > peak) peak = b;
     }
     // One slew for both directions (~300 ms): a transient briefly overruns the
-    // dial rather than yanking the whole cloud smaller, which is the readable
+    // dial rather than yanking the whole trace smaller, which is the readable
     // trade — you are looking at the SHAPE, and it has to hold still enough to
     // be looked at.
     const want = Math.max(1, Math.min(0.92 / Math.max(peak, 1e-4), 64));
     this.scopeGain[slot] = slewTowards(
       this.scopeGain[slot], want, this.dtMs ?? 16, SCOPE_GAIN_SLEW_MS);
+    const g = this.scopeGain[slot];
 
-    // The density buffer is built in CSS pixels and blitted through the canvas
-    // transform, so the cloud looks the same on a HiDPI screen as on a plain
+    // The screen is built in CSS pixels and blitted through the canvas
+    // transform, so the trace looks the same on a HiDPI screen as on a plain
     // one (and costs the same) instead of thinning out as the pixels get finer.
-    const g = this.scopeGain[slot] * r;
     const size = Math.ceil(2 * r) + 2;
-    const cloud = this.cloudBuffer(slot, size, C.accent);
-    const { hits, image } = cloud;
-    hits.fill(0);
+    const cell = this.beamCell(slot, size, C.accent, C.cvBg, kind);
+    const beam = cell.beam;
+    beam.decay(this.dtMs ?? 16);
 
-    // Splat each sample over its four neighbouring pixels.
-    const mid = size / 2;
-    for (let k = 0; k < count; k++) {
-      const o = ((write - count + k + SCOPE_FRAMES * 2) % SCOPE_FRAMES) * SCOPE_CHANNELS;
-      const px = mid + hSign * ring[o + axes.h] * g;
-      const py = mid - ring[o + axes.v] * g;
-      const x0 = Math.floor(px);
-      const y0 = Math.floor(py);
-      if (x0 < 0 || y0 < 0 || x0 + 1 >= size || y0 + 1 >= size) continue;
-      const fx = px - x0;
-      const fy = py - y0;
-      const base = y0 * size + x0;
-      hits[base] += (1 - fx) * (1 - fy);
-      hits[base + 1] += fx * (1 - fy);
-      hits[base + size] += (1 - fx) * fy;
-      hits[base + size + 1] += fx * fy;
+    const n = this.freshFrames;
+    if (n > 0) {
+      if (this.traceGap) beam.lift();
+      for (let k = 0; k < n; k++) {
+        const o = ((write - n + k + SCOPE_FRAMES * 2) % SCOPE_FRAMES) * SCOPE_CHANNELS;
+        traceX[k] = hSign * ring[o + axes.h] * g;
+        traceY[k] = ring[o + axes.v] * g;
+      }
+      beam.trace(traceX, traceY, n);
     }
-
-    const data = image.data;
-    const k = (CLOUD_K * CLOUD_REF_FRAMES) / count;
-    for (let i = 0, p = 3; i < hits.length; i++, p += 4) {
-      const h = hits[i];
-      data[p] = h <= 0 ? 0 : Math.round(255 * densityAlpha(h, k));
-    }
-    cloud.ctx.putImageData(image, 0, 0);
-    ctx.drawImage(cloud.canvas, cx - size / 2, cy - size / 2);
+    beam.develop(cell.image.data, cell.rgb, cell.core);
+    cell.ctx.putImageData(cell.image, 0, 0);
+    ctx.drawImage(cell.canvas, cx - size / 2, cy - size / 2);
 
     if (this.scopeGain[slot] > 1.05) {
       ctx.fillStyle = C.dim;
@@ -1012,21 +1024,36 @@ export class MasterStrip {
     }
   }
 
-  /** Density buffer + its ImageData for one panel, rebuilt on resize/theme change. */
-  cloudBuffer(slot, size, ink) {
-    let c = this.cloud[slot];
-    if (c === null || c.size !== size || c.ink !== ink) {
+  /**
+   * One panel's beam, its blit canvas and its ImageData. The beam survives a
+   * theme change (only the ink is re-parsed) but not a resize or a change of
+   * view: both of those move every pixel of it, and the phosphor would spend
+   * half a second showing the previous geometry.
+   */
+  beamCell(slot, size, ink, ground, kind) {
+    let c = this.beams[slot];
+    if (c === null || c.size !== size) {
       const canvas = document.createElement("canvas");
       canvas.width = size;
       canvas.height = size;
       const cctx = canvas.getContext("2d");
-      const image = cctx.createImageData(size, size);
-      const [r, g, b] = parseInk(ink);
-      const d = image.data;
-      for (let p = 0; p < d.length; p += 4) { d[p] = r; d[p + 1] = g; d[p + 2] = b; }
-      c = this.cloud[slot] = {
-        size, ink, canvas, ctx: cctx, image, hits: new Float32Array(size * size),
+      c = this.beams[slot] = {
+        size, ink: null, ground: null, kind, rgb: [128, 128, 128], core: [255, 255, 255],
+        canvas, ctx: cctx,
+        image: cctx.createImageData(size, size), beam: new CrtBeam(size),
       };
+    }
+    if (c.ink !== ink) {
+      c.ink = ink;
+      c.rgb = parseInk(ink);
+    }
+    if (c.ground !== ground) {
+      c.ground = ground;
+      c.core = beamCoreInk(parseInk(ground));
+    }
+    if (c.kind !== kind) {
+      c.kind = kind;
+      c.beam.clear();
     }
     return c;
   }

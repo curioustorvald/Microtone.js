@@ -256,6 +256,10 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
           ctx.fillRect(x, Math.min(mid, y), rectW, Math.max(1, Math.abs(mid - y)));
         }
       } else {
+        // Bars anchored to the centre line, as everywhere else a sample is
+        // drawn (item 109) — clamping BOTH ends against `mid` grows each
+        // column off the zero axis instead of leaving a min..max hairline
+        // floating where the whole column sits on one side of zero.
         for (let col = 0; col < waveW; col++) {
           const a = Math.floor(col * spp), b = Math.min(buf.length, Math.floor((col + 1) * spp));
           if (b <= a) continue;
@@ -265,10 +269,10 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
             if (buf[p] < mn) mn = buf[p];
             if (buf[p] > mx) mx = buf[p];
           }
-          // mx >= mn ⟹ yT <= yB always — clamping the top against `mid` (as
-          // this used to) flattened all-negative columns onto the zero line
-          // instead of drawing them below it.
-          const yT = mid - mx * (mid - 2), yB = mid - mn * (mid - 2);
+          // mx >= mn ⟹ yT <= yB. (Clamping only the top — as this once did —
+          // is the bug that flattened all-negative columns onto the zero line.)
+          const yT = Math.min(mid, mid - mx * (mid - 2));
+          const yB = Math.max(mid, mid - mn * (mid - 2));
           ctx.fillRect(col, yT, 1, Math.max(1, yB - yT));
         }
       }

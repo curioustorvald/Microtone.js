@@ -77,7 +77,6 @@
         win.URL.createObjectURL = (blob) => { captured = blob; return "blob:stub"; };
 
         const { sampleSpans } = await win.eval('import("/src/doc/document.js")');
-        const { openSampleDspEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
         const { openSampleLab } = await win.eval('import("/src/ui/popups/samplelab.js")');
 
         // ── leg A: Samples view "Export ⬇" button ──────────────────────────
@@ -99,44 +98,47 @@
         const expectedA = interleaveU8(sampleSpans(s0).map((sp) => store.doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)));
         ok(bytesEqual(parsedA.data, expectedA), "a4 exported bytes are bit-exact with the pool");
 
-        // ── leg B: sample editor's Export original / Export edited ─────────
+        // ── leg B: the Sample Lab on a POOLED sample (item 109 — the one
+        //    editor) exports the take it opened, and its edits ──────────────
         const beforeB = win.eval("__microtone.store.doc.toBytes()");
-        const pEditor = openSampleDspEditor(store, s0);
-        const dlg = await waitFor(() => win.document.querySelector(".sample-editor"));
+        const editBtn = findBtn(win.document.querySelector(".smp-toolbar"), /^Edit/);
+        ok(!!editBtn, "b1 the Samples toolbar opens the Lab from Edit…");
+        editBtn.click();
+        const dlg = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const labB = dlg.__lab;
+        ok(labB.state().len === s0.len && labB.state().canReplace,
+          "b2 the Lab opened on the pooled sample with Replace offered");
+
         const origBtn = findBtn(dlg, /Export original/i);
         const editedBtn = findBtn(dlg, /Export edited/i);
-        ok(!!origBtn && !!editedBtn, "b1 sample editor has both export buttons");
+        ok(!!origBtn && !!editedBtn, "b3 the Lab has both export buttons");
 
         captured = null;
         origBtn.click();
         const origBytesB = new Uint8Array(await captured.arrayBuffer());
         const parsedOrigB = parseWav(origBytesB);
-        ok(bytesEqual(parsedOrigB.data, expectedA), "b2 export-original matches the pre-edit pool bytes");
+        const chansB = sampleSpans(s0).length;
+        ok(parsedOrigB.fmt && parsedOrigB.fmt.bits === 16 &&
+           parsedOrigB.fmt.channels === chansB && parsedOrigB.fmt.rate === s0.rate,
+          `b4 16-bit WAV, one channel per span, at the sample's rate (got ${JSON.stringify(parsedOrigB.fmt)})`);
+        ok(parsedOrigB.data.length === s0.len * 2 * chansB, "b5 correct byte length for the take");
 
-        const invertBtn = findBtn(dlg, /^Invert$/);
-        ok(!!invertBtn, "b3 found the Invert DSP button");
-        invertBtn.click();
-
+        labB.tool("invert");
         captured = null;
         editedBtn.click();
         const editedBytesB = new Uint8Array(await captured.arrayBuffer());
-        const parsedEditedB = parseWav(editedBytesB);
-        const liveChansB = interleaveU8(sampleSpans(s0).map((sp) => store.doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)));
-        ok(bytesEqual(parsedEditedB.data, liveChansB), "b4 export-edited matches the live pool bytes after Invert");
-        ok(!bytesEqual(parsedEditedB.data, parsedOrigB.data), "b5 edited export differs from the original export");
+        ok(!bytesEqual(editedBytesB, origBytesB), "b6 export-edited differs after Invert");
 
-        // export-original stays fixed even after the in-session edit
         captured = null;
         origBtn.click();
         const origBytesB2 = new Uint8Array(await captured.arrayBuffer());
-        ok(bytesEqual(origBytesB2, origBytesB), "b6 export-original is unaffected by the later Invert");
+        ok(bytesEqual(origBytesB2, origBytesB), "b7 export-original is unaffected by the later Invert");
 
-        const cancelBtn = findBtn(dlg, /^Cancel$/);
-        cancelBtn.click();
-        await pEditor;
+        labB.cancel();
+        await waitFor(() => !win.document.querySelector(".samplelab-modal"));
         const afterB = win.eval("__microtone.store.doc.toBytes()");
         ok(afterB.length === beforeB.length && afterB.every((v, i) => v === beforeB[i]),
-          "b7 Cancel rolled the Invert back — doc byte-identical to before the editor opened");
+          "b8 closing without committing left the doc byte-identical");
 
         // ── leg C: Sample Lab's Export original / Export edited ────────────
         const rate = 8000;

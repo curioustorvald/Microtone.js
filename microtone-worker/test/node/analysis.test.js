@@ -23,7 +23,7 @@ import { loadIntoEngine, renderSong } from "../../src/audio/offline-render.js";
 import {
   dbfs, meterFrac, correlation, availableScopes, effectiveScopes, SCOPE_KINDS,
   scopeAxes, scopeLabels, blobView, MeterBallistics,
-  scopePanelHeight, scopePanelsThatFit, parseInk, densityAlpha,
+  scopePanelHeight, scopePanelsThatFit, parseInk,
   slewTowards, integrateCorrelation, SCOPE_GAIN_SLEW_MS, CORR_INTEGRATE_MS,
   METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
   SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
@@ -528,27 +528,19 @@ test("the vectorscope auto-gain slews in wall time", () => {
   assert.equal(slewTowards(3, 9, 0, 300), 3);
 });
 
-test("cloud ink parsing and the density curve", () => {
+test("trace ink parsing", () => {
+  // The beam's own curves are in test/node/crtbeam.test.js; this is the theme
+  // colour it is developed through.
   assert.deepEqual(parseInk("#ffc043"), [255, 192, 67]);
   assert.deepEqual(parseInk("#abc"), [170, 187, 204]);
   assert.deepEqual(parseInk("rgb(1, 2, 3)"), [1, 2, 3]);
   assert.deepEqual(parseInk("nonsense"), [128, 128, 128]);
-  // Density has to READ as density — the SHAPE of the curve, not a particular
-  // steepness (CLOUD_K is a look, tuned by eye): one hit visible but far from
-  // solid, monotone, saturating, never over 1.
-  assert.equal(densityAlpha(0), 0);
-  assert.ok(densityAlpha(1) > 0.05 && densityAlpha(1) < 0.7, String(densityAlpha(1)));
-  assert.ok(densityAlpha(12) > 0.9, String(densityAlpha(12)));
-  assert.ok(densityAlpha(3) > densityAlpha(1));
-  assert.ok(densityAlpha(1000) <= 1);
-  // A wider window draws more points, so the curve is scaled by the caller to
-  // keep the same look: 4× the points at ¼ the steepness reads the same.
-  assert.ok(Math.abs(densityAlpha(4, 0.25 / 4) - densityAlpha(1, 0.25)) < 1e-3);
 });
 
-test("the scope window is wide enough to settle", () => {
-  // 128 ms at 32 kHz: eight snapshot intervals, so ~⅛ of the cloud's points
-  // are replaced per displayed frame and the shape stops flickering.
+test("the scope ring outlasts a displayed frame several times over", () => {
+  // 128 ms at 32 kHz. The scopes draw the samples that arrived since the last
+  // frame, so the ring only has to cover the gaps: a snapshot burst, a slow
+  // frame, a browser that throttled the tab for a moment.
   assert.equal(SCOPE_FRAMES, 4096);
   const ms = (SCOPE_FRAMES / 32000) * 1000;
   assert.ok(ms >= 100 && ms <= 200, `${ms} ms window`);

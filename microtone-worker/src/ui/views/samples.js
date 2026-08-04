@@ -1,7 +1,10 @@
 // Samples view (F4) — deduped sample census (base instruments + Ixmp patches),
 // waveform canvas with loop markers and LIVE per-voice play-position blobs
 // (snapshot voices whose samplePtr matches). Reference: taut_views.mjs samples
-// tab. Read-only in M7 (sample editor modal is an M8 item).
+// tab. The toolbar's editors: "Edit…" opens the Sample Lab (item 109 — one
+// editor, which both replaces the sample in place and imports as new),
+// "Paint…" redraws its waveform by hand, "Chord…" is the Lab with the chord
+// maker on top.
 
 import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
@@ -32,16 +35,15 @@ export class SamplesView {
     this.info.className = "detail-info";
     this.toolbar = document.createElement("div");
     this.toolbar.className = "smp-toolbar";
+    // "Edit…" is the ONE sample editor (item 109): the Sample Lab, opened on a
+    // float copy of the selected sample. It commits either way — Replace writes
+    // the edit back over these pool bytes (every instrument using them follows),
+    // or Import as new mints fresh samples and instruments and leaves the
+    // original alone.
     this.editBtn = document.createElement("button");
     this.editBtn.textContent = t("smp.edit");
-    this.editBtn.title = "Open the sample DSP editor (normalise/fade/reverse — affects every instrument using the sample)";
-    this.editBtn.addEventListener("click", async () => {
-      const s = this.list?.[this.selected];
-      if (!s) return;
-      const { openSampleDspEditor } = await import("../popups/sampleeditor.js");
-      await openSampleDspEditor(this.store, s);
-      this.refresh();
-    });
+    this.editBtn.title = t("smp.editTitle");
+    this.editBtn.addEventListener("click", () => this.openInLab());
     // Create a fresh instrument that plays the selected pooled sample (item 40).
     this.newInstBtn = document.createElement("button");
     this.newInstBtn.textContent = t("smp.newInst");
@@ -65,15 +67,8 @@ export class SamplesView {
       await paintEditSample(this.store, s);
       this.refresh(); // repaint the waveform view
     });
-    // "Lab…" opens a COPY of the selected sample in the Sample Lab (item 83):
-    // length-changing edits (crop/chop/EQ) are legal there because the commit
-    // creates NEW samples+instruments — the pooled original is untouched.
-    this.labBtn = document.createElement("button");
-    this.labBtn.textContent = t("smp.lab");
-    this.labBtn.title = t("smp.labTitle");
-    this.labBtn.addEventListener("click", () => this.openInLab());
-    // "Chord…" (item 89) is the same copy-into-the-Lab trip with the chord
-    // maker opened on arrival: mix pitch-shifted copies of the sample into one
+    // "Chord…" (item 89) is the same trip into the Lab with the chord maker
+    // opened on arrival: mix pitch-shifted copies of the sample into one
     // chorded sample, the Amiga trick. The Lab then names/auditions/commits it.
     this.chordBtn = document.createElement("button");
     this.chordBtn.textContent = t("smp.chord");
@@ -86,7 +81,7 @@ export class SamplesView {
     this.exportBtn.textContent = t("smp.export");
     this.exportBtn.title = t("smp.exportTitle");
     this.exportBtn.addEventListener("click", () => this.exportSample());
-    this.toolbar.append(this.editBtn, this.paintBtn, this.labBtn, this.chordBtn, this.exportBtn, this.newInstBtn);
+    this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.exportBtn, this.newInstBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);
@@ -105,9 +100,10 @@ export class SamplesView {
   show() { this.visible = true; this.refresh(); }
   hide() { this.visible = false; }
 
-  /** Open a float COPY of the selected sample in the Sample Lab; `openChord`
-   *  opens the chord maker on top of it. The pooled original is untouched
-   *  either way — the Lab's commit creates new samples and instruments. */
+  /** Open a float copy of the selected sample in the Sample Lab; `openChord`
+   *  opens the chord maker on top of it. `replaceTarget` is what lets the Lab
+   *  write the edit BACK over these pool bytes (item 109) — the alternative
+   *  commit, importing the result as new instruments, leaves them untouched. */
   async openInLab(openChord = false) {
     const s = this.list?.[this.selected];
     if (!s) return;
@@ -123,8 +119,10 @@ export class SamplesView {
       name: unescapeName(s.name) || `sample ${s.index}`,
       sourceLabel: t("smp.labSource", { idx: s.index }),
       openChord,
+      replaceTarget: s,
     });
-    if (res) this.cb.onNewInstrument?.(res.firstSlot);
+    if (res?.firstSlot !== undefined) this.cb.onNewInstrument?.(res.firstSlot);
+    else if (res?.replaced) this.refresh();
   }
 
   exportSample() {

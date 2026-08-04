@@ -1064,10 +1064,12 @@ export class AdvancedZoneEditor {
       ctx.fillRect(x0, 0, Math.max(x1 - x0, 1), h);
       ctx.globalAlpha = 1;
     }
-    ctx.strokeStyle = C.waveMid;
-    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
-    ctx.strokeStyle = C.wave;
-    ctx.beginPath();
+    // Centre-anchored bars, as every other sample display draws (item 109) —
+    // each column is filled from the zero line out to its peak.
+    const baseY = h / 2;
+    ctx.fillStyle = C.waveMid;
+    ctx.fillRect(0, Math.round(baseY), w, 1);
+    ctx.fillStyle = C.wave;
     for (let col = 0; col < w; col++) {
       const start = Math.floor((col * smp.len) / w);
       const end = Math.min(smp.len, Math.floor(((col + 1) * smp.len) / w) || start + 1);
@@ -1079,12 +1081,10 @@ export class AdvancedZoneEditor {
         if (v > mx) mx = v;
       }
       if (mn > mx) continue;
-      const yT = h - (mx / 255) * h;
-      const yB = h - (mn / 255) * h;
-      ctx.moveTo(col + 0.5, yT);
-      ctx.lineTo(col + 0.5, Math.max(yB, yT + 1));
+      const yT = Math.min(baseY, h - (mx / 255) * h);
+      const yB = Math.max(baseY, h - (mn / 255) * h);
+      ctx.fillRect(col, yT, 1, Math.max(1, yB - yT));
     }
-    ctx.stroke();
     // live play-position hairlines for voices sounding this sample
     const audio = this.store.audio;
     if (audio) {

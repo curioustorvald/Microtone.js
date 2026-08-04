@@ -151,14 +151,19 @@
           `t8c the canvas is one full lane per channel (mono ${monoH}, stereo ${stereoH})`);
         samplesView.hide();
 
-        // ── the DSP editor and the paint canvas grow a lane per channel ──────
-        const { openSampleDspEditor } = await win.eval('import("/src/ui/popups/sampleeditor.js")');
-        const pDsp = openSampleDspEditor(store, entry);
-        const dspDlg = await waitFor(() => win.document.querySelector(".sample-editor"));
-        const dspH = parseFloat(dspDlg.querySelector("canvas").style.height);
-        ok(Math.abs(dspH - 400) < 0.5, `t11 DSP editor draws two 200px lanes (got ${dspH})`);
-        [...dspDlg.querySelectorAll(".modal-buttons button")].at(-1).click(); // Cancel
-        await pDsp;
+        // ── the Sample Lab opens the pair as a stereo take (item 109) ───────
+        const { u8ToFloat } = await win.eval('import("/src/doc/wavelab.js")');
+        const pLab2 = openSampleLab(store, {
+          data: sampleSpans(entry).map((sp) => u8ToFloat(bin.subarray(sp.ptr, sp.ptr + sp.len))),
+          rate: entry.rate, name: "pair", replaceTarget: entry,
+        });
+        const labDlg2 = await waitFor(() => win.document.querySelector(".samplelab-modal"));
+        const labState = labDlg2.__lab.state();
+        ok(labState.channels === 2 && labState.len === entry.len,
+          `t11 the Lab opens both channels as one take (got ${labState.channels} × ${labState.len})`);
+        ok(labState.canReplace, "t11b Replace is offered for a pooled sample");
+        labDlg2.__lab.cancel();
+        await pLab2;
 
         const { paintEditSample } = await win.eval('import("/src/ui/popups/waveformpaint.js")');
         win.confirm = () => true; // the long-sample warning would block headless

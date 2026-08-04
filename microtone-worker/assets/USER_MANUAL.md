@@ -264,21 +264,37 @@ has no front–back axis and a planar song has no height, so every view that wou
 be a flat line is simply not offered — which leaves a stereo song with the two
 top views.
 
-A Lissajous view draws the last eighth of a second as a **cloud of points**, one
-per sample, and where the trace passes again and again the ink builds up — so the
-densest part of the cloud is where most of the energy actually is, the way a
-phosphor screen shows it. The window is deliberately long: only a fraction of the
-points change from frame to frame, so the shape settles into something you can
-read instead of flickering.
+A Lissajous view is drawn the way the instrument it is named after drew it: as a
+**beam**, dragged from where one sample was to where the next one is, leaving
+light behind it. So the trace is a connected figure rather than a scatter of
+dots, and three things about a real screen come with it.
+
+*Brightness is dwell.* The beam lays down the same charge every sample, however
+far it travels, so where it lingers the light piles up and where it races across
+the dial it thins out — the turning points of a figure burn while the sweep
+between them stays faint. A beam asked to slew hard dims a little further still.
+What that adds up to is a display where the **bright part is where the sound
+actually is**, not merely where it reached.
+
+*Light adds up.* Twenty passes over the same spot really are twenty times the
+energy of one. Ink runs out long before that, so a spot far past saturation
+starts going white instead (dark, on the light theme) — density keeps reading
+after opacity has nothing left to say.
+
+*The screen fades rather than being wiped.* Each frame adds the samples that
+arrived since the last one and lets the rest decay, over about a tenth of a
+second. The figure therefore settles into something you can look at instead of
+flickering, it looks the same whatever frame rate your machine manages, and when
+the music stops the trace dies away rather than freezing on its last window.
 
 In a stereo song the top view is the familiar mid/side goniometer: a vertical
-cloud is a mono-safe mix, a horizontal one is very wide, a diagonal one leans to
+trace is a mono-safe mix, a horizontal one is very wide, a diagonal one leans to
 that side. This is not a special case — for two speakers, left–right and
 front–back *are* side and mid — so the same display serves every song. It is
 auto-gained so a quiet mix still fills the dial, with the factor shown in the
 corner; the meters below it are the absolute reading. The gain glides over about
 a third of a second rather than snapping, so a transient briefly overruns the
-dial instead of yanking the whole cloud smaller — the shape has to hold still
+dial instead of yanking the whole figure smaller — the shape has to hold still
 enough to compare from one moment to the next.
 
 Under each scope is the **correlation meter**, a thin bar growing out of the
@@ -493,19 +509,22 @@ waveform display XORs the loop region live with the engine's invert mask, so
 you see the bit-flipped waveform actually being played back, not the sample's
 original bytes.
 
-**Edit…** opens the sample editor in DSP mode:
+**Edit…** opens the selected sample in the [Sample Lab](#the-sample-lab) — the
+one sample editor. Crop, EQ, chop, normalise, fade, chord: everything the Lab
+does, it does here too, on a high-resolution float copy of the pooled bytes.
+What differs is how you leave it, and the Lab offers both ways:
 
-- **Normalise**, **Fade in**, **Fade out**, **Reverse**, **Invert** (polarity) — all length-preserving, each one undo step.
-- **Rename** the sample.
-- **▶ C4** auditions through the engine.
+- **Replace** writes the edit back over the pooled sample. Every instrument using it plays the new audio — that is the point, and it is why the button asks first, listing the instruments it will reach. The length may change: the sample is re-placed in the pool, every instrument and patch bound to it follows, and each one's play and loop points are carried through the edits you made (a crop shifts them, a cut closes over them, a resample scales them). One undo step puts all of it back.
+- **Import as new** lands the result as new samples and instruments and leaves the pooled original untouched — the right choice when you are deriving a variation rather than fixing the source.
 
-DSP edits rewrite the pool bytes, so *every* instrument using the sample hears
-the change. **Apply** keeps the edits; **Cancel** rolls all of them back.
+Replace is offered only when the Lab was opened on a pooled sample, and only
+for a single sample: chop the take into several chunks and only *Import as
+new* remains. Two edits it will not do in place, because the format cannot
+express them safely: turning a **mono** sample into a **stereo** one (import it
+as new instead), and changing the length of a sample whose pool bytes overlap
+another sample's.
 
-**Lab…** opens a *copy* of the selected sample in the Sample Lab (below) —
-use it when you want to crop, EQ or chop a pooled sample: the result lands as
-new samples and instruments, and the original is untouched. (A pooled span's
-length can never change in place — every other pool pointer would move.)
+**Rename** the sample by typing in the Lab's **Name** field before you Replace.
 
 **Chord…** is the same trip with the [chord maker](#the-chord-maker) already
 open: mix pitch-shifted copies of the sample into one chorded waveform.
@@ -528,12 +547,14 @@ channels in their own speakers, and panning fully left silences the right
 channel. A stereo sample whose channels are identical sounds exactly like the
 mono sample it came from.
 
-Editing follows the pair. **Edit…** shows both channels as full-height lanes and
-applies each tool to both in one undo step (Normalise shares one factor across
-them, so the stereo image is not re-balanced). **Paint…** also opens one lane
-per channel: a stroke edits the lane it starts in, so you can draw the channels
-apart — the shape buttons (Sine, Saw, …) fill both lanes, since a seed is a
-whole-waveform shape.
+Editing follows the pair. **Edit…** opens both channels as one stereo take in
+the Lab and applies each tool to both in one undo step (Normalise shares one
+factor across them, so the stereo image is not re-balanced); **→ Mono** there,
+followed by Replace, folds the pooled sample down to one channel and hands the
+right channel's bytes back to the pool. **Paint…** opens one lane per channel:
+a stroke edits the lane it starts in, so you can draw the channels apart — the
+shape buttons (Sine, Saw, …) fill both lanes, since a seed is a whole-waveform
+shape.
 
 Stereo samples reach a project from a stereo audio file or recording (through
 the Sample Lab), from an `.it` module whose samples are stereo, or from a
@@ -541,12 +562,13 @@ SoundFont import with **Import stereo instruments in stereo** ticked.
 
 ## The Sample Lab
 
-The Sample Lab is the import-time sample editor — a tiny Audacity that opens
-whenever audio enters the project from outside: **New from sample…** (audio
-files), **Record sample…** (the microphone) and the Samples view's **Lab…**
-button. It works on a high-resolution float copy of the take, so every edit
-here happens *before* the 8-bit, 65535-frame pool format is committed — the
-one place where cropping and resampling are still reversible.
+The Sample Lab is *the* sample editor — a tiny Audacity that opens whenever
+audio enters the project from outside (**New from sample…** for audio files,
+**Record sample…** for the microphone) and whenever you edit a sample already
+in the project (the Samples view's **Edit…** and **Chord…**). It works on a
+high-resolution float copy of the take, so every edit here happens *before* the
+8-bit, 65535-frame pool format is committed — the one place where cropping and
+resampling are still reversible.
 
 - **Waveform** — drag to select a range; mouse wheel scrolls, Ctrl+wheel zooms at the pointer, and the Zoom/Fit buttons do the same from the bar. Space plays the selection (or everything); Delete cuts it.
 - **Tools** — Crop (keep only the selection), Cut, Silence, Fade in/out, Gain… (dB), Normalise, Reverse, Invert, Remove DC. Tools apply to the selection, or the whole take when nothing is selected. The Lab keeps its own undo/redo (Ctrl+Z / Ctrl+Y) separate from the project's.
@@ -557,14 +579,15 @@ one place where cropping and resampling are still reversible.
 - **Chord…** opens the [chord maker](#the-chord-maker) on the take.
 - **Mono / Stereo** — a stereo file or recording opens as a stereo take: two lanes, and every tool applies to both channels (Normalise uses one shared factor, so the image survives; transient detection listens to the mono fold). The **→ Mono** button folds the take down to one channel, halving what it will cost in the pool; **→ Stereo** splits a mono take back into a pair. Both are ordinary Lab edits — Ctrl+Z undoes them.
 - **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the engine's output rate) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
+- **Committing** — **Import as new** always mints new samples and instruments. **Replace** appears when the Lab was opened on a sample already in the project and writes the edit back over it, carrying every instrument bound to it along; see [Samples](#samples-f4) for what it will and will not do in place. When the Lab opened on a pooled sample, its loop region is shaded on the waveform and moves with your edits, so you can see where Replace will leave it.
 
 ### The chord maker
 
 A tracker channel plays one note at a time, so the Amiga answer to "I want a
 chord here" was to bake the chord into the sample itself. The **Chord…** button
 does exactly that: it mixes up to six pitch-shifted copies of the working
-buffer into one waveform. Reach it from the Samples view (**Chord…**, on a copy
-of a pooled sample) or from inside the Lab, on anything you have just recorded,
+buffer into one waveform. Reach it from the Samples view (**Chord…**, on a
+sample in the project) or from inside the Lab, on anything you have just recorded,
 imported or cropped.
 
 Each of the six voices is a tick-box, a **mode**, one value, an octave and a
