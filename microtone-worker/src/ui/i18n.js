@@ -10,6 +10,7 @@
 // textContent, data-i18n-title sets the title attribute.
 
 import en from "./lang/en.js";
+import { applyIcons } from "./icons.js";
 
 export const LANGS = {
   en: "English",
@@ -104,7 +105,8 @@ export function t(key, params = null) {
   return s;
 }
 
-/** Apply data-i18n / data-i18n-title attributes below root. */
+/** Apply data-i18n / data-i18n-title attributes below root, then re-mount the
+ *  data-icon vector labels (item 107) — setting textContent above wipes them. */
 export function applyDom(root = document) {
   for (const el of root.querySelectorAll("[data-i18n]")) {
     el.textContent = t(el.dataset.i18n);
@@ -112,4 +114,5 @@ export function applyDom(root = document) {
   for (const el of root.querySelectorAll("[data-i18n-title]")) {
     el.title = t(el.dataset.i18nTitle);
   }
+  applyIcons(root);
 }

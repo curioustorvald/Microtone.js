@@ -6,7 +6,12 @@
 // (item 999 — a pool span's length is immutable once allocated). The in-place
 // editor's u8 ops stay in sampledsp.js.
 
-export const TARGET_RATE_MAX = 32000; // engine renders 32 kHz — higher rates only waste budget
+// Sample-rate ceiling for what lands in the pool. Deliberately BELOW the
+// engine's own 48 kHz output rate (item 108): the pool is 8 MB and a record's
+// sampleLength is a u16, so rate buys bandwidth at the cost of both budgets —
+// and 32 kHz is also what the TSVM device plays the file back at, so a file
+// written here stays honest there. Raise it if bandwidth is worth the bytes.
+export const TARGET_RATE_MAX = 32000;
 export const FRAME_BUDGET = 0xffff;   // record sampleLength is u16
 
 // ── range helpers ──────────────────────────────────────────────────────────

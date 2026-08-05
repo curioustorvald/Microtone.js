@@ -4,8 +4,12 @@
 
 import { parseTaud } from "../format/taud-parse.js";
 import { AudioSystem } from "../audio/audio-system.js";
+import { SAMPLING_RATE } from "../engine/constants.js";
+import { applyIcons } from "./icons.js";
 
 const $ = (id) => document.getElementById(id);
+
+applyIcons(document); // vector transport symbols (item 107)
 
 const audio = new AudioSystem();
 let audioReady = false;
@@ -25,7 +29,8 @@ async function ensureAudio() {
 function updateAudioBadge() {
   const el = $("audioState");
   if (audio.running) {
-    el.textContent = `audio on @ ${audio.context.sampleRate} Hz${audio.context.sampleRate !== 32000 ? " (resampled)" : ""}`;
+    const rate = audio.context.sampleRate;
+    el.textContent = `audio on @ ${rate} Hz${rate !== SAMPLING_RATE ? " (resampled)" : ""}`;
     el.classList.add("on");
   }
 }

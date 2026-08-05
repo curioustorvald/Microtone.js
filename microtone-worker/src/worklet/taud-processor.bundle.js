@@ -7,7 +7,25 @@
 // Source: tsvm_core/src/net/torvald/tsvm/peripheral/AudioAdapter.kt:149-250
 // Lookup tables (sinc, SNES gauss, Amiga filter coefficients) live in tables.js.
 
-const SAMPLING_RATE = 32000;
+// ── Output sampling rate (web item 108) ───────────────────────────────────
+// DELIBERATE web divergence from Kotlin's fixed 32000. Browsers run their
+// AudioContext at 48 kHz, so a 32 kHz engine had to be resampled on the way
+// out — for playback AND for the default 48 kHz WAV export. Rendering at
+// 48 kHz deletes that stage from both default paths: at a 48 kHz context the
+// worklet's read cursor steps by exactly 1.0 and one TRACKER_CHUNK is exactly
+// one render quantum.
+//
+// Everything rate-derived (tick length, the IT/SF2 filter coefficients, the
+// Amiga LPF/LED coefficients, the anti-click ramps) is computed FROM this
+// value, so the audible parameters stay where they are in Hz and in
+// milliseconds — what changes is that they are now realised on a 48 kHz grid.
+//
+// It is a `let`, not a const: setSamplingRate() below puts the engine back on
+// 32 kHz for the JVM-oracle conformance tests and the Kotlin-mirroring
+// scenario tests, which compare against 32 kHz reference renders. Set it ONCE
+// before rendering — like rng.js's seed, it is start-up configuration, not a
+// per-render parameter.
+let SAMPLING_RATE = 48000;
 // Batch length of the mixer's per-sample loop. Tick/row timing is per-SAMPLE
 // (mixer.js `samplesIntoTick`), so this is pure batching granularity and does
 // NOT affect output — verified bit-exact vs the 512 baseline on the whole
@@ -51,15 +69,42 @@ const TUNING_REF_C4_HZ = LINEAR_FREQ_C4_HZ;
 const TUNING_DEFAULT_BASE_NOTE = 0xa000; // C9
 const TUNING_DEFAULT_FREQ_HZ = 8363.0;
 
-// Anti-click ramp-out on sample end/cut: 8 ms at 32 kHz.
-const RAMP_OUT_SAMPLES = 256;
+// Anti-click ramp-out on sample end/cut: 8 ms (256 samples at Kotlin's 32 kHz).
+let RAMP_OUT_SAMPLES = 384;
+const RAMP_OUT_SEC = 0.008;
 
 // Fast note-fade (note word 0x0004): SF2 exclusiveClass choke, ≈ FluidSynth's
 // GEN_VOLENVRELEASE = -2000 timecents.
 const FAST_FADE_SEC = 0.3;
 
-// Volume-change anti-click ramp: ~2 ms at 32 kHz. Bypassed on fresh note triggers.
-const VOL_RAMP_SAMPLES = 64;
+// Volume-change anti-click ramp: 2 ms (64 samples at Kotlin's 32 kHz).
+// Bypassed on fresh note triggers.
+let VOL_RAMP_SAMPLES = 96;
+const VOL_RAMP_SEC = 0.002;
+
+// Modules whose load-time tables are rate-derived (tables.js's Amiga filter
+// coefficients) register here so setSamplingRate can rebuild them. Coefficients
+// computed per call — the IT/SF2 voice filters — need no registration.
+const rateListeners = new Set();
+
+/** Register a rebuild callback; it fires on every later setSamplingRate. */
+function onSamplingRateChange(fn) {
+  rateListeners.add(fn);
+  return fn;
+}
+
+/**
+ * Move the engine's output rate. Call BEFORE constructing an engine: voices
+ * already carrying ramp counters or filter state keep the old rate's numbers.
+ * Rebuilds every rate-derived table, so the Amiga low-pass stays at 4421 Hz
+ * and the anti-click ramps stay at 8 ms / 2 ms whatever the rate.
+ */
+function setSamplingRate(rate) {
+  SAMPLING_RATE = rate;
+  RAMP_OUT_SAMPLES = Math.round(RAMP_OUT_SEC * rate);
+  VOL_RAMP_SAMPLES = Math.round(VOL_RAMP_SEC * rate);
+  for (const fn of rateListeners) fn(rate);
+}
 
 // Sample bin: 8 MB total (banking is a device-protocol concern; the JS engine
 // addresses the pool directly, as the Kotlin playback path does).
@@ -274,22 +319,31 @@ const SNES_GAUSS = Int32Array.from([
   0x513, 0x514, 0x514, 0x515, 0x516, 0x516, 0x517, 0x517, 0x517, 0x518, 0x518, 0x518, 0x518, 0x518, 0x519, 0x519,
 ]);
 
-// ── Amiga filter coefficients (precomputed at 32 kHz; AudioAdapter.kt:318-339) ──
+// ── Amiga filter coefficients (AudioAdapter.kt:318-339) ──
+// Kotlin precomputes these at its fixed 32 kHz; the web engine's rate is
+// settable (item 108), so they are recomputed whenever it moves — the cutoffs
+// below are the physical RC/Sallen-Key corner frequencies of the real hardware
+// and must land on the same Hz at any output rate.
 const AMIGA_A500_LP_FC = 4420.971;
 const AMIGA_LED_FC = 3090.533;
 const AMIGA_LED_Q = 0.660225;
 
-const AMIGA_A500_B1 = Math.exp((-2.0 * Math.PI * AMIGA_A500_LP_FC) / SAMPLING_RATE);
-const AMIGA_A500_A0 = 1.0 - AMIGA_A500_B1;
+let AMIGA_A500_B1, AMIGA_A500_A0;
+let AMIGA_LED_A1, AMIGA_LED_A2, AMIGA_LED_B1, AMIGA_LED_B2;
 
-const AMIGA_LED_A_BASE = 1.0 / Math.tan((Math.PI * AMIGA_LED_FC) / SAMPLING_RATE);
-const AMIGA_LED_B_BASE = 1.0 / AMIGA_LED_Q;
-const AMIGA_LED_A1 =
-  1.0 / (1.0 + AMIGA_LED_B_BASE * AMIGA_LED_A_BASE + AMIGA_LED_A_BASE * AMIGA_LED_A_BASE);
-const AMIGA_LED_A2 = 2.0 * AMIGA_LED_A1;
-const AMIGA_LED_B1 = 2.0 * (1.0 - AMIGA_LED_A_BASE * AMIGA_LED_A_BASE) * AMIGA_LED_A1;
-const AMIGA_LED_B2 =
-  (1.0 - AMIGA_LED_B_BASE * AMIGA_LED_A_BASE + AMIGA_LED_A_BASE * AMIGA_LED_A_BASE) * AMIGA_LED_A1;
+function rebuildAmigaCoeffs(rate) {
+  AMIGA_A500_B1 = Math.exp((-2.0 * Math.PI * AMIGA_A500_LP_FC) / rate);
+  AMIGA_A500_A0 = 1.0 - AMIGA_A500_B1;
+
+  const aBase = 1.0 / Math.tan((Math.PI * AMIGA_LED_FC) / rate);
+  const bBase = 1.0 / AMIGA_LED_Q;
+  AMIGA_LED_A1 = 1.0 / (1.0 + bBase * aBase + aBase * aBase);
+  AMIGA_LED_A2 = 2.0 * AMIGA_LED_A1;
+  AMIGA_LED_B1 = 2.0 * (1.0 - aBase * aBase) * AMIGA_LED_A1;
+  AMIGA_LED_B2 = (1.0 - bBase * aBase + aBase * aBase) * AMIGA_LED_A1;
+}
+rebuildAmigaCoeffs(SAMPLING_RATE);
+onSamplingRateChange(rebuildAmigaCoeffs);
 
 // ── 64-entry signed sine table (OpenMPT-style; 1407) ──
 const MOD_SIN_TABLE = Int32Array.from([
@@ -1000,10 +1054,17 @@ const BIN_SHELF_FB_DB = 3.0;
  */
 const BIN_CALIB_BANDS = 96;
 
-/** Delay-line length in frames — a power of two ≥ the longest ITD (~21 frames
- *  at 32 kHz, since (a/c)(1 + π/2) ≈ 0.65 ms). */
-const BIN_RING = 32;
-const BIN_RING_MASK = BIN_RING - 1;
+/** Delay-line length in frames: the smallest power of two that clears the
+ *  longest ITD — (a/c)(1 + π/2) ≈ 0.65 ms, so ~21 frames at 32 kHz but ~32 at
+ *  48 kHz (item 108), which a fixed 32-frame ring would wrap straight into
+ *  itself. Sized from the rate the renderer was built for, plus the one frame
+ *  of look-back the fractional tap reads. */
+function binauralRingLen(sampleRate) {
+  const need = Math.ceil(binauralEarDelay(-1.0, 1.0) * sampleRate) + 2;
+  let n = 32;
+  while (n < need) n *= 2;
+  return n;
+}
 
 /**
  * Virtual speaker directions as [azimuth, elevation] pairs in engine units.
@@ -1170,7 +1231,9 @@ class BinauralRenderer {
     this.shelfState = new Float64Array(ns * 2);   // [x₋₁, y₋₁]
     this.shadowState = new Float64Array(ns * 2 * 2);
     this.lpState = new Float64Array(ns);
-    this.ring = new Float64Array(ns * BIN_RING);
+    this.ringLen = binauralRingLen(sampleRate);
+    this.ringMask = this.ringLen - 1;
+    this.ring = new Float64Array(ns * this.ringLen);
     this.ringPos = 0;
     this.lpA = 1.0 - Math.exp((-2.0 * Math.PI * BIN_ITD_LP_HZ) / sampleRate);
     this._g = new Float64Array(ns);
@@ -1282,6 +1345,7 @@ class BinauralRenderer {
     const shelf = this.shelf, sst = this.shelfState;
     const shadow = this.shadow, hst = this.shadowState;
     const ring = this.ring, pos = this.ringPos;
+    const ringLen = this.ringLen, ringMask = this.ringMask;
     const dInt = this.delayInt, dFrac = this.delayFrac;
     const lpA = this.lpA, lp = this.lpState;
     let l = 0.0;
@@ -1307,15 +1371,15 @@ class BinauralRenderer {
       const lo = lp[s] + lpA * (sv - lp[s]);
       lp[s] = lo;
       const hi = sv - lo;
-      const base = s * BIN_RING;
-      ring[base + (pos & BIN_RING_MASK)] = lo;
+      const base = s * ringLen;
+      ring[base + (pos & ringMask)] = lo;
 
       for (let ear = 0; ear < 2; ear++) {
         const j = s * 2 + ear;
         const i0 = pos - dInt[j];
         const f = dFrac[j];
-        const d0 = ring[base + (i0 & BIN_RING_MASK)];
-        const d1 = ring[base + ((i0 - 1) & BIN_RING_MASK)];
+        const d0 = ring[base + (i0 & ringMask)];
+        const d1 = ring[base + ((i0 - 1) & ringMask)];
         const ear_in = d0 + (d1 - d0) * f + hi;
         const hc = j * 3;
         const hs = shadow[hc] * ear_in + shadow[hc + 1] * hst[j * 2] - shadow[hc + 2] * hst[j * 2 + 1];
@@ -1549,7 +1613,7 @@ const ANALYSIS_AMBISONIC = "ambisonic";
 
 /**
  * Scope ring: frames of B-format held for the vectorscopes. 4096 frames is
- * 128 ms at 32 kHz — eight snapshot intervals, so a 60 fps strip never misses a
+ * 85 ms at 48 kHz — five snapshot intervals, so a 60 fps strip never misses a
  * sample, and the cloud it draws is a WIDE window: many points, and only about
  * an eighth of them replaced per frame, which is what makes the shape settle
  * instead of flickering. The ring rides in the snapshot (64 KiB), so this is
@@ -6172,9 +6236,17 @@ function generateTrackerAudio(eng, playhead, out) {
     applyTrackerRow(eng, ts, playhead);
   }
 
+  // The rate and the Amiga coefficients are settable module bindings (item
+  // 108) — read them ONCE per chunk so the per-sample loop below works on
+  // plain locals, as it did when they were compile-time constants.
+  const srate = SAMPLING_RATE;
+  const a500A0 = AMIGA_A500_A0, a500B1 = AMIGA_A500_B1;
+  const ledA1 = AMIGA_LED_A1, ledA2 = AMIGA_LED_A2;
+  const ledB1 = AMIGA_LED_B1, ledB2 = AMIGA_LED_B2;
+
   for (let n = 0; n < TRACKER_CHUNK; n++) {
     // Recompute samples-per-tick every iteration (T/T-slide mutate BPM mid-row).
-    const spt = (SAMPLING_RATE * 2.5) / playhead.bpm;
+    const spt = (srate * 2.5) / playhead.bpm;
     if (advancing) {
       ts.samplesIntoTick += 1.0;
       if (ts.samplesIntoTick >= spt) {
@@ -6351,27 +6423,28 @@ function generateTrackerAudio(eng, playhead, out) {
 
     // Amiga interpolation modes: post-mix LPF chain.
     if (ts.interpolationMode === INTERP_A500) {
-      ts.amigaLPStateL = mixL * AMIGA_A500_A0 + ts.amigaLPStateL * AMIGA_A500_B1;
-      ts.amigaLPStateR = mixR * AMIGA_A500_A0 + ts.amigaLPStateR * AMIGA_A500_B1;
+      ts.amigaLPStateL = mixL * a500A0 + ts.amigaLPStateL * a500B1;
+      ts.amigaLPStateR = mixR * a500A0 + ts.amigaLPStateR * a500B1;
       mixL = ts.amigaLPStateL;
       mixR = ts.amigaLPStateR;
       if (ts.ledFilterOn) {
         const sl = ts.amigaLEDStateL;
         const sr = ts.amigaLEDStateR;
-        const outL = mixL * AMIGA_LED_A1 + sl[0] * AMIGA_LED_A2 + sl[1] * AMIGA_LED_A1 - sl[2] * AMIGA_LED_B1 - sl[3] * AMIGA_LED_B2;
-        const outR = mixR * AMIGA_LED_A1 + sr[0] * AMIGA_LED_A2 + sr[1] * AMIGA_LED_A1 - sr[2] * AMIGA_LED_B1 - sr[3] * AMIGA_LED_B2;
+        const outL = mixL * ledA1 + sl[0] * ledA2 + sl[1] * ledA1 - sl[2] * ledB1 - sl[3] * ledB2;
+        const outR = mixR * ledA1 + sr[0] * ledA2 + sr[1] * ledA1 - sr[2] * ledB1 - sr[3] * ledB2;
         sl[1] = sl[0]; sl[0] = mixL; sl[3] = sl[2]; sl[2] = outL;
         sr[1] = sr[0]; sr[0] = mixR; sr[3] = sr[2]; sr[2] = outR;
         mixL = outL;
         mixR = outR;
       }
     } else if (ts.interpolationMode === INTERP_A1200) {
-      // A1200 1-pole LPF is above Nyquist at 32 kHz → bypassed (pt2-clone).
+      // The A1200's own 1-pole LPF sits at ~34 kHz — above Nyquist at 32 kHz
+      // AND at 48 kHz — so it stays bypassed (pt2-clone).
       if (ts.ledFilterOn) {
         const sl = ts.amigaLEDStateL;
         const sr = ts.amigaLEDStateR;
-        const outL = mixL * AMIGA_LED_A1 + sl[0] * AMIGA_LED_A2 + sl[1] * AMIGA_LED_A1 - sl[2] * AMIGA_LED_B1 - sl[3] * AMIGA_LED_B2;
-        const outR = mixR * AMIGA_LED_A1 + sr[0] * AMIGA_LED_A2 + sr[1] * AMIGA_LED_A1 - sr[2] * AMIGA_LED_B1 - sr[3] * AMIGA_LED_B2;
+        const outL = mixL * ledA1 + sl[0] * ledA2 + sl[1] * ledA1 - sl[2] * ledB1 - sl[3] * ledB2;
+        const outR = mixR * ledA1 + sr[0] * ledA2 + sr[1] * ledA1 - sr[2] * ledB1 - sr[3] * ledB2;
         sl[1] = sl[0]; sl[0] = mixL; sl[3] = sl[2]; sl[2] = outL;
         sr[1] = sr[0]; sr[0] = mixR; sr[3] = sr[2]; sr[2] = outR;
         mixL = outL;
@@ -7094,7 +7167,7 @@ const SNAP_SAB_BYTES = SNAP_FLOATS * 4 + 4;
 // ══ src/audio/audio-ring.js ══
 // SharedArrayBuffer audio ring for Tier 2 (off-audio-thread rendering).
 //
-// A render Worker (producer) fills 32 kHz float L/R frames; the AudioWorklet
+// A render Worker (producer) fills engine-rate float L/R frames; the AudioWorklet
 // (consumer) reads them with a fractional resample cursor and copies to output.
 // Single-producer / single-consumer, so the two absolute frame counters
 // (AR_WRITE by the worker, AR_READ by the worklet) need only be published with
@@ -7106,7 +7179,7 @@ const SNAP_SAB_BYTES = SNAP_FLOATS * 4 + 4;
 // must stay bundle-safe (plain export forms, unique top-level names) — it goes
 // into tools/make-worklet-bundle.js for the non-module-worklet fallback.
 
-const AR_FRAMES = 8192;            // ring capacity in frames (power of two) — 256 ms @ 32 kHz
+const AR_FRAMES = 8192;            // ring capacity in frames (power of two) — 171 ms @ 48 kHz
 const AR_MASK = AR_FRAMES - 1;
 const AR_CTRL_LEN = 6;             // Int32 control slots
 const AR_WRITE = 0;                // absolute frames produced (worker → worklet), Int32-wrapping
@@ -7115,7 +7188,7 @@ const AR_STATE = 2;                // bit0: producer active (playing/jam) — in
 const AR_EPOCH = 3;                // transport-reset generation (worker bumps; worklet re-syncs)
 const AR_FLUSH_POS = 4;            // write frame at the last flush — the worklet jumps its read cursor here,
                                           //   dropping the stale tail (counters stay monotonic; no reset race)
-// Target ring occupancy the worker keeps buffered. 1024 frames ≈ 32 ms @ 32 kHz
+// Target ring occupancy the worker keeps buffered. 1024 frames ≈ 21 ms @ 48 kHz
 // = the jam-latency / cursor-lead / underrun-safety knob (user-chosen balanced).
 const AR_HIGH_WATER = 1024;
 const AR_SAB_BYTES = AR_CTRL_LEN * 4 + AR_FRAMES * 4 * 2;
@@ -7320,16 +7393,19 @@ function fillAnalysisInto(ts, f) {
 // TaudProcessor — AudioWorkletProcessor with two modes:
 //
 //   RENDER mode (non-isolated fallback): hosts the TaudEngine and renders
-//     32 kHz U8/float chunks into a local FIFO ring, reading them back with a
-//     fractional resample cursor. This is the original single-thread path.
+//     engine-rate U8/float chunks into a local FIFO ring, reading them back
+//     with a fractional resample cursor. This is the original single-thread path.
 //
 //   CONSUME mode (Tier 2, crossOriginIsolated): the engine lives in a separate
 //     render Worker that fills a SharedArrayBuffer audio ring; process() only
 //     resamples + copies from that ring, so it can never overrun. Entered on
 //     CMD.USE_AUDIO_SAB; no engine commands are routed here in this mode.
 //
-// The engine ALWAYS produces 32 kHz; when the context rate isn't 32000 the ring
-// is read with a fractional cursor + linear interpolation. Loaded via
+// The engine renders at SAMPLING_RATE — 48 kHz since item 108, which is the
+// rate audio-system.js asks the AudioContext for, so the common case reads the
+// ring back one frame at a time with no interpolation at all. A context that
+// insists on another rate (44.1 kHz hardware) is still served by reading with a
+// fractional cursor + linear interpolation. Loaded via
 // audioWorklet.addModule() as an ES module; the committed single-file concat
 // (taud-processor.bundle.js) is the non-module-worklet fallback — regenerate
 // with tools/make-worklet-bundle.js after any change here.
@@ -7352,7 +7428,7 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.ringR = new Float32Array(RING_FRAMES);
     this.ringWrite = 0;      // absolute frame counter (wraps via mask)
     this.ringReadPos = 0.0;  // fractional absolute read cursor
-    this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 32 kHz context
+    this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 48 kHz context
 
     // CONSUME mode (Tier 2): audio-ring SAB views + wrap-safe read cursor.
     this.audioRing = null;

@@ -107,6 +107,109 @@ export const ICON = {
     '<circle cx="18" cy="7" r="2.4" fill="currentColor" stroke="none"/>'),
 };
 
+// ── button icons (item 107) ───────────────────────────────────────────────
+// The transport and tool buttons used to be Unicode symbols — ▶ ■ ⏺ ↶ ↷ ↻ ◐ ⬇
+// ↗ ♥ ⇤ ⇥ — with a VS15 selector begging for text presentation. Several of
+// them are simply absent from the default fonts on some phones and tablets, so
+// the button read as a tofu box (and where they DID resolve, the emoji
+// fallback painted them in a font of its own choosing). These are the same
+// shapes as vectors: same 24×24 grid as the menu icons above, drawn at 1em
+// beside the label (`.btn-ico` in the stylesheet).
+const solid = (body) =>
+  `<svg viewBox="0 0 24 24" class="btn-ico" fill="currentColor" aria-hidden="true">${body}</svg>`;
+const line = (body) =>
+  `<svg viewBox="0 0 24 24" class="btn-ico" fill="none" stroke="currentColor" ` +
+  `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+
+export const BTN_ICON = {
+  /** Play (▶). */
+  play: solid('<path d="M7.5 4.8 19 12 7.5 19.2z"/>'),
+  /** Stop (■). */
+  stop: solid('<rect x="6" y="6" width="12" height="12" rx="1.4"/>'),
+  /** Record / arm (⏺ ●). */
+  record: solid('<circle cx="12" cy="12" r="6"/>'),
+  /** Undo (↶) — the arrow turns back on itself, anticlockwise. */
+  undo: line('<path d="M9.5 8.5H14a4.75 4.75 0 0 1 0 9.5H7.5"/><path d="M12 5 8.5 8.5 12 12"/>'),
+  /** Redo (↷). */
+  redo: line('<path d="M14.5 8.5H10a4.75 4.75 0 0 0 0 9.5h6.5"/><path d="M12 5l3.5 3.5L12 12"/>'),
+  /** Reload the app (↻). */
+  reload: line('<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.8 3.5v4.2h-4.2"/>'),
+  /** Cycle the theme (◐) — a disc lit on one side. */
+  theme: line('<circle cx="12" cy="12" r="8"/>' +
+    '<path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none"/>'),
+  /** Export / download (⬇). */
+  download: line('<path d="M12 4v10"/><path d="M7.5 9.5 12 14l4.5-4.5"/><path d="M4.5 19.5h15"/>'),
+  /** Opens in a new tab (↗). */
+  external: line('<path d="M13.5 4.5H19.5V10.5"/><path d="M19.5 4.5 11 13"/>' +
+    '<path d="M16.5 14v4.5a1.5 1.5 0 0 1-1.5 1.5H5.5A1.5 1.5 0 0 1 4 18.5V9a1.5 1.5 0 0 1 1.5-1.5H10"/>'),
+  /** Step to the previous / next pattern (◀ ▶). */
+  prev: solid('<path d="M16 4.8 4.5 12 16 19.2z"/>'),
+  next: solid('<path d="M8 4.8 19.5 12 8 19.2z"/>'),
+  /** Jump to the previous / next cue (|◀ ▶|). */
+  prevCue: solid('<path d="M18 4.8 8 12 18 19.2z"/><rect x="5" y="4.8" width="2.4" height="14.4" rx="0.8"/>'),
+  nextCue: solid('<path d="M6 4.8 16 12 6 19.2z"/><rect x="16.6" y="4.8" width="2.4" height="14.4" rx="0.8"/>'),
+  /** Rename this file (✎) — a pencil over a line. */
+  rename: line('<path d="M4.5 19.5h15"/>' +
+    '<path d="M5.5 15.6 15.9 5.2a2 2 0 0 1 2.9 0 2 2 0 0 1 0 2.9L8.4 18.5H5.5z"/>'),
+  /** Fold a panel open/shut (▾). */
+  caretDown: solid('<path d="M6 9h12l-6 7z"/>'),
+  /** Becomes this (→) — the mono/stereo conversions. */
+  arrowRight: line('<path d="M4 12h15"/><path d="M13.5 6.5 19 12l-5.5 5.5"/>'),
+  /** A plain filled disc — the status bar's "unsaved changes" marker (●). */
+  dot: solid('<circle cx="12" cy="12" r="5"/>'),
+  /** Delete this file (✕). */
+  close: line('<path d="M6 6l12 12M18 6 6 18"/>'),
+  /** Support the project (♥). */
+  heart: solid('<path d="M12 20.6 4.9 13.4a4.4 4.4 0 0 1 0-6.3 4.6 4.6 0 0 1 6.4 0l.7.7.7-.7a4.6 4.6 0 0 1 6.4 0 4.4 4.4 0 0 1 0 6.3z"/>'),
+};
+
+/** The `<svg>` markup for a button icon — for the HTML-template popups.
+ *  `after` is the trailing-icon variant (the download and new-tab arrows). */
+export function icon(name, after = false) {
+  const svg = BTN_ICON[name] ?? "";
+  return after ? svg.replace('class="btn-ico"', 'class="btn-ico after"') : svg;
+}
+
+/** …and the same thing as an element, for the DOM-building callers. */
+function iconEl(name, after = false) {
+  const holder = document.createElement("span");
+  holder.innerHTML = icon(name); // our own markup, never user data
+  const svg = holder.firstElementChild;
+  if (svg && after) svg.classList.add("after");
+  return svg;
+}
+
+/**
+ * Give `el` an icon and `text`. Used wherever a label is assigned at runtime
+ * (the `btn.textContent = t(…)` sites), so a button whose label toggles
+ * play↔stop can be re-labelled as often as it likes. `after` puts the icon at
+ * the END, which is where the download and new-tab arrows read best.
+ */
+export function setIconLabel(el, name, text = "", { after = false } = {}) {
+  const svg = iconEl(name, after);
+  const parts = text ? [text] : [];
+  if (svg) parts[after ? "push" : "unshift"](svg);
+  el.replaceChildren(...parts);
+}
+
+/**
+ * Mount `data-icon="name"` icons below `root`, beside whatever text is already
+ * there (`data-icon-after` puts it on the far side). i18n.applyDom() calls this
+ * after every pass because setting textContent wipes the icon element — which
+ * is also why it has to be safe to call twice (an element that still has its
+ * icon is left alone).
+ */
+export function applyIcons(root = document) {
+  for (const el of root.querySelectorAll("[data-icon]")) {
+    const has = el.firstElementChild?.classList.contains("btn-ico") ||
+                el.lastElementChild?.classList.contains("btn-ico");
+    if (has) continue;
+    const after = el.hasAttribute("data-icon-after");
+    const svg = iconEl(el.dataset.icon, after);
+    if (svg) el[after ? "append" : "prepend"](svg);
+  }
+}
+
 /**
  * An effect cell's "icon" is its own base-36 opcode letter — the thing you
  * would type, and the thing the grid prints. Drawn as SVG text rather than a

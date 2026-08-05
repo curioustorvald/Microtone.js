@@ -149,7 +149,8 @@ export function resampleF32(f32, channels, srcRate, dstRate) {
   return out;
 }
 
-/** Encode a rendered f32 mix bus (32 kHz) as a 16-bit stereo WAV at `outRate`. */
+/** Encode a rendered f32 mix bus (engine rate) as a 16-bit stereo WAV at
+ *  `outRate`; the 48 kHz default needs no resampling at all (item 108). */
 function encodeWav(f32, outRate) {
   const pcm = resampleF32(f32, 2, SAMPLING_RATE, outRate);
   const numSamples = pcm.length; // interleaved stereo samples

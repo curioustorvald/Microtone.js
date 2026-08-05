@@ -3,6 +3,7 @@
 // export (item 38); shaped like showImportProgress but for a known-length job.
 
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 export function showProgress(title, { cancellable = false } = {}) {
   const dlg = document.createElement("dialog");
@@ -49,7 +50,7 @@ export function showProgress(title, { cancellable = false } = {}) {
     fail(message) {
       running = false;
       spin.classList.add("stopped");
-      pct.textContent = "✖ " + message;
+      setIconLabel(pct, "close", message);
       closeBtn.textContent = t("common.close");
       closeBtn.onclick = (e) => { e.preventDefault(); dlg.close(); dlg.remove(); };
       btnRow.hidden = false;

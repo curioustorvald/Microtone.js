@@ -205,23 +205,27 @@ function painted(cv) {
   // saved front/side choices used to be overwritten there and then — four
   // configured panels came back as several copies of one view.)
   const sorted = (a) => [...a].filter(Boolean).sort().join();
-  while (masterStrip.scopes.length < 4) masterStrip.addScope();
+  // Fill the column. The count is bounded by the window, so ask for the
+  // capacity rather than a number — asking for more is how a test hangs.
+  masterStrip.setPanelCount(masterStrip.geometry().capacity);
   await sleep(120);
   const wishes = masterStrip.scopes.join();
-  check(sorted(masterStrip.scopes) === "blobs,front,side,top",
-    "adding panels hands out four DIFFERENT views", wishes);
+  check(new Set(masterStrip.scopes).size === masterStrip.scopes.length &&
+    masterStrip.drawn === masterStrip.scopes.length,
+    "filling the column hands out that many DIFFERENT views", wishes);
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
   await sleep(120);
   check(masterStrip.scopes.join() === wishes, "a stereo song does not rewrite them",
     masterStrip.scopes.join());
-  check(sorted(masterStrip.effective) === "blobs,top" && masterStrip.effective.length === 4,
-    "…it just stops drawing the two it cannot show", String(masterStrip.effective));
+  check(sorted(masterStrip.effective) === "blobs,top" &&
+    masterStrip.effective.length === masterStrip.scopes.length,
+    "…it just stops drawing the ones it cannot show", String(masterStrip.effective));
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(120);
   check(masterStrip.effective.join() === wishes,
     "…and going spatial brings them straight back", masterStrip.effective.join());
   // Back to one panel, leaving room for the "+" leg below.
-  while (masterStrip.scopes.length > 1) masterStrip.removeScope(masterStrip.scopes.length - 1);
+  masterStrip.setPanelCount(1);
   await sleep(120);
 
   // The + button puts one back.
@@ -236,31 +240,59 @@ function painted(cv) {
   // re-picked which panels are drawable but never re-laid the stack out, so the
   // button kept the answer it gave for the previous model.)
   const addBtn = strip.querySelector(".ms-head .icon-btn");
-  masterStrip.meterH = 112; // make room, without laying out by hand
+  masterStrip.setPanelCount(2);
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
   await sleep(150);
-  check(masterStrip.fit > masterStrip.slots.length, "…room to spare",
-    `${masterStrip.fit} vs ${masterStrip.slots.length}`);
+  check(masterStrip.geometry().capacity > masterStrip.drawn, "…room to spare",
+    `${masterStrip.geometry().capacity} vs ${masterStrip.drawn}`);
   check(addBtn.hidden, "a stereo song has both its views up, so + steps aside");
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(150);
   check(!addBtn.hidden, "…and a spatial song has four more, so + comes back");
 
-  // Dragging the divider resizes the meter panel.
-  const meterHBefore = masterStrip.meterH;
-  masterStrip._split = strip.getBoundingClientRect();
-  masterStrip.onSplitMove({ clientY: strip.getBoundingClientRect().bottom - 300 });
+  // ── the ONE state: what the strip believes is always what is on screen ────
+  // (Regression: a geometric "fit" and the panel list were two states that only
+  // agreed by accident, so the strip drew six panels in a column with room for
+  // three and then refused to add a fourth until a resize shook it loose.)
+  const agrees = (tag) => {
+    const domVisible = masterStrip.scopePanel.filter((b) => !b.hidden).length;
+    const g = masterStrip.geometry();
+    // The panels and the meter between them fill the column exactly: no gap,
+    // and nothing overflowing the clipped box pretending to be on screen.
+    const stripBox = strip.getBoundingClientRect();
+    const meterBox = masterStrip.meterBox.getBoundingClientRect();
+    const fills = Math.abs(meterBox.bottom - (stripBox.bottom - 4)) < 2;
+    check(domVisible === masterStrip.drawn && masterStrip.drawn <= g.capacity && fills,
+      `state matches the screen ${tag}`,
+      `drawn=${masterStrip.drawn} dom=${domVisible} cap=${g.capacity} fills=${fills}`);
+  };
+  agrees("after adding");
+
+  // The divider IS the count: it closes panels on the way down…
+  const cap = masterStrip.geometry().capacity;
+  masterStrip.setPanelCount(cap);
+  await sleep(80);
+  const panelsBefore = masterStrip.drawn;
+  // Where the divider would sit with n panels above it: the top of the first
+  // panel plus n panel heights.
+  const g0 = masterStrip.geometry();
+  const panelsTop = masterStrip.scopePanel[0].getBoundingClientRect().top;
+  const dividerAt = (n) => panelsTop + n * g0.panelH;
+  masterStrip.onSplitDown({ pointerId: 1, preventDefault() {} });
+  masterStrip.onSplitMove({ clientY: dividerAt(1) });
   masterStrip.onSplitUp({ pointerId: 1 });
   await sleep(120);
-  check(Math.abs(masterStrip.meterH - 297) < 6, "the divider sets the meter height",
-    `${meterHBefore} → ${masterStrip.meterH}`);
-  // Scope panels are fixed-size, so the meter is the elastic one: it never gets
-  // LESS than the dragged height, and takes any leftover a whole panel cannot use.
-  check(masterStrip.meterBox.getBoundingClientRect().height >= masterStrip.meterH - 1,
-    "…and the panel takes at least that much", masterStrip.meterBox.getBoundingClientRect().height.toFixed(1));
-  // A meter that big leaves room for fewer scopes.
-  check(masterStrip.panelCount() <= 2, "panels that no longer fit are not drawn",
-    String(masterStrip.panelCount()));
+  check(masterStrip.drawn === 1, "dragging the divider down closes panels",
+    `${panelsBefore} → ${masterStrip.drawn}`);
+  agrees("after dragging down");
+  // …and opens them on the way up, because it is the same one number.
+  masterStrip.onSplitDown({ pointerId: 1, preventDefault() {} });
+  masterStrip.onSplitMove({ clientY: dividerAt(cap) });
+  masterStrip.onSplitUp({ pointerId: 1 });
+  await sleep(120);
+  check(masterStrip.drawn === cap, "dragging it back up opens them again",
+    `${masterStrip.drawn} of ${cap}`);
+  agrees("after dragging up");
 
   // Speaker targets: bars stand where the speakers do, and no LFE bar.
   masterStrip.targetSel.value = "7.1";

@@ -20,12 +20,18 @@
   <meta property="og:site_name" content="Microtone">
   <meta property="og:url" content="https://microtone.cc/">
   <meta property="og:title" content="Microtone — a microtonal, spatial music tracker for the browser">
+  <meta name="twitter:title" content="Microtone — a microtonal, spatial music tracker for the browser">
   <meta property="og:description" content="Any tuning on a 4096-step pitch grid, sources placed anywhere on the sphere, ambisonic B-format and stereo export. Free software, no install, no account.">
+  <meta name="twitter:description" content="Any tuning on a 4096-step pitch grid, sources placed anywhere on the sphere, ambisonic B-format and stereo export. Free software, no install, no account.">
   <meta property="og:image" content="https://microtone.cc/screenshot.png">
+  <meta name="twitter:image" content="https://microtone.cc/screenshot.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="600">
-  <meta property="og:image:alt" content="The Microtone tracker's Timeline view, showing microtonal note columns across several channels.">
+  <meta property="twitter:image:width" content="1200">
+  <meta property="twitter:image:height" content="600">
   <meta name="twitter:card" content="summary_large_image">
+  <meta property="og:image:alt" content="The Microtone tracker's Timeline view, showing microtonal note columns across several channels.">
+  <meta name="twitter:image:alt" content="The Microtone tracker's Timeline view, showing microtonal note columns across several channels.">
   <!-- Installable app (PWA). iOS ignores the manifest's display/name, hence the
        apple-* metas; there is deliberately NO service worker, so Chromium will
        not raise its install prompt — "Add to Home Screen" is the install path.
@@ -149,14 +155,14 @@
       <span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span>
     </div>
     <div class="transport-controls">
-      <button id="playSong" data-i18n="topbar.playSong" data-i18n-title="topbar.playSongTitle">&#65038;▶ Song</button>
-      <button id="playCue" data-i18n="topbar.playCue" data-i18n-title="topbar.playCueTitle">&#65038;▶ Cue</button>
-      <button id="stopBtn" data-i18n-title="topbar.stopTitle">&#65038;■</button>
+      <button id="playSong" data-icon="play" data-i18n="topbar.playSong" data-i18n-title="topbar.playSongTitle">Song</button>
+      <button id="playCue" data-icon="play" data-i18n="topbar.playCue" data-i18n-title="topbar.playCueTitle">Cue</button>
+      <button id="stopBtn" data-icon="stop" data-i18n-title="topbar.stopTitle"></button>
       <label class="chk"><input type="checkbox" id="follow" checked /><span data-i18n="topbar.follow">follow</span></label>
-      <button id="recBtn" class="rec on" data-i18n="topbar.rec" data-i18n-title="topbar.recTitle">&#65038;⏺ rec</button>
+      <button id="recBtn" class="rec on" data-icon="record" data-i18n="topbar.rec" data-i18n-title="topbar.recTitle">rec</button>
       <span class="tb-sep"></span>
-      <button id="undoBtn" class="icon-btn" data-i18n-title="topbar.undoTitle" disabled>&#65038;↶</button>
-      <button id="redoBtn" class="icon-btn" data-i18n-title="topbar.redoTitle" disabled>&#65038;↷</button>
+      <button id="undoBtn" class="icon-btn" data-icon="undo" data-i18n-title="topbar.undoTitle" disabled></button>
+      <button id="redoBtn" class="icon-btn" data-icon="redo" data-i18n-title="topbar.redoTitle" disabled></button>
       <span id="undoStat" class="dim undo-stat"></span>
       <span class="tb-sep"></span>
       <span id="octCtl" class="dim wheelable" data-i18n-title="topbar.octTitle">Oct <b id="octDisp">4</b></span>
@@ -180,12 +186,12 @@
     <div class="grow"></div>
     <div>
       <span id="audioBadge" class="badge" data-i18n="topbar.audioOff">audio off</span>
-      <a class="support-btn donate" href="https://ko-fi.com/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.donate" data-i18n-title="topbar.donateTitle">♥ Donate</a>
+      <a class="support-btn donate" href="https://ko-fi.com/curioustorvald" target="_blank" rel="noopener" data-icon="heart" data-i18n="topbar.donate" data-i18n-title="topbar.donateTitle">Donate</a>
       <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.sponsor" data-i18n-title="topbar.sponsorTitle">Sponsor</a>
-      <button id="reloadBtn" class="icon-btn" data-i18n-title="topbar.reloadTitle">&#8635;</button>
+      <button id="reloadBtn" class="icon-btn" data-icon="reload" data-i18n-title="topbar.reloadTitle"></button>
       <button id="helpBtn" class="icon-btn" data-i18n-title="topbar.helpTitle">?</button>
       <button id="langBtn" data-i18n-title="topbar.langTitle">EN</button>
-      <button id="themeBtn" data-i18n-title="topbar.themeTitle">&#65038;◐</button>
+      <button id="themeBtn" class="icon-btn" data-icon="theme" data-i18n-title="topbar.themeTitle"></button>
     </div>
   </header>
 
@@ -234,12 +240,12 @@
 
   <footer class="statusbar">
     <span id="stFile" class="dim" data-i18n="status.noFile">no file</span>
-    <span id="stDirty" class="dirty" hidden>&#65038;●</span>
+    <span id="stDirty" class="dirty" data-icon="dot" hidden></span>
     <div class="grow"></div>
     <!-- Contextual per-view hint, driven by app.js updateHint() (item 78);
          no data-i18n so applyDom can't clobber the view-specific text. -->
     <span id="stHint" class="dim">Open or import a file to begin</span>
-    <a class="gh-link" href="docs.html" target="_blank" rel="noopener" data-i18n="status.docs" data-i18n-title="status.docsTitle">Docs &#65038;↗</a>
+    <a class="gh-link" href="docs.html" target="_blank" rel="noopener" data-icon="external" data-icon-after data-i18n="status.docs" data-i18n-title="status.docsTitle">Docs</a>
   </footer>
 
   <script type="module" src="src/ui/app.js"></script>

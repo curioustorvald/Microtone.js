@@ -143,9 +143,17 @@ export function generateTrackerAudio(eng, playhead, out) {
     applyTrackerRow(eng, ts, playhead);
   }
 
+  // The rate and the Amiga coefficients are settable module bindings (item
+  // 108) — read them ONCE per chunk so the per-sample loop below works on
+  // plain locals, as it did when they were compile-time constants.
+  const srate = SAMPLING_RATE;
+  const a500A0 = AMIGA_A500_A0, a500B1 = AMIGA_A500_B1;
+  const ledA1 = AMIGA_LED_A1, ledA2 = AMIGA_LED_A2;
+  const ledB1 = AMIGA_LED_B1, ledB2 = AMIGA_LED_B2;
+
   for (let n = 0; n < TRACKER_CHUNK; n++) {
     // Recompute samples-per-tick every iteration (T/T-slide mutate BPM mid-row).
-    const spt = (SAMPLING_RATE * 2.5) / playhead.bpm;
+    const spt = (srate * 2.5) / playhead.bpm;
     if (advancing) {
       ts.samplesIntoTick += 1.0;
       if (ts.samplesIntoTick >= spt) {
@@ -322,27 +330,28 @@ export function generateTrackerAudio(eng, playhead, out) {
 
     // Amiga interpolation modes: post-mix LPF chain.
     if (ts.interpolationMode === INTERP_A500) {
-      ts.amigaLPStateL = mixL * AMIGA_A500_A0 + ts.amigaLPStateL * AMIGA_A500_B1;
-      ts.amigaLPStateR = mixR * AMIGA_A500_A0 + ts.amigaLPStateR * AMIGA_A500_B1;
+      ts.amigaLPStateL = mixL * a500A0 + ts.amigaLPStateL * a500B1;
+      ts.amigaLPStateR = mixR * a500A0 + ts.amigaLPStateR * a500B1;
       mixL = ts.amigaLPStateL;
       mixR = ts.amigaLPStateR;
       if (ts.ledFilterOn) {
         const sl = ts.amigaLEDStateL;
         const sr = ts.amigaLEDStateR;
-        const outL = mixL * AMIGA_LED_A1 + sl[0] * AMIGA_LED_A2 + sl[1] * AMIGA_LED_A1 - sl[2] * AMIGA_LED_B1 - sl[3] * AMIGA_LED_B2;
-        const outR = mixR * AMIGA_LED_A1 + sr[0] * AMIGA_LED_A2 + sr[1] * AMIGA_LED_A1 - sr[2] * AMIGA_LED_B1 - sr[3] * AMIGA_LED_B2;
+        const outL = mixL * ledA1 + sl[0] * ledA2 + sl[1] * ledA1 - sl[2] * ledB1 - sl[3] * ledB2;
+        const outR = mixR * ledA1 + sr[0] * ledA2 + sr[1] * ledA1 - sr[2] * ledB1 - sr[3] * ledB2;
         sl[1] = sl[0]; sl[0] = mixL; sl[3] = sl[2]; sl[2] = outL;
         sr[1] = sr[0]; sr[0] = mixR; sr[3] = sr[2]; sr[2] = outR;
         mixL = outL;
         mixR = outR;
       }
     } else if (ts.interpolationMode === INTERP_A1200) {
-      // A1200 1-pole LPF is above Nyquist at 32 kHz → bypassed (pt2-clone).
+      // The A1200's own 1-pole LPF sits at ~34 kHz — above Nyquist at 32 kHz
+      // AND at 48 kHz — so it stays bypassed (pt2-clone).
       if (ts.ledFilterOn) {
         const sl = ts.amigaLEDStateL;
         const sr = ts.amigaLEDStateR;
-        const outL = mixL * AMIGA_LED_A1 + sl[0] * AMIGA_LED_A2 + sl[1] * AMIGA_LED_A1 - sl[2] * AMIGA_LED_B1 - sl[3] * AMIGA_LED_B2;
-        const outR = mixR * AMIGA_LED_A1 + sr[0] * AMIGA_LED_A2 + sr[1] * AMIGA_LED_A1 - sr[2] * AMIGA_LED_B1 - sr[3] * AMIGA_LED_B2;
+        const outL = mixL * ledA1 + sl[0] * ledA2 + sl[1] * ledA1 - sl[2] * ledB1 - sl[3] * ledB2;
+        const outR = mixR * ledA1 + sr[0] * ledA2 + sr[1] * ledA1 - sr[2] * ledB1 - sr[3] * ledB2;
         sl[1] = sl[0]; sl[0] = mixL; sl[3] = sl[2]; sl[2] = outL;
         sr[1] = sr[0]; sr[0] = mixR; sr[3] = sr[2]; sr[2] = outR;
         mixL = outL;

@@ -11,10 +11,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { TaudEngine } from "../../src/engine/engine.js";
-import { TRACKER_CHUNK, PATTERN_BYTES_WIDE, CELL_BYTES_WIDE } from "../../src/engine/constants.js";
+import {
+  TRACKER_CHUNK, PATTERN_BYTES_WIDE, CELL_BYTES_WIDE, SAMPLING_RATE, setSamplingRate,
+} from "../../src/engine/constants.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { EffectOp } from "../../src/engine/tables.js";
 import { SURROUND_PLANAR, SURROUND_SPATIAL } from "../../src/engine/spatial.js";
+
+// Pinned to the Kotlin engine's 32 kHz (item 108 moved the web default to
+// 48 kHz): the expectations below are sample counts and reference renders
+// taken from AudioAdapter.kt, and they stay diffable against it.
+setSamplingRate(32000);
 
 /** Engine with a looping ramp sample in slot 1, in the wide-cell format. */
 function makeWideEngine(surroundModel = SURROUND_SPATIAL) {
@@ -81,7 +88,7 @@ function loadWideSong(eng, rows) {
   return eng;
 }
 
-const CHUNKS_PER_TICK = (32000 * 2.5) / 125 / TRACKER_CHUNK;
+const CHUNKS_PER_TICK = (SAMPLING_RATE * 2.5) / 125 / TRACKER_CHUNK;
 function render(eng, ticks) {
   const out = new Uint8Array(TRACKER_CHUNK * 2);
   for (let i = 0; i < ticks * CHUNKS_PER_TICK; i++) eng.renderChunk(0, out);

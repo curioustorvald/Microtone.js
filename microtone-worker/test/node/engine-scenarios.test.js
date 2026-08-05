@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { TaudEngine } from "../../src/engine/engine.js";
-import { TRACKER_CHUNK } from "../../src/engine/constants.js";
+import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
 import { envPoint, buildMetaRecord, makeMetaLayer } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
@@ -17,6 +17,11 @@ import {
 } from "../../src/engine/envelope.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine } from "../../src/audio/offline-render.js";
+
+// Pinned to the Kotlin engine's 32 kHz (item 108 moved the web default to
+// 48 kHz): the expectations below are sample counts and reference renders
+// taken from AudioAdapter.kt, and they stay diffable against it.
+setSamplingRate(32000);
 
 const scratch = new Int32Array(2);
 

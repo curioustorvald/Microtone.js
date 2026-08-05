@@ -13,6 +13,7 @@
 // items land, see CLAUDE.md "Patch notes").
 
 import { renderMarkdown, extractToc } from "./markdown.js";
+import { applyIcons } from "./icons.js";
 
 // ── theme (mirror src/ui/theme.js, standalone) ──
 const THEMES = ["dark", "dim", "light"]; // cycle order, as in theme.js
@@ -122,6 +123,7 @@ function fromHash() {
 
 // ── boot ──
 initTheme();
+applyIcons(document); // the theme button's ◐ is a vector now (item 107)
 document.getElementById("themeBtn").addEventListener("click", cycleTheme);
 const start = fromHash();
 selectDoc(start.id, start.anchor);

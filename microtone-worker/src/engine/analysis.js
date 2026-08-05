@@ -51,7 +51,7 @@ export const ANALYSIS_AMBISONIC = "ambisonic";
 
 /**
  * Scope ring: frames of B-format held for the vectorscopes. 4096 frames is
- * 128 ms at 32 kHz — eight snapshot intervals, so a 60 fps strip never misses a
+ * 85 ms at 48 kHz — five snapshot intervals, so a 60 fps strip never misses a
  * sample, and the cloud it draws is a WIDE window: many points, and only about
  * an eighth of them replaced per frame, which is what makes the shape settle
  * instead of flickering. The ring rides in the snapshot (64 KiB), so this is

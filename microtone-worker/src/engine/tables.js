@@ -5,7 +5,7 @@
 import {
   SAMPLING_RATE, MIDDLE_C, AMIGA_BASE_PERIOD, LINEAR_FREQ_C4_HZ,
   TUNING_REF_C4_HZ, TUNING_DEFAULT_BASE_NOTE, TUNING_DEFAULT_FREQ_HZ,
-  SINC_WIDTH, SINC_PRECISION,
+  SINC_WIDTH, SINC_PRECISION, onSamplingRateChange,
 } from "./constants.js";
 import { random } from "./rng.js";
 
@@ -69,22 +69,31 @@ export const SNES_GAUSS = Int32Array.from([
   0x513, 0x514, 0x514, 0x515, 0x516, 0x516, 0x517, 0x517, 0x517, 0x518, 0x518, 0x518, 0x518, 0x518, 0x519, 0x519,
 ]);
 
-// ── Amiga filter coefficients (precomputed at 32 kHz; AudioAdapter.kt:318-339) ──
+// ── Amiga filter coefficients (AudioAdapter.kt:318-339) ──
+// Kotlin precomputes these at its fixed 32 kHz; the web engine's rate is
+// settable (item 108), so they are recomputed whenever it moves — the cutoffs
+// below are the physical RC/Sallen-Key corner frequencies of the real hardware
+// and must land on the same Hz at any output rate.
 const AMIGA_A500_LP_FC = 4420.971;
 const AMIGA_LED_FC = 3090.533;
 const AMIGA_LED_Q = 0.660225;
 
-export const AMIGA_A500_B1 = Math.exp((-2.0 * Math.PI * AMIGA_A500_LP_FC) / SAMPLING_RATE);
-export const AMIGA_A500_A0 = 1.0 - AMIGA_A500_B1;
+export let AMIGA_A500_B1, AMIGA_A500_A0;
+export let AMIGA_LED_A1, AMIGA_LED_A2, AMIGA_LED_B1, AMIGA_LED_B2;
 
-const AMIGA_LED_A_BASE = 1.0 / Math.tan((Math.PI * AMIGA_LED_FC) / SAMPLING_RATE);
-const AMIGA_LED_B_BASE = 1.0 / AMIGA_LED_Q;
-export const AMIGA_LED_A1 =
-  1.0 / (1.0 + AMIGA_LED_B_BASE * AMIGA_LED_A_BASE + AMIGA_LED_A_BASE * AMIGA_LED_A_BASE);
-export const AMIGA_LED_A2 = 2.0 * AMIGA_LED_A1;
-export const AMIGA_LED_B1 = 2.0 * (1.0 - AMIGA_LED_A_BASE * AMIGA_LED_A_BASE) * AMIGA_LED_A1;
-export const AMIGA_LED_B2 =
-  (1.0 - AMIGA_LED_B_BASE * AMIGA_LED_A_BASE + AMIGA_LED_A_BASE * AMIGA_LED_A_BASE) * AMIGA_LED_A1;
+function rebuildAmigaCoeffs(rate) {
+  AMIGA_A500_B1 = Math.exp((-2.0 * Math.PI * AMIGA_A500_LP_FC) / rate);
+  AMIGA_A500_A0 = 1.0 - AMIGA_A500_B1;
+
+  const aBase = 1.0 / Math.tan((Math.PI * AMIGA_LED_FC) / rate);
+  const bBase = 1.0 / AMIGA_LED_Q;
+  AMIGA_LED_A1 = 1.0 / (1.0 + bBase * aBase + aBase * aBase);
+  AMIGA_LED_A2 = 2.0 * AMIGA_LED_A1;
+  AMIGA_LED_B1 = 2.0 * (1.0 - aBase * aBase) * AMIGA_LED_A1;
+  AMIGA_LED_B2 = (1.0 - bBase * aBase + aBase * aBase) * AMIGA_LED_A1;
+}
+rebuildAmigaCoeffs(SAMPLING_RATE);
+onSamplingRateChange(rebuildAmigaCoeffs);
 
 // ── 64-entry signed sine table (OpenMPT-style; 1407) ──
 export const MOD_SIN_TABLE = Int32Array.from([

@@ -13,7 +13,11 @@ import { fileURLToPath } from "node:url";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { loadIntoEngine, renderSong } from "../../tools/render-taud.js";
-import { SAMPLING_RATE } from "../../src/engine/constants.js";
+import { SAMPLING_RATE, setSamplingRate } from "../../src/engine/constants.js";
+
+// The oracle IS the 32 kHz Kotlin engine, so the comparison runs at its rate —
+// the web default is 48 kHz since item 108.
+setSamplingRate(32000);
 
 const NONDETERMINISTIC = new Set(["4THSYM"]);
 

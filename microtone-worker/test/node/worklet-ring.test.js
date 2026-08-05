@@ -24,7 +24,7 @@ import { CMD } from "../../src/worklet/protocol.js";
 // the global `sampleRate` (AudioWorkletGlobalScope semantics) each time it
 // runs, not just at import — restoring it right after import would break
 // every processor built later in this file.
-globalThis.sampleRate = 32000; // match the engine's native rate: step = 1.0, no resampler
+globalThis.sampleRate = 48000; // match the engine's native rate: step = 1.0, no resampler
 globalThis.AudioWorkletProcessor = class {
   constructor() { this.port = { onmessage: null, postMessage() {} }; }
 };

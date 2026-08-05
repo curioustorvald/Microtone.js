@@ -33,7 +33,7 @@ async function decodeChannels(fileBytes, contextRate, maxChannels = 2) {
 
 /**
  * Float decode for the Sample Lab (item 83): full-length at `rate` (default
- * 48 kHz — above the 32 kHz taud ceiling, so nothing is thrown away before the
+ * 48 kHz — at or above the taud target ceiling, so nothing is thrown away before the
  * user has cropped/chopped; the Lab's Kaiser resampler has the final say at
  * commit time). No length budget here — length changes are the Lab's whole
  * point.

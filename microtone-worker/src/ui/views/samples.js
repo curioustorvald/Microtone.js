@@ -14,6 +14,7 @@ import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 /** Waveform canvas height PER CHANNEL (px). */
 const WAVE_LANE_H = 220;
@@ -78,7 +79,7 @@ export class SamplesView {
     // current committed bytes, 8-bit PCM straight out of the pool (bit-exact,
     // no requantisation).
     this.exportBtn = document.createElement("button");
-    this.exportBtn.textContent = t("smp.export");
+    setIconLabel(this.exportBtn, "download", t("smp.export"), { after: true });
     this.exportBtn.title = t("smp.exportTitle");
     this.exportBtn.addEventListener("click", () => this.exportSample());
     this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.exportBtn, this.newInstBtn);

@@ -36,6 +36,7 @@ import {
   volumeDialog, panDialog, transposeDialog, instrumentDialog,
 } from "../blocktools.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 const FONT_PX = 14; // family comes from --cv-font via fonts.js
 const CHAR_W = 8.5;
@@ -86,8 +87,10 @@ class PatternPane {
     this.patInput.type = "text";
     this.patInput.className = "pat-input";
     this.patInput.addEventListener("change", () => this.setPattern(parseInt(this.patInput.value, 16) || 0));
-    const prev = mkBtn("◀", () => this.setPattern(this.patIdx - 1));
-    const next = mkBtn("▶", () => this.setPattern(this.patIdx + 1));
+    const prev = mkBtn("", () => this.setPattern(this.patIdx - 1));
+    const next = mkBtn("", () => this.setPattern(this.patIdx + 1));
+    setIconLabel(prev, "prev");
+    setIconLabel(next, "next");
     // Editable pattern name (pNam) — doubles as the name display alongside the
     // number. Commit on blur/Enter; Enter also returns focus to the grid.
     this.nameInput = document.createElement("input");
@@ -169,7 +172,7 @@ class PatternPane {
     });
     this.canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
 
-    // Interacting with the header — ◀/▶, the pattern-number field, or the name
+    // Interacting with the header — the step buttons, the pattern-number field, or the name
     // field — focuses this column (item 46).
     this.header.addEventListener("pointerdown", () => this.container.setActivePane(this));
     this.patInput.addEventListener("focus", () => this.container.setActivePane(this));
@@ -915,7 +918,8 @@ export class PatternView {
    *  re-runs on a runtime language change. Tools act on the active pane. */
   buildBar() {
     this.bar.innerHTML = "";
-    this.previewBtn = mkBtn(t("pat.preview"), () => this.togglePreview());
+    this.previewBtn = mkBtn("", () => this.togglePreview());
+    setIconLabel(this.previewBtn, "play", t("pat.preview"));
     const dupBtn = mkBtn(t("pat.duplicatePattern"), () => this.active.duplicate());
     dupBtn.title = t("pat.duplicateTitle");
     const trBtn = mkBtn(t("pat.transpose"), () => this.active.transpose());
@@ -943,8 +947,11 @@ export class PatternView {
 
   syncPreviewBtn() {
     if (!this.previewBtn) return;
-    const label = this.active?.previewing ? t("pat.previewStop") : t("pat.preview");
-    if (this.previewBtn.textContent !== label) this.previewBtn.textContent = label;
+    const playing = this.active?.previewing === true;
+    const label = playing ? t("pat.previewStop") : t("pat.preview");
+    if (this.previewBtn.textContent !== label) {
+      setIconLabel(this.previewBtn, playing ? "stop" : "play", label);
+    }
   }
 
   // ── pane lifecycle + active tracking ──

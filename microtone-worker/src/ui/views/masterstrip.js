@@ -18,13 +18,25 @@
 // mouse writes the project's value (one undo step per drag), and stopping
 // playback snaps the cap back to it.
 //
-// ── Layout ──
+// ── Layout: one state, one reconciler ──
 // A scope panel is a FIXED size — chooser, square dial, correlation bar — set
 // by the strip's width, so how many of them fit is a question about the
-// viewport's height. The meter panel takes the rest and is dragged to size by
-// the divider above it; every panel that fits above it is drawn, and the
-// chooser's own "hide this panel" entry drops just that one (the ✕ in the
-// header hides the whole strip). "+" adds one back whenever there is room.
+// viewport's height, and the meter takes whatever they leave.
+//
+// `layout()` is the ONLY place that decides any of it. Adding a panel, closing
+// one, dragging the divider, resizing the window and loading a song all end
+// there, and when it returns `this.scopes` is the panels, `this.drawn` is how
+// many are up, and the meter's height follows from that. Nothing keeps a
+// second opinion, because two opinions is how this went wrong: a `fit` computed
+// in one place and a panel list edited in another disagreed the moment either
+// changed, so the strip believed in three panels while showing six, "+" refused
+// to add a fourth, and a resize "fixed" it by accident.
+//
+// The COUNT is that state, and everything is expressed as setting it: "+" is
+// one more, the chooser's "hide this panel" is one fewer, and the divider — a
+// fixed panel size means where it sits and how many panels are above it are the
+// same fact — drags straight to a count, closing panels on the way down and
+// opening them on the way up. (The ✕ in the header hides the whole strip.)
 
 import {
   ANALYSIS_OFF, ANALYSIS_STEREO, ANALYSIS_AMBISONIC,
@@ -40,6 +52,7 @@ import { themeColors } from "../theme.js";
 import { paintSpatialDot } from "../spatialdot.js";
 import { CrtBeam, beamCoreInk } from "../crtbeam.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 const PREF_KEY = "microtone-masterstrip";
 
@@ -74,6 +87,9 @@ export const SCOPE_SELECT_H = 22;
 export const SCOPE_CORR_H = 9;
 export const SPLIT_H = 7;
 export const METER_MIN_H = 112;
+/** How many scope panels a strip that has never been configured starts with,
+ *  and what the divider's double-click puts back. */
+export const DEFAULT_PANELS = 2;
 /** The strip's own padding, top and bottom (CSS .master-strip). */
 export const STRIP_PAD = 4;
 
@@ -82,6 +98,19 @@ export const STRIP_PAD = 4;
  *  transient — the trace's shape is the reading, and a gain that jumps makes
  *  shapes impossible to compare from one moment to the next. */
 export const SCOPE_GAIN_SLEW_MS = 300;
+/** How much of the dial's radius the auto-gain aims to fill. */
+export const SCOPE_GAIN_FILL = 0.92;
+/**
+ * …taken back by this much, because the peak it divides by is a B-FORMAT
+ * COMPONENT and not the delivered mix. A mono full-scale mix peaks at √2 in W,
+ * but a hard-panned or wide one peaks at only ~0.71 in W and Y alike — so the
+ * bare fill target asks for 1.3× on material that is already clipping, which is
+ * the one case where the gain has to be 1. The headroom pulls that back under
+ * the floor, and costs every other reading a fifth of its size.
+ */
+export const SCOPE_GAIN_HEADROOM = 0.7;
+/** Ceiling, so a near-silent passage does not amplify the dither into a disc. */
+export const SCOPE_GAIN_MAX = 64;
 /**
  * Correlation is a STATISTIC, and one snapshot interval (~16 ms) is far too
  * short a sample of one: read that raw and the bar dances on every transient
@@ -93,6 +122,16 @@ export const CORR_INTEGRATE_MS = 600;
 export const CORR_SLEW_MS = 150;
 
 // ── pure helpers (unit-tested in test/node/analysis.test.js) ───────────────
+
+/**
+ * The gain a window that peaked at `peak` asks for: enough to fill the dial,
+ * never below 1 (the scope is a magnifier, and shrinking a mix that already
+ * fills the dial would only hide how wide it is), never above the ceiling.
+ */
+export function scopeAutoGain(peak) {
+  const want = (SCOPE_GAIN_FILL * SCOPE_GAIN_HEADROOM) / Math.max(peak, 1e-4);
+  return Math.max(1, Math.min(want, SCOPE_GAIN_MAX));
+}
 
 /** Amplitude → dBFS, with a floor rather than −Infinity. */
 export function dbfs(v) {
@@ -347,7 +386,6 @@ export class MasterStrip {
       : [SCOPE_BLOBS, SCOPE_TOP];
     // Default chosen so two scope panels and a usable meter fit an ordinary
     // window; the divider moves it from there.
-    this.meterH = typeof p.meterH === "number" ? p.meterH : 160;
     this.savedTarget = p.target ?? null;
     this.target = ANALYSIS_STEREO;
 
@@ -356,9 +394,15 @@ export class MasterStrip {
     this.field = new MeterBallistics();
     this.corr = 1;
     this.corrSums = { ll: 0, rr: 0, lr: 0 }; // exponentially-weighted window
-    // What each panel shows, and the panel → wish map; refreshControls owns both.
-    this.effective = this.scopes.slice();
-    this.slots = this.scopes.map((_, i) => i);
+    // Derived by layout(), and by nothing else: what each panel shows, the
+    // panel → entry map, and how many are on screen. Empty until the strip has
+    // been measured — a guess here is what once drew six panels in a box with
+    // room for three.
+    this.effective = [];
+    this.slots = [];
+    this.drawn = 0;
+    this._kindsSig = null;
+    this._prefSig = null;
     this._wasPlaying = false;
     this.scopeGain = new Array(MAX_SCOPE_PANELS).fill(1); // auto-gain per panel
     this.beams = new Array(MAX_SCOPE_PANELS).fill(null);  // CRT beam per panel
@@ -410,7 +454,7 @@ export class MasterStrip {
     this.addBtn.addEventListener("click", () => this.addScope());
     const close = document.createElement("button");
     close.className = "icon-btn";
-    close.textContent = "︎✕";
+    setIconLabel(close, "close");
     close.title = t("master.hideTitle");
     close.addEventListener("click", () => this.setVisible(false));
     head.append(title, this.addBtn, close);
@@ -432,8 +476,7 @@ export class MasterStrip {
           return;
         }
         this.scopes[wish] = sel.value;
-        this.savePrefs();
-        this.refreshControls();
+        this.layout();
       });
       const wrap = document.createElement("div");
       wrap.className = "ms-canvaswrap";
@@ -454,7 +497,7 @@ export class MasterStrip {
     this.split.addEventListener("pointermove", (e) => this.onSplitMove(e));
     this.split.addEventListener("pointerup", (e) => this.onSplitUp(e));
     this.split.addEventListener("pointercancel", (e) => this.onSplitUp(e));
-    this.split.addEventListener("dblclick", () => { this.meterH = 160; this.layout(); this.savePrefs(); });
+    this.split.addEventListener("dblclick", () => this.setPanelCount(DEFAULT_PANELS));
     this.el.appendChild(this.split);
 
     const mbox = document.createElement("div");
@@ -499,30 +542,25 @@ export class MasterStrip {
     new ResizeObserver(() => this.resize()).observe(this.el);
   }
 
-  /** Scope panels actually on screen: what this song can show, capped by room. */
-  panelCount() {
-    const n = this.slots?.length ?? this.scopes.length;
-    return Math.min(n, this.fit ?? n);
-  }
+  /** Scope panels on screen. Set by layout, which is the only thing that
+   *  decides it — never re-derived here, and never a guess before the strip has
+   *  been measured (that guess is what once put six panels in a box with room
+   *  for three). */
+  panelCount() { return this.drawn; }
 
-  addScope() {
-    if (this.scopes.length >= MAX_SCOPE_PANELS) return;
-    // Ask for a kind nothing else has asked for — from the WHOLE set, not just
-    // what this song can show, so adding panels to a stereo song still leaves
-    // four distinct views waiting for the day it goes spatial.
-    const unused = SCOPE_KINDS.find((k) => !this.scopes.includes(k)) ?? SCOPE_TOP;
-    this.scopes.push(unused);
-    this.savePrefs();
-    this.refreshControls(); // …which re-lays out the stack
-  }
+  /** "+" — one more panel, taking its room from the meter. */
+  addScope() { this.setPanelCount(this.drawn + 1); }
 
+  /** "Hide this panel" — close the panel that entry `i` belongs to. */
   removeScope(i) {
     this.scopes.splice(i, 1);
-    this.savePrefs();
-    this.refreshControls();
+    this.layout();
   }
 
-  /** Rebuild the choosers for the current song's surround model. */
+  /**
+   * The song's model changed what can be metered and what can be seen: rebuild
+   * the target chooser, mark the scope choosers for a rebuild, and reconcile.
+   */
   refreshControls() {
     const model = this.model();
     const targets = availableTargets(model);
@@ -535,32 +573,30 @@ export class MasterStrip {
     }
     this.targetSel.value = this.target;
     this.targetSel.disabled = targets.length < 2;
+    this._kindsSig = null; // the scope choosers' options follow the model
+    this.layout();
+  }
 
+  /** Point each visible panel's chooser at the view that panel is showing.
+   *  Called by layout — the choosers are a VIEW of the state, never its owner. */
+  syncChoosers(model) {
     const kinds = availableScopes(model);
-    // What each panel shows now. The wishes in this.scopes are left alone — see
-    // effectiveScopes; overwriting them here is what used to lose a saved
-    // front/side choice to the stereo model the strip boots with. `slots` maps
-    // a panel on screen back to the wish it belongs to.
-    this.effective = effectiveScopes(this.scopes, model);
-    this.slots = this.effective
-      .map((kind, i) => (kind === null ? -1 : i))
-      .filter((i) => i >= 0);
-    for (let p = 0; p < MAX_SCOPE_PANELS; p++) {
+    const sig = kinds.join();
+    const rebuild = sig !== this._kindsSig;
+    this._kindsSig = sig;
+    for (let p = 0; p < this.drawn; p++) {
       const sel = this.scopeSel[p];
-      if (p >= this.slots.length) continue;
-      sel.innerHTML = "";
-      for (const k of [...kinds, SCOPE_HIDE]) {
-        const o = document.createElement("option");
-        o.value = k;
-        o.textContent = t(`master.scope.${k}`);
-        sel.appendChild(o);
+      if (rebuild) {
+        sel.innerHTML = "";
+        for (const k of [...kinds, SCOPE_HIDE]) {
+          const o = document.createElement("option");
+          o.value = k;
+          o.textContent = t(`master.scope.${k}`);
+          sel.appendChild(o);
+        }
       }
       sel.value = this.effective[this.slots[p]];
     }
-    // The model decides which panels are drawable at all, so the stack has to
-    // be re-laid out here — otherwise a song going spatial gains views with
-    // nowhere to appear, and "+" keeps the answer it gave for the old model.
-    this.layout();
   }
 
   /** Default metering target for a freshly loaded song, or the saved one. */
@@ -585,7 +621,6 @@ export class MasterStrip {
     try {
       localStorage.setItem(PREF_KEY, JSON.stringify({
         visible: this.visible, scopes: this.scopes, target: this.savedTarget,
-        meterH: Math.round(this.meterH),
       }));
     } catch { /* private mode */ }
   }
@@ -650,41 +685,122 @@ export class MasterStrip {
   // ── layout ──
 
   /**
-   * Give every panel its height. Scope panels are a fixed size set by the
-   * strip's width, the meter takes what the user dragged, and whatever no
-   * longer fits is simply not shown (its choice is remembered, so growing the
-   * window brings it straight back).
+   * THE reconcile step. Everything that can change the strip's shape — adding a
+   * panel, hiding one, dragging the divider, resizing the window, loading a
+   * song — ends here, and when it returns the strip's state IS what is on
+   * screen. There is no second opinion to go stale: `this.scopes` is the panels,
+   * `this.drawn` is how many are up, and the meter's height is a function of
+   * that rather than a number of its own that could disagree.
+   *
+   * Two rules decide the count:
+   *   * GEOMETRY IS AUTHORITATIVE, and destructive. A panel the height can no
+   *     longer hold has been REMOVED — dragging the divider down over a panel
+   *     is how you close it, and it does not come back on its own. One panel
+   *     always survives, so shrinking the window to nothing cannot wipe the
+   *     strip.
+   *   * THE MODEL IS NOT. A panel set to a view this song cannot express waits
+   *     (drawn as null by effectiveScopes) and returns intact for a song that
+   *     can — losing those was a real bug once, see effectiveScopes.
+   *
+   * The meter is the only elastic panel: it takes whatever the panels leave, so
+   * the divider is always exactly where the count says it is.
    */
-  layout() {
+  /**
+   * The strip's measurements, or null while it is hidden (nothing to reconcile
+   * against, and a zero height would "close" panels nobody closed).
+   * `capacity` is the most panels the column can hold while the meter keeps its
+   * minimum — the geometric ceiling on the count.
+   */
+  geometry() {
     // clientHeight/Width include the strip's own padding; the panels do not.
     const stripH = this.el.clientHeight - STRIP_PAD * 2;
     const width = this.el.clientWidth - STRIP_PAD * 2;
-    if (stripH <= 0 || width <= 0) return;
+    if (stripH <= 0 || width <= 0) return null;
     const headH = this.head.offsetHeight;
     const panelH = scopePanelHeight(width);
+    const capacity = scopePanelsThatFit(stripH, headH, METER_MIN_H, panelH);
+    return { stripH, width, headH, panelH, capacity };
+  }
 
-    this.meterH = Math.max(METER_MIN_H, Math.min(this.meterH, stripH - headH - SPLIT_H));
-    this.fit = scopePanelsThatFit(stripH, headH, this.meterH, panelH);
-    const shown = this.panelCount();
-    for (let i = 0; i < MAX_SCOPE_PANELS; i++) {
-      const box = this.scopePanel[i];
-      box.hidden = i >= shown;
-      box.style.height = `${panelH}px`;
+  layout() {
+    const g = this.geometry();
+    if (g === null) return;
+    const model = this.model();
+
+    // Derive what is on screen, then let the GEOMETRY close whatever the column
+    // can no longer hold. Only DRAWN panels count against the capacity: a panel
+    // waiting for a song that can show its view takes up no room and is not
+    // closed by a resize.
+    this.derive(model);
+    while (this.slots.length > g.capacity) {
+      this.scopes.splice(this.slots[this.slots.length - 1], 1);
+      this.derive(model);
     }
-    // Scope panels are a fixed size and the meter is the only elastic panel, so
-    // it takes everything left over — never less than the dragged height. That
-    // makes the divider STEP: drag it up far enough and one more scope fits,
-    // whereupon the meter gives that panel its room and keeps the remainder.
-    this.meterBox.style.height = `${stripH - headH - SPLIT_H - shown * panelH}px`;
-    // "+" only offers itself when it would actually put a panel on screen:
-    // there has to be room, and the song has to have a view left to show (a
-    // stereo song has two, so a fifth wish would sit invisible).
-    const next = SCOPE_KINDS.find((k) => !this.scopes.includes(k)) ?? SCOPE_TOP;
-    const wouldDraw = effectiveScopes([...this.scopes, next], this.model())
-      .filter((k) => k !== null).length > this.slots.length;
-    this.addBtn.hidden = this.scopes.length >= MAX_SCOPE_PANELS ||
-      this.fit <= this.slots.length || !wouldDraw;
+    this.drawn = this.slots.length;
+
+    for (let p = 0; p < MAX_SCOPE_PANELS; p++) {
+      const box = this.scopePanel[p];
+      box.hidden = p >= this.drawn;
+      box.style.height = `${g.panelH}px`;
+    }
+    // The meter is the elastic panel: its height is a FUNCTION of the count,
+    // never a stored number that could disagree with it.
+    this.meterBox.style.height =
+      `${g.stripH - g.headH - SPLIT_H - this.drawn * g.panelH}px`;
+
+    this.addBtn.hidden = this.nextScope(model) === null;
     this.resizeCanvases();
+    this.syncChoosers(model);
+    this.savePrefsIfChanged();
+  }
+
+  /** What each panel shows, and the panel → entry map. */
+  derive(model) {
+    this.effective = effectiveScopes(this.scopes, model);
+    this.slots = this.effective
+      .map((kind, i) => (kind === null ? -1 : i))
+      .filter((i) => i >= 0);
+  }
+
+  /**
+   * The view a new panel would take, or null if one cannot be added: no room
+   * left in the column, or no view this song has that is not already up.
+   */
+  nextScope(model = this.model()) {
+    const g = this.geometry();
+    if (g === null || this.scopes.length >= MAX_SCOPE_PANELS) return null;
+    if (this.slots.length >= g.capacity) return null;
+    const next = SCOPE_KINDS.find((k) => !this.scopes.includes(k)) ?? SCOPE_TOP;
+    const would = effectiveScopes([...this.scopes, next], model)
+      .filter((k) => k !== null).length;
+    return would > this.slots.length ? next : null;
+  }
+
+  /**
+   * Make exactly `n` panels be on screen — the one operation behind "+",
+   * "hide this panel" and the divider, so all three agree by construction.
+   * Bounded by the column's capacity and by how many views the song has.
+   */
+  setPanelCount(n) {
+    for (let guard = 0; guard <= MAX_SCOPE_PANELS; guard++) {
+      if (this.drawn === n) break;
+      if (this.drawn < n) {
+        const next = this.nextScope();
+        if (next === null) break;
+        this.scopes.push(next);
+      } else {
+        this.scopes.splice(this.slots[this.drawn - 1], 1);
+      }
+      this.layout();
+    }
+  }
+
+  /** Persist only when the state actually moved — a drag lays out every frame. */
+  savePrefsIfChanged() {
+    const sig = `${this.scopes.join()}|${this.visible}|${this.savedTarget}`;
+    if (sig === this._prefSig) return;
+    this._prefSig = sig;
+    this.savePrefs();
   }
 
   resize() {
@@ -715,17 +831,26 @@ export class MasterStrip {
     e.preventDefault();
   }
 
+  /**
+   * The divider IS the panel count — scope panels are a fixed size, so where it
+   * sits and how many panels are above it are the same fact. Dragging it down
+   * closes panels, dragging it up opens them again (taking the next view the
+   * song has), and it lands on the boundary nearest the pointer. The meter
+   * takes whatever is left, which is why there is no meter height to keep in
+   * step with anything.
+   */
   onSplitMove(e) {
     if (this._split === null) return;
-    this.meterH = this._split.bottom - STRIP_PAD - e.clientY - SPLIT_H / 2;
-    this.layout();
+    const g = this.geometry();
+    if (g === null) return;
+    const y = e.clientY - this._split.top - STRIP_PAD;
+    this.setPanelCount(Math.max(0, Math.round((y - g.headH) / g.panelH)));
   }
 
   onSplitUp(e) {
     if (this._split === null) return;
     this._split = null;
     this.split.releasePointerCapture?.(e.pointerId);
-    this.savePrefs();
   }
 
   // ── fader ──
@@ -988,9 +1113,8 @@ export class MasterStrip {
     // dial rather than yanking the whole trace smaller, which is the readable
     // trade — you are looking at the SHAPE, and it has to hold still enough to
     // be looked at.
-    const want = Math.max(1, Math.min(0.92 / Math.max(peak, 1e-4), 64));
     this.scopeGain[slot] = slewTowards(
-      this.scopeGain[slot], want, this.dtMs ?? 16, SCOPE_GAIN_SLEW_MS);
+      this.scopeGain[slot], scopeAutoGain(peak), this.dtMs ?? 16, SCOPE_GAIN_SLEW_MS);
     const g = this.scopeGain[slot];
 
     // The screen is built in CSS pixels and blitted through the canvas

@@ -9,7 +9,12 @@ import assert from "node:assert/strict";
 import { dittoGhosts, OP_DITTO } from "../../src/doc/ditto.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { TaudEngine } from "../../src/engine/engine.js";
-import { TRACKER_CHUNK } from "../../src/engine/constants.js";
+import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
+
+// Pinned to the Kotlin engine's 32 kHz (item 108 moved the web default to
+// 48 kHz): the expectations below are sample counts and reference renders
+// taken from AudioAdapter.kt, and they stay diffable against it.
+setSamplingRate(32000);
 
 // ── helpers ────────────────────────────────────────────────────────────────
 /** 64 blank rows (vol/pan carry the SEL_FINE-0 no-op, the blank convention). */

@@ -2,7 +2,25 @@
 // Source: tsvm_core/src/net/torvald/tsvm/peripheral/AudioAdapter.kt:149-250
 // Lookup tables (sinc, SNES gauss, Amiga filter coefficients) live in tables.js.
 
-export const SAMPLING_RATE = 32000;
+// ── Output sampling rate (web item 108) ───────────────────────────────────
+// DELIBERATE web divergence from Kotlin's fixed 32000. Browsers run their
+// AudioContext at 48 kHz, so a 32 kHz engine had to be resampled on the way
+// out — for playback AND for the default 48 kHz WAV export. Rendering at
+// 48 kHz deletes that stage from both default paths: at a 48 kHz context the
+// worklet's read cursor steps by exactly 1.0 and one TRACKER_CHUNK is exactly
+// one render quantum.
+//
+// Everything rate-derived (tick length, the IT/SF2 filter coefficients, the
+// Amiga LPF/LED coefficients, the anti-click ramps) is computed FROM this
+// value, so the audible parameters stay where they are in Hz and in
+// milliseconds — what changes is that they are now realised on a 48 kHz grid.
+//
+// It is a `let`, not a const: setSamplingRate() below puts the engine back on
+// 32 kHz for the JVM-oracle conformance tests and the Kotlin-mirroring
+// scenario tests, which compare against 32 kHz reference renders. Set it ONCE
+// before rendering — like rng.js's seed, it is start-up configuration, not a
+// per-render parameter.
+export let SAMPLING_RATE = 48000;
 // Batch length of the mixer's per-sample loop. Tick/row timing is per-SAMPLE
 // (mixer.js `samplesIntoTick`), so this is pure batching granularity and does
 // NOT affect output — verified bit-exact vs the 512 baseline on the whole
@@ -46,15 +64,42 @@ export const TUNING_REF_C4_HZ = LINEAR_FREQ_C4_HZ;
 export const TUNING_DEFAULT_BASE_NOTE = 0xa000; // C9
 export const TUNING_DEFAULT_FREQ_HZ = 8363.0;
 
-// Anti-click ramp-out on sample end/cut: 8 ms at 32 kHz.
-export const RAMP_OUT_SAMPLES = 256;
+// Anti-click ramp-out on sample end/cut: 8 ms (256 samples at Kotlin's 32 kHz).
+export let RAMP_OUT_SAMPLES = 384;
+const RAMP_OUT_SEC = 0.008;
 
 // Fast note-fade (note word 0x0004): SF2 exclusiveClass choke, ≈ FluidSynth's
 // GEN_VOLENVRELEASE = -2000 timecents.
 export const FAST_FADE_SEC = 0.3;
 
-// Volume-change anti-click ramp: ~2 ms at 32 kHz. Bypassed on fresh note triggers.
-export const VOL_RAMP_SAMPLES = 64;
+// Volume-change anti-click ramp: 2 ms (64 samples at Kotlin's 32 kHz).
+// Bypassed on fresh note triggers.
+export let VOL_RAMP_SAMPLES = 96;
+const VOL_RAMP_SEC = 0.002;
+
+// Modules whose load-time tables are rate-derived (tables.js's Amiga filter
+// coefficients) register here so setSamplingRate can rebuild them. Coefficients
+// computed per call — the IT/SF2 voice filters — need no registration.
+const rateListeners = new Set();
+
+/** Register a rebuild callback; it fires on every later setSamplingRate. */
+export function onSamplingRateChange(fn) {
+  rateListeners.add(fn);
+  return fn;
+}
+
+/**
+ * Move the engine's output rate. Call BEFORE constructing an engine: voices
+ * already carrying ramp counters or filter state keep the old rate's numbers.
+ * Rebuilds every rate-derived table, so the Amiga low-pass stays at 4421 Hz
+ * and the anti-click ramps stay at 8 ms / 2 ms whatever the rate.
+ */
+export function setSamplingRate(rate) {
+  SAMPLING_RATE = rate;
+  RAMP_OUT_SAMPLES = Math.round(RAMP_OUT_SEC * rate);
+  VOL_RAMP_SAMPLES = Math.round(VOL_RAMP_SEC * rate);
+  for (const fn of rateListeners) fn(rate);
+}
 
 // Sample bin: 8 MB total (banking is a device-protocol concern; the JS engine
 // addresses the pool directly, as the Kotlin playback path does).

@@ -83,10 +83,17 @@ const BIN_SHELF_FB_DB = 3.0;
  */
 const BIN_CALIB_BANDS = 96;
 
-/** Delay-line length in frames — a power of two ≥ the longest ITD (~21 frames
- *  at 32 kHz, since (a/c)(1 + π/2) ≈ 0.65 ms). */
-const BIN_RING = 32;
-const BIN_RING_MASK = BIN_RING - 1;
+/** Delay-line length in frames: the smallest power of two that clears the
+ *  longest ITD — (a/c)(1 + π/2) ≈ 0.65 ms, so ~21 frames at 32 kHz but ~32 at
+ *  48 kHz (item 108), which a fixed 32-frame ring would wrap straight into
+ *  itself. Sized from the rate the renderer was built for, plus the one frame
+ *  of look-back the fractional tap reads. */
+function binauralRingLen(sampleRate) {
+  const need = Math.ceil(binauralEarDelay(-1.0, 1.0) * sampleRate) + 2;
+  let n = 32;
+  while (n < need) n *= 2;
+  return n;
+}
 
 /**
  * Virtual speaker directions as [azimuth, elevation] pairs in engine units.
@@ -253,7 +260,9 @@ export class BinauralRenderer {
     this.shelfState = new Float64Array(ns * 2);   // [x₋₁, y₋₁]
     this.shadowState = new Float64Array(ns * 2 * 2);
     this.lpState = new Float64Array(ns);
-    this.ring = new Float64Array(ns * BIN_RING);
+    this.ringLen = binauralRingLen(sampleRate);
+    this.ringMask = this.ringLen - 1;
+    this.ring = new Float64Array(ns * this.ringLen);
     this.ringPos = 0;
     this.lpA = 1.0 - Math.exp((-2.0 * Math.PI * BIN_ITD_LP_HZ) / sampleRate);
     this._g = new Float64Array(ns);
@@ -365,6 +374,7 @@ export class BinauralRenderer {
     const shelf = this.shelf, sst = this.shelfState;
     const shadow = this.shadow, hst = this.shadowState;
     const ring = this.ring, pos = this.ringPos;
+    const ringLen = this.ringLen, ringMask = this.ringMask;
     const dInt = this.delayInt, dFrac = this.delayFrac;
     const lpA = this.lpA, lp = this.lpState;
     let l = 0.0;
@@ -390,15 +400,15 @@ export class BinauralRenderer {
       const lo = lp[s] + lpA * (sv - lp[s]);
       lp[s] = lo;
       const hi = sv - lo;
-      const base = s * BIN_RING;
-      ring[base + (pos & BIN_RING_MASK)] = lo;
+      const base = s * ringLen;
+      ring[base + (pos & ringMask)] = lo;
 
       for (let ear = 0; ear < 2; ear++) {
         const j = s * 2 + ear;
         const i0 = pos - dInt[j];
         const f = dFrac[j];
-        const d0 = ring[base + (i0 & BIN_RING_MASK)];
-        const d1 = ring[base + ((i0 - 1) & BIN_RING_MASK)];
+        const d0 = ring[base + (i0 & ringMask)];
+        const d1 = ring[base + ((i0 - 1) & ringMask)];
         const ear_in = d0 + (d1 - d0) * f + hi;
         const hc = j * 3;
         const hs = shadow[hc] * ear_in + shadow[hc + 1] * hst[j * 2] - shadow[hc + 2] * hst[j * 2 + 1];

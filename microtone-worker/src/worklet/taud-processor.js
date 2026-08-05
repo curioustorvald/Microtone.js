@@ -1,16 +1,19 @@
 // TaudProcessor — AudioWorkletProcessor with two modes:
 //
 //   RENDER mode (non-isolated fallback): hosts the TaudEngine and renders
-//     32 kHz U8/float chunks into a local FIFO ring, reading them back with a
-//     fractional resample cursor. This is the original single-thread path.
+//     engine-rate U8/float chunks into a local FIFO ring, reading them back
+//     with a fractional resample cursor. This is the original single-thread path.
 //
 //   CONSUME mode (Tier 2, crossOriginIsolated): the engine lives in a separate
 //     render Worker that fills a SharedArrayBuffer audio ring; process() only
 //     resamples + copies from that ring, so it can never overrun. Entered on
 //     CMD.USE_AUDIO_SAB; no engine commands are routed here in this mode.
 //
-// The engine ALWAYS produces 32 kHz; when the context rate isn't 32000 the ring
-// is read with a fractional cursor + linear interpolation. Loaded via
+// The engine renders at SAMPLING_RATE — 48 kHz since item 108, which is the
+// rate audio-system.js asks the AudioContext for, so the common case reads the
+// ring back one frame at a time with no interpolation at all. A context that
+// insists on another rate (44.1 kHz hardware) is still served by reading with a
+// fractional cursor + linear interpolation. Loaded via
 // audioWorklet.addModule() as an ES module; the committed single-file concat
 // (taud-processor.bundle.js) is the non-module-worklet fallback — regenerate
 // with tools/make-worklet-bundle.js after any change here.
@@ -38,7 +41,7 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.ringR = new Float32Array(RING_FRAMES);
     this.ringWrite = 0;      // absolute frame counter (wraps via mask)
     this.ringReadPos = 0.0;  // fractional absolute read cursor
-    this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 32 kHz context
+    this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 48 kHz context
 
     // CONSUME mode (Tier 2): audio-ring SAB views + wrap-safe read cursor.
     this.audioRing = null;

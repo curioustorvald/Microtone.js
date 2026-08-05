@@ -104,7 +104,7 @@ export function profileVerdict(p) {
     detail:
       "Saturated, but most of the callback is spent OUTSIDE the engine (resample / " +
       "snapshot / messaging). A WASM engine rewrite would not fix this — check the " +
-      "SAB path and the 32 kHz→context resampler first.",
+      "SAB path and the engine→context resampler first.",
   };
 }
 
@@ -141,9 +141,11 @@ export function createProfileOverlay() {
     cursor: "move", userSelect: "none", touchAction: "none",
   });
   const titleText = document.createElement("span");
-  titleText.textContent = "⏱ Audio profiler";
+  titleText.textContent = "Audio profiler";
   const closeBtn = document.createElement("span");
-  closeBtn.textContent = "✕";
+  closeBtn.textContent = "\u00d7"; // Latin-1 ×, not a dingbat: this file stays
+                                  // self-contained, so it cannot use the SVG
+                                  // icon set — and × is in every font anyway.
   Object.assign(closeBtn.style, { cursor: "pointer", opacity: "0.6", touchAction: "none" });
   closeBtn.addEventListener("click", () => el.remove());
   title.append(titleText, closeBtn);
@@ -217,7 +219,7 @@ export function createProfileOverlay() {
     body.textContent = rows.join("\n");
 
     const v = profileVerdict(p);
-    verdict.textContent = `▸ ${v.label}`;
+    verdict.textContent = v.label;
     verdict.style.color = TONE_COLOUR[v.tone] || "#e5e7eb";
     verdictDetail.textContent = v.detail;
   }

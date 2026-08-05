@@ -34,8 +34,12 @@
 
         // ── i18n boot: static chrome translated via data-i18n ──
         const langBtn = win.document.getElementById("langBtn");
+        // The transport symbols are SVG since item 107, so textContent is the
+        // bare word and the icon is an element beside it.
+        const playBtn = win.document.getElementById("playSong");
         const i18nOk = !!langBtn && langBtn.textContent === "EN" &&
-          win.document.getElementById("playSong").textContent === "▶ Song";
+          playBtn.textContent === "Song" &&
+          playBtn.firstElementChild?.classList.contains("btn-ico") === true;
         log(`i18n applied (langBtn "${langBtn?.textContent}"): ${i18nOk ? "ok" : "FAIL"}`);
 
         // ── About popup on brand click ──
@@ -659,8 +663,10 @@
         const koTab = win3.document.querySelector('#tabs button[data-view="files"]').textContent;
         const koBtn = win3.document.getElementById("langBtn").textContent;
         localStorage.removeItem("microtone-lang");
-        const koOk = koPlay === "▶ 곡" && koTab === "파일" && koBtn === "KO";
-        log(`ko boot ("${koPlay}" / "${koTab}" / ${koBtn}): ${koOk ? "ok" : "FAIL"}`);
+        const koIcon = win3.document.getElementById("playSong")
+          .firstElementChild?.classList.contains("btn-ico") === true;
+        const koOk = koPlay === "곡" && koTab === "파일" && koBtn === "KO" && koIcon;
+        log(`ko boot ("${koPlay}" / "${koTab}" / ${koBtn}, icon ${koIcon}): ${koOk ? "ok" : "FAIL"}`);
 
         log(out.some((l) => l.includes("FAIL")) ? "FAILURES" : "ALL PASS");
       } catch (err) {

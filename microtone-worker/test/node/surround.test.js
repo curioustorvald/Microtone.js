@@ -10,11 +10,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { TaudEngine } from "../../src/engine/engine.js";
-import { TRACKER_CHUNK } from "../../src/engine/constants.js";
+import { TRACKER_CHUNK, SAMPLING_RATE, setSamplingRate } from "../../src/engine/constants.js";
 import { EffectOp } from "../../src/engine/tables.js";
 import {
   SURROUND_STEREO, SURROUND_PLANAR, SURROUND_SPATIAL, AmbisonicRenderer,
 } from "../../src/engine/spatial.js";
+
+// Pinned to the Kotlin engine's 32 kHz (item 108 moved the web default to
+// 48 kHz): the expectations below are sample counts and reference renders
+// taken from AudioAdapter.kt, and they stay diffable against it.
+setSamplingRate(32000);
 
 /** Engine with a looping ramp sample in slot 1 (engine-scenarios' recipe). */
 function makeTestEngine(surroundModel = SURROUND_STEREO) {
@@ -63,7 +68,7 @@ function loadSong(eng, rows) {
 }
 
 /** Chunks per tick at BPM 125 / 32 kHz — 640 samples, however big a chunk is. */
-const CHUNKS_PER_TICK = (32000 * 2.5) / 125 / TRACKER_CHUNK;
+const CHUNKS_PER_TICK = (SAMPLING_RATE * 2.5) / 125 / TRACKER_CHUNK;
 assert.ok(Number.isInteger(CHUNKS_PER_TICK));
 
 /** Render exactly `ticks` engine ticks, returning the U8 device output. */

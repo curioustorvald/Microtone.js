@@ -5,8 +5,13 @@ runs entirely in your browser. There is no server component: your files never
 leave your machine, projects are stored in the browser's private storage, and
 even MIDI/module conversion happens locally. The audio engine is a faithful
 port of the TSVM Taud engine — a ScreamTracker 3-lineage tracker extended with
-16-bit effect arguments and a 4096 tone-equal temperament pitch grid, rendering
-32 kHz stereo 8-bit audio (the dithered 8-bit character is intentional).
+16-bit effect arguments and a 4096 tone-equal temperament pitch grid. It renders
+**48 kHz** stereo, which is the rate browsers run their audio at, so what you
+hear and what you export leave the engine untouched by any resampling stage.
+(The TSVM device itself is a 32 kHz machine, and the 8-bit dithered character
+its output stage gives the format is intentional and unchanged — everything
+rate-derived, from tick length to the Amiga filters, is computed for whichever
+rate the engine is running at, so a song plays and sounds the same on both.)
 
 > Press **?** in the app (or the **?** button in the top bar) at any time for a
 > compact keyboard reference. The full effect-command specification lives in
@@ -138,6 +143,11 @@ Each cell is five columns:
 | **+** / **−** | fine (one-shot) rise / drop | fine step right / left | **00–1F** |
 | `···` | nothing — the column is empty | | |
 
+Full volume is **3F**, i.e. 63. That is not a step short of the 64 a
+ScreamTracker 3 screen shows: ST3 carries the volume in six bits too and clamps
+its own `C40` down to 63, so an imported song keeps its full dynamic range —
+a `C40` arrives as 3F and every quieter value arrives untouched.
+
 In a **surround project** these two columns are wider: the volume runs 00–FF and
 the panning column carries a height and a full-circle angle. See
 [The wide pattern cell](#the-wide-pattern-cell).
@@ -240,10 +250,17 @@ room, and hands it a view none of the others is using. A panel set to a view the
 current song cannot express — a height view on a song that is not spatial —
 simply waits: it is not drawn, it does not turn into a second copy of another
 panel, and it comes back as itself the moment you open a song that has that
-axis. Drag the divider above the meter to give it more or less height; because
-scope panels cannot be squeezed, growing the meter eventually pushes one out and
-takes its room, and shrinking it lets one back in. Double-click the divider to
-reset it. Everything here is remembered between sessions.
+axis.
+
+The **divider** above the meter is the same control by another name: a scope
+panel is a fixed size, so where the divider sits and how many panels are above
+it are one and the same thing. Drag it down and panels close as it passes them;
+drag it back up and they open again, taking the next view the song has. The
+meter always takes exactly what is left. Double-click the divider to go back to
+two panels. Everything here is remembered between sessions — and if you open the
+app in a window too short for the panels you had, the ones that no longer fit
+are closed rather than left half-drawn, so what you see is always what the strip
+thinks it has.
 
 **The vectorscopes** come in two families, and both draw the same three views of
 the same space, on the same axes — **top** (left–right against front–back),
@@ -292,7 +309,9 @@ trace is a mono-safe mix, a horizontal one is very wide, a diagonal one leans to
 that side. This is not a special case — for two speakers, left–right and
 front–back *are* side and mid — so the same display serves every song. It is
 auto-gained so a quiet mix still fills the dial, with the factor shown in the
-corner; the meters below it are the absolute reading. The gain glides over about
+corner; the meters below it are the absolute reading. A mix that is already at
+the clipping point is never magnified — the gain reads ×1 and the figure keeps
+some room inside the rim. The gain glides over about
 a third of a second rather than snapping, so a transient briefly overruns the
 dial instead of yanking the whole figure smaller — the shape has to hold still
 enough to compare from one moment to the next.
@@ -578,7 +597,7 @@ resampling are still reversible.
   - **Import N chunks** lands every kept chunk as its own sample + instrument, named `name 1…N`, in a single undo step.
 - **Chord…** opens the [chord maker](#the-chord-maker) on the take.
 - **Mono / Stereo** — a stereo file or recording opens as a stereo take: two lanes, and every tool applies to both channels (Normalise uses one shared factor, so the image survives; transient detection listens to the mono fold). The **→ Mono** button folds the take down to one channel, halving what it will cost in the pool; **→ Stereo** splits a mono take back into a pair. Both are ordinary Lab edits — Ctrl+Z undoes them.
-- **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the engine's output rate) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
+- **Rate and the frame budget** — the info line always shows what will land in the pool: each chunk is resampled to the target rate (32 kHz ceiling — the pool is 8 MB and a sample can hold 65535 frames, and 32 kHz is also the rate the TSVM device plays the file back at) with a band-limited Kaiser-sinc resampler (the same kernel the converters use), and anything still longer than 65535 frames is squeezed to fit with the rate following, preserving pitch. Both steps are irreversible once imported, which is exactly why the Lab shows them first — crop or chop until the numbers read the way you want.
 - **Committing** — **Import as new** always mints new samples and instruments. **Replace** appears when the Lab was opened on a sample already in the project and writes the edit back over it, carrying every instrument bound to it along; see [Samples](#samples-f4) for what it will and will not do in place. When the Lab opened on a pooled sample, its loop region is shaded on the waveform and moves with your edits, so you can see where Replace will leave it.
 
 ### The chord maker

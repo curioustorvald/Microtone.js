@@ -25,6 +25,7 @@ import { paintNoteCell } from "../glyphs.js";
 import { canvasFont } from "../fonts.js";
 import { themeColors } from "../theme.js";
 import { t } from "../i18n.js";
+import { icon, setIconLabel } from "../icons.js";
 
 const WAVE_H = 96;
 const GLYPH_CHAR_W = 9, GLYPH_H = 20;
@@ -90,7 +91,7 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       <canvas class="chord-wave"></canvas>
       <div class="chord-info dim"></div>
       <div class="modal-buttons">
-        <button class="chord-play">${esc(t("chord.preview"))}</button>
+        <button class="chord-play">${icon("play")}${esc(t("chord.preview"))}</button>
         <button class="chord-ok">${esc(t("chord.apply"))}</button>
         <button class="chord-cancel">${esc(t("common.cancel"))}</button>
       </div>`;
@@ -343,7 +344,7 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       if (!playing) return;
       try { playing.src.stop(); } catch { /* already ended */ }
       playing = null;
-      playBtn.textContent = t("chord.preview");
+      setIconLabel(playBtn, "play", t("chord.preview"));
       paintWave();
     }
     function startPlay() {
@@ -362,7 +363,7 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       src.connect(actx.destination);
       src.start();
       playing = { src, t0: actx.currentTime };
-      playBtn.textContent = t("chord.stop");
+      setIconLabel(playBtn, "stop", t("chord.stop"));
       src.onended = () => { if (playing?.src === src) stopPlay(); };
       const tick = () => { if (!playing) return; paintWave(); requestAnimationFrame(tick); };
       requestAnimationFrame(tick);

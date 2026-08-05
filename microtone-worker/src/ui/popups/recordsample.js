@@ -6,6 +6,7 @@
 
 import { openSampleLab } from "./samplelab.js";
 import { t } from "../i18n.js";
+import { icon, setIconLabel } from "../icons.js";
 
 const MAX_REC_SECONDS = 120;
 const METER_W = 260, METER_H = 16;
@@ -107,7 +108,7 @@ function runRecorderModal(stream) {
       <div class="rec-status dim">${esc(t("rec.ready"))}</div>
       <p class="dim rec-hint">${esc(t("rec.hint", { max: MAX_REC_SECONDS }))}</p>
       <div class="modal-buttons">
-        <button class="rec-toggle">${esc(t("rec.record"))}</button>
+        <button class="rec-toggle">${icon("record")}${esc(t("rec.record"))}</button>
         <button class="rec-use" disabled>${esc(t("rec.use"))}</button>
         <button class="rec-cancel">${esc(t("common.cancel"))}</button>
       </div>`;
@@ -136,7 +137,8 @@ function runRecorderModal(stream) {
     function setRecording(on) {
       recording = on;
       if (on) { chunks = []; total = 0; }
-      toggleBtn.textContent = on ? t("rec.stop") : (total > 0 ? t("rec.again") : t("rec.record"));
+      if (on) setIconLabel(toggleBtn, "stop", t("rec.stop"));
+      else setIconLabel(toggleBtn, "record", total > 0 ? t("rec.again") : t("rec.record"));
       useBtn.disabled = on || total === 0;
       if (!on && total > 0) {
         status.textContent = t("rec.took", { secs: (total / ctx.sampleRate).toFixed(1) });

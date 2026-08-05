@@ -888,6 +888,22 @@ function selView() {
     : store.view === "cues" ? cuesView : null;
 }
 
+// A button keeps DOM focus after it is clicked, and a focused button treats
+// Enter and Space as "press me again" — so the transport keys would re-open the
+// dialog you just used instead of starting playback (item 105). Hand focus back
+// to the app after every POINTER activation, so Enter always means play/stop.
+//
+// `detail === 0` is a click the KEYBOARD synthesised (Enter/Space on a focused
+// control, or .click() from our own code): leaving that one focused is what
+// keeps tab-through navigation usable. Dialogs are left alone — inside a modal,
+// activating the focused button IS what Enter should do, and contextmenu.js
+// walks its cells with the same focus.
+document.addEventListener("click", (e) => {
+  if (e.detail === 0) return;
+  const btn = e.target.closest?.("button, a");
+  if (btn && !btn.closest("dialog")) btn.blur();
+});
+
 // ── keyboard dispatch ──
 window.addEventListener("keydown", (e) => {
   // Save works anywhere, any time (item 47.4): before the input/dialog and

@@ -290,16 +290,18 @@ test("the same signal draws the same picture at any frame rate", () => {
 });
 
 test("the pen is a spot, not a pixel", () => {
-  // Sub-pixel motion must still move the trace: the ink either side of the
-  // centre is what makes a slow sweep read as a smooth curve.
+  // A resting beam parked on ONE pixel's centre: the ink either side of it is
+  // what makes a slow sweep read as a smooth curve rather than a staircase.
   const beam = new CrtBeam(SIZE);
-  sweepLine(beam, 0, 0, 0, 0, 4);
   const mid = beam.mid | 0;
-  const centre = beam.energy[mid * SIZE + mid];
-  const skirt = beam.energy[mid * SIZE + mid + 1];
+  const on = 0.5 / beam.radius; // dial units from the middle to that centre
+  sweepLine(beam, on, 0, on, 0, 4);
+  const centre = beam.energy[(mid - 1) * SIZE + mid];
+  const skirt = beam.energy[(mid - 1) * SIZE + mid + 1];
   assert.ok(centre > 0 && skirt > 0 && skirt < centre, `${centre} / ${skirt}`);
-  assert.ok(beam.energy[mid * SIZE + mid + 4] === 0, "and it is truncated");
-  assert.ok(BEAM_SIGMA > 0.5 && BEAM_SIGMA < 2, "a spot, not a brush");
+  assert.equal(beam.energy[(mid - 1) * SIZE + mid + 4], 0, "and it is truncated");
+  // A spot, not a brush — how wide exactly is a look, tuned by eye.
+  assert.ok(BEAM_SIGMA >= 0.4 && BEAM_SIGMA < 2, String(BEAM_SIGMA));
 });
 
 test("resizing gives a clean screen at the new geometry", () => {

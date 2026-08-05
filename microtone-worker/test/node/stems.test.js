@@ -177,8 +177,8 @@ test("encodeWav24Mono writes a 24-bit 48 kHz mono header and exact samples", () 
 });
 
 test("encodeWav24Mono resamples 32 kHz → 48 kHz", () => {
-  const src = new Float32Array(32000); // 1 s
-  const wav = encodeWav24Mono(src, 48000);
+  const src = new Float32Array(32000); // 1 s at 32 kHz
+  const wav = encodeWav24Mono(src, 48000, 32000);
   const dv = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
   assert.equal(dv.getUint32(40, true) / 3, 48000, "one second at 48 kHz");
 });

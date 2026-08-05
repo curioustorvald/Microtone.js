@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>button icon gallery</title>
+  <link rel="stylesheet" href="../../css/microtone.css" />
+  <style>
+    body { padding: 1.5rem; font-family: system-ui, sans-serif; }
+    h2 { margin: 1.4rem 0 0.6rem; font-size: 0.95rem; color: var(--dim); font-weight: 600; }
+    .strip { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+    .big .btn-ico { width: 3rem; height: 3rem; }
+    .cell { display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
+            padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; }
+    .cell code { font-size: 0.7rem; color: var(--dim); }
+  </style>
+</head>
+<body>
+  <!-- The vector twins of the transport/tool symbols (item 107), drawn large so
+       the geometry can be judged, and again at label size inside real buttons —
+       the same job test/browser/glyph-gallery.html does for the note glyphs.
+       Serve the repo (tools/test-server.py) and open this page. -->
+  <h1 style="font-size:1.1rem">Button icons</h1>
+  <p class="dim">Big: the raw 24×24 geometry. Below: the same icons at 1em in
+     buttons, with and without a label, in every theme.</p>
+
+  <h2>geometry</h2>
+  <div class="strip big" id="big"></div>
+
+  <h2>in context</h2>
+  <div id="themes"></div>
+
+  <script type="module">
+    import { BTN_ICON, icon } from "../../src/ui/icons.js";
+    import { THEMES, applyTheme } from "../../src/ui/theme.js";
+
+    const names = Object.keys(BTN_ICON);
+    document.getElementById("big").innerHTML = names.map((n) =>
+      `<span class="cell">${icon(n)}<code>${n}</code></span>`).join("");
+
+    const themes = document.getElementById("themes");
+    for (const th of THEMES) {
+      const wrap = document.createElement("div");
+      wrap.dataset.theme = th;
+      wrap.style.cssText = "background:var(--bg);padding:0.7rem;border-radius:8px;margin:0.5rem 0";
+      wrap.innerHTML =
+        `<div class="dim" style="font-size:0.75rem;margin-bottom:0.4rem">${th}</div>` +
+        `<div class="strip">` +
+        names.map((n) => `<button>${icon(n)}</button>`).join("") +
+        names.map((n) => `<button>${icon(n)}${n}</button>`).join("") +
+        `<button>Export${icon("download", true)}</button>` +
+        `</div>`;
+      themes.appendChild(wrap);
+    }
+    // The per-block data-theme attributes above drive the palette; make sure the
+    // page itself starts from a known one.
+    applyTheme(THEMES[0]);
+    console.log("GALLERY: " + names.length + " icons");
+  </script>
+</body>
+</html>

@@ -63,7 +63,7 @@ This manual extensively uses "tracker lingo" that may not sound intuitive to the
 ## 1. Sound device
 
 - **Bit depth:** 8-bit unsigned throughout, including the final mixdown. Conforming implementations **MUST** deliver 8-bit unsigned samples at the output stage.
-- **Sample rate:** fixed at 32000 Hz. Conforming implementations **MUST** produce output at exactly this rate; resampling to another playback rate is the responsibility of the host environment, not of the Taud engine.
+- **Sample rate:** 32000 Hz, the TSVM Audio Adapter's rate and the reference rate every sample count in this document is quoted against. A host **MAY** instead run the engine at its own output rate — the browser implementation renders 48 kHz — provided everything rate-derived is recomputed from it and the music lands on the same rows at the same times; see the Engine Spec §1.3 for the exhaustive list.
 - **Output channels:** strictly stereo; the mix bus **MUST** always produce a two-channel frame, even for mono-source samples.
 
 Internal accumulators **MAY** widen to 16 or 32 bits during mixing and effect computation, but stored samples and final output **MUST** be 8-bit.
@@ -667,7 +667,7 @@ Taud splits T by which byte carries the value:
 
 ProTracker `Fxx` with `xx ≥ $20` maps to Taud `T $(xx − $19)00`; `Fxx` with `xx < $20` maps to A (speed) instead.
 
-**Implementation.** If the high byte is non-zero, set `tempo_byte = arg >> 8`; derive `BPM = tempo_byte + $19`; compute tick duration as `samples_per_tick = 32000 × 5 / (BPM × 2) = 80000 / BPM` (integer truncated) at the fixed 32000 Hz output rate. Example: BPM 125 → 640 samples per tick; BPM 24 → 3200 samples per tick; BPM 280 → 286 samples per tick. There is no memory for set-tempo.
+**Implementation.** If the high byte is non-zero, set `tempo_byte = arg >> 8`; derive `BPM = tempo_byte + $19`; compute tick duration as `samples_per_tick = rate × 5 / (BPM × 2)`, i.e. `80000 / BPM` (integer truncated) at the 32000 Hz reference rate. Example at that rate: BPM 125 → 640 samples per tick; BPM 24 → 3200 samples per tick; BPM 280 → 286 samples per tick. There is no memory for set-tempo.
 
 ### T $FFxx (high byte 0xFF) — Set tempo (extended)
 
@@ -949,7 +949,7 @@ S is a multiplexing opcode; the **high nibble of the high byte** selects the sub
 
 **Compatibility.** ST3/IT `S00`/`S01` and PT `E00`/`E01` map directly. To actually hear the effect, the interpolation mode **MUST** be set to one of the two Amiga modes.
 
-**Implementation.** Per-playhead boolean `ledFilterOn` (default off). Writes from row are gated on `interpolationMode ∈ {Amiga 500, Amiga 1200}`; in linear / no-interp / default modes the filter chain is bypassed entirely so the toggle is a silent no-op. The post-mix LPF chain runs on the stereo bus (left/right state per playhead) before dithering: in Amiga 500 mode a 1-pole RC LPF (R = 360 Ω, C = 0.1 µF, fc ≈ 4421 Hz) is always applied; in Amiga 1200 mode that LPF is bypassed (cutoff ~34 kHz, well above 32 kHz Nyquist — matches `pt2_paula.c`). When the LED toggle is on, an additional 2-pole Sallen-Key LPF (R1=R2=10 kΩ, C1=6800 pF, C2=3900 pF, fc ≈ 3091 Hz, Q ≈ 0.660) is run after the mode LPF. Coefficients precomputed once at SAMPLING_RATE; recurrence follows musicdsp.org #38 with `pt2_rcfilters.c` parameter mapping.
+**Implementation.** Per-playhead boolean `ledFilterOn` (default off). Writes from row are gated on `interpolationMode ∈ {Amiga 500, Amiga 1200}`; in linear / no-interp / default modes the filter chain is bypassed entirely so the toggle is a silent no-op. The post-mix LPF chain runs on the stereo bus (left/right state per playhead) before dithering: in Amiga 500 mode a 1-pole RC LPF (R = 360 Ω, C = 0.1 µF, fc ≈ 4421 Hz) is always applied; in Amiga 1200 mode that LPF is bypassed (cutoff ~34 kHz, above Nyquist at any rate the engine runs at — matches `pt2_paula.c`). When the LED toggle is on, an additional 2-pole Sallen-Key LPF (R1=R2=10 kΩ, C1=6800 pF, C2=3900 pF, fc ≈ 3091 Hz, Q ≈ 0.660) is run after the mode LPF. Coefficients precomputed once at the running SAMPLING_RATE (recomputed if it moves, so both corners stay at their analogue frequencies); recurrence follows musicdsp.org #38 with `pt2_rcfilters.c` parameter mapping.
 
 ## S $1x00 — PT/ST3/IT Glissando control
 
@@ -1275,6 +1275,8 @@ Each cell carries a 6-bit value field plus a 2-bit selector field for the volume
 Volume-column effects do not consume the main effect slot; a cell can carry both (for instance, a tone portamento in the effect slot and a volume slide in the volume column). Because the volume column writes the per-note axis, an `M $xx00` on the same or following row sets the per-channel axis independently — the two multiply at the mixer (see §3 / §M).
 
 When the converter folds an ST3 K, L, M, or N effect into the volume column, the slide-up / slide-down nibbles map to selectors 1 / 2 (clamped to 6 bits — values above $3F clip). Note that *converted* M and N still target `note_vol` here (vol-col semantics) — to preserve the original per-channel intent, converters **MUST** emit them in the main effect column instead.
+
+**The ceiling is 63, and ScreamTracker's is too.** ST3's volume column and `Cxx` are documented as 0…64, and the editor shows 64 as full, but the value is carried in six bits and the player clamps it: `C40` sounds at 63, exactly as `C3F` does. Taud's `$00..$3F` is therefore the same dynamic range as the format it descends from, not a range short of one step — a converter that rescales by 63/64 to "fit" only pulls every volume in the song down. Clamp `$40` to `$3F` and leave every other value alone. The same reading applies to XM and IT sources, whose 0…64 columns are the same six bits with the same clamp.
 
 NOTE: **`3.00` — is No-op**
 

@@ -58,7 +58,8 @@ export class AudioSystem {
   /** Create the context + node. Must be called once; audio starts suspended
    *  until resume() is called from a user gesture.
    *  Test knobs: forceBundle loads the single-file worklet concat; sampleRate
-   *  overrides the context rate (exercises the 32 kHz→context resampler). */
+   *  overrides the context rate (exercises the engine→context resampler —
+   *  at the default 48 kHz the engine's rate IS the context rate). */
   async init({ snapshotIntervalMs = 16, forceBundle = false, sampleRate = 48000, profile = false } = {}) {
     let ctx;
     try {

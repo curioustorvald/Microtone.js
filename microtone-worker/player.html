@@ -19,11 +19,11 @@
 
     <section class="transport" id="transport" hidden>
       <div class="row">
-        <button id="play" class="big">▶ Play</button>
-        <button id="stopBtn" class="big">■ Stop</button>
+        <button id="play" class="big" data-icon="play">Play</button>
+        <button id="stopBtn" class="big" data-icon="stop">Stop</button>
         <label>Song <select id="song"></select></label>
-        <button id="prevCue">|◀ cue</button>
-        <button id="nextCue">cue ▶|</button>
+        <button id="prevCue" data-icon="prevCue">cue</button>
+        <button id="nextCue" data-icon="nextCue" data-icon-after>cue</button>
         <label>Vol <input id="vol" type="range" min="0" max="255" value="255" /></label>
         <label id="binauralWrap" hidden title="Monitor a surround song through a head model — height and front/back become audible on headphones"><input id="binaural" type="checkbox" checked /> Binaural</label>
       </div>

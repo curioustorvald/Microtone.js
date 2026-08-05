@@ -31,7 +31,7 @@
       await audio.init({
         snapshotIntervalMs: 16,
         forceBundle: params.has("bundle"),
-        sampleRate: params.has("rate") ? parseInt(params.get("rate"), 10) : 32000,
+        sampleRate: params.has("rate") ? parseInt(params.get("rate"), 10) : 48000,
       });
       log(`init ok — sampleRate=${audio.context.sampleRate} bundleFallback=${audio.usedBundleFallback}`);
       log(`snapshot path: ${audio.usingSab ? "SharedArrayBuffer" : "postMessage"} (crossOriginIsolated=${globalThis.crossOriginIsolated})`);

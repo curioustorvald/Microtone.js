@@ -28,7 +28,7 @@
   /* status colours */
   --ok-bg: #234d2c;   --ok-fg: #9df0ae;    /* "audio on" badge */
   --err-bg: #5c2e2e;  --err-fg: #ffb0b0;   /* "audio off" badge, warnings */
-  --rec-fg: #ff5c5c;  --rec-border: #7a3434;
+  --rec-fg: #ff5c5c;  --rec-border: #7a3434;  --rec-bg: #3d2229;  /* record ARMED */
 
   /* canvas: pattern grids (Timeline / Cues / Patterns) */
   --cv-bg: #1f232b;         /* waveform / envelope canvas ground */
@@ -82,7 +82,7 @@
   /* status colours */
   --ok-bg: #2e5c38;   --ok-fg: #9df0ae;
   --err-bg: #6b3838;  --err-fg: #ffb0b0;
-  --rec-fg: #ff5c5c;  --rec-border: #8a4141;
+  --rec-fg: #ff5c5c;  --rec-border: #8a4141;  --rec-bg: #55353c;
 
   /* canvas: pattern grids (Timeline / Cues / Patterns) */
   --cv-bg: #34363b;
@@ -131,7 +131,7 @@
   /* status colours */
   --ok-bg: #d3ecd8;   --ok-fg: #1d6b32;
   --err-bg: #f4d9d9;  --err-fg: #a03434;
-  --rec-fg: #c22f2f;  --rec-border: #d99d9d;
+  --rec-fg: #c22f2f;  --rec-border: #d99d9d;  --rec-bg: #fbe3e3;
 
   /* canvas: pattern grids */
   --cv-bg: #eceef2;
@@ -328,6 +328,16 @@ select, input[type="range"] {
 .transport-controls { display: flex; gap: 0.3rem; align-items: center; }
 .chk { color: var(--dim); font-size: 0.85rem; display: flex; align-items: center; gap: 0.25rem; }
 
+/* Vector button labels (item 107) — ▶ ■ ⏺ ↶ ↷ ↻ ◐ ⬇ ↗ ♥ ⇤ ⇥ as SVG, since
+   several of those code points are missing from the stock fonts on some phones
+   and tablets and rendered as tofu. Sized in em so they track the button's own
+   font, and nudged down to sit on the text's optical centre. The margin is only
+   for icons that have a LABEL beside them — an icon-only button (stop, undo,
+   theme) is its sole child and stays centred. */
+.btn-ico { width: 1em; height: 1em; vertical-align: -0.14em; flex: none; }
+.btn-ico:not(:only-child) { margin-right: 0.4em; }
+.btn-ico.after:not(:only-child) { margin-right: 0; margin-left: 0.35em; }
+
 .tb-sep { width: 1px; align-self: stretch; margin: 0.1rem 0.25rem; background: var(--border); }
 .icon-btn { padding: 0.25rem 0.5rem; font-size: 1.05rem; line-height: 1; }
 button.icon-btn:disabled { opacity: 0.35; cursor: default; }
@@ -475,8 +485,15 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 
 .dirty { color: var(--accent); }
 
-.rec { color: var(--dim); }
-/* .rec.on { color: var(--rec-fg); border-color: var(--rec-border); } */
+/* Record arm. It is a TOGGLE you are meant to find, so idle it is an ordinary
+   button — the dimmed version read as a disabled control. Armed, the dot, the
+   label and the button all take the record colour. */
+.rec.on {
+  color: var(--rec-fg);
+  border-color: var(--rec-border);
+  background: var(--rec-bg);
+}
+.rec.on:hover { border-color: var(--rec-fg); }
 
 .wheelable-dummy, .wheelable {
   padding: 0.15rem 0.35rem;

@@ -28,6 +28,7 @@ import {
 } from "../units.js";
 import { SURROUND_STEREO, SURROUND_SPATIAL } from "../../engine/spatial.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 // Fraction of the envelope graph's plottable width the time axis uses; the
 // rightmost 1−ENV_TIME_FRAC stays empty so the last node can always be grabbed
@@ -292,8 +293,8 @@ export class InstrumentsView {
       const parent = this._childParent;
       const back = document.createElement("button");
       back.className = "inst-parent-chip";
-      back.textContent = "◀ $" + parent.toString(16).toUpperCase().padStart(3, "0") + " " +
-        (unescapeName(doc.instrumentName(parent)) || t("inst.unnamed"));
+      setIconLabel(back, "prev", "$" + parent.toString(16).toUpperCase().padStart(3, "0") + " " +
+        (unescapeName(doc.instrumentName(parent)) || t("inst.unnamed")));
       back.title = t("inst.backToMeta");
       back.addEventListener("click", () => {
         this._childSelected = null;

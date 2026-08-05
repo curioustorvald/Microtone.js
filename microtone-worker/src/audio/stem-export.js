@@ -29,7 +29,7 @@ import { SAMPLING_RATE, TRACKER_CHUNK } from "../engine/constants.js";
 import { loadIntoEngine, resampleF32 } from "./offline-render.js";
 import { unescapeName } from "../ui/names.js";
 
-/** First allocation per track — ~33 s at 32 kHz (4 MiB), doubling from there. */
+/** First allocation per track — ~22 s at 48 kHz (4 MiB), doubling from there. */
 const INITIAL_STEM_FRAMES = 1 << 20;
 
 /**
@@ -227,7 +227,7 @@ export async function renderStemsAsync(docLike, songIndex, maxSeconds, {
   };
 }
 
-/** Encode a mono float bus (32 kHz) as a 24-bit mono WAV at `outRate`. */
+/** Encode a mono float bus (engine rate) as a 24-bit mono WAV at `outRate`. */
 export function encodeWav24Mono(f32, outRate = 48000, srcRate = SAMPLING_RATE) {
   const pcm = resampleF32(f32, 1, srcRate, outRate);
   const n = pcm.length;

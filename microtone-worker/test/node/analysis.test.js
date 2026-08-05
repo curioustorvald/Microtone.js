@@ -16,7 +16,7 @@ import {
 import {
   SURROUND_STEREO, SURROUND_PLANAR, SURROUND_SPATIAL, SpatialBus,
 } from "../../src/engine/spatial.js";
-import { TRACKER_CHUNK } from "../../src/engine/constants.js";
+import { TRACKER_CHUNK, SAMPLING_RATE } from "../../src/engine/constants.js";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine, renderSong } from "../../src/audio/offline-render.js";
@@ -25,6 +25,7 @@ import {
   scopeAxes, scopeLabels, blobView, MeterBallistics,
   scopePanelHeight, scopePanelsThatFit, parseInk,
   slewTowards, integrateCorrelation, SCOPE_GAIN_SLEW_MS, CORR_INTEGRATE_MS,
+  scopeAutoGain, SCOPE_GAIN_FILL, SCOPE_GAIN_HEADROOM, SCOPE_GAIN_MAX,
   METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
   SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
   SCOPE_SELECT_H, SCOPE_CORR_H, SPLIT_H, MAX_SCOPE_PANELS,
@@ -486,7 +487,7 @@ test("a scope panel is a fixed size, so the viewport decides how many fit", () =
 test("correlation is integrated over a window of AUDIO, not one interval", () => {
   const sums = { ll: 0, rr: 0, lr: 0 };
   // 16 ms intervals of a mono signal: the reading settles at +1.
-  const chunk = 512; // frames per interval at 32 kHz ≈ 16 ms
+  const chunk = Math.round(SAMPLING_RATE * 0.016); // one ~16 ms snapshot interval
   let c = 0;
   for (let i = 0; i < 60; i++) c = integrateCorrelation(sums, 100, 100, 100, chunk);
   assert.ok(Math.abs(c - 1) < 1e-9, `mono ${c}`);
@@ -510,6 +511,28 @@ test("correlation is integrated over a window of AUDIO, not one interval", () =>
   for (let i = 0; i < 10; i++) integrateCorrelation(b, 0, 0, 0, 320);
   assert.ok(Math.abs(a.ll - b.ll) < 1e-12, `${a.ll} vs ${b.ll}`);
   assert.ok(CORR_INTEGRATE_MS >= 300, "the window is long enough to be a statistic");
+});
+
+test("the vectorscope auto-gain leaves headroom for a full-scale mix", () => {
+  // The peak it divides by is a B-format COMPONENT, so full scale reads
+  // differently depending on how wide the mix is — and the case that must NOT
+  // be magnified is the loudest one.
+  const S = Math.SQRT1_2;
+  assert.equal(scopeAutoGain(Math.SQRT2), 1, "mono at full scale: W = √2");
+  assert.equal(scopeAutoGain(1), 1, "and anything between");
+  // Hard-panned full scale is the widest a clipping mix can read, and the
+  // headroom takes what used to be a 1.3× magnification of it down to
+  // effectively none — the trace lands at three quarters of the radius.
+  assert.ok(SCOPE_GAIN_FILL / S > 1.25, "…which is what it asked for before");
+  assert.ok(scopeAutoGain(S) <= 1.05, String(scopeAutoGain(S)));
+  assert.ok(S * scopeAutoGain(S) < 0.8, String(S * scopeAutoGain(S)));
+  // A quiet mix is still magnified, and a silent one does not blow up.
+  assert.ok(scopeAutoGain(0.1) > 5 && scopeAutoGain(0.1) < 8, String(scopeAutoGain(0.1)));
+  assert.equal(scopeAutoGain(0), SCOPE_GAIN_MAX);
+  assert.equal(scopeAutoGain(1e-9), SCOPE_GAIN_MAX);
+  // Monotone, and it fills the dial short of the rim.
+  assert.ok(scopeAutoGain(0.05) > scopeAutoGain(0.2));
+  assert.ok(0.2 * scopeAutoGain(0.2) < 0.92, String(0.2 * scopeAutoGain(0.2)));
 });
 
 test("the vectorscope auto-gain slews in wall time", () => {

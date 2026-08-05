@@ -93,6 +93,8 @@ Taud's volume and pan columns each carry a 6-bit value plus a selector, and the 
 - On a row that triggers a note but carries no explicit source volume, emit a **SET** with the instrument's default volume. Otherwise the channel's prior volume persists into the fresh note, which is almost never what the source meant.
 - On every other row, emit the FINE-0 no-op so the column does not disturb running state.
 
+A source volume of 64 maps to **63**, not to a rescaled value. ST3, XM and IT all display a 0…64 volume and all clamp it to six bits in the player, so 64 and 63 sound the same at the source; scaling the whole range by 63/64 to make 64 "fit" would quietly pull every other volume in the song down. Clamp, do not scale.
+
 Effects that only set channel volume or panning (`M`, `N`, `X`, `P` in ST3 terms) **SHOULD** be folded into these columns, which frees the effect slot for something that genuinely needs it. Each cell has exactly one effect slot, and on dense material that slot is the scarcest resource in the whole conversion.
 
 ### 1.8 Subsongs

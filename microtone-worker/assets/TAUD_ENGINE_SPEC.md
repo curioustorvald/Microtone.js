@@ -33,7 +33,20 @@ Background voices are not addressable from the pattern. They receive no row even
 
 ### 1.3 Output
 
-The engine renders **32 000 Hz, 8-bit unsigned, stereo, interleaved** — always stereo, and always at that rate. The 8-bit dithered character is intentional and part of the format's sound. An implementation that must feed a different sample rate **SHOULD** convert after the engine's own output stage rather than by running the engine at another rate, because tick timing, filter coefficients and the interpolators are all defined against 32 kHz.
+The engine renders **8-bit unsigned, stereo, interleaved** at **32 000 Hz**, which is the TSVM Audio Adapter's hardware rate and the **reference rate this document is written against**: every sample count quoted below (samples per tick, the 256-sample ramp-out, the 64-sample volume ramp) and every filter coefficient follows from it. The 8-bit dithered character is intentional and part of the format's sound; always stereo is not negotiable.
+
+A host whose output is at another rate **MAY** run the engine at that rate instead of resampling after the output stage — the browser implementation renders 48 kHz for exactly this reason, since resampling a 32 kHz render up to the audio device's rate is a quality loss taken on every song. An implementation that does so **MUST** derive all of the following from its own rate rather than carrying the 32 kHz numbers over:
+
+| Quantity | Rule |
+|---|---|
+| `samples_per_tick` ([§2.1](#2-1-ticks-and-rows)) | `rate × 2.5 ÷ bpm` |
+| Playback rate ([§3.2](#3-2-playback-rate)) | `sampling_rate ÷ rate` |
+| Ramp-out on sample end/cut ([§12](#12-output-stage)) | 8 ms — 256 samples at 32 kHz |
+| Volume-change ramp ([§12](#12-output-stage)) | 2 ms — 64 samples at 32 kHz |
+| Voice filter coefficients ([§9](#9-filters)) | `rate` in §9's formulae is the running rate, so the cutoff clamp rises with it |
+| Amiga LPF / LED coefficients ([§10.4](#10-4-the-post-mix-amiga-chain)) | Recomputed at the running rate, so both corners stay at their analogue frequencies (4420.971 Hz, 3090.533 Hz) |
+
+Rate is the one thing that is an implementation's own choice. Nothing else in this document is: a render at another rate **MUST** still reach the same row at the same moment, and the same voice at the same pitch, as the 32 kHz reference — which is what makes conformance testable against a 32 kHz oracle by running the implementation at 32 kHz.
 
 Internally the mix bus is floating point, and the quantisation to 8 bits happens once per chunk in a defined, deterministic way ([§12](#12-output-stage)).
 
@@ -50,7 +63,7 @@ The tick duration is
 
 ```
 tick_seconds     = 2.5 / bpm
-samples_per_tick = 32000 × 2.5 / bpm
+samples_per_tick = rate × 2.5 / bpm
 ```
 
 so BPM 125 gives a 50 Hz tick and, at speed 6, a 120 ms row. BPM is a 9-bit value, 25…535; the engine **MUST** clamp to that range.
@@ -99,7 +112,7 @@ One 12-TET semitone is `4096 ÷ 12` ≈ 341.33 units, and one cent is `4096 ÷ 1
 A sounding voice reads its sample at
 
 ```
-playback_rate = (sampling_rate ÷ 32000)
+playback_rate = (sampling_rate ÷ rate)
               × 2 ^ ((note − 0x5000 + detune) ÷ 4096)
               × tuning_ratio
 ```
@@ -489,7 +502,7 @@ The interpolation mode comes from the global behaviour flags and applies to ever
 | 0 — default | Windowed sinc: a Hann-windowed sinc kernel over ±3 taps, tabulated at 1024 sub-sample positions and linearly interpolated between table entries |
 | 1 — none | Zero-order hold — take the sample under the integer position |
 | 2 — Amiga 500 | Zero-order hold, plus a post-mix one-pole low-pass at 4420.971 Hz and the optional LED filter |
-| 3 — Amiga 1200 | Zero-order hold, plus the optional LED filter only: the A1200's own one-pole sits above Nyquist at 32 kHz and is bypassed |
+| 3 — Amiga 1200 | Zero-order hold, plus the optional LED filter only: the A1200's own one-pole sits at ~34 kHz, above Nyquist at any rate the engine runs at, and is bypassed |
 | 4 — SNES | The SPC700's 4-tap Gaussian, with the int16 mid-sum overflow preserved so the characteristic "chirp" on loud content survives |
 | 5 — NES DPCM | A 1-bit sigma-delta simulation: a 7-bit counter slews ±2 toward the target level per output sample |
 
@@ -505,7 +518,7 @@ The mask is instrument-scope runtime state and **MUST** be cleared on a transpor
 
 ### 8.5 The sample-end ramp
 
-When a voice reaches the end of a non-looping sample, or the volume envelope's cut rule fires, the engine engages a **256-sample (8 ms) linear ramp-out** rather than stopping instantly. During the ramp the sample position is held and the emitted value decays to zero, and the voice deactivates when the ramp completes. Re-engaging a ramp already in progress is a no-op, and a fresh trigger cancels any pending ramp so an attack is never muted by a stale one.
+When a voice reaches the end of a non-looping sample, or the volume envelope's cut rule fires, the engine engages an **8 ms linear ramp-out** (256 samples at the reference rate) rather than stopping instantly. During the ramp the sample position is held and the emitted value decays to zero, and the voice deactivates when the ramp completes. Re-engaging a ramp already in progress is a no-op, and a fresh trigger cancels any pending ramp so an attack is never muted by a stale one.
 
 ## 9. Filters
 
@@ -524,7 +537,7 @@ c = clamp(cutoff, 0, 254) × 0.5                      → 0…127
 r = (resonance ≥ 255) ? 0 : clamp(resonance, 0, 254) × 0.5
 f = min(110 × 2 ^ (c ÷ 24 + 0.25), nyquist)
 d = 10 ^ ((−r × 24 ÷ 128) ÷ 20)
-R = 32000 ÷ (2π f)
+R = rate ÷ (2π f)
 D = d·R + d − 1
 E = R²
 a0 = 1 ÷ (1 + D + E)
@@ -543,10 +556,10 @@ y[n] = a0·x[n] + b0·clamp(y[n−1], ±2) + b1·clamp(y[n−2], ±2)
 FluidSynth's RBJ biquad, with cutoff in absolute cents and resonance in centibels above the DC gain. Cutoff `0xFFFF` or above turns the filter off.
 
 ```
-fc  = clamp(8.176 × 2 ^ (cutoff ÷ 1200), 5, 0.45 × 32000)
+fc  = clamp(8.176 × 2 ^ (cutoff ÷ 1200), 5, 0.45 × rate)
 qdB = clamp(resonance_cB ÷ 10, 0, 96) − 3.01          (0 cB ⇒ Butterworth)
 Q   = max(10 ^ (qdB ÷ 20), 0.001)
-ω = 2π·fc ÷ 32000 ,  α = sin ω ÷ (2Q) ,  a0inv = 1 ÷ (1 + α)
+ω = 2π·fc ÷ rate ,  α = sin ω ÷ (2Q) ,  a0inv = 1 ÷ (1 + α)
 gain = a0inv ÷ √Q                                      (SF2 §2.01 gain normalisation)
 b1  = (1 − cos ω) × gain ,  b02 = b1 ÷ 2
 a1  = −2 cos ω × a0inv   ,  a2  = (1 − α) × a0inv
@@ -591,7 +604,7 @@ global    = (song_global_volume ÷ 255) × (mixing_volume ÷ 255) × master_volu
 sample_out = sample × per_voice × global × pan_gain × ramp_gain
 ```
 
-`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **64-sample (2 ms) linear ramp**, which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so attacks are not softened.
+`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **2 ms linear ramp** (64 samples at the reference rate), which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so attacks are not softened.
 
 The envelope volume is likewise smoothed per sample: at each tick the engine computes a slope `(new_envelope_value − current) ÷ samples_per_tick` and adds it once per frame. Without this, a 50 Hz envelope staircase is audible on sustained material.
 
@@ -616,7 +629,7 @@ For the planar and spatial models, see [§11](#11-the-spatial-model).
 In Amiga 500 mode the stereo mix passes through a one-pole low-pass:
 
 ```
-state ← mix × a0 + state × b1,   b1 = e^(−2π × 4420.971 ÷ 32000),  a0 = 1 − b1
+state ← mix × a0 + state × b1,   b1 = e^(−2π × 4420.971 ÷ rate),  a0 = 1 − b1
 ```
 
 In both Amiga modes, when the LED filter is on, the mix additionally passes through the 3090.533 Hz second-order section. These act on the mix, after every voice has been summed.
@@ -780,6 +793,6 @@ An implementation conforms when all of the following hold.
 - NNA ghosts carry the complete voice state, including both filter topologies' delay lines.
 - Duplicate Check runs before the NNA spawn and consults the *existing* voice's instrument.
 - A note delay's trigger re-binds the instrument for the remainder of that tick.
-- Sample ends and envelope cuts ramp out over 256 samples; volume changes ramp over 64, and a trigger snaps rather than ramps.
+- Sample ends and envelope cuts ramp out over 8 ms; volume changes ramp over 2 ms, and a trigger snaps rather than ramps.
 - A planar or spatial song that uses only ordinary pan renders bit-identically to the stereo model.
 - The output stage narrows to binary32 before clamping, and runs the dither loop entirely in binary32 against a seeded generator.

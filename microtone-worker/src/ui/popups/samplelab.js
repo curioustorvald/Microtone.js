@@ -44,6 +44,7 @@ import { showModal } from "../widgets/modal.js";
 import { themeColors } from "../theme.js";
 import { escapeNonAscii } from "../names.js";
 import { t } from "../i18n.js";
+import { icon, setIconLabel } from "../icons.js";
 
 const WAVE_H = 220;
 const EQGRAPH_H = 150;
@@ -136,7 +137,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       <h3>${esc(t("lab.title", { name: name || t("lab.untitled") }))}${sourceLabel ? ` <span class="dim">· ${esc(sourceLabel)}</span>` : ""}</h3>
       <div class="lab-info dim"></div>
       <div class="lab-tools">
-        <button class="lab-play">${esc(t("lab.play"))}</button>
+        <button class="lab-play">${icon("play")}${esc(t("lab.play"))}</button>
         <span class="lab-sep"></span>
         <button class="lab-zin">${esc(t("lab.zoomIn"))}</button>
         <button class="lab-zout">${esc(t("lab.zoomOut"))}</button>
@@ -166,13 +167,13 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         <button data-op="invert">${esc(t("lab.invert"))}</button>
         <button data-op="removeDC">${esc(t("lab.removeDC"))}</button>
         <span class="lab-sep"></span>
-        <button class="lab-eqtoggle">${esc(t("lab.eq"))} ▾</button>
+        <button class="lab-eqtoggle">${esc(t("lab.eq"))}${icon("caretDown", true)}</button>
         <button class="lab-chord" title="${esc(t("lab.chordTitle"))}">${esc(t("lab.chord"))}</button>
         <span class="lab-sep"></span>
         <button class="lab-chans" title="${esc(t("lab.channelsTitle"))}"></button>
         <span class="lab-sep"></span>
-        <button class="lab-exp-orig" title="${esc(t("lab.exportOriginalTitle"))}">${esc(t("lab.exportOriginal"))}</button>
-        <button class="lab-exp-edit" title="${esc(t("lab.exportEditedTitle"))}">${esc(t("lab.exportEdited"))}</button>
+        <button class="lab-exp-orig" title="${esc(t("lab.exportOriginalTitle"))}">${esc(t("lab.exportOriginal"))}${icon("download", true)}</button>
+        <button class="lab-exp-edit" title="${esc(t("lab.exportEditedTitle"))}">${esc(t("lab.exportEdited"))}${icon("download", true)}</button>
       </div>
       <div class="lab-eq" hidden>
         <div class="lab-eqbands"></div>
@@ -512,7 +513,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
         });
       }
       $(".lab-info").textContent = line;
-      chanBtn.textContent = t(isStereo() ? "lab.toMono" : "lab.toStereo");
+      setIconLabel(chanBtn, "arrowRight", t(isStereo() ? "lab.toMono" : "lab.toStereo"));
 
       const kept = keptChunks();
       let fitStr;
@@ -802,7 +803,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       if (!playing) return;
       try { playing.src.stop(); } catch { /* already ended */ }
       playing = null;
-      playBtn.textContent = t("lab.play");
+      setIconLabel(playBtn, "play", t("lab.play"));
       paintWave();
     }
     function startPlay() {
@@ -838,7 +839,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       head.connect(actx.destination);
       src.start(0, a / bufRate, (b - a) / bufRate);
       playing = { src, t0: actx.currentTime, from: a };
-      playBtn.textContent = t("lab.stop");
+      setIconLabel(playBtn, "stop", t("lab.stop"));
       src.onended = () => { if (playing?.src === src) stopPlay(); };
       const tick = () => {
         if (!playing) return;

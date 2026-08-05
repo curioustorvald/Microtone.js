@@ -55,10 +55,13 @@ export const BEAM_FLOOR = 1e-3;
 /**
  * Current limiting. `beamVelocity` is measured in DIAL RADII per sample, which
  * is what makes the look independent of the panel's size: a full-scale 1 kHz
- * tone sweeps ~0.2 radii per sample at 32 kHz, 5 kHz sweeps ~1. So k is set for
- * a gentle darkening across the audible band rather than a cliff.
+ * tone sweeps ~0.13 radii per sample at 48 kHz, 5 kHz sweeps ~0.65. So k is set
+ * for a gentle darkening across the audible band rather than a cliff. It is
+ * rate-coupled by that definition — k was 0.6 while the engine ran at 32 kHz
+ * (item 108) and is scaled by 48/32 to keep the same tone at the same
+ * brightness.
  */
-export const BEAM_LIMIT_K = 0.6;
+export const BEAM_LIMIT_K = 0.9;
 
 /**
  * Oversampling. The beam does not fly in straight lines between samples — it

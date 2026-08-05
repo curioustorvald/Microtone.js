@@ -14,6 +14,7 @@ import {
 import { showProgress } from "../popups/progress.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 export class FilesView {
   /**
@@ -44,7 +45,8 @@ export class FilesView {
       await this.cb.importMidi();
       this.refresh();
     });
-    const exportBtn = mkBtn(t("files.export"), () => this.export());
+    const exportBtn = mkBtn("", () => this.export());
+    setIconLabel(exportBtn, "download", t("files.export"), { after: true });
     const wavBtn = mkBtn(t("files.exportWav"), () => this.exportWav());
     const stemsBtn = mkBtn(t("files.exportStems"), () => this.exportStems());
     // doc-scoped actions grey out until something is loaded
@@ -78,7 +80,7 @@ export class FilesView {
           `<td>${(e.size / 1024).toFixed(1)} K</td>` +
           `<td>${new Date(e.mtime).toLocaleString()}</td>`;
         const td = document.createElement("td");
-        const renameBtn = mkBtn("✎", () => this.rename(e.name));
+        const renameBtn = iconBtn("rename", () => this.rename(e.name));
         renameBtn.title = t("common.rename");
         td.append(
           mkBtn(t("files.open"), async () => {
@@ -86,8 +88,8 @@ export class FilesView {
             this.refresh();
           }),
           renameBtn,
-          mkBtn("⬇", async () => download(await opfs.read(e.name), e.name)),
-          mkBtn("✕", async () => {
+          iconBtn("download", async () => download(await opfs.read(e.name), e.name)),
+          iconBtn("close", async () => {
             const yes = await showModal({ title: t("files.deleteAsk", { name: e.name }), okLabel: t("common.delete") });
             if (yes) { await opfs.remove(e.name); this.refresh(); }
           }),
@@ -331,6 +333,13 @@ function mkBtn(label, onClick) {
   const b = document.createElement("button");
   b.textContent = label;
   b.addEventListener("click", onClick);
+  return b;
+}
+
+/** The same, labelled with a vector icon instead of a symbol (item 107). */
+function iconBtn(name, onClick) {
+  const b = mkBtn("", onClick);
+  setIconLabel(b, name);
   return b;
 }
 

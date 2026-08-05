@@ -13,6 +13,7 @@ import { setInstBytesOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
+import { setIconLabel } from "../icons.js";
 
 const W = 720, H = 200;
 
@@ -212,7 +213,7 @@ function buildShell(store, { title, info, className, resolve }) {
    *  than whatever a metainstrument would map C4 to (bug #65). */
   const makeAuditionButton = (getSpec) => {
     const playBtn = document.createElement("button");
-    playBtn.textContent = t("smp.audition");
+    setIconLabel(playBtn, "play", t("smp.audition"));
     playBtn.title = t("smp.auditionTitle");
     playBtn.addEventListener("click", async () => {
       await window.__microtoneEnsureAudio?.();
@@ -220,13 +221,13 @@ function buildShell(store, { title, info, className, resolve }) {
       if (!audio) return;
       if (auditioning) {
         audio.jamStop(0);
-        playBtn.textContent = t("smp.audition");
+        setIconLabel(playBtn, "play", t("smp.audition"));
         auditioning = false;
       } else {
         const spec = getSpec?.();
         if (!spec || !(spec.len > 0)) return;
         audio.jamSample(0, store.doc.channelCount - 1, 0x5000, spec);
-        playBtn.textContent = t("smp.auditionStop");
+        setIconLabel(playBtn, "stop", t("smp.auditionStop"));
         auditioning = true;
       }
     });
