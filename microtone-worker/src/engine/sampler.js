@@ -45,6 +45,20 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
 }
 
 /**
+ * Promote a [-1,1] PCM sample to the SNES DSP's signed 15-bit domain
+ * (-4000h..+3FFFh). The gaussian's four coefficients sum to ~800h while every
+ * tap is only SAR 10, so the running sum sits at ~2x the sample and stays
+ * inside int16 ONLY while the input is 15-bit — feed the DSP 16-bit samples and
+ * the mid-sum wrap fires on everything past half scale, folding loud waveforms
+ * inside out instead of chirping on the rare hardware case. -1.0 must map to
+ * exactly -16384, which is what arms the documented 801h overflow (three
+ * max-negative samples read back as +3FF8h).
+ */
+function pcmTo15Bit(x) {
+  return Math.min(Math.round(x * 16384.0), 16383);
+}
+
+/**
  * Interpolate ONE channel at the voice's current position WITHOUT advancing it.
  * `basePtr` selects the channel's pool span and `st` its DPCM counter (the
  * Voice itself for channel 1, voice.right for a stereo right channel).
@@ -63,17 +77,19 @@ function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, bas
       return acc;
     }
     case INTERP_SNES: {
-      // SNES BRR 4-tap gaussian with the int16 mid-sum overflow "chirp" preserved.
-      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr) * 32767.0);
-      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr) * 32767.0);
-      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr) * 32767.0);
-      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr) * 32767.0);
+      // SNES BRR 4-tap gaussian, with the hardware's partial overflow handling
+      // preserved: of the three additions the 2nd WRAPS (the gauss "chirp") and
+      // only the 3rd saturates (fullsnes §snesapudspbrrpitch).
+      const oldest = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr));
+      const olders = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr));
+      const olds = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr));
+      const news = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr));
       const offset = Math.min(Math.max(Math.trunc(frac * 256.0), 0), 255);
       let out = (SNES_GAUSS[0xff - offset] * oldest) >> 10;
-      out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;
-      out += (SNES_GAUSS[0x100 + offset] * olds) >> 10;
-      out = (out << 16) >> 16; // int16 wrap (the hardware overflow)
-      out += (SNES_GAUSS[offset] * news) >> 10;
+      out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;   // 1st add: cannot overflow
+      out += (SNES_GAUSS[0x100 + offset] * olds) >> 10;     // 2nd add: overflows for i<0x20…
+      out = (out << 16) >> 16;                              // …and the hardware lets it wrap
+      out += (SNES_GAUSS[offset] * news) >> 10;             // 3rd add: saturated, not wrapped
       out = Math.min(Math.max(out, -32768), 32767);
       return (out >> 1) / 16384.0;
     }

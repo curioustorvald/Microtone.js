@@ -503,7 +503,7 @@ The interpolation mode comes from the global behaviour flags and applies to ever
 | 1 — none | Zero-order hold — take the sample under the integer position |
 | 2 — Amiga 500 | Zero-order hold, plus a post-mix one-pole low-pass at 4420.971 Hz and the optional LED filter |
 | 3 — Amiga 1200 | Zero-order hold, plus the optional LED filter only: the A1200's own one-pole sits at ~34 kHz, above Nyquist at any rate the engine runs at, and is bypassed |
-| 4 — SNES | The SPC700's 4-tap Gaussian, with the int16 mid-sum overflow preserved so the characteristic "chirp" on loud content survives |
+| 4 — SNES | The SPC700's 4-tap Gaussian, run over the DSP's signed **15-bit** sample domain (`-0x4000`…`+0x3FFF`) as the hardware does. Its partial overflow handling is preserved: of the three tap additions the second is allowed to wrap and only the third saturates, so the ROM table's bugged `0x801` phases still "chirp" exactly where the hardware does — a run of max-negative samples reads back as `+0x3FF8`. Promoting the samples to 16 bits instead makes the mid-sum wrap on *all* content past half scale, which folds loud waveforms inside out and doubles everything else |
 | 5 — NES DPCM | A 1-bit sigma-delta simulation: a 7-bit counter slews ±2 toward the target level per output sample |
 
 The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225, toggled by `S $00` / `S $01` and applied to the **stereo mix**, not per voice. It is available only in the two Amiga modes.

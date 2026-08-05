@@ -8,6 +8,9 @@ port of the TSVM Taud engine — a ScreamTracker 3-lineage tracker extended with
 16-bit effect arguments and a 4096 tone-equal temperament pitch grid. It renders
 **48 kHz** stereo, which is the rate browsers run their audio at, so what you
 hear and what you export leave the engine untouched by any resampling stage.
+(Hardware that insists on another rate — 44.1 kHz laptops — and exports at any
+other rate go through a band-limited Kaiser-sinc resampler, the same kernel the
+Sample Lab uses, rather than losing the top octave to a cheaper conversion.)
 (The TSVM device itself is a 32 kHz machine, and the 8-bit dithered character
 its output stage gives the format is intentional and unchanged — everything
 rate-derived, from tick length to the Amiga filters, is computed for whichever

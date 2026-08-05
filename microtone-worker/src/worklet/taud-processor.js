@@ -11,9 +11,12 @@
 //
 // The engine renders at SAMPLING_RATE — 48 kHz since item 108, which is the
 // rate audio-system.js asks the AudioContext for, so the common case reads the
-// ring back one frame at a time with no interpolation at all. A context that
-// insists on another rate (44.1 kHz hardware) is still served by reading with a
-// fractional cursor + linear interpolation. Loaded via
+// ring back one frame at a time with no interpolation at all (step === 1: a
+// straight copy, not even a kernel). A context that insists on another rate
+// (44.1 kHz hardware) is served by a fractional cursor reading through the
+// Kaiser-windowed sinc in audio/resampler.js — the same kernel the exporters
+// and the sample Lab use. That kernel needs `lead` frames AHEAD of the cursor,
+// so both modes buffer that much extra look-ahead. Loaded via
 // audioWorklet.addModule() as an ES module; the committed single-file concat
 // (taud-processor.bundle.js) is the non-module-worklet fallback — regenerate
 // with tools/make-worklet-bundle.js after any change here.
@@ -27,6 +30,7 @@ import {
 import {
   audioRingViews, AR_MASK, AR_WRITE, AR_READ, AR_STATE, AR_EPOCH, AR_FLUSH_POS,
 } from "../audio/audio-ring.js";
+import { kaiserKernel } from "../audio/resampler.js";
 
 const RING_FRAMES = 4096; // power of two (render-mode local ring)
 
@@ -41,13 +45,18 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.ringR = new Float32Array(RING_FRAMES);
     this.ringWrite = 0;      // absolute frame counter (wraps via mask)
     this.ringReadPos = 0.0;  // fractional absolute read cursor
+    this.ringFloor = 0;      // oldest frame the kernel may read (flush barrier)
     this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 48 kHz context
+    // null at a matching context rate — then a frame is a frame and the read
+    // loops copy. Otherwise the sinc kernel both read cursors run through.
+    this.rs = this.step === 1.0 ? null : kaiserKernel(SAMPLING_RATE, sampleRate);
 
     // CONSUME mode (Tier 2): audio-ring SAB views + wrap-safe read cursor.
     this.audioRing = null;
     this.arEpoch = -1;       // forces a re-sync on the first callback
     this.arReadBase = 0;     // Int32-wrapping integer read frame
     this.arReadFrac = 0.0;   // 0..1 fractional accumulator
+    this.arFloor = 0;        // ditto, on the SAB ring's wrapping counter
 
     const opts = options?.processorOptions ?? {};
     this.snapshotIntervalFrames =
@@ -138,6 +147,10 @@ class TaudProcessor extends AudioWorkletProcessor {
    *  state starting exactly at the read cursor, so nothing is left to leak. */
   flushRing() {
     this.ringReadPos = this.ringWrite;
+    // …and the sinc's history taps must not reach back across the cut either:
+    // those frames are the discarded tail, and half a kernel of it would be
+    // mixed into the first frames of the new playback.
+    this.ringFloor = this.ringWrite;
   }
 
   renderIntoRing() {
@@ -198,8 +211,11 @@ class TaudProcessor extends AudioWorkletProcessor {
   renderAndPlay(outL, outR, frames) {
     const ph = this.engine.playheads[this.playhead];
     const mask = RING_FRAMES - 1;
+    const rs = this.rs;
     if (ph.isPlaying || ph.jamActive || this.ringReadPos < this.ringWrite) {
-      while (this.ringWrite < this.ringReadPos + frames * this.step + 2) {
+      // The last output frame's newest tap sits `lead` frames past its cursor.
+      const lead = (rs === null ? 0 : rs.lead) + 2;
+      while (this.ringWrite < this.ringReadPos + frames * this.step + lead) {
         if (ph.isPlaying || ph.jamActive) {
           this.renderIntoRing();
         } else {
@@ -209,15 +225,37 @@ class TaudProcessor extends AudioWorkletProcessor {
           this.ringWrite += 1;
         }
       }
-      for (let n = 0; n < frames; n++) {
-        const pos = this.ringReadPos;
-        const i0 = Math.floor(pos);
-        const frac = pos - i0;
-        const a = i0 & mask;
-        const b = (i0 + 1) & mask;
-        outL[n] = this.ringL[a] * (1 - frac) + this.ringL[b] * frac;
-        outR[n] = this.ringR[a] * (1 - frac) + this.ringR[b] * frac;
-        this.ringReadPos += this.step;
+      if (rs === null) {
+        const i0 = this.ringReadPos;
+        for (let n = 0; n < frames; n++) {
+          const a = (i0 + n) & mask;
+          outL[n] = this.ringL[a];
+          outR[n] = this.ringR[a];
+        }
+        this.ringReadPos = i0 + frames;
+      } else {
+        const { rows, deltas, phases, history, nTaps } = rs;
+        const floor = this.ringFloor;
+        for (let n = 0; n < frames; n++) {
+          const pos = this.ringReadPos;
+          const i0 = Math.floor(pos);
+          const fp = (pos - i0) * phases;
+          const p = fp | 0;
+          const g = fp - p;
+          const row = rows[p], dRow = deltas[p];
+          const base = i0 - history;
+          let l = 0.0, r = 0.0;
+          for (let t = 0; t < nTaps; t++) {
+            const src = base + t;
+            const a = (src < floor ? floor : src) & mask;
+            const w = row[t] + dRow[t] * g;
+            l += this.ringL[a] * w;
+            r += this.ringR[a] * w;
+          }
+          outL[n] = l;
+          outR[n] = r;
+          this.ringReadPos = pos + this.step;
+        }
       }
     } else {
       outL.fill(0);
@@ -236,15 +274,18 @@ class TaudProcessor extends AudioWorkletProcessor {
     const { ctrl, L, R } = this.audioRing;
     // A transport reset (play/seek/stop) bumps the epoch and publishes a flush
     // mark — jump the read cursor there, dropping the stale buffered tail.
+    const rs = this.rs;
     const epoch = Atomics.load(ctrl, AR_EPOCH) | 0;
     if (epoch !== this.arEpoch) {
       this.arEpoch = epoch;
       this.arReadBase = Atomics.load(ctrl, AR_FLUSH_POS) | 0;
       this.arReadFrac = 0;
+      this.arFloor = this.arReadBase; // no history taps into the dropped tail
     }
     const write = Atomics.load(ctrl, AR_WRITE) | 0;
     const avail = (write - this.arReadBase) | 0;
-    const need = Math.ceil(frames * this.step) + 2;
+    // …+ the frames the kernel's newest tap needs beyond the last read cursor.
+    const need = Math.ceil(frames * this.step) + (rs === null ? 0 : rs.lead) + 2;
     if (avail < need) {
       // Silence, hold the cursor. If the PRODUCER is active (playing/jam) this
       // is a real dropout — the worker isn't refilling the ring in time; that is
@@ -257,13 +298,37 @@ class TaudProcessor extends AudioWorkletProcessor {
     }
     let base = this.arReadBase, frac = this.arReadFrac;
     const step = this.step;
-    for (let n = 0; n < frames; n++) {
-      const a = base & AR_MASK;
-      const b = (base + 1) & AR_MASK;
-      outL[n] = L[a] * (1 - frac) + L[b] * frac;
-      outR[n] = R[a] * (1 - frac) + R[b] * frac;
-      frac += step;
-      while (frac >= 1) { frac -= 1; base = (base + 1) | 0; }
+    if (rs === null) {
+      for (let n = 0; n < frames; n++) {
+        const a = base & AR_MASK;
+        outL[n] = L[a];
+        outR[n] = R[a];
+        base = (base + 1) | 0;
+      }
+    } else {
+      const { rows, deltas, phases, history, nTaps } = rs;
+      const floor = this.arFloor;
+      for (let n = 0; n < frames; n++) {
+        const fp = frac * phases;
+        const p = fp | 0;
+        const g = fp - p;
+        const row = rows[p], dRow = deltas[p];
+        const first = (base - history) | 0;
+        let l = 0.0, r = 0.0;
+        for (let t = 0; t < nTaps; t++) {
+          // Counters are Int32-wrapping, so "older than the floor" is a signed
+          // DIFFERENCE, never a plain <.
+          const src = (first + t) | 0;
+          const a = (((src - floor) | 0) < 0 ? floor : src) & AR_MASK;
+          const w = row[t] + dRow[t] * g;
+          l += L[a] * w;
+          r += R[a] * w;
+        }
+        outL[n] = l;
+        outR[n] = r;
+        frac += step;
+        while (frac >= 1) { frac -= 1; base = (base + 1) | 0; }
+      }
     }
     this.arReadBase = base;
     this.arReadFrac = frac;

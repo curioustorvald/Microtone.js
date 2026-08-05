@@ -6,6 +6,8 @@
 // (item 999 — a pool span's length is immutable once allocated). The in-place
 // editor's u8 ops stay in sampledsp.js.
 
+import { RESAMP_PHASES, resampHalfWidth, kaiserSincRows } from "../audio/resampler.js";
+
 // Sample-rate ceiling for what lands in the pool. Deliberately BELOW the
 // engine's own 48 kHz output rate (item 108): the pool is 8 MB and a record's
 // sampleLength is a u16, so rate buys bandwidth at the cost of both budgets —
@@ -146,53 +148,13 @@ export function removeDCRange(buf, a, b) {
 
 // ── band-limited resampler ─────────────────────────────────────────────────
 // Float twin of the canonical taud_common.resample_bandlimited (the converter/
-// sf2taudify path): polyphase Kaiser-windowed sinc, β=8 (~-70 dB stop-band),
-// cutoff follows the ratio so a downsample anti-aliases on the way down, each
-// phase row DC-normalised so a constant signal passes unchanged. Same tap
-// budget (8..24 half-taps) and 512 phases as the Python original, so the web
-// import path and the converters shave samples with the same knife.
+// sf2taudify path). The kernel itself lives in src/audio/resampler.js — the
+// same Kaiser-windowed sinc the player and the exporters run on — so the web
+// import path, the converters and playback all shave samples with one knife.
+// What stays here is the LENGTH contract: output = max(1, ⌊n·ratio⌋), which
+// planFit's arithmetic has to agree with exactly.
 
-const KAISER_BETA = 8.0;
-const SINC_PHASES = 512;
-const sincTableCache = new Map();
-
-function besselI0(x) {
-  let s = 1.0, t = 1.0, k = 1;
-  for (;;) {
-    t *= (x * x) / (4.0 * k * k);
-    s += t;
-    if (t < 1e-12 * s) return s;
-    k++;
-  }
-}
-
-function windowedSincTable(cutoff, halfWidth, phases) {
-  const key = `${Math.round(cutoff * 1e6)}:${halfWidth}:${phases}`;
-  const cached = sincTableCache.get(key);
-  if (cached) return cached;
-  const nTaps = 2 * halfWidth;
-  const invI0 = 1.0 / besselI0(KAISER_BETA);
-  const table = [];
-  for (let p = 0; p < phases; p++) {
-    const frac = p / phases;
-    const row = new Float64Array(nTaps);
-    let s = 0.0;
-    for (let k = 0; k < nTaps; k++) {
-      const x = (k - (halfWidth - 1)) - frac;
-      const a = 2.0 * cutoff * x;
-      const sinc = a === 0.0 ? 1.0 : Math.sin(Math.PI * a) / (Math.PI * a);
-      const r = x / halfWidth;
-      const win = besselI0(KAISER_BETA * Math.sqrt(Math.max(0.0, 1.0 - r * r))) * invI0;
-      row[k] = sinc * win;
-      s += row[k];
-    }
-    const inv = s !== 0 ? 1.0 / s : 1.0;
-    for (let k = 0; k < nTaps; k++) row[k] *= inv;
-    table.push(row);
-  }
-  sincTableCache.set(key, table);
-  return table;
-}
+const SINC_PHASES = RESAMP_PHASES;
 
 /** Resample by `ratio` (< 1 = downsample). Output length = max(1, ⌊n·ratio⌋). */
 export function resample(buf, ratio) {
@@ -200,8 +162,8 @@ export function resample(buf, ratio) {
   const nIn = buf.length;
   const nOut = Math.max(1, Math.floor(nIn * ratio));
   const cutoff = 0.5 * Math.min(1.0, ratio);
-  const halfWidth = Math.max(8, Math.min(24, Math.round(12.0 / Math.min(1.0, ratio))));
-  const table = windowedSincTable(cutoff, halfWidth, SINC_PHASES);
+  const halfWidth = resampHalfWidth(ratio);
+  const table = kaiserSincRows(cutoff, halfWidth, SINC_PHASES);
   const out = new Float32Array(nOut);
   const invRatio = 1.0 / ratio;
   const last = nIn - 1;

@@ -384,6 +384,7 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   font-variation-settings:
     "wdth" 100 !important;
   text-transform: uppercase;
+  min-width: 72pt;
 }
 .tabs button.active {
   background: var(--bg);
@@ -541,8 +542,10 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   margin: 0 0 0.65rem;
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.09em;
   text-transform: uppercase;
+  font-variation-settings:
+    "wdth" 96 !important;
+  letter-spacing: 0.06em;
   color: var(--dim);
 }
 /* The dated heading of the patch-notes section being excerpted. */
@@ -1067,7 +1070,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .inst-group-head {
   color: var(--accent);
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   font-variation-settings:
     "wdth" 96 !important;
@@ -1540,7 +1543,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   color: var(--accent);
   font-size: 0.8rem;
   text-transform: uppercase; font-variation-settings:
-"wdth" 100 !important;
+"wdth" 96 !important;
   letter-spacing: 0.06em;
 }
 .about-modal a { color: var(--accent); }

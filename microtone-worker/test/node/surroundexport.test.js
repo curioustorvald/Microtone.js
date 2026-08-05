@@ -11,9 +11,10 @@ import { fileURLToPath } from "node:url";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { Document } from "../../src/doc/document.js";
 import {
-  AUDIO_EXPORT_FORMATS, StreamResampler, renderMultichannelAsync,
+  AUDIO_EXPORT_FORMATS, renderMultichannelAsync,
   makeExportRenderer, exportFileSuffix, admChunksFor,
 } from "../../src/audio/surround-export.js";
+import { StreamResampler } from "../../src/audio/resampler.js";
 import { renderToWavAsync } from "../../src/audio/offline-render.js";
 import { encodeWavBuffer, quantisePcm } from "../../src/audio/wavwrite.js";
 import { acnOrderDegree, buildChna, buildAdmXml, hoaChannelSpecs } from "../../src/audio/adm.js";
@@ -157,7 +158,11 @@ test("the streaming resampler is seamless across chunk boundaries", () => {
     const n = r.process(input, chunk, out);
     for (let i = 0; i < n; i++) got.push(out[i]);
   }
-  for (let i = 1; i < got.length; i++) {
+  // The first kernel-width of output is the START of the stream, where the sinc
+  // taps hang off the front of the ramp into zero-padding — no resampler can
+  // invent the signal before sample 0. The seams are what this test is about.
+  const head = 2 * 12;
+  for (let i = head + 1; i < got.length; i++) {
     assert.ok(Math.abs((got[i] - got[i - 1]) - 32000 / 48000) < 1e-3,
       `kink at output frame ${i}: ${got[i - 1]} → ${got[i]}`);
   }

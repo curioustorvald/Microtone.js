@@ -31,6 +31,7 @@ import {
 } from "../engine/spatial.js";
 import { SPEAKER_LAYOUTS, SpeakerRenderer } from "../engine/speakers.js";
 import { loadIntoEngine } from "./offline-render.js";
+import { StreamResampler } from "./resampler.js";
 import { WavWriter, riffChunk } from "./wavwrite.js";
 import {
   buildAdmXml, buildChna, admXmlBytes, speakerChannelSpecs, hoaChannelSpecs,
@@ -69,48 +70,6 @@ export function makeExportRenderer(id) {
 /** File suffix: `.wav` everywhere, but AmbiX files conventionally say so. */
 export function exportFileSuffix(id) {
   return exportFormat(id).kind === "hoa" ? ".ambix.wav" : ".wav";
-}
-
-/**
- * Linear resampler that survives being fed one chunk at a time. The offline
- * stereo export can resample its whole buffer at the end; a multichannel render
- * is encoded as it goes, so the interpolation has to carry the last frame and
- * the fractional phase across the boundary — otherwise every 512 frames there
- * is a click.
- */
-export class StreamResampler {
-  constructor(channels, srcRate, dstRate) {
-    this.channels = channels;
-    this.step = srcRate / dstRate;
-    this.phase = 0.0;
-    this.prev = new Float64Array(channels);
-  }
-
-  /** Upper bound on the output frames one `frames`-long block can produce. */
-  maxOut(frames) { return Math.ceil(frames / this.step) + 2; }
-
-  /** @returns the number of frames written into `out`. */
-  process(input, frames, out) {
-    const ch = this.channels;
-    let n = 0;
-    while (this.phase <= frames - 1) {
-      const i0 = Math.floor(this.phase);
-      const f = this.phase - i0;
-      // i0 can be the last frame when the phase lands exactly on it (equal
-      // rates do this every time); there is no i0+1 then, and f is 0 anyway.
-      const i1 = i0 + 1 < frames ? i0 + 1 : frames - 1;
-      for (let c = 0; c < ch; c++) {
-        const a = i0 < 0 ? this.prev[c] : input[i0 * ch + c];
-        out[n * ch + c] = a + (input[i1 * ch + c] - a) * f;
-      }
-      n++;
-      this.phase += this.step;
-    }
-    this.phase -= frames;
-    for (let c = 0; c < ch; c++) this.prev[c] = input[(frames - 1) * ch + c];
-    this.started = true;
-    return n;
-  }
 }
 
 /** ADM chunks (`chna` before the data, `axml` after it) for a target. */
@@ -200,6 +159,9 @@ export async function renderMultichannelAsync(docLike, songIndex, maxSeconds, {
   }
   onProgress?.(1);
   if (aborted) return { blocks: null, channels, frames, seconds: frames / SAMPLING_RATE, halted, aborted };
+  // The sinc kernel holds a few frames back waiting for their look-ahead; drain
+  // them or the file ends half a millisecond early.
+  writer.push(out, resampler.flush(out));
 
   const adm = admChunksFor(format, { title, sampleRate: outRate, bitDepth: f.bits });
   return {

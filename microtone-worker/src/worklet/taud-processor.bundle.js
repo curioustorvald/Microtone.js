@@ -284,6 +284,11 @@ function sincTap(frac, tap) {
 }
 
 // ── SNES BRR 4-tap gaussian table (512 entries; AudioAdapter.kt:283-316) ──
+// The quad {gauss[i], gauss[0xff-i], gauss[0x100+i], gauss[0x1ff-i]} is meant to
+// sum to 0x800 but the ROM is slightly bugged and lands on 0x7ff..0x801 (0x7ff at
+// 42 phases, 0x800 at 168, 0x801 at 46). The 0x801 phases are the ones that can
+// overrun int16 on rail-level input, and the DSP lets that partial sum WRAP —
+// the famous "SNES gauss overflow chirp". See sampler.js INTERP_SNES.
 const SNES_GAUSS = Int32Array.from([
   0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000,
   0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x002, 0x002, 0x002, 0x002, 0x002,
@@ -3530,6 +3535,20 @@ function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
 }
 
 /**
+ * Promote a [-1,1] PCM sample to the SNES DSP's signed 15-bit domain
+ * (-4000h..+3FFFh). The gaussian's four coefficients sum to ~800h while every
+ * tap is only SAR 10, so the running sum sits at ~2x the sample and stays
+ * inside int16 ONLY while the input is 15-bit — feed the DSP 16-bit samples and
+ * the mid-sum wrap fires on everything past half scale, folding loud waveforms
+ * inside out instead of chirping on the rare hardware case. -1.0 must map to
+ * exactly -16384, which is what arms the documented 801h overflow (three
+ * max-negative samples read back as +3FF8h).
+ */
+function pcmTo15Bit(x) {
+  return Math.min(Math.round(x * 16384.0), 16383);
+}
+
+/**
  * Interpolate ONE channel at the voice's current position WITHOUT advancing it.
  * `basePtr` selects the channel's pool span and `st` its DPCM counter (the
  * Voice itself for channel 1, voice.right for a stereo right channel).
@@ -3548,17 +3567,19 @@ function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, bas
       return acc;
     }
     case INTERP_SNES: {
-      // SNES BRR 4-tap gaussian with the int16 mid-sum overflow "chirp" preserved.
-      const oldest = Math.trunc(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr) * 32767.0);
-      const olders = Math.trunc(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr) * 32767.0);
-      const olds = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr) * 32767.0);
-      const news = Math.trunc(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr) * 32767.0);
+      // SNES BRR 4-tap gaussian, with the hardware's partial overflow handling
+      // preserved: of the three additions the 2nd WRAPS (the gauss "chirp") and
+      // only the 3rd saturates (fullsnes §snesapudspbrrpitch).
+      const oldest = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 - 1, sampleLen, binMax, basePtr));
+      const olders = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0, sampleLen, binMax, basePtr));
+      const olds = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 + 1, sampleLen, binMax, basePtr));
+      const news = pcmTo15Bit(readSamplePoint(eng, voice, inst, i0 + 2, sampleLen, binMax, basePtr));
       const offset = Math.min(Math.max(Math.trunc(frac * 256.0), 0), 255);
       let out = (SNES_GAUSS[0xff - offset] * oldest) >> 10;
-      out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;
-      out += (SNES_GAUSS[0x100 + offset] * olds) >> 10;
-      out = (out << 16) >> 16; // int16 wrap (the hardware overflow)
-      out += (SNES_GAUSS[offset] * news) >> 10;
+      out += (SNES_GAUSS[0x1ff - offset] * olders) >> 10;   // 1st add: cannot overflow
+      out += (SNES_GAUSS[0x100 + offset] * olds) >> 10;     // 2nd add: overflows for i<0x20…
+      out = (out << 16) >> 16;                              // …and the hardware lets it wrap
+      out += (SNES_GAUSS[offset] * news) >> 10;             // 3rd add: saturated, not wrapped
       out = Math.min(Math.max(out, -32768), 32767);
       return (out >> 1) / 16384.0;
     }
@@ -7202,6 +7223,239 @@ function audioRingViews(sab) {
   return { ctrl, L, R };
 }
 
+// ══ src/audio/resampler.js ══
+// Kaiser-windowed-sinc resampling — the ONE interpolator every rate conversion
+// in the app goes through:
+//
+//   * the AudioWorklet's engine→context read cursor (both the local render ring
+//     and the Tier 2 SAB ring) — src/worklet/taud-processor.js
+//   * the offline stereo WAV + mono stem exports — src/audio/offline-render.js
+//   * the streaming multichannel export — src/audio/surround-export.js
+//   * the sample Lab / import knife — src/doc/wavelab.js, which is ALSO the
+//     float twin of the Python converters' taud_common.resample_bandlimited
+//
+// β=8 (~-70 dB stop-band), 512 phases, 8..24 half-taps, cutoff following the
+// ratio so a DOWN-conversion anti-aliases on the way down, each phase row
+// DC-normalised so a constant passes through unchanged. Those are the Python
+// original's numbers, so the app and the converters shave a sample identically.
+//
+// Imported by the AudioWorklet, so this file must stay bundle-safe (plain
+// export forms, unique top-level names) — it is in tools/make-worklet-bundle.js.
+
+const RESAMP_BETA = 8.0;
+const RESAMP_PHASES = 512; // power of two: the phase index is a mask away
+
+function resampBesselI0(x) {
+  let s = 1.0, t = 1.0, k = 1;
+  for (;;) {
+    t *= (x * x) / (4.0 * k * k);
+    s += t;
+    if (t < 1e-12 * s) return s;
+    k++;
+  }
+}
+
+const resampRowCache = new Map();
+const resampKernelCache = new Map();
+
+/**
+ * Half-taps for a conversion by `ratio` (dst/src): 12 either side, widened as a
+ * downsample narrows the transition band, capped at 24 so the cost stays bounded.
+ */
+function resampHalfWidth(ratio) {
+  return Math.max(8, Math.min(24, Math.round(12.0 / Math.min(1.0, ratio))));
+}
+
+/**
+ * Kernel rows of 2·halfWidth taps, row p being the kernel for fractional offset
+ * p/phases. There are phases+1 of them: the last (frac = 1.0) is the endpoint
+ * the read loops interpolate TOWARDS — see kaiserKernel. Cached, since the
+ * tables are pure functions of their arguments and a handful of them cover
+ * every rate pair the app ever sees.
+ */
+function kaiserSincRows(cutoff, halfWidth, phases = RESAMP_PHASES) {
+  const key = `${Math.round(cutoff * 1e6)}:${halfWidth}:${phases}`;
+  const cached = resampRowCache.get(key);
+  if (cached) return cached;
+  const nTaps = 2 * halfWidth;
+  const invI0 = 1.0 / resampBesselI0(RESAMP_BETA);
+  const rows = [];
+  for (let p = 0; p <= phases; p++) {
+    const frac = p / phases;
+    const row = new Float64Array(nTaps);
+    let s = 0.0;
+    for (let k = 0; k < nTaps; k++) {
+      const x = (k - (halfWidth - 1)) - frac;
+      const a = 2.0 * cutoff * x;
+      const sinc = a === 0.0 ? 1.0 : Math.sin(Math.PI * a) / (Math.PI * a);
+      const r = x / halfWidth;
+      const win = resampBesselI0(RESAMP_BETA * Math.sqrt(Math.max(0.0, 1.0 - r * r))) * invI0;
+      row[k] = sinc * win;
+      s += row[k];
+    }
+    const inv = s !== 0 ? 1.0 / s : 1.0;
+    for (let k = 0; k < nTaps; k++) row[k] *= inv;
+    rows.push(row);
+  }
+  resampRowCache.set(key, rows);
+  return rows;
+}
+
+/**
+ * Everything a read loop needs to convert srcRate → dstRate. The tap window for
+ * output position `pos` is [⌊pos⌋−history, ⌊pos⌋+lead]: `lead` FUTURE frames
+ * must already be buffered, which is why the streaming callers keep a look-ahead
+ * the linear cursor never needed.
+ *
+ * `rows` is paired with `deltas` (row p+1 − row p) so a read loop can BLEND the
+ * two rows bracketing the true phase: `w = rows[p][t] + deltas[p][t]·g`. Picking
+ * the nearest row instead quantises the read position to 1/2·phases of a sample,
+ * and that timing jitter is a ~−52 dB noise floor at 10 kHz — audible hiss riding
+ * the music, and far worse than the −70 dB stop-band the window buys. One extra
+ * multiply-add per tap buys it back.
+ */
+function kaiserKernel(srcRate, dstRate) {
+  const cached = resampKernelCache.get(`${srcRate}:${dstRate}`);
+  if (cached) return cached;
+  const ratio = dstRate / srcRate;
+  const halfWidth = resampHalfWidth(ratio);
+  const nTaps = 2 * halfWidth;
+  const rows = kaiserSincRows(0.5 * Math.min(1.0, ratio), halfWidth, RESAMP_PHASES);
+  const deltas = [];
+  for (let p = 0; p < RESAMP_PHASES; p++) {
+    const d = new Float64Array(nTaps);
+    for (let t = 0; t < nTaps; t++) d[t] = rows[p + 1][t] - rows[p][t];
+    deltas.push(d);
+  }
+  const kernel = {
+    rows,
+    deltas,
+    phases: RESAMP_PHASES,
+    halfWidth,
+    nTaps,
+    history: halfWidth - 1,
+    lead: halfWidth,
+    step: srcRate / dstRate,
+  };
+  resampKernelCache.set(`${srcRate}:${dstRate}`, kernel);
+  return kernel;
+}
+
+/**
+ * Resample an interleaved Float32 buffer srcRate → dstRate in one go. Edge taps
+ * clamp to the first/last frame (same as wavelab's whole-buffer resample).
+ * Equal rates return the input untouched.
+ */
+function resampleInterleaved(f32, channels, srcRate, dstRate) {
+  if (srcRate === dstRate) return f32;
+  const srcFrames = f32.length / channels;
+  const dstFrames = Math.floor((srcFrames * dstRate) / srcRate);
+  const out = new Float32Array(dstFrames * channels);
+  const { rows, deltas, phases, history, nTaps, step } = kaiserKernel(srcRate, dstRate);
+  const acc = new Float64Array(channels);
+  const last = srcFrames - 1;
+  for (let n = 0; n < dstFrames; n++) {
+    const pos = n * step;
+    const i0 = Math.floor(pos);
+    const fp = (pos - i0) * phases;
+    const p = fp | 0;
+    const g = fp - p;
+    const row = rows[p], dRow = deltas[p];
+    const base = i0 - history;
+    acc.fill(0.0);
+    for (let t = 0; t < nTaps; t++) {
+      let idx = base + t;
+      if (idx < 0) idx = 0;
+      else if (idx > last) idx = last;
+      const o = idx * channels;
+      const w = row[t] + dRow[t] * g;
+      for (let c = 0; c < channels; c++) acc[c] += f32[o + c] * w;
+    }
+    const oo = n * channels;
+    for (let c = 0; c < channels; c++) out[oo + c] = acc[c];
+  }
+  return out;
+}
+
+/**
+ * Chunk-at-a-time resampler for the multichannel export, which encodes as it
+ * renders. It carries the kernel's history AND its look-ahead across the block
+ * boundary — a sinc needs `lead` frames that have not been rendered yet, so
+ * output lags the input by that much and `flush()` drains the tail.
+ */
+class StreamResampler {
+  constructor(channels, srcRate, dstRate) {
+    this.channels = channels;
+    this.step = srcRate / dstRate;
+    this.k = srcRate === dstRate ? null : kaiserKernel(srcRate, dstRate);
+    // Source position of the next output frame, relative to the current block's
+    // first frame. Goes NEGATIVE (into the history) by up to the look-ahead.
+    this.phase = 0.0;
+    this.histFrames = this.k ? this.k.nTaps + 2 : 0;
+    this.hist = new Float32Array(this.histFrames * channels);
+    this.acc = new Float64Array(channels);
+  }
+
+  /** Upper bound on the output frames one `frames`-long block can produce. */
+  maxOut(frames) { return Math.ceil(frames / this.step) + 2; }
+
+  /** @returns the number of frames written into `out`. */
+  process(input, frames, out) {
+    const ch = this.channels;
+    if (this.k === null) { // equal rates: a copy, not a filter
+      out.set(input.subarray(0, frames * ch));
+      return frames;
+    }
+    const { rows, deltas, phases, history, lead, nTaps } = this.k;
+    const hist = this.hist, histFrames = this.histFrames, acc = this.acc;
+    // The newest tap of output frame ⌊phase⌋ is ⌊phase⌋+lead, so stop as soon
+    // as that would read past the end of this block.
+    const limit = frames - 1 - lead;
+    let phase = this.phase;
+    let n = 0;
+    while (Math.floor(phase) <= limit) {
+      const i0 = Math.floor(phase);
+      const fp = (phase - i0) * phases;
+      const p = fp | 0;
+      const g = fp - p;
+      const row = rows[p], dRow = deltas[p];
+      const base = i0 - history;
+      acc.fill(0.0);
+      for (let t = 0; t < nTaps; t++) {
+        const idx = base + t;
+        const w = row[t] + dRow[t] * g;
+        if (idx >= 0) {
+          const o = idx * ch;
+          for (let c = 0; c < ch; c++) acc[c] += input[o + c] * w;
+        } else {
+          const o = Math.max(idx + histFrames, 0) * ch;
+          for (let c = 0; c < ch; c++) acc[c] += hist[o + c] * w;
+        }
+      }
+      const oo = n * ch;
+      for (let c = 0; c < ch; c++) out[oo + c] = acc[c];
+      n++;
+      phase += this.step;
+    }
+    this.phase = phase - frames;
+    // Carry the tail of this block as the next block's history (short blocks
+    // push the older history along instead of replacing it).
+    const carry = Math.min(histFrames, frames);
+    if (carry < histFrames) hist.copyWithin(0, carry * ch);
+    hist.set(input.subarray((frames - carry) * ch, frames * ch), (histFrames - carry) * ch);
+    return n;
+  }
+
+  /** Emit the frames still held back by the look-ahead. Zero-padded: a render
+   *  ends in silence, and a click at the very last sample is worse than a
+   *  half-millisecond of decay. Call once, after the last process(). */
+  flush(out) {
+    if (this.k === null) return 0;
+    const pad = this.k.lead + 1;
+    return this.process(new Float32Array(pad * this.channels), pad, out);
+  }
+}
+
 // ══ src/worklet/engine-commands.js ══
 // Engine command dispatch + snapshot fill, shared by the AudioWorklet
 // (render-mode fallback) and the Tier 2 render Worker. Both host a TaudEngine
@@ -7403,12 +7657,16 @@ function fillAnalysisInto(ts, f) {
 //
 // The engine renders at SAMPLING_RATE — 48 kHz since item 108, which is the
 // rate audio-system.js asks the AudioContext for, so the common case reads the
-// ring back one frame at a time with no interpolation at all. A context that
-// insists on another rate (44.1 kHz hardware) is still served by reading with a
-// fractional cursor + linear interpolation. Loaded via
+// ring back one frame at a time with no interpolation at all (step === 1: a
+// straight copy, not even a kernel). A context that insists on another rate
+// (44.1 kHz hardware) is served by a fractional cursor reading through the
+// Kaiser-windowed sinc in audio/resampler.js — the same kernel the exporters
+// and the sample Lab use. That kernel needs `lead` frames AHEAD of the cursor,
+// so both modes buffer that much extra look-ahead. Loaded via
 // audioWorklet.addModule() as an ES module; the committed single-file concat
 // (taud-processor.bundle.js) is the non-module-worklet fallback — regenerate
 // with tools/make-worklet-bundle.js after any change here.
+
 
 
 
@@ -7428,13 +7686,18 @@ class TaudProcessor extends AudioWorkletProcessor {
     this.ringR = new Float32Array(RING_FRAMES);
     this.ringWrite = 0;      // absolute frame counter (wraps via mask)
     this.ringReadPos = 0.0;  // fractional absolute read cursor
+    this.ringFloor = 0;      // oldest frame the kernel may read (flush barrier)
     this.step = SAMPLING_RATE / sampleRate; // 1.0 at a 48 kHz context
+    // null at a matching context rate — then a frame is a frame and the read
+    // loops copy. Otherwise the sinc kernel both read cursors run through.
+    this.rs = this.step === 1.0 ? null : kaiserKernel(SAMPLING_RATE, sampleRate);
 
     // CONSUME mode (Tier 2): audio-ring SAB views + wrap-safe read cursor.
     this.audioRing = null;
     this.arEpoch = -1;       // forces a re-sync on the first callback
     this.arReadBase = 0;     // Int32-wrapping integer read frame
     this.arReadFrac = 0.0;   // 0..1 fractional accumulator
+    this.arFloor = 0;        // ditto, on the SAB ring's wrapping counter
 
     const opts = options?.processorOptions ?? {};
     this.snapshotIntervalFrames =
@@ -7525,6 +7788,10 @@ class TaudProcessor extends AudioWorkletProcessor {
    *  state starting exactly at the read cursor, so nothing is left to leak. */
   flushRing() {
     this.ringReadPos = this.ringWrite;
+    // …and the sinc's history taps must not reach back across the cut either:
+    // those frames are the discarded tail, and half a kernel of it would be
+    // mixed into the first frames of the new playback.
+    this.ringFloor = this.ringWrite;
   }
 
   renderIntoRing() {
@@ -7585,8 +7852,11 @@ class TaudProcessor extends AudioWorkletProcessor {
   renderAndPlay(outL, outR, frames) {
     const ph = this.engine.playheads[this.playhead];
     const mask = RING_FRAMES - 1;
+    const rs = this.rs;
     if (ph.isPlaying || ph.jamActive || this.ringReadPos < this.ringWrite) {
-      while (this.ringWrite < this.ringReadPos + frames * this.step + 2) {
+      // The last output frame's newest tap sits `lead` frames past its cursor.
+      const lead = (rs === null ? 0 : rs.lead) + 2;
+      while (this.ringWrite < this.ringReadPos + frames * this.step + lead) {
         if (ph.isPlaying || ph.jamActive) {
           this.renderIntoRing();
         } else {
@@ -7596,15 +7866,37 @@ class TaudProcessor extends AudioWorkletProcessor {
           this.ringWrite += 1;
         }
       }
-      for (let n = 0; n < frames; n++) {
-        const pos = this.ringReadPos;
-        const i0 = Math.floor(pos);
-        const frac = pos - i0;
-        const a = i0 & mask;
-        const b = (i0 + 1) & mask;
-        outL[n] = this.ringL[a] * (1 - frac) + this.ringL[b] * frac;
-        outR[n] = this.ringR[a] * (1 - frac) + this.ringR[b] * frac;
-        this.ringReadPos += this.step;
+      if (rs === null) {
+        const i0 = this.ringReadPos;
+        for (let n = 0; n < frames; n++) {
+          const a = (i0 + n) & mask;
+          outL[n] = this.ringL[a];
+          outR[n] = this.ringR[a];
+        }
+        this.ringReadPos = i0 + frames;
+      } else {
+        const { rows, deltas, phases, history, nTaps } = rs;
+        const floor = this.ringFloor;
+        for (let n = 0; n < frames; n++) {
+          const pos = this.ringReadPos;
+          const i0 = Math.floor(pos);
+          const fp = (pos - i0) * phases;
+          const p = fp | 0;
+          const g = fp - p;
+          const row = rows[p], dRow = deltas[p];
+          const base = i0 - history;
+          let l = 0.0, r = 0.0;
+          for (let t = 0; t < nTaps; t++) {
+            const src = base + t;
+            const a = (src < floor ? floor : src) & mask;
+            const w = row[t] + dRow[t] * g;
+            l += this.ringL[a] * w;
+            r += this.ringR[a] * w;
+          }
+          outL[n] = l;
+          outR[n] = r;
+          this.ringReadPos = pos + this.step;
+        }
       }
     } else {
       outL.fill(0);
@@ -7623,15 +7915,18 @@ class TaudProcessor extends AudioWorkletProcessor {
     const { ctrl, L, R } = this.audioRing;
     // A transport reset (play/seek/stop) bumps the epoch and publishes a flush
     // mark — jump the read cursor there, dropping the stale buffered tail.
+    const rs = this.rs;
     const epoch = Atomics.load(ctrl, AR_EPOCH) | 0;
     if (epoch !== this.arEpoch) {
       this.arEpoch = epoch;
       this.arReadBase = Atomics.load(ctrl, AR_FLUSH_POS) | 0;
       this.arReadFrac = 0;
+      this.arFloor = this.arReadBase; // no history taps into the dropped tail
     }
     const write = Atomics.load(ctrl, AR_WRITE) | 0;
     const avail = (write - this.arReadBase) | 0;
-    const need = Math.ceil(frames * this.step) + 2;
+    // …+ the frames the kernel's newest tap needs beyond the last read cursor.
+    const need = Math.ceil(frames * this.step) + (rs === null ? 0 : rs.lead) + 2;
     if (avail < need) {
       // Silence, hold the cursor. If the PRODUCER is active (playing/jam) this
       // is a real dropout — the worker isn't refilling the ring in time; that is
@@ -7644,13 +7939,37 @@ class TaudProcessor extends AudioWorkletProcessor {
     }
     let base = this.arReadBase, frac = this.arReadFrac;
     const step = this.step;
-    for (let n = 0; n < frames; n++) {
-      const a = base & AR_MASK;
-      const b = (base + 1) & AR_MASK;
-      outL[n] = L[a] * (1 - frac) + L[b] * frac;
-      outR[n] = R[a] * (1 - frac) + R[b] * frac;
-      frac += step;
-      while (frac >= 1) { frac -= 1; base = (base + 1) | 0; }
+    if (rs === null) {
+      for (let n = 0; n < frames; n++) {
+        const a = base & AR_MASK;
+        outL[n] = L[a];
+        outR[n] = R[a];
+        base = (base + 1) | 0;
+      }
+    } else {
+      const { rows, deltas, phases, history, nTaps } = rs;
+      const floor = this.arFloor;
+      for (let n = 0; n < frames; n++) {
+        const fp = frac * phases;
+        const p = fp | 0;
+        const g = fp - p;
+        const row = rows[p], dRow = deltas[p];
+        const first = (base - history) | 0;
+        let l = 0.0, r = 0.0;
+        for (let t = 0; t < nTaps; t++) {
+          // Counters are Int32-wrapping, so "older than the floor" is a signed
+          // DIFFERENCE, never a plain <.
+          const src = (first + t) | 0;
+          const a = (((src - floor) | 0) < 0 ? floor : src) & AR_MASK;
+          const w = row[t] + dRow[t] * g;
+          l += L[a] * w;
+          r += R[a] * w;
+        }
+        outL[n] = l;
+        outR[n] = r;
+        frac += step;
+        while (frac >= 1) { frac -= 1; base = (base + 1) | 0; }
+      }
     }
     this.arReadBase = base;
     this.arReadFrac = frac;
