@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>welcome screen smoke</title></head>
+<body>
+  <!-- Keeps the load event pending so --dump-dom runs the page in REAL time
+       (tools/test-server.py /hang) — the panels here are all async. -->
+  <img src="/hang" hidden alt="">
+  <pre id="out">running…</pre>
+  <!-- Item 104. No ?load= — the whole point is what the app shows with NOTHING
+       loaded. The second frame loads a project to prove the screen gets out of
+       the way again. -->
+  <iframe id="app" src="../../index.html" style="width:1200px;height:800px"></iframe>
+  <iframe id="app2" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:800px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const boot = (id, ready) => new Promise((resolve) => {
+      const frame = document.getElementById(id);
+      const poll = setInterval(() => {
+        const w = frame.contentWindow;
+        if (w?.__microtone && (!ready || ready(w))) { clearInterval(poll); resolve(w); }
+      }, 100);
+    });
+
+    (async () => {
+      try {
+        const win = await boot("app");
+        const doc = win.document;
+        const { t } = await win.eval('import("/src/ui/i18n.js")');
+
+        // ── the welcome screen IS the no-document Timeline tab ──
+        await sleep(400); // the async panels (OPFS listing, patch-notes fetch)
+        const host = doc.getElementById("welcomeHost");
+        const shellOk = !host.hidden && win.__microtone.store.view === "timeline" &&
+          doc.getElementById("timeline").hidden &&
+          host.querySelectorAll(".wc-panel").length === 3 &&
+          !!host.querySelector(".wc-banner");
+        log(`welcome screen up on boot, timeline canvas away: ${shellOk ? "ok" : "FAIL"}`);
+
+        // ── Start panel: the three entry points, translated ──
+        const actions = [...host.querySelectorAll(".wc-action")].map((b) => b.textContent.trim());
+        const startOk = actions.length === 3 &&
+          actions[0] === t("welcome.new") && actions[1] === t("welcome.open") &&
+          actions[2] === t("welcome.importMidi") &&
+          host.querySelector(".wc-action").classList.contains("wc-primary") &&
+          host.querySelector(".wc-action .btn-ico"); // vector labels mounted
+        log(`Start panel [${actions.join(" | ")}]: ${startOk ? "ok" : "FAIL"}`);
+
+        // New project… reaches the wizard (and nothing else has to be true for it)
+        host.querySelector(".wc-action").click();
+        await sleep(120);
+        const wizard = doc.querySelector("dialog.modal, dialog");
+        const newOk = !!wizard?.open;
+        [...(wizard?.querySelectorAll("button") ?? [])]
+          .find((b) => /cancel|취소/i.test(b.textContent))?.click();
+        wizard?.close();
+        log(`"New project…" opens the wizard: ${newOk ? "ok" : "FAIL"}`);
+
+        // ── Recent projects: OPFS-backed, and it says so when empty ──
+        const recent = host.querySelector(".wc-recent .wc-recent-body");
+        const rows = recent.querySelectorAll(".wc-file");
+        const recentOk = rows.length > 0
+          ? [...rows].every((r) => r.querySelector(".wc-file-name")?.textContent.trim())
+          : !!recent.querySelector(".wc-note");
+        log(`Recent projects (${rows.length} row(s)): ${recentOk ? "ok" : "FAIL"}`);
+
+        // ── What's new: the newest PATCH_NOTES.md section, live ──
+        const notesMd = await (await fetch("../../assets/PATCH_NOTES.md")).text();
+        const { firstSection, topLevelBullets } =
+          await win.eval('import("/src/ui/markdown.js")');
+        const section = firstSection(notesMd);
+        const items = [...host.querySelectorAll(".wc-news-list li")];
+        const firstBullet = topLevelBullets(section.body)[0].replace(/[*`]/g, "");
+        const newsOk = items.length > 0 && items.length <= 5 &&
+          host.querySelector(".wc-date").textContent === section.title &&
+          items[0].textContent.startsWith(firstBullet.slice(0, 30)) &&
+          items.every((li) => li.querySelector(".wc-clamp")); // marker kept off the clamp
+        log(`What's new = PATCH_NOTES "${section.title}" (${items.length} items): ${newsOk ? "ok" : "FAIL"}`);
+
+        // ── support banner replaced the topbar buttons (item 104.3) ──
+        const links = [...host.querySelectorAll(".wc-banner a")].map((a) => a.href);
+        const bannerOk = links.some((h) => h.includes("ko-fi.com")) &&
+          links.some((h) => h.includes("github.com/sponsors")) &&
+          doc.querySelectorAll(".topbar .support-btn").length === 0;
+        log(`support banner present, topbar buttons retired: ${bannerOk ? "ok" : "FAIL"}`);
+
+        // The About popup keeps its own links — retiring the topbar pair must
+        // not have taken the ask away entirely.
+        doc.getElementById("brandBtn").click();
+        await sleep(60);
+        const about = doc.querySelector("dialog.about-modal");
+        const aboutOk = [...about.querySelectorAll("a")].some((a) => a.href.includes("ko-fi.com")) &&
+          [...about.querySelectorAll("a")].some((a) => a.href.includes("github.com/sponsors"));
+        about.querySelector(".modal-buttons button").click();
+        log(`About popup still carries both links: ${aboutOk ? "ok" : "FAIL"}`);
+
+        // ── item 104.1: the File tab is no longer a one-way trip ──
+        const tab = (v) => doc.querySelector(`#tabs button[data-view="${v}"]`);
+        const deadEnds = ["cues", "pattern", "samples", "instruments", "project"];
+        const disabledOk = deadEnds.every((v) => tab(v).disabled) &&
+          !tab("timeline").disabled && !tab("files").disabled;
+        tab("files").click();
+        await sleep(250);
+        const wentOk = win.__microtone.store.view === "files" && host.hidden;
+        tab("timeline").click();
+        await sleep(150);
+        const cameBackOk = win.__microtone.store.view === "timeline" && !host.hidden &&
+          doc.getElementById("filesHost").hidden;
+        // …and the same round trip on the keyboard (F7 / F1)
+        const key = (code) => win.dispatchEvent(new win.KeyboardEvent("keydown", { code, bubbles: true }));
+        key("F7");
+        await sleep(200);
+        const f7Ok = win.__microtone.store.view === "files";
+        key("F1");
+        await sleep(150);
+        const f1Ok = win.__microtone.store.view === "timeline" && !host.hidden;
+        log(`no-doc tabs: dead ends disabled ${disabledOk}, to File ${wentOk}, ` +
+            `back ${cameBackOk}, F7 ${f7Ok}, F1 ${f1Ok}: ` +
+            `${disabledOk && wentOk && cameBackOk && f7Ok && f1Ok ? "ok" : "FAIL"}`);
+
+        // ── live language change re-renders the panels ──
+        const i18n = await win.eval('import("/src/ui/i18n.js")');
+        await i18n.changeLang("ko");
+        await sleep(300);
+        const koOk = host.querySelector(".wc-action").textContent.trim() === "새 프로젝트…" &&
+          host.querySelector(".wc-panel h2").textContent.startsWith("시작");
+        await i18n.changeLang("en");
+        await sleep(300);
+        const backEnOk = host.querySelector(".wc-action").textContent.trim() === t("welcome.new");
+        log(`language change re-renders the welcome panels: ${koOk && backEnOk ? "ok" : "FAIL"}`);
+
+        // ── a loaded document gets the editor back ──
+        const win2 = await boot("app2", (w) => w.__microtone.store.doc);
+        await sleep(400);
+        const doc2 = win2.document;
+        const loadedOk = doc2.getElementById("welcomeHost").hidden &&
+          !doc2.getElementById("timeline").hidden &&
+          [...doc2.querySelectorAll("#tabs button")].every((b) => !b.disabled) &&
+          !doc2.getElementById("toolbox").hidden;
+        log(`document loaded → welcome away, every tab live: ${loadedOk ? "ok" : "FAIL"}`);
+
+        // Opening it recorded the MRU entry the Recent panel sorts on.
+        const mru = JSON.parse(win2.localStorage.getItem("microtone-recent") ?? "{}");
+        const mruOk = typeof mru["WHEN.taud"] === "number";
+        log(`open recorded in the recent-projects MRU: ${mruOk ? "ok" : "FAIL"}`);
+
+        log("DONE");
+      } catch (err) {
+        log(`EXCEPTION ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

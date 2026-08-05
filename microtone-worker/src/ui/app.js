@@ -16,6 +16,7 @@ import { FilesView } from "./views/files.js";
 import { SamplesView } from "./views/samples.js";
 import { InstrumentsView } from "./views/instruments.js";
 import { ProjectView } from "./views/project.js";
+import { WelcomeView } from "./views/welcome.js";
 import { MasterStrip } from "./views/masterstrip.js";
 import { JamKeyboard } from "./jam.js";
 import { InstLookup } from "./instlookup.js";
@@ -228,14 +229,14 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
   }
 
   rebuildSongList();
+  welcomeView.noteOpened(name); // the welcome screen's Recent list sorts on this
 
   // Invalidate the views' cached song state (Timeline songMap crop, etc.) for
   // the NEW document BEFORE showView draws — otherwise the first frame paints
   // with the previous song's map and, if the canvas dims are unchanged, that
   // stale crop can persist (item 49a: crop-to-length failed on a file-tab reload).
   store.emit("doc");
-  $("emptyState").hidden = true;
-  showView("timeline");
+  showView("timeline"); // hides the welcome screen: a document is loaded now
   if (converted) store.doc.dirty = true; // imported, not yet saved anywhere
   if (converted && saveToOpfs && (await opfs.available())) {
     // Files-tab MIDI import: the CONVERSION RESULT lands in OPFS right away.
@@ -396,8 +397,7 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   opt.textContent = `0: ${projName}`;
   sel.appendChild(opt);
   store.emit("doc"); // invalidate view caches before the first draw (item 49a)
-  $("emptyState").hidden = true;
-  showView("timeline");
+  showView("timeline"); // hides the welcome screen: a document is loaded now
   updateStatus();
 }
 
@@ -580,6 +580,17 @@ const filesView = new FilesView(store, $("filesHost"), {
   importMidi: () => importMidiInteractive({ toOpfs: true }),
   renameSong: (i) => renameSongInteractive(i),
 });
+// Welcome screen (item 104) — the Timeline tab's content before a project is
+// loaded. Everything it offers is an existing entry point, wired here rather
+// than re-implemented.
+const welcomeView = new WelcomeView(store, $("welcomeHost"), {
+  newProject: () => newProject(),
+  open: () => $("fileInput").click(),
+  importMidi: () => importMidiInteractive(),
+  openRecent: async (name) => loadBytes(name, await opfs.read(name)),
+  browseFiles: () => showView("files"),
+  help: () => showHelp(),
+});
 
 /** Toolbox buttons that depend on the document, not on the view. */
 function refreshToolbox() {
@@ -597,15 +608,26 @@ function refreshToolbox() {
   $("tbMaster").classList.toggle("active", masterStrip.visible);
 }
 
+// The views that mean something with nothing loaded: the Timeline (which is
+// where the welcome screen lives) and the File tab (browse OPFS, import
+// something). Item 104.1 — before this, going to the File tab with no document
+// was a one-way trip, because the Timeline tab was as inert as the rest.
+const NO_DOC_VIEWS = ["timeline", "files"];
+
 function showView(name) {
   store.view = name;
+  const noDoc = !store.doc;
   for (const btn of $("tabs").children) {
     btn.classList.toggle("active", btn.dataset.view === name);
+    // The dead-end tabs say so rather than silently swallowing the click.
+    btn.disabled = noDoc && !NO_DOC_VIEWS.includes(btn.dataset.view);
   }
-  $("emptyState").hidden = !!store.doc || name === "files";
-  $("toolbox").hidden = !(name === "timeline" || name === "pattern") || !store.doc;
+  const welcome = noDoc && name === "timeline";
+  $("welcomeHost").hidden = !welcome;
+  welcome ? welcomeView.show() : welcomeView.hide();
+  $("toolbox").hidden = !(name === "timeline" || name === "pattern") || noDoc;
   refreshToolbox();
-  $("timeline").hidden = name !== "timeline";
+  $("timeline").hidden = name !== "timeline" || noDoc;
   $("cuesCanvas").hidden = name !== "cues";
   $("patternHost").hidden = name !== "pattern";
   $("samplesHost").hidden = name !== "samples";
@@ -613,7 +635,7 @@ function showView(name) {
   $("projectHost").hidden = name !== "project";
   $("filesHost").hidden = name !== "files";
   $("placeholder").hidden = true;
-  if (name === "timeline") timeline.resize();
+  if (name === "timeline" && !noDoc) timeline.resize();
   if (name === "cues") cuesView.resize();
   name === "pattern" ? patternView.show() : patternView.hide();
   name === "samples" ? samplesView.show() : samplesView.hide();
@@ -624,9 +646,7 @@ function showView(name) {
 }
 $("tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
-  // The File tab works without a document (browse OPFS, import something);
-  // every other view needs one.
-  if (btn && (store.doc || btn.dataset.view === "files")) showView(btn.dataset.view);
+  if (btn && (store.doc || NO_DOC_VIEWS.includes(btn.dataset.view))) showView(btn.dataset.view);
 });
 
 // ── transport ──
@@ -914,11 +934,12 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (!store.doc) {
-    // The File tab stays reachable before anything is loaded.
-    if (e.code === "F7" && !e.ctrlKey && !e.metaKey && !e.altKey &&
+    // The welcome screen (F1) and the File tab (F7) stay reachable before
+    // anything is loaded — and so does the way back (item 104.1).
+    if ((e.code === "F1" || e.code === "F7") && !e.ctrlKey && !e.metaKey && !e.altKey &&
         e.target.tagName !== "INPUT" && !e.target.closest?.("dialog")) {
       e.preventDefault();
-      showView("files");
+      showView(e.code === "F1" ? "timeline" : "files");
     }
     return;
   }
@@ -1198,7 +1219,12 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, jam, instLookup, masterStrip, loadBytes, playCursor };
+window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, welcomeView, jam, instLookup, masterStrip, loadBytes, playCursor };
+
+// Paint the initial view (item 104): with nothing loaded that is the welcome
+// screen, and it also puts the no-document tabs into their disabled state. A
+// ?load= / recovery boot calls showView again once the document is in.
+showView(store.view);
 
 // ── frame loop ──
 function frame() {

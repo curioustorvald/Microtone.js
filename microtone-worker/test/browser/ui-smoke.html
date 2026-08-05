@@ -647,8 +647,17 @@
         const host2 = win2.document.getElementById("filesHost");
         const saveDisabled = host2.querySelector(".files-bar button")?.disabled === true;
         const noDocOk = !host2.hidden && win2.__microtone.store.view === "files" &&
-          win2.document.getElementById("emptyState").hidden && saveDisabled;
+          win2.document.getElementById("welcomeHost").hidden && saveDisabled;
         log(`File tab reachable without a document (Save greyed): ${noDocOk ? "ok" : "FAIL"}`);
+
+        // ── …and back again (item 104.1): the Timeline tab carries the welcome
+        // screen, so it must stay live with nothing loaded.
+        win2.document.querySelector('#tabs button[data-view="timeline"]').click();
+        await new Promise((r) => setTimeout(r, 200));
+        const backOk = win2.__microtone.store.view === "timeline" &&
+          !win2.document.getElementById("welcomeHost").hidden && host2.hidden &&
+          win2.document.querySelector('#tabs button[data-view="pattern"]').disabled;
+        log(`Timeline tab reachable again without a document: ${backOk ? "ok" : "FAIL"}`);
 
         // ── Korean boot: saved language applies to the static chrome ──
         localStorage.setItem("microtone-lang", "ko");

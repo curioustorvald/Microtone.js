@@ -186,8 +186,8 @@
     <div class="grow"></div>
     <div>
       <span id="audioBadge" class="badge" data-i18n="topbar.audioOff">audio off</span>
-      <a class="support-btn donate" href="https://ko-fi.com/curioustorvald" target="_blank" rel="noopener" data-icon="heart" data-i18n="topbar.donate" data-i18n-title="topbar.donateTitle">Donate</a>
-      <a class="support-btn sponsor" href="https://github.com/sponsors/curioustorvald" target="_blank" rel="noopener" data-i18n="topbar.sponsor" data-i18n-title="topbar.sponsorTitle">Sponsor</a>
+      <!-- Donate/Sponsor used to sit here; item 104.3 retired them in favour of
+           the welcome screen's support banner. The About popup keeps its own. -->
       <button id="reloadBtn" class="icon-btn" data-icon="reload" data-i18n-title="topbar.reloadTitle"></button>
       <button id="helpBtn" class="icon-btn" data-i18n-title="topbar.helpTitle">?</button>
       <button id="langBtn" data-i18n-title="topbar.langTitle">EN</button>
@@ -220,9 +220,9 @@
          strip is a SIBLING so it takes width off the grid instead of covering
          it, and the canvases' ResizeObserver picks the change up on its own. -->
     <div id="viewStage" class="view-stage">
-      <div id="emptyState" class="empty-state">
-        <p><strong data-i18n="empty.drop">Drop a .taud file anywhere</strong><span data-i18n="empty.orOpen"> or use Open…</span></p>
-      </div>
+      <!-- Welcome screen (item 104): the Timeline tab's content until a project
+           is loaded — start actions, recent projects, patch notes, support. -->
+      <div id="welcomeHost" class="view-dom"></div>
       <canvas id="timeline" class="view-canvas" hidden></canvas>
       <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
       <div id="patternHost" class="view-dom" hidden></div>

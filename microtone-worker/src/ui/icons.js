@@ -161,6 +161,28 @@ export const BTN_ICON = {
   close: line('<path d="M6 6l12 12M18 6 6 18"/>'),
   /** Support the project (♥). */
   heart: solid('<path d="M12 20.6 4.9 13.4a4.4 4.4 0 0 1 0-6.3 4.6 4.6 0 0 1 6.4 0l.7.7.7-.7a4.6 4.6 0 0 1 6.4 0 4.4 4.4 0 0 1 0 6.3z"/>'),
+
+  // ── welcome screen (item 104) ──
+  /** Start a new project — a sheet with a plus. */
+  filePlus: line(
+    '<path d="M13.5 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21H11"/>' +
+    '<path d="M13.5 3 19 8.5v3"/><path d="M13.5 3v5.5H19"/>' +
+    '<path d="M17.5 14.5V21M14.25 17.75h6.5"/>'),
+  /** Open an existing file — a folder. */
+  folder: line('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.1l2 2.5h8.9A1.5 1.5 0 0 1 21 9v9' +
+    'a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z"/>'),
+  /** Import a score — a beamed pair of notes. */
+  music: line('<path d="M9 18V5.5l10-2V16"/>' +
+    '<ellipse cx="6.4" cy="18" rx="2.6" ry="2.2"/>' +
+    '<ellipse cx="16.4" cy="16" rx="2.6" ry="2.2"/>'),
+  /** The documentation — an open book. */
+  book: line('<path d="M12 6.5V20"/>' +
+    '<path d="M12 6.5C10.6 5.2 8.6 4.5 6 4.5H3.5v13H6c2.6 0 4.6.7 6 2 1.4-1.3 3.4-2 6-2' +
+    'h2.5v-13H18c-2.6 0-4.6.7-6 2z"/>'),
+  /** Buy the author a coffee — a cup with steam. */
+  coffee: line('<path d="M4 9.5h13v6a4.5 4.5 0 0 1-4.5 4.5h-4A4.5 4.5 0 0 1 4 15.5z"/>' +
+    '<path d="M17 11h1.8a2.6 2.6 0 0 1 0 5.2H17"/>' +
+    '<path d="M8 3.5V6M12 3v3"/>'),
 };
 
 /** The `<svg>` markup for a button icon — for the HTML-template popups.

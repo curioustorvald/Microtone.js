@@ -390,6 +390,10 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   color: var(--accent);
   border-color: var(--border);
 }
+/* No document loaded: everything but the welcome screen and the File tab is a
+   dead end, and says so rather than swallowing the click (item 104.1). */
+.tabs button:disabled { opacity: 0.4; cursor: default; }
+.tabs button:disabled:hover { border-color: var(--border); }
 
 .view-host {
   flex: 1;
@@ -481,6 +485,206 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   justify-content: center;
   color: var(--dim);
   font-size: 1.1rem;
+}
+
+/* ── welcome screen (item 104) ────────────────────────────────────────────
+ * What the Timeline tab shows until a project is loaded: Start, Recent
+ * projects, What's new and the support banner. Built out of the same panel /
+ * border / accent variables the editing views use, so the first screen looks
+ * like the tracker rather than like a landing page. #welcomeHost is a
+ * .view-dom, so the whole thing scrolls inside the view stage. */
+.welcome-view {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 1.2rem 1.2rem 1.6rem;
+}
+.wc-inner { max-width: 62rem; margin: 0 auto; }
+
+.wc-hero { margin: 0 0 1.1rem; text-align: center; }
+.wc-brand {
+  font-family: "Geist", sans-serif;
+  font-weight: 900;
+  font-style: oblique;
+  font-size: 2.4rem;
+  line-height: 1.05;
+}
+.wc-tagline { margin: 0.45rem 0 0; color: var(--dim); font-size: 0.95rem; }
+
+.wc-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 19rem) minmax(0, 1fr);
+  grid-template-areas:
+    "start  recent"
+    "news   news"
+    "banner banner";
+}
+.wc-start { grid-area: start; }
+.wc-recent { grid-area: recent; }
+.wc-news { grid-area: news; }
+.wc-banner { grid-area: banner; }
+
+.wc-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.8rem 0.95rem 0.9rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.wc-panel h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* The dated heading of the patch-notes section being excerpted. */
+.wc-date {
+  margin-left: auto;
+  letter-spacing: 0;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Start — one row per entry point, the primary one wearing the accent. */
+.wc-action {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  margin-bottom: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  font-size: 0.95rem;
+}
+.wc-action .btn-ico { width: 1.2em; height: 1.2em; opacity: 0.9; }
+.wc-primary { color: var(--accent); border-color: var(--accent); }
+.wc-drop { margin: 0.45rem 0 0; color: var(--dim); font-size: 0.8rem; }
+
+.wc-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+.wc-links a {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+  text-decoration: none;
+}
+.wc-links a:hover { color: var(--accent); }
+/* .btn-ico's own spacing rule keys off :only-child, and the svg IS the only
+   ELEMENT beside a bare text node — so these two have to say it themselves. */
+.wc-links .btn-ico, .wc-banner .btn-ico { margin-right: 0.4em; }
+.wc-sep { color: var(--border); }
+.wc-linkbtn {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--dim);
+  font-size: inherit;
+}
+.wc-linkbtn:hover { color: var(--accent); }
+
+/* Recent projects — rows are buttons, so focus walks them like the file list. */
+.wc-recent-body { display: flex; flex-direction: column; gap: 1px; flex: 1; }
+.wc-file {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.32rem 0.5rem;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  text-align: left;
+  font-size: 0.9rem;
+}
+.wc-file:hover { background: var(--panel-2); border-color: var(--border); }
+.wc-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-file-meta { color: var(--dim); font-size: 0.78rem; white-space: nowrap; }
+.wc-file-size { min-width: 5ch; text-align: right; font-variant-numeric: tabular-nums; }
+
+.wc-note { margin: 0.2rem 0; color: var(--dim); font-size: 0.85rem; }
+.wc-warn { color: var(--err-fg); }
+.wc-more {
+  align-self: flex-start;
+  margin-top: 0.65rem;
+  color: var(--dim);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
+
+/* What's new — the newest PATCH_NOTES.md section. Entries run long, so each is
+   clamped to a couple of lines; "Read all" has the rest. The clamp needs
+   display:-webkit-box, which would take the marker off an <li>, so it lives on
+   a wrapper span (welcome.js) and the item stays a list item. */
+.wc-news-list { margin: 0; padding-left: 1.15rem; }
+.wc-news-list li {
+  margin-bottom: 0.4rem;
+  color: var(--dim);
+  font-size: 0.87rem;
+  line-height: 1.45;
+}
+.wc-news-list li::marker { color: var(--border); }
+.wc-news-list strong { color: var(--fg); font-weight: 600; }
+.wc-news-list a { color: var(--accent-2); }
+.wc-news-list code { color: var(--accent); font-size: 0.92em; }
+.wc-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Support banner — what the retired topbar Donate/Sponsor buttons became. */
+.wc-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.95rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.wc-banner p { flex: 1 1 18rem; margin: 0; color: var(--dim); font-size: 0.85rem; }
+.wc-banner b { color: var(--fg); }
+.wc-banner .support-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.87rem;
+}
+
+@media (max-width: 760px) {
+  .wc-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "start" "recent" "news" "banner";
+  }
+  .wc-brand { font-size: 2.1rem; }
+  .welcome-view { padding: 1.1rem 0.8rem 1.6rem; }
 }
 
 .dirty { color: var(--accent); }

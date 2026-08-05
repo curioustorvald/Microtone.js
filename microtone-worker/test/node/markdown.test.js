@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { renderMarkdown, extractToc, slug } from "../../src/ui/markdown.js";
+import {
+  renderMarkdown, extractToc, slug, firstSection, topLevelBullets,
+} from "../../src/ui/markdown.js";
 
 test("slug: stable, ascii-kebab, non-empty", () => {
   assert.equal(slug("0. Tracker terminologies"), "0-tracker-terminologies");
@@ -108,6 +110,39 @@ test("PATCH_NOTES.md: dated sections, newest first, renders + TOCs", () => {
   assert.equal(new Set(toc.map((e) => e.slug)).size, toc.length, "dates are unique");
   const dates = toc.map((e) => e.text);
   assert.deepEqual(dates, [...dates].sort().reverse(), "newest section first");
+});
+
+// Item 104: the welcome screen's "what's new" panel excerpts the newest dated
+// section of PATCH_NOTES.md through these two.
+test("firstSection: newest section only, preamble and deeper headings skipped", () => {
+  const md = "# Title\n\nBlurb.\n\n## 2026-08-05\n\n- one\n- two\n\n### Detail\n\n- three\n\n" +
+             "## 2026-07-30\n\n- old\n";
+  const sec = firstSection(md);
+  assert.equal(sec.title, "2026-08-05");
+  assert.equal(sec.body, "- one\n- two\n\n### Detail\n\n- three");
+  assert.ok(!sec.body.includes("old"), "stops at the next section");
+  assert.ok(!sec.body.includes("Blurb"), "the preamble is not part of it");
+  assert.equal(firstSection("# Only an h1\n\ntext"), null);
+  // a `##` inside a fence neither opens nor closes a section
+  const fenced = "## A\n\n```\n## not a heading\n```\n\n## B\n";
+  assert.equal(firstSection(fenced).body, "```\n## not a heading\n```");
+});
+
+test("topLevelBullets: markers stripped, nested items dropped", () => {
+  const md = "- one\n  - nested\n- two\n\ntext\n\n1. three\n";
+  assert.deepEqual(topLevelBullets(md), ["one", "two", "three"]);
+  assert.deepEqual(topLevelBullets("```\n- in code\n```\n- real"), ["real"]);
+});
+
+test("PATCH_NOTES.md: the newest section yields a renderable teaser", () => {
+  const md = readFileSync(fileURLToPath(new URL("../../assets/PATCH_NOTES.md", import.meta.url)), "utf8");
+  const sec = firstSection(md);
+  assert.match(sec.title, /^\d{4}-\d{2}-\d{2}$/, "the teaser's heading is the date");
+  const bullets = topLevelBullets(sec.body);
+  assert.ok(bullets.length >= 3, "the newest batch has headline items to show");
+  const html = renderMarkdown(bullets.slice(0, 5).map((b) => `- ${b}`).join("\n"));
+  assert.match(html, /^<ul><li>/, "renders as one flat list");
+  assert.ok(!html.includes("<h2"), "no heading leaks into the excerpt");
 });
 
 // Item 997: the three Taud reference specifications. They are heavily
