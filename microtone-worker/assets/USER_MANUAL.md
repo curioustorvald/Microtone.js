@@ -685,6 +685,25 @@ range; spread and narrow them on the new instrument's **Layers** tab.
 Metainstruments are not offered as picks — the engine resolves a layer directly
 to a sample, so metainstruments cannot be nested.
 
+### Duplicating an instrument
+
+The **Duplicate** button beside an instrument's name copies it into the lowest
+free number in `$01`–`$FF` and selects the copy, ready to edit. This is how you
+build a variant — a shorter fadeout, a different filter or envelope, another
+zone map — without importing the same sound twice.
+
+The copy **shares its source's samples**: only the instrument record and its
+Ixmp patches are copied, so a duplicate costs one instrument number and no
+sample-pool space at all. Editing the copy's *settings* never touches the
+original, but editing the *sample* (in the Sample Lab, or by dragging its loop
+markers) changes what both play, because it is one sample.
+
+Duplicating a metainstrument copies its layer sub-instruments too, into fresh
+`$100`+ slots, so its layers can be retuned or refiltered without moving the
+original stack. Layers that shared one sub-instrument still share one copy — the
+*linked ×n* relationship survives. The copy is named after its source with a
+`(2)` (then `(3)`, …) suffix; rename it in the name box. One undo step.
+
 ### Renumbering an instrument
 
 The **Renumber…** button beside an instrument's name moves it to another number

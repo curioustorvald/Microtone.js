@@ -141,6 +141,27 @@ function bytesEqual(a, b) {
 }
 
 /**
+ * Rewrite a Metainstrument record's 10-bit layer indices (byte o, plus the two
+ * high bits in byte o+8) in place through `slotMap`. A layer whose target is
+ * NOT in the map is zeroed — index 0 is "no layer" to the record parser, so a
+ * stale source index can never alias an unrelated destination instrument.
+ */
+function remapMetaLayerSlots(rec, slotMap) {
+  const count = rec[1];
+  for (let n = 0; n < count && 4 + n * 10 + 10 <= 256; n++) {
+    const o = 4 + n * 10;
+    const mapped = slotMap.get(rec[o] | (((rec[o + 8] >>> 6) & 0x3) << 8));
+    if (mapped !== undefined) {
+      rec[o] = mapped & 0xff;
+      rec[o + 8] = (rec[o + 8] & 0x3f) | (((mapped >>> 8) & 0x3) << 6);
+    } else {
+      rec[o] = 0;
+      rec[o + 8] &= 0x3f;
+    }
+  }
+}
+
+/**
  * Plan an import of `selectedSlots` from srcDoc into destDoc. Pure — computes
  * everything applyPlan will write. Returns {error} on any budget/validity
  * failure, else:
@@ -258,22 +279,7 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
     let ixmpBlob = null, ixmpCount = 0;
 
     if (inst.isMeta) {
-      // Remap the 10-bit layer indices in place; entries whose target is not
-      // imported are zeroed (index 0 = "no layer" to the record parser) so a
-      // stale source index can't alias a destination instrument.
-      const count = rec[1];
-      for (let n = 0; n < count && 4 + n * 10 + 10 <= 256; n++) {
-        const o = 4 + n * 10;
-        const idx = rec[o] | (((rec[o + 8] >>> 6) & 0x3) << 8);
-        const mapped = slotMap.get(idx);
-        if (mapped !== undefined) {
-          rec[o] = mapped & 0xff;
-          rec[o + 8] = (rec[o + 8] & 0x3f) | (((mapped >>> 8) & 0x3) << 6);
-        } else {
-          rec[o] = 0;
-          rec[o + 8] &= 0x3f;
-        }
-      }
+      remapMetaLayerSlots(rec, slotMap);
     } else {
       if (inst.sampleLength > 0) {
         const ptr = sampleMap.get(sampleKey(inst.samplePtr, inst.sampleLength));
@@ -856,13 +862,15 @@ function allocChildSlot(taken) {
   return -1;
 }
 
-/** A plan entry copying `src`'s record + Ixmp blob into layer child `dest`. */
-function childCopyEntry(doc, src, dest) {
+/** A plan entry copying `src`'s record + Ixmp blob into `dest` — a layer child
+ *  unless `topLevel`. The copy keeps the source's pool pointers verbatim, so it
+ *  costs one instrument slot and zero sample bytes. */
+function copyEntry(doc, src, dest, topLevel = false) {
   const blob = [...doc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === src);
   return {
     srcSlot: src,
     destSlot: dest,
-    topLevel: false,
+    topLevel,
     record: doc.instRecordBytes(src),
     ixmpBlob: blob ? blob.blob : null,
     ixmpCount: blob ? blob.count : 0,
@@ -938,7 +946,7 @@ export function planCreateMeta(destDoc, picks, name = "") {
   for (const [src, n] of counts) {
     const child = allocChildSlot(taken);
     if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
-    insts.push(childCopyEntry(destDoc, src, child));
+    insts.push(copyEntry(destDoc, src, child));
     // Full-rect layers at unity mix, no detune: every layer sounds on every
     // trigger until the user narrows it on the Layers tab.
     for (let k = 0; k < n; k++) layers.push(makeMetaLayer(child, 159, 0, 0x0000, 0xffff, 0, 63));
@@ -994,7 +1002,7 @@ export function planAddMetaLayers(destDoc, metaSlot, picks) {
   for (const [src, n] of counts) {
     const child = allocChildSlot(taken);
     if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
-    insts.push(childCopyEntry(destDoc, src, child));
+    insts.push(copyEntry(destDoc, src, child));
     for (let k = 0; k < n; k++) added.push(defaultLayer(child));
   }
   insts.push({
@@ -1040,7 +1048,7 @@ export function planUnlinkMetaLayer(destDoc, metaSlot, layerIdx) {
   if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
 
   const insts = [
-    childCopyEntry(destDoc, src, child),
+    copyEntry(destDoc, src, child),
     {
       srcSlot: -1,
       destSlot: metaSlot & 0x3ff,
@@ -1055,6 +1063,119 @@ export function planUnlinkMetaLayer(destDoc, metaSlot, layerIdx) {
     metaSlot: metaSlot & 0x3ff,
     childSlots: [child],
     unlinkedFrom: src,
+  });
+}
+
+// ── item 114: duplicate an instrument already in this project ────────────────
+
+/**
+ * The copy's INam text: the source's name with the codebase's " (N)" duplicate
+ * suffix (stem-export labels use the same), deduped against every name the
+ * project already carries — "Piano" → "Piano (2)" → "Piano (3)". Only a
+ * trailing " (N)" is stripped before counting, so a name that ENDS in a number
+ * keeps it: "Synth Strings 1" duplicates to "Synth Strings 1 (2)", never to
+ * "Synth Strings 2" (a different GM instrument). A counter rather than a word
+ * because INam is an ASCII-escaped byte table read in every language — a
+ * translated "copy" would land \uHHHH-escaped in the file. An unnamed
+ * instrument stays unnamed; the list already shows the slot number.
+ */
+export function duplicateInstrumentName(taken, name) {
+  if (name === "") return "";
+  const stem = name.replace(/ \(\d+\)$/, "");
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * Duplicate instruments that are already in this project (item 114) — the
+ * cheap way to derive a variant (a different fadeout, envelope or filter)
+ * without touching the original.
+ *
+ * SAMPLES ARE NOT COPIED. The record and the Ixmp patch blob keep the source's
+ * pool pointers verbatim, so a duplicate costs one instrument slot and zero
+ * pool bytes, and the sample census is unchanged — same (ptr:len) set, same
+ * order, so SNam needs no rebuild (`writeSnam: false`).
+ *
+ * A metainstrument duplicates DEEP: its layer children are copied into fresh
+ * $100+ slots and the copy's layer table is repointed at them, so editing a
+ * layer of the duplicate can never change how the original sounds. Layers that
+ * shared one child still share ONE copy — item 113's linking survives, and the
+ * duplicate costs the same number of slots as its source.
+ *
+ * `slots` are source slots (any used slot, including a $100+ layer child —
+ * its copy becomes an ordinary note-addressable instrument). Returns {error}
+ * or a planImport-shaped plan (apply with importBankOp), with
+ * `duplicates: [{srcSlot, destSlot}]` naming the top-level copies in the order
+ * they were requested.
+ */
+export function planDuplicateInstruments(destDoc, slots) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const used = new Set(destDoc.usedInstrumentSlots());
+  const sources = [...new Set(slots)].filter((s) => used.has(s));
+  if (sources.length === 0) return { error: "No instruments selected." };
+
+  // Copies must stay note-addressable ($01–$FF); their layer children go to
+  // $100+, where only a layer table can reach them.
+  const taken = new Set(used);
+  let low = 1;
+  const nextLow = () => { while (low <= 255 && taken.has(low)) low++; return low <= 255 ? low : null; };
+
+  const insts = [];
+  const names = [];
+  const duplicates = [];
+  const usedNames = new Set(splitNameTable(sectionPayload(destDoc, "INam"))
+    .map((p) => new TextDecoder().decode(p)));
+
+  for (const src of sources) {
+    const dest = nextLow();
+    if (dest === null) {
+      return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+    }
+    taken.add(dest);
+    duplicates.push({ srcSlot: src, destSlot: dest });
+
+    // Layer closure: every sub-instrument the source reaches gets its own copy,
+    // discovered before any record is built so a nested layer table can be
+    // remapped through the finished map.
+    const slotMap = new Map([[src, dest]]);
+    const children = [];
+    const queue = [src];
+    while (queue.length > 0) {
+      for (const dep of layerDeps(destDoc, queue.shift(), used)) {
+        if (slotMap.has(dep)) continue; // a shared child stays shared in the copy
+        const child = allocChildSlot(taken);
+        if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
+        slotMap.set(dep, child);
+        children.push([dep, child]);
+        queue.push(dep);
+      }
+    }
+
+    for (const [srcChild, destChild] of children) {
+      const entry = copyEntry(destDoc, srcChild, destChild);
+      if (destDoc.instruments[srcChild].isMeta) remapMetaLayerSlots(entry.record, slotMap);
+      insts.push(entry);
+      names.push([destChild, destDoc.instrumentName(srcChild)]); // children keep the name
+    }
+    const top = copyEntry(destDoc, src, dest, true);
+    if (destDoc.instruments[src].isMeta) remapMetaLayerSlots(top.record, slotMap);
+    insts.push(top);
+
+    const copyName = duplicateInstrumentName(usedNames, destDoc.instrumentName(src));
+    usedNames.add(copyName);
+    names.push([dest, copyName]);
+  }
+
+  // A project with no INam and nothing but unnamed copies keeps no INam.
+  const inamPayload = inamPayloadWith(destDoc, names);
+  const hadInam = sectionPayload(destDoc, "INam") !== null;
+  return metaPlan(insts, hadInam || inamPayload.length > 0 ? inamPayload : null, {
+    duplicates,
+    childSlots: insts.filter((it) => !it.topLevel).map((it) => it.destSlot),
   });
 }
 

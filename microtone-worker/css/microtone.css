@@ -1147,6 +1147,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .inst-name-idx { color: var(--accent); font-family: "Roboto Mono", monospace; font-weight: 600; }
+.inst-dup-btn { flex: 0 0 auto; }
 .inst-renum-btn { flex: 0 0 auto; }
 .inst-del-btn { flex: 0 0 auto; }
 .inst-del-btn:hover { color: var(--fg); border-color: var(--danger, #d9534f); }

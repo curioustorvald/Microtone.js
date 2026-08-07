@@ -502,6 +502,8 @@ export default {
   "inst.backToMeta": "이 하위 악기를 사용하는 메타악기로 돌아갑니다",
   "inst.newMeta": "새 메타악기…",
   "inst.newMetaTitle": "이 프로젝트의 악기 여러 개를 하나의 메타악기로 레이어링합니다",
+  "inst.duplicate": "복제",
+  "inst.duplicateTitle": "이 악기를 빈 슬롯에 복사해 손볼 수 있게 합니다 — 복사본은 원본의 샘플을 공유하므로 샘플 메모리를 쓰지 않습니다",
   "inst.renumber": "번호 바꾸기…",
   "inst.renumberTitle": "이 악기에 다른 번호를 지정합니다",
   "inst.delete": "삭제…",

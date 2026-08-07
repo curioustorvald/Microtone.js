@@ -18,6 +18,7 @@ import {
   planDeleteInstrument, metainstrumentParents,
   classifyMetaChildren, uniqueSampleSpansForSet,
 } from "../../doc/cleanup.js";
+import { planDuplicateInstruments } from "../../doc/bankmerge.js";
 import { showModal } from "../widgets/modal.js";
 import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
@@ -328,6 +329,11 @@ export class InstrumentsView {
       this.refreshListLabel(slot);
       this.store.emit("status"); // status bar / other views pick up the name
     });
+    const dupBtn = document.createElement("button");
+    dupBtn.className = "inst-dup-btn";
+    dupBtn.textContent = t("inst.duplicate");
+    dupBtn.title = t("inst.duplicateTitle");
+    dupBtn.addEventListener("click", () => this.duplicateInstrument());
     const renumBtn = document.createElement("button");
     renumBtn.className = "inst-renum-btn";
     renumBtn.textContent = t("inst.renumber");
@@ -338,8 +344,34 @@ export class InstrumentsView {
     delBtn.textContent = t("inst.delete");
     delBtn.title = t("inst.deleteTitle");
     delBtn.addEventListener("click", () => this.deleteInstrument());
-    row.append(idx, input, renumBtn, delBtn);
+    row.append(idx, input, dupBtn, renumBtn, delBtn);
     return row;
+  }
+
+  /** Duplicate the selected instrument (item 114): a derivative copy that
+   *  SHARES its source's samples — one slot, no pool bytes — so tweaking one
+   *  field (fadeout, an envelope, the filter) needs no re-import. No dialog:
+   *  the copy is one undo step away, and the selection moves onto it so the
+   *  tweak can start immediately. A metainstrument copies its layer children
+   *  too, so editing the copy's layers can't change the original's sound. */
+  duplicateInstrument() {
+    const doc = this.store.doc;
+    const slot = this.selected;
+    if (!doc || !doc.usedInstrumentSlots().includes(slot)) return;
+    const plan = planDuplicateInstruments(doc, [slot]);
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(importBankOp(plan));
+
+    // The copy is a top-level instrument even when the source was a layer child
+    // (item 59 keeps children off the list), so the breadcrumb ends here.
+    this.selected = plan.duplicates[0].destSlot;
+    this._childSelected = null;
+    this._childParent = null;
+    this.advanced = false;
+    this.jam.currentInst = this.selected;
+    this.store.emit("instsel");
+    this.store.emit("status");
+    this.refresh();
   }
 
   /** Delete the selected instrument. The dialog adapts to the situation: notes

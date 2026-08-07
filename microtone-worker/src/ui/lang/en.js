@@ -511,6 +511,8 @@ export default {
   "inst.paintTitle": "Draw a new sample waveform by hand and add it as an instrument",
   "inst.newMeta": "New metainstrument…",
   "inst.newMetaTitle": "Layer several of this project's instruments into one metainstrument",
+  "inst.duplicate": "Duplicate",
+  "inst.duplicateTitle": "Copy this instrument into a free slot for tweaking — the copy shares the original's samples, so it costs no sample memory",
   "inst.renumber": "Renumber…",
   "inst.renumberTitle": "Give this instrument a different number",
   "inst.delete": "Delete…",

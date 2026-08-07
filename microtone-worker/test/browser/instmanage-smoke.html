@@ -213,6 +213,36 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const t15 = same(doc.toBytes(), baseline);
   log(`undo of the pattern-remapping renumber is byte-exact: ${t15 ? "ok" : "FAIL"}`);
 
+  // ── item 114: duplicate an instrument (samples shared, not copied) ──
+  iv.selected = from;
+  iv.refresh();
+  const dupBtn = iv.panel.querySelector(".inst-dup-btn");
+  const t18 = !!dupBtn && dupBtn.textContent === "Duplicate";
+  log(`name row has a Duplicate button: ${t18 ? "ok" : "FAIL"}`);
+  const poolBefore = doc.sampleBin.slice();
+  const censusBefore = doc.sampleList().map((e) => `${e.ptr}:${e.len}`).join(",");
+  const srcName = doc.instrumentName(from);
+  const usedBefore = doc.usedInstrumentSlots().length;
+  dupBtn.click();
+  await sleep(60);
+  const dup = iv.selected;
+  const recSame = [...doc.instRecordBytes(dup)].every((b, i) => b === doc.instRecordBytes(from)[i]);
+  const t19 = dup !== from && dup >= 1 && dup <= 0xff && recSame &&
+    doc.usedInstrumentSlots().length === usedBefore + 1 && jam.currentInst === dup;
+  log(`Duplicate copies $${from.toString(16)} → $${dup.toString(16)} and selects it: ${t19 ? "ok" : "FAIL"}`);
+  const t20 = doc.instrumentName(dup) === srcName + " (2)" &&
+    !!iv.listEl.querySelector(".side-row.sel") &&
+    [...iv.listEl.querySelectorAll(".side-row")].some((r) => r.querySelector(".name").textContent === srcName + " (2)");
+  log(`the copy is named "${doc.instrumentName(dup)}" and listed: ${t20 ? "ok" : "FAIL"}`);
+  // The whole point: no sample bytes are spent on a derivative instrument.
+  const t21 = same(doc.sampleBin, poolBefore) &&
+    doc.sampleList().map((e) => `${e.ptr}:${e.len}`).join(",") === censusBefore;
+  log(`sample pool and census untouched: ${t21 ? "ok" : "FAIL"}`);
+  store.undo.undo();
+  iv.refresh();
+  const t22 = same(doc.toBytes(), baseline);
+  log(`undo of the duplicate is byte-exact: ${t22 ? "ok" : "FAIL"}`);
+
   // ── item 74: cleanup unreachable instrument patches ──
   pv.visible = true;
   pv.refresh();

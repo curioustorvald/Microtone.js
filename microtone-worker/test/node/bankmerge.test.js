@@ -12,10 +12,10 @@ import { parseTaud, parseIxmpSection } from "../../src/format/taud-parse.js";
 import { SAMPLEINST_SIZE, SAMPLEBIN_SIZE } from "../../src/format/taud-const.js";
 import { Document } from "../../src/doc/document.js";
 import { UndoStack } from "../../src/doc/undo.js";
-import { importBankOp } from "../../src/doc/ops.js";
+import { importBankOp, setInstFieldOp } from "../../src/doc/ops.js";
 import {
   planImport, bankInventory, splitNameTable, joinNameTable, buildIxmpSection,
-  planCreateMeta,
+  planCreateMeta, planDuplicateInstruments, duplicateInstrumentName,
 } from "../../src/doc/bankmerge.js";
 import {
   TaudInst, buildMetaRecord, makeMetaLayer, META_MAX_LAYERS,
@@ -378,4 +378,124 @@ test("importBankOp undo of a created meta restores the file byte-exactly", () =>
   assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo is byte-exact");
   undo.redo();
   assert.equal(doc.instruments[plan.metaSlot].isMeta, true);
+});
+
+// ── item 114: duplicate an instrument already in the project ──
+
+test("duplicateInstrumentName: ' (N)' suffix, existing trailing numbers kept", () => {
+  const taken = new Set(["Piano", "Piano (2)", "Synth Strings 1"]);
+  assert.equal(duplicateInstrumentName(taken, "Piano"), "Piano (3)");
+  assert.equal(duplicateInstrumentName(taken, "Piano (2)"), "Piano (3)", "the stem, not a second suffix");
+  // "Synth Strings 2" is a DIFFERENT GM instrument — the ordinal is part of the name.
+  assert.equal(duplicateInstrumentName(taken, "Synth Strings 1"), "Synth Strings 1 (2)");
+  assert.equal(duplicateInstrumentName(taken, ""), "", "an unnamed instrument stays unnamed");
+});
+
+test("duplicate an Ixmp instrument: patches copied, samples SHARED", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "4THSYM.taud")));
+  const baseline = Buffer.from(doc.toBytes());
+  const src = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].extraPatches?.length > 0);
+  const censusBefore = doc.sampleList().map((e) => `${e.ptr}:${e.len}:${e.name}`);
+  const poolBefore = Buffer.from(doc.sampleBin);
+
+  const undo = new UndoStack(doc);
+  const plan = planDuplicateInstruments(doc, [src]);
+  assert.ok(!plan.error, plan.error);
+  assert.equal(plan.samples.length, 0, "a duplicate writes no pool bytes");
+  assert.equal(plan.writeSnam, false, "the census is unchanged, so SNam must not be rewritten");
+  undo.apply(importBankOp(plan));
+
+  const copy = plan.duplicates[0].destSlot;
+  assert.ok(copy >= 1 && copy <= 0xff, "copies stay note-addressable");
+  assert.ok(Buffer.from(doc.instRecordBytes(copy)).equals(Buffer.from(doc.instRecordBytes(src))),
+    "the record is copied verbatim — same sample pointers");
+  assert.equal(doc.instruments[copy].extraPatches.length, doc.instruments[src].extraPatches.length);
+  assert.equal(doc.instrumentName(copy), doc.instrumentName(src) + " (2)");
+  assert.ok(Buffer.from(doc.sampleBin).equals(poolBefore), "the sample pool is untouched");
+  assert.deepEqual(doc.sampleList().map((e) => `${e.ptr}:${e.len}:${e.name}`), censusBefore,
+    "same spans, same order, same names");
+
+  // The Ixmp SECTION (not just doc.ixmp) has to carry the copy, or a reload loses it.
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  assert.equal(reloaded.instruments[copy].extraPatches.length, doc.instruments[src].extraPatches.length);
+  assert.equal(reloaded.instrumentName(copy), doc.instrumentName(copy));
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(baseline), "undo is byte-exact");
+});
+
+test("duplicating twice counts up, and the copy is independently editable", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const src = doc.selectableInstrumentSlots()[0];
+  const undo = new UndoStack(doc);
+  const first = planDuplicateInstruments(doc, [src]);
+  undo.apply(importBankOp(first));
+  const second = planDuplicateInstruments(doc, [src]);
+  undo.apply(importBankOp(second));
+  const [a, b] = [first.duplicates[0].destSlot, second.duplicates[0].destSlot];
+  assert.notEqual(a, b);
+  assert.equal(doc.instrumentName(a), doc.instrumentName(src) + " (2)");
+  assert.equal(doc.instrumentName(b), doc.instrumentName(src) + " (3)");
+
+  // The point of the feature: change one field on the copy, original unmoved.
+  const fadeBefore = doc.instruments[src].volumeFadeoutLow;
+  undo.apply(setInstFieldOp(a, "volumeFadeoutLow", (fadeBefore + 7) & 0xff));
+  assert.equal(doc.instruments[src].volumeFadeoutLow, fadeBefore);
+  assert.notEqual(doc.instruments[a].volumeFadeoutLow, fadeBefore);
+});
+
+test("duplicating a metainstrument deep-copies its layer children, links intact", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "M_E1M1.taud")));
+  const baseline = Buffer.from(doc.toBytes());
+  const src = doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  const srcLayers = doc.instruments[src].metaLayers.map((l) => l.instIdx);
+
+  const undo = new UndoStack(doc);
+  const plan = planDuplicateInstruments(doc, [src]);
+  assert.ok(!plan.error, plan.error);
+  undo.apply(importBankOp(plan));
+  const copy = plan.duplicates[0].destSlot;
+  const copyLayers = doc.instruments[copy].metaLayers.map((l) => l.instIdx);
+
+  assert.equal(copyLayers.length, srcLayers.length);
+  assert.ok(copyLayers.every((s) => s >= 0x100), "children land in the hidden $100+ range");
+  assert.ok(copyLayers.every((s) => !srcLayers.includes(s)), "no layer still points at the original's child");
+  // One child per DISTINCT source child: item 113's linking survives the copy.
+  assert.equal(new Set(copyLayers).size, new Set(srcLayers).size);
+  srcLayers.forEach((s, i) => {
+    srcLayers.forEach((t, j) => {
+      assert.equal(copyLayers[i] === copyLayers[j], s === t, "sharing pattern preserved");
+    });
+  });
+  for (const [i, child] of copyLayers.entries()) {
+    assert.ok(Buffer.from(doc.instRecordBytes(child))
+      .equals(Buffer.from(doc.instRecordBytes(srcLayers[i]))), "child record copied verbatim");
+    assert.equal(doc.instrumentName(child), doc.instrumentName(srcLayers[i]), "children keep their name");
+  }
+  assert.ok(!doc.selectableInstrumentSlots().some((s) => copyLayers.includes(s)),
+    "the copies' children stay out of the instrument list");
+  assert.deepEqual(doc.instruments[src].metaLayers.map((l) => l.instIdx), srcLayers, "source untouched");
+
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  assert.deepEqual(reloaded.instruments[copy].metaLayers.map((l) => l.instIdx), copyLayers);
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(baseline), "undo is byte-exact");
+});
+
+test("planDuplicateInstruments: several at once, and the empty/exhausted cases", () => {
+  const doc = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const picks = doc.selectableInstrumentSlots().slice(0, 3);
+  const plan = planDuplicateInstruments(doc, picks);
+  assert.deepEqual(plan.duplicates.map((d) => d.srcSlot), picks, "requested order kept");
+  assert.equal(new Set(plan.duplicates.map((d) => d.destSlot)).size, picks.length, "distinct slots");
+  assert.match(planDuplicateInstruments(doc, []).error ?? "", /No instruments selected/);
+  assert.match(planDuplicateInstruments(doc, [0x3ff]).error ?? "", /No instruments selected/,
+    "an empty slot is not a source");
+
+  // Every note-addressable slot occupied → nowhere for a copy to go.
+  const full = new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+  const rec = full.instRecordBytes(full.selectableInstrumentSlots()[0]);
+  for (let s = 1; s <= 0xff; s++) { full.instruments[s].loadRecord(rec); full.markInstUsed(s); }
+  assert.match(planDuplicateInstruments(full, [1]).error ?? "", /No free instrument slots/);
 });
