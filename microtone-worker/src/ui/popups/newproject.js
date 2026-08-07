@@ -36,6 +36,40 @@ const clampInt = (v, lo, hi, dflt) => {
   return isNaN(n) ? dflt : Math.max(lo, Math.min(hi, n));
 };
 
+// ── tap tempo (unit-tested in test/node/taptempo.test.js) ─────────────────
+// A tap marks a NOTATED beat — beatPri rows of tickRate ticks — and one tick is
+// 2.5/BPM seconds (engine tick.js), so a beat lasts beatPri·tickRate·2.5/BPM
+// seconds. Inverting that is the whole conversion: the tapper is calibrated
+// against the beat lamp beside it, not against the field, so on the defaults
+// (4 rows/beat × speed 6 = the classic 24 ticks) tapping 125 writes 125, while
+// on any other meter/speed the written BPM keeps the beat you tapped.
+export const TAP_MAX = 8;              // taps kept — the averaging window
+export const TAP_RESET_MIN_MS = 2000;  // silence that starts a new count
+export const TAP_RESET_MAX_MS = 6000;
+
+/** How long a tap series survives without a tap: a couple of the user's own
+ *  beats, so a slow tempo isn't cut off mid-count. */
+export function tapResetMs(taps) {
+  if (taps.length < 2) return TAP_RESET_MIN_MS;
+  const mean = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
+  return Math.max(TAP_RESET_MIN_MS, Math.min(TAP_RESET_MAX_MS, mean * 2.5));
+}
+
+/** Tap timestamps (ms, oldest first) → { intervalMs, tapBpm, bpm }, or null
+ *  before there are two taps to measure. `bpm` is the song field, clamped to
+ *  its 25..535 range; `tapBpm` is the tempo actually tapped. */
+export function tapAnalyse(taps, beatPri, tickRate) {
+  if (taps.length < 2) return null;
+  const intervalMs = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
+  if (!(intervalMs > 0)) return null;
+  const raw = (2500 * beatPri * tickRate) / intervalMs;
+  return {
+    intervalMs,
+    tapBpm: 60000 / intervalMs,
+    bpm: Math.max(25, Math.min(535, Math.round(raw))),
+  };
+}
+
 export function showNewProject({ fromBank = null, bankName = null } = {}) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
@@ -60,6 +94,9 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
               <input type="number" data-f="bpm" min="25" max="535" value="125"></label>
             <label class="np-field"><span>${esc(t("np.speed"))}</span>
               <input type="number" data-f="spd" min="1" max="127" value="6"></label>
+            <div class="np-field np-tap-row"><span>${esc(t("np.tapTempo"))}</span>
+              <button type="button" class="np-tap" data-f="tap" title="${esc(t("np.tapTip"))}">${esc(t("np.tapBtn"))}</button>
+              <span class="dim np-tap-read" data-f="tapread">${esc(t("np.tapIdle"))}</span></div>
             <div class="np-field np-blink-row"><span class="np-blink-label">${esc(t("np.beat"))}</span>
               <canvas class="np-blink" width="188" height="16"></canvas></div>
           </fieldset>
@@ -220,6 +257,42 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
       raf = requestAnimationFrame(frame);
     }
 
+    // ── tap tempo: the BPM field follows the beat you tap (the button, or
+    //    Space anywhere the key isn't a character someone means to type). Each
+    //    tap also re-phases the beat lamp above, so the preview blinks along
+    //    with your tapping. A pause starts a new count. ──
+    const taps = [];
+    let tapTimer = 0, tapFlash = 0;
+    function tapReset() {
+      taps.length = 0;
+      clearTimeout(tapTimer); tapTimer = 0;
+      inp("tapread").textContent = t("np.tapIdle");
+    }
+    function tap() {
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (taps.length && now - taps[taps.length - 1] > tapResetMs(taps)) taps.length = 0;
+      taps.push(now);
+      if (taps.length > TAP_MAX) taps.shift();
+      applyTap();
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(tapReset, tapResetMs(taps));
+      // flash the button, and start the preview beat on this tap
+      const btn = inp("tap");
+      btn.classList.add("hit");
+      clearTimeout(tapFlash);
+      tapFlash = setTimeout(() => btn.classList.remove("hit"), 90);
+      blinkTick = 0; accMs = 0; drawBlinken();
+    }
+    /** Write the tapped tempo into the BPM field. Also re-run when the meter or
+     *  the speed changes under a live count — those are what the beat the user
+     *  is tapping is made of. */
+    function applyTap() {
+      const a = tapAnalyse(taps, beatPri(), spdVal());
+      if (!a) { inp("tapread").textContent = t("np.tapWait"); return; }
+      inp("bpm").value = String(a.bpm);
+      inp("tapread").textContent = t("np.tapRead", { bpm: a.tapBpm.toFixed(1), n: taps.length });
+    }
+
     // ── selection helpers ──
     function selectBase(i) {
       baseSel = i;
@@ -264,7 +337,13 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
       el.addEventListener("click", () => selectNote(+el.dataset.note)));
 
     inp("freq").addEventListener("input", () => { freqAuto = false; });
-    for (const f of ["rpb", "tnum"]) inp(f).addEventListener("input", () => { drawDerived(); drawPreview(); });
+    for (const f of ["rpb", "tnum"]) inp(f).addEventListener("input", () => {
+      drawDerived(); drawPreview();
+      if (taps.length >= 2) applyTap(); // keep the tapped beat, new row count
+    });
+    inp("spd").addEventListener("input", () => { if (taps.length >= 2) applyTap(); });
+    inp("bpm").addEventListener("input", tapReset); // typed BPM wins over a count
+    inp("tap").addEventListener("click", (e) => { e.preventDefault(); tap(); });
 
     // arrow-key navigation on the notation list
     inp("notes").addEventListener("keydown", (e) => {
@@ -277,6 +356,8 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
     // ── close / result ──
     const finish = (result) => {
       cancelAnimationFrame(raf);
+      clearTimeout(tapTimer);
+      clearTimeout(tapFlash);
       dlg.close();
       dlg.remove();
       resolve(result);
@@ -304,6 +385,14 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(null); });
     dlg.addEventListener("keydown", (e) => {
       e.stopPropagation(); // don't leak piano/transport keys while modal is up
+      // Space taps the tempo — everywhere except a text field (where it is a
+      // character) and a button (where the browser's own activation runs it,
+      // which is how the Tap button itself, and only it, taps on Space).
+      if (e.code === "Space" && !isTypingTarget(e.target) && e.target.tagName !== "BUTTON") {
+        e.preventDefault();
+        if (!e.repeat) tap();
+        return;
+      }
       // Enter submits, except inside the notation list (arrows drive it) and
       // on the buttons (their own click handler runs).
       if (e.key === "Enter" && e.target.tagName !== "BUTTON" && e.target !== inp("notes")) {
@@ -326,6 +415,14 @@ export function showNewProject({ fromBank = null, bankName = null } = {}) {
     inp("name").select();
     raf = requestAnimationFrame(frame);
   });
+}
+
+/** True where a space is a character the user meant to type (the metadata
+ *  fields). A number input takes no spaces, so Space there taps instead. */
+function isTypingTarget(el) {
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  return el.tagName === "INPUT" && el.type !== "number";
 }
 
 function esc(s) {

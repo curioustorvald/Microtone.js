@@ -4,6 +4,22 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-07
+
+- **A chorded piano out of one piano.** The New metainstrument picker now has a **count** on every row: leave it at ×1 for an ordinary layer, or raise it to stack the same instrument several times. A count above 1 makes one copy and points that many **linked** layers at it, so the stack stays a single instrument — retune or refilter the piano and all three of its voices follow. Picking three different instruments works exactly as before.
+- **The Layers tab is a real editor at last.** It could only ever nudge mix and detune; now every part of the layer table is editable and undoable.
+  - **Add layers…** brings in more instruments, **Duplicate** makes another voice of a layer's own sub-instrument, **▲ ▼** reorder, and a layer can be removed (all but the last — a metainstrument with no layers is not one).
+  - The **pitch and velocity bounds** that decide when a layer sounds are editable here, which is what the new-metainstrument dialog has always told you to come and do.
+  - **▸** beside row 0 marks the foreground layer: the first layer covering a trigger plays on the channel itself and the rest spawn background voices, so the order is priority.
+  - **Chord…** builds a whole chord or unison spread off one layer in a single action, with the same just intervals and presets as the chord maker — the preview names each voice in the song's own notation before you commit.
+  - **Detune reads in cents.** The layer table used to want raw 4096-TET integers, where a major third is 1365; it now takes cents, with ◂ ▸ buttons that step one whole degree of the song's notation (so a 31-TET song steps by 31-TET degrees, not by semitones). The raw value and the note the layer sounds against C4 are shown beside it.
+  - **Linked layers are labelled.** Layers sharing one sub-instrument are badged *linked ×n*, so it is clear that editing it moves all of them; **Unlink** gives a single layer its own copy when one voice needs to differ.
+  - **Both dialogs state the cost.** The picker and the chord stack show how much of the 25-layer table is spent and how many voices a note will cost, so a big stack is a decision rather than a surprise.
+- **Tap the tempo in.** The New Project dialog's *Tempo* section gains a **Tap** button: tap the beat you hear in your head and the BPM follows from the second tap on, tightening as you keep going. Every tap also restarts the beat lamp below, so you can watch the preview blink along with you.
+  - **Space taps too.** The Tap button takes the Space bar once it has focus, and so does Space anywhere else in the dialog — except the name, composer and copyright fields, where a space is still a space you are typing.
+  - **What you tap is a beat, not a row.** The tapper reads the *Rows/beat* and *Speed* settings and writes whatever BPM makes a beat last as long as you tapped, so the lamp keeps time with you whatever the meter is; on the usual 4 rows/beat at speed 6 that is the tapped tempo unchanged. Change rows/beat or speed while a count is running and the BPM re-derives from the same taps.
+  - **The count clears itself** after a pause of a couple of your own beats, so the next tap starts fresh instead of averaging in the tempo you tapped a minute ago. Typing a BPM by hand ends the count as well.
+
 ## 2026-08-05
 
 - **Surround panning.** A song can now declare a **panning model** in the Project view: *Stereo* as before, *Planar* to pan all the way round the listener, or *Spatial* to place sources anywhere on the sphere. The model is a property of the song — it decides what the pan commands mean.

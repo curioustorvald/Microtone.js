@@ -18,6 +18,9 @@ import {
   patchChannelPtrs, makeInstPatch, writePatchesBlob, CHAN_MODE_DISCRETE,
 } from "../engine/inst.js";
 import { sampleSpans } from "./document.js";
+import {
+  metaLayers, metaRecordOf, defaultLayer, linkCount, repointLayer,
+} from "./metaedit.js";
 
 const sampleKey = (ptr, len) => `${ptr}:${len}`;
 
@@ -823,17 +826,86 @@ export function planReplaceSample(destDoc, sample, { pcm, pcmR = null, rate, nam
   };
 }
 
+// ── metainstrument construction (items 72 + 113) ──
+//
+// A layer child lives at $100+, where nothing but a layer table can reach it,
+// and shares its source's sample pointers — so a layer costs one slot out of
+// 768 and zero pool bytes. `picks` throughout are either bare slot numbers
+// (repeats allowed) or {slot, count} pairs; N of the same source becomes ONE
+// child copy carrying N LINKED layers, which is what a unison/chord stack wants
+// (retune the piano once and all its voices follow). Splitting one layer off its
+// shared child is planUnlinkMetaLayer.
+
+/** Collapse `picks` to Map<slot, layerCount>, dropping anything unused. */
+function normalisePicks(picks, used) {
+  const counts = new Map();
+  for (const p of picks ?? []) {
+    const slot = typeof p === "number" ? p : p?.slot;
+    const n = typeof p === "number" ? 1 : Math.round(Number(p?.count ?? 1)) || 0;
+    if (!Number.isInteger(slot) || !used.has(slot) || n <= 0) continue;
+    counts.set(slot, (counts.get(slot) ?? 0) + n);
+  }
+  return counts;
+}
+
+/** Lowest free sub-instrument slot at $100+; adds it to `taken`. */
+function allocChildSlot(taken) {
+  for (let c = 0x100; c <= 0x3ff; c++) {
+    if (!taken.has(c)) { taken.add(c); return c; }
+  }
+  return -1;
+}
+
+/** A plan entry copying `src`'s record + Ixmp blob into layer child `dest`. */
+function childCopyEntry(doc, src, dest) {
+  const blob = [...doc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === src);
+  return {
+    srcSlot: src,
+    destSlot: dest,
+    topLevel: false,
+    record: doc.instRecordBytes(src),
+    ixmpBlob: blob ? blob.blob : null,
+    ixmpCount: blob ? blob.count : 0,
+  };
+}
+
+/** INam payload with `entries` ([[slot, text], …]) spliced in by slot. */
+function inamPayloadWith(doc, entries) {
+  const parts = splitNameTable(sectionPayload(doc, "INam"));
+  const enc = new TextEncoder();
+  for (const [slot, text] of entries) {
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = enc.encode(text);
+  }
+  return joinNameTable(parts);
+}
+
+/** The planImport-shaped envelope every meta plan here returns. */
+function metaPlan(insts, inamPayload, extra) {
+  return {
+    insts,
+    samples: [],
+    inamPayload,
+    snamNames: new Map(),
+    writeSnam: false, // copies reuse existing (ptr:len) spans — census unchanged
+    slotMap: new Map(insts.map((it) => [it.srcSlot, it.destSlot])),
+    newSampleBytes: 0,
+    dedupedSamples: 0,
+    ...extra,
+  };
+}
+
 /**
  * Plan a new metainstrument built from instruments already in this project
- * (item 72). Each pick is COPIED into a fresh sub-instrument slot ($100+, which
- * pattern cells can't address) and the copies become the layers, so the picked
- * originals stay in $01–$FF — selectable, jammable and still valid in every
- * pattern cell that references them. A copy shares its source's sample pointers,
- * so no pool bytes are spent and the census (hence SNam) is unchanged.
+ * (item 72). Each picked instrument is COPIED into a fresh sub-instrument slot
+ * ($100+, which pattern cells can't address) and the copies become the layers,
+ * so the picked originals stay in $01–$FF — selectable, jammable and still valid
+ * in every pattern cell that references them.
  *
- * `picks` are slots in this doc; a pick must not be a metainstrument (layers
- * resolve through triggerNote, which never re-enters the meta branch — see
- * buildMetaRecord). `name` is the escaped INam text for the new meta.
+ * A pick must not be a metainstrument (layers resolve through triggerNote, which
+ * never re-enters the meta branch — see buildMetaRecord). Picking the same
+ * instrument N times gives N linked layers (item 113): one copy, N voices.
+ * `name` is the escaped INam text for the new meta.
  * Returns {error} or a planImport-shaped plan (apply with importBankOp).
  */
 export function planCreateMeta(destDoc, picks, name = "") {
@@ -841,13 +913,14 @@ export function planCreateMeta(destDoc, picks, name = "") {
     return { error: "This project has no sample+instrument image." };
   }
   const used = new Set(destDoc.usedInstrumentSlots());
-  const slots = [...new Set(picks)].filter((s) => used.has(s));
-  if (slots.length === 0) return { error: "No instruments selected." };
-  if (slots.some((s) => destDoc.instruments[s].isMeta)) {
+  const counts = normalisePicks(picks, used);
+  if (counts.size === 0) return { error: "No instruments selected." };
+  if ([...counts.keys()].some((s) => destDoc.instruments[s].isMeta)) {
     return { error: "A metainstrument can't be layered inside another metainstrument." };
   }
-  if (slots.length > META_MAX_LAYERS) {
-    return { error: `A metainstrument holds at most ${META_MAX_LAYERS} layers (${slots.length} selected).` };
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  if (total > META_MAX_LAYERS) {
+    return { error: `A metainstrument holds at most ${META_MAX_LAYERS} layers (${total} selected).` };
   }
 
   // The meta itself must stay note-addressable ($01–$FF); its layer copies go
@@ -862,23 +935,13 @@ export function planCreateMeta(destDoc, picks, name = "") {
 
   const insts = [];
   const layers = [];
-  let child = 0x100;
-  for (const src of slots) {
-    while (child <= 0x3ff && taken.has(child)) child++;
-    if (child > 0x3ff) return { error: "No free sub-instrument slots left in $100–$3FF." };
-    taken.add(child);
-    const blob = [...destDoc.ixmp].reverse().find((e) => (e.instId & 0x3ff) === src);
-    insts.push({
-      srcSlot: src,
-      destSlot: child,
-      topLevel: false,
-      record: destDoc.instRecordBytes(src),
-      ixmpBlob: blob ? blob.blob : null,
-      ixmpCount: blob ? blob.count : 0,
-    });
-    // Full-rect layer at unity mix, no detune: every layer sounds on every
-    // trigger until the user narrows it in the Meta tab.
-    layers.push(makeMetaLayer(child, 159, 0, 0x0000, 0xffff, 0, 63));
+  for (const [src, n] of counts) {
+    const child = allocChildSlot(taken);
+    if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
+    insts.push(childCopyEntry(destDoc, src, child));
+    // Full-rect layers at unity mix, no detune: every layer sounds on every
+    // trigger until the user narrows it on the Layers tab.
+    for (let k = 0; k < n; k++) layers.push(makeMetaLayer(child, 159, 0, 0x0000, 0xffff, 0, 63));
   }
   insts.push({
     srcSlot: -1,
@@ -891,29 +954,108 @@ export function planCreateMeta(destDoc, picks, name = "") {
 
   // INam: the meta's name by slot; each copy inherits its source's name so the
   // layer table reads meaningfully.
-  const parts = splitNameTable(sectionPayload(destDoc, "INam"));
-  const enc = new TextEncoder();
-  const put = (slot, text) => {
-    while (parts.length <= slot) parts.push(new Uint8Array(0));
-    parts[slot] = enc.encode(text);
-  };
-  for (const it of insts) {
-    if (it.srcSlot >= 0) put(it.destSlot, destDoc.instrumentName(it.srcSlot));
-  }
-  put(metaSlot, name);
+  const names = insts.filter((it) => it.srcSlot >= 0)
+    .map((it) => [it.destSlot, destDoc.instrumentName(it.srcSlot)]);
+  names.push([metaSlot, name]);
 
-  return {
-    insts,
-    samples: [],
-    inamPayload: joinNameTable(parts),
-    snamNames: new Map(),
-    writeSnam: false, // copies reuse existing (ptr:len) spans — census unchanged
-    slotMap: new Map(insts.map((it) => [it.srcSlot, it.destSlot])),
-    newSampleBytes: 0,
-    dedupedSamples: 0,
+  return metaPlan(insts, inamPayloadWith(destDoc, names), {
     metaSlot,
     childSlots: insts.filter((it) => it.srcSlot >= 0).map((it) => it.destSlot),
-  };
+  });
+}
+
+/**
+ * Append layers to an EXISTING metainstrument (item 113) — the Layers tab's
+ * "Add layers…". Same copy-into-a-child rule as planCreateMeta; the meta's
+ * current table is kept and the new layers land after it, so the foreground
+ * layer (record order 0) doesn't change under the user.
+ */
+export function planAddMetaLayers(destDoc, metaSlot, picks) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const meta = destDoc.instruments[metaSlot & 0x3ff];
+  if (!meta?.isMeta) return { error: "That instrument is not a metainstrument." };
+  const used = new Set(destDoc.usedInstrumentSlots());
+  const counts = normalisePicks(picks, used);
+  if (counts.size === 0) return { error: "No instruments selected." };
+  if ([...counts.keys()].some((s) => destDoc.instruments[s].isMeta)) {
+    return { error: "A metainstrument can't be layered inside another metainstrument." };
+  }
+  const existing = metaLayers(meta);
+  const total = existing.length + [...counts.values()].reduce((a, b) => a + b, 0);
+  if (total > META_MAX_LAYERS) {
+    return { error: `A metainstrument holds at most ${META_MAX_LAYERS} layers (${total} would result).` };
+  }
+
+  const taken = new Set(used);
+  const insts = [];
+  const added = [];
+  for (const [src, n] of counts) {
+    const child = allocChildSlot(taken);
+    if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
+    insts.push(childCopyEntry(destDoc, src, child));
+    for (let k = 0; k < n; k++) added.push(defaultLayer(child));
+  }
+  insts.push({
+    srcSlot: -1,
+    destSlot: metaSlot & 0x3ff,
+    topLevel: true,
+    record: metaRecordOf(meta, [...existing, ...added]),
+    ixmpBlob: null,
+    ixmpCount: 0,
+  });
+
+  const names = insts.filter((it) => it.srcSlot >= 0)
+    .map((it) => [it.destSlot, destDoc.instrumentName(it.srcSlot)]);
+
+  return metaPlan(insts, inamPayloadWith(destDoc, names), {
+    metaSlot: metaSlot & 0x3ff,
+    childSlots: insts.filter((it) => it.srcSlot >= 0).map((it) => it.destSlot),
+    addedLayers: added.length,
+  });
+}
+
+/**
+ * Split layer `layerIdx` off the sub-instrument it SHARES with its siblings
+ * (item 113): the child is copied into a fresh $100+ slot and only that one
+ * layer is repointed, so editing it stops moving the other voices of the stack.
+ * A layer that already owns its child outright has nothing to unlink.
+ */
+export function planUnlinkMetaLayer(destDoc, metaSlot, layerIdx) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const meta = destDoc.instruments[metaSlot & 0x3ff];
+  if (!meta?.isMeta) return { error: "That instrument is not a metainstrument." };
+  const layers = metaLayers(meta);
+  if (layerIdx < 0 || layerIdx >= layers.length) return { error: "No such layer." };
+  if (linkCount(layers, layerIdx) < 2) {
+    return { error: "This layer already has its own sub-instrument." };
+  }
+
+  const src = layers[layerIdx].instIdx & 0x3ff;
+  const taken = new Set(destDoc.usedInstrumentSlots());
+  const child = allocChildSlot(taken);
+  if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
+
+  const insts = [
+    childCopyEntry(destDoc, src, child),
+    {
+      srcSlot: -1,
+      destSlot: metaSlot & 0x3ff,
+      topLevel: true,
+      record: metaRecordOf(meta, repointLayer(layers, layerIdx, child)),
+      ixmpBlob: null,
+      ixmpCount: 0,
+    },
+  ];
+
+  return metaPlan(insts, inamPayloadWith(destDoc, [[child, destDoc.instrumentName(src)]]), {
+    metaSlot: metaSlot & 0x3ff,
+    childSlots: [child],
+    unlinkedFrom: src,
+  });
 }
 
 /** Everything applyPlan touches, captured for the invertible op. */

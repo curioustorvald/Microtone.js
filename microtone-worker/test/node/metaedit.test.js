@@ -5,8 +5,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { TaudInst } from "../../src/engine/inst.js";
-import { setMetaBytesOp } from "../../src/doc/ops.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { TaudInst, META_MAX_LAYERS } from "../../src/engine/inst.js";
+import { setMetaBytesOp, setMetaRecordOp, importBankOp } from "../../src/doc/ops.js";
+import {
+  metaLayers, metaRecordOf, defaultLayer, linkCount,
+  duplicateLayer, removeLayer, moveLayer, patchLayer, appendLayers, repointLayer,
+  stackLayer,
+} from "../../src/doc/metaedit.js";
+import {
+  planCreateMeta, planAddMetaLayers, planUnlinkMetaLayer,
+} from "../../src/doc/bankmerge.js";
+import { parseTaud } from "../../src/format/taud-parse.js";
+import { Document } from "../../src/doc/document.js";
+import { UndoStack } from "../../src/doc/undo.js";
+
+const corpusDir = fileURLToPath(new URL("../corpus/", import.meta.url));
+const loadWhen = () => new Document(parseTaud(readFileSync(corpusDir + "WHEN.taud")));
+
+/** Two ordinary (non-meta) instruments to layer. */
+const twoPicks = (doc) =>
+  doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
+
+const metaOf = (doc) => doc.selectableInstrumentSlots().find((s) => doc.instruments[s].isMeta);
 
 /** Build a 256-byte Metainstrument record with `layers` = [{inst, mix, detune}]. */
 function metaRecord(layers) {
@@ -79,4 +102,228 @@ test("setMetaBytesOp: edit mix + detune, invertible, targets metaRaw", () => {
   assert.equal(doc.instruments[0].metaLayers[1].mixOctet, 100, "inverse restores mix");
   // (detune stayed at −341: the inverse only touched the mix byte)
   assert.equal(doc.instruments[0].metaLayers[1].detune, -341);
+});
+
+// ── item 113: layer-table structure editing ──
+
+test("metaedit: duplicate is LINKED and lands next to its source", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([
+    { inst: 0x100, mix: 159, detune: 0 },
+    { inst: 0x101, mix: 120, detune: 7 },
+  ]));
+  const layers = metaLayers(inst);
+  assert.ok(layers.every((l) => l.rawOffset === undefined), "rawOffset is dropped");
+
+  const dup = duplicateLayer(layers, 0, 1365);
+  assert.equal(dup.length, 3);
+  assert.equal(dup[1].instIdx, 0x100, "the copy shares the source's sub-instrument");
+  assert.equal(dup[1].detune, 1365, "…at the requested offset");
+  assert.equal(dup[1].mixOctet, 159, "…and inherits everything else");
+  assert.equal(dup[2].instIdx, 0x101, "the rest shifts down");
+  assert.equal(linkCount(dup, 0), 2);
+  assert.equal(linkCount(dup, 2), 1);
+});
+
+test("metaedit: the last layer can't be removed; reorder + patch behave", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([
+    { inst: 0x100, mix: 159, detune: 0 },
+    { inst: 0x101, mix: 120, detune: 0 },
+  ]));
+  const layers = metaLayers(inst);
+
+  const one = removeLayer(layers, 0);
+  assert.equal(one.length, 1);
+  assert.equal(removeLayer(one, 0).length, 1, "a 0-layer record is never produced");
+
+  const moved = moveLayer(layers, 1, -1);
+  assert.deepEqual(moved.map((l) => l.instIdx), [0x101, 0x100], "record order is priority");
+  assert.equal(moveLayer(layers, 0, -1), layers, "out-of-range move is a no-op");
+
+  const tuned = patchLayer(layers, 1, { detune: -341, volStart: 32 });
+  assert.equal(tuned[1].detune, -341);
+  assert.equal(tuned[1].volStart, 32);
+  assert.equal(tuned[0].detune, 0, "siblings untouched");
+});
+
+test("metaedit: the layer table caps at META_MAX_LAYERS", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([{ inst: 0x100, mix: 159, detune: 0 }]));
+  let layers = metaLayers(inst);
+  for (let i = 0; i < META_MAX_LAYERS + 5; i++) layers = duplicateLayer(layers, 0);
+  assert.equal(layers.length, META_MAX_LAYERS, "duplicate stops at the cap");
+  assert.equal(appendLayers(layers, [defaultLayer(0x200)]).length, META_MAX_LAYERS);
+
+  // …and the packed record round-trips exactly that many.
+  const round = new TaudInst(0);
+  round.loadRecord(metaRecordOf(inst, layers));
+  assert.equal(round.metaLayers.length, META_MAX_LAYERS);
+});
+
+test("planCreateMeta: repeated picks make ONE child copy carrying N layers", () => {
+  const doc = loadWhen();
+  const [a] = twoPicks(doc);
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(planCreateMeta(doc, [a, a, a], "Chorded")));
+
+  const meta = metaOf(doc);
+  const layers = doc.instruments[meta].metaLayers;
+  assert.equal(layers.length, 3, "three layers");
+  const kids = new Set(layers.map((l) => l.instIdx & 0x3ff));
+  assert.equal(kids.size, 1, "…over a single sub-instrument copy");
+  assert.ok([...kids].every((k) => k >= 0x100), "the copy lives at $100+");
+  assert.ok(doc.usedInstrumentSlots().includes(a), "the original stays selectable");
+
+  // The {slot, count} form is the same thing.
+  const doc2 = loadWhen();
+  new UndoStack(doc2).apply(importBankOp(planCreateMeta(doc2, [{ slot: a, count: 3 }], "Chorded")));
+  assert.equal(doc2.instruments[metaOf(doc2)].metaLayers.length, 3);
+});
+
+test("planCreateMeta: the layer cap counts duplicates", () => {
+  const doc = loadWhen();
+  const [a] = twoPicks(doc);
+  const plan = planCreateMeta(doc, [{ slot: a, count: META_MAX_LAYERS + 1 }], "Too big");
+  assert.match(plan.error ?? "", /at most/);
+});
+
+test("setMetaRecordOp: duplicate a layer, undo byte-exact, survives a save/reload", () => {
+  const doc = loadWhen();
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(planCreateMeta(doc, twoPicks(doc), "Stack")));
+  const meta = metaOf(doc);
+  const baseline = doc.toBytes();
+
+  const inst = doc.instruments[meta];
+  const grown = duplicateLayer(metaLayers(inst), 0, 1365);
+  undo.apply(setMetaRecordOp(meta, metaRecordOf(inst, grown)));
+  assert.equal(doc.instruments[meta].metaLayers.length, 3);
+  assert.equal(doc.instruments[meta].metaLayers[1].detune, 1365);
+
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  const rl = reloaded.instruments[meta].metaLayers;
+  assert.equal(rl.length, 3, "the third layer survives the round trip");
+  assert.equal(rl[1].detune, 1365);
+  assert.equal(rl[1].instIdx, rl[0].instIdx, "still linked to the same child");
+
+  undo.undo();
+  assert.deepEqual(doc.toBytes(), baseline, "undo is byte-exact");
+});
+
+test("setMetaRecordOp: flags (strict / percussion) survive a rebuild", () => {
+  const inst = new TaudInst(0);
+  const rec = metaRecord([{ inst: 0x100, mix: 159, detune: 0 }]);
+  rec[0] = 0x03; // strict + percussion
+  inst.loadRecord(rec);
+  assert.equal(inst.metaStrict, true);
+
+  const rebuilt = new TaudInst(0);
+  rebuilt.loadRecord(metaRecordOf(inst, duplicateLayer(metaLayers(inst), 0)));
+  assert.equal(rebuilt.metaStrict, true, "strict bit kept");
+  assert.equal(rebuilt.metaRaw[0] & 0x02, 0x02, "percussion bit kept");
+});
+
+test("planAddMetaLayers: appends after the existing table, foreground unchanged", () => {
+  const doc = loadWhen();
+  const [a, b] = twoPicks(doc);
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(planCreateMeta(doc, [a], "Stack")));
+  const meta = metaOf(doc);
+  const before = doc.instruments[meta].metaLayers[0].instIdx;
+
+  undo.apply(importBankOp(planAddMetaLayers(doc, meta, [{ slot: b, count: 2 }])));
+  const layers = doc.instruments[meta].metaLayers;
+  assert.equal(layers.length, 3);
+  assert.equal(layers[0].instIdx, before, "layer 0 (the foreground) is untouched");
+  assert.equal(layers[1].instIdx, layers[2].instIdx, "the two new layers are linked");
+  assert.notEqual(layers[1].instIdx, before);
+  assert.equal(doc.instrumentName(layers[1].instIdx & 0x3ff), doc.instrumentName(b),
+    "the copy inherits its source's name");
+
+  const plan = planAddMetaLayers(doc, meta, [{ slot: a, count: META_MAX_LAYERS }]);
+  assert.match(plan.error ?? "", /at most/, "the cap counts what is already there");
+});
+
+test("planUnlinkMetaLayer: one layer gets its own copy, its siblings keep theirs", () => {
+  const doc = loadWhen();
+  const [a] = twoPicks(doc);
+  const undo = new UndoStack(doc);
+  undo.apply(importBankOp(planCreateMeta(doc, [{ slot: a, count: 3 }], "Chorded")));
+  const meta = metaOf(doc);
+  const shared = doc.instruments[meta].metaLayers[0].instIdx;
+  const baseline = doc.toBytes();
+
+  undo.apply(importBankOp(planUnlinkMetaLayer(doc, meta, 1)));
+  const layers = doc.instruments[meta].metaLayers;
+  assert.equal(layers.length, 3, "the table keeps its shape");
+  assert.equal(layers[0].instIdx, shared);
+  assert.equal(layers[2].instIdx, shared, "the other two stay linked");
+  assert.notEqual(layers[1].instIdx, shared, "layer 1 moved to its own slot");
+  assert.ok((layers[1].instIdx & 0x3ff) >= 0x100, "…at $100+");
+  assert.deepEqual(doc.instRecordBytes(layers[1].instIdx & 0x3ff), doc.instRecordBytes(shared),
+    "the clone starts out identical");
+  assert.match(planUnlinkMetaLayer(doc, meta, 1).error ?? "", /already/,
+    "a layer that owns its child outright has nothing to unlink");
+
+  const reloaded = new Document(parseTaud(doc.toBytes()));
+  assert.equal(reloaded.instruments[meta].metaLayers[1].instIdx, layers[1].instIdx);
+
+  undo.undo();
+  assert.deepEqual(doc.toBytes(), baseline, "undo is byte-exact");
+});
+
+test("repointLayer: onlyThis vs every layer on the same child", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([
+    { inst: 0x100, mix: 159, detune: 0 },
+    { inst: 0x100, mix: 159, detune: 5 },
+    { inst: 0x101, mix: 159, detune: 0 },
+  ]));
+  const layers = metaLayers(inst);
+  assert.deepEqual(repointLayer(layers, 0, 0x200).map((l) => l.instIdx), [0x200, 0x100, 0x101]);
+  assert.deepEqual(repointLayer(layers, 0, 0x200, false).map((l) => l.instIdx),
+    [0x200, 0x200, 0x101]);
+});
+
+// ── item 113: the chord stack's pure half (popups/metachord.js) ──
+
+test("chordOffsets: normalises around the voice nearest unison", async () => {
+  const { chordOffsets } = await import("../../src/ui/popups/metachord.js");
+  const { presetForNotation } = await import("../../src/ui/pitchtables.js");
+  const p12 = presetForNotation(120); // 12-TET
+
+  // Just intonation, like the chord maker: 5/4 and 3/2 off the root, which is
+  // the layer you already have and so is NOT in the list.
+  const major = chordOffsets("major", p12);
+  assert.equal(major.length, 2, "a triad adds two voices to the existing layer");
+  assert.ok(Math.abs(major[0] - Math.round(4096 * Math.log2(5 / 4))) <= 1);
+  assert.ok(Math.abs(major[1] - Math.round(4096 * Math.log2(3 / 2))) <= 1);
+
+  // "Octaves" is the case that proves the rule: its first voice is an octave
+  // DOWN, so a naive "first voice is the root" would transpose the whole stack.
+  const oct = chordOffsets("octaves", p12);
+  assert.deepEqual(oct.sort((a, b) => a - b), [-4096, 4096],
+    "one octave either side of the layer, which stays put");
+
+  // The chorus preset is a pair of a few cents either way.
+  const det = chordOffsets("detune", p12).sort((a, b) => a - b);
+  assert.equal(det.length, 2);
+  assert.ok(det[0] < 0 && det[1] > 0 && Math.abs(det[1]) < 60, "a few cents, not an interval");
+});
+
+test("stackLayer: linked copies at the given detunes, capped", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([
+    { inst: 0x100, mix: 140, detune: 20 },
+    { inst: 0x101, mix: 159, detune: 0 },
+  ]));
+  const layers = metaLayers(inst);
+  const out = stackLayer(layers, 0, [1319, 2396]);
+  assert.deepEqual(out.map((l) => l.instIdx), [0x100, 0x100, 0x100, 0x101], "inserted after the source");
+  assert.deepEqual(out.map((l) => l.detune), [20, 1319, 2396, 0]);
+  assert.ok(out.slice(0, 3).every((l) => l.mixOctet === 140), "copies inherit the source's mix");
+
+  const flood = stackLayer(layers, 0, new Array(50).fill(100));
+  assert.equal(flood.length, META_MAX_LAYERS, "the cap still holds");
 });

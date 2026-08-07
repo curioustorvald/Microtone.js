@@ -409,6 +409,34 @@ export function setMetaBytesOp(slot, pairs, gestureId = null) {
   };
 }
 
+/**
+ * Replace a Metainstrument's WHOLE 256-byte record (doc/metaedit.js builds it).
+ * setMetaBytesOp can only patch bytes in place, which is fine for mix/detune but
+ * not for add / duplicate / remove / reorder — those change the layer COUNT in
+ * byte 1 and shift every 10-byte entry after the edit.
+ *
+ * The inverse captures instRecordBytes() rather than metaRaw, so it still works
+ * on a slot that stopped being a meta (a 0-layer record decodes as neither meta
+ * nor sample — metaedit.removeLayer refuses to create one, and this keeps the op
+ * honest if some other caller ever does).
+ */
+export function setMetaRecordOp(slot, record, gestureId = null) {
+  return {
+    type: "setMetaRecord",
+    slot, record, gestureId,
+    coalesceKey: `metarecord:${slot}`,
+    apply(doc) {
+      const s = slot & 0x3ff;
+      const prev = doc.instRecordBytes(s);
+      doc.instruments[s].loadRecord(record);
+      doc.markInstUsed(s);
+      doc.dirty = true;
+      return setMetaRecordOp(slot, prev, gestureId);
+    },
+    dirty: () => [{ kind: "inst", slot }],
+  };
+}
+
 /** One envelope node on an instrument envelope array (volEnvelopes /
  *  panEnvelopes / pfEnvelopes / pf2Envelopes): sets value and/or offset
  *  (ThreeFiveMiniUfloat LUT index). */

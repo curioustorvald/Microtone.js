@@ -11,8 +11,15 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
 (async () => {
  try {
   const app = document.getElementById("app");
-  await new Promise((r) => app.addEventListener("load", r));
-  const win = app.contentWindow;
+  // Poll rather than await the "load" event: this script is a module (deferred),
+  // so on a warm cache the iframe can finish loading BEFORE the listener is
+  // attached and the event never arrives.
+  const win = await new Promise((resolve) => {
+    const poll = setInterval(() => {
+      const w = app.contentWindow;
+      if (w && w.document?.readyState === "complete") { clearInterval(poll); resolve(w); }
+    }, 50);
+  });
   for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
   const M = win.__microtone;
   if (!M) { log("no __microtone"); return; }
@@ -42,19 +49,18 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const t1 = !!metaDlg && metaDlg.open;
   log(`New metainstrument… opens the picker: ${t1 ? "ok" : "FAIL"}`);
 
-  const boxes = [...metaDlg.querySelectorAll(".import-row input[type=checkbox]")];
+  const pickRows = [...metaDlg.querySelectorAll(".meta-pick-row")];
   // Metainstruments must not be offered — layers resolve through triggerNote.
-  const t2 = boxes.length === doc.selectableInstrumentSlots()
+  const t2 = pickRows.length === doc.selectableInstrumentSlots()
     .filter((s) => !doc.instruments[s].isMeta).length;
-  log(`picker lists only non-meta instruments (${boxes.length}): ${t2 ? "ok" : "FAIL"}`);
+  log(`picker lists only non-meta instruments (${pickRows.length}): ${t2 ? "ok" : "FAIL"}`);
   const okBtn = btnIn(metaDlg, "Create");
   const t3 = okBtn.disabled === true; // nothing picked yet
   log(`Create disabled with an empty selection: ${t3 ? "ok" : "FAIL"}`);
 
-  for (const s of picks) {
-    const box = boxes.find((b) => Number(b.dataset.slot) === s);
-    box.checked = true; fire(box, "change");
-  }
+  const rowFor = (dlg, s) => [...dlg.querySelectorAll(".meta-pick-row")]
+    .find((r) => Number(r.dataset.slot) === s);
+  for (const s of picks) rowFor(metaDlg, s).querySelector(".meta-pick-hit").click();
   const nameIn = metaDlg.querySelector(".import-filter");
   nameIn.value = "Stack";
   okBtn.click();
@@ -75,9 +81,9 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
 
   // ── item 71 inside the new meta: Edit… reaches a copy's base editor ──
   iv.refresh();
-  const layerEdit = [...iv.panel.querySelectorAll(".advCell button")];
-  const t7 = iv.tab === "meta" && layerEdit.length === picks.length &&
-    layerEdit[0].textContent === "Edit…";
+  const layerEdit = [...iv.panel.querySelectorAll(".advCell button")]
+    .filter((b) => b.textContent === "Edit…");
+  const t7 = iv.tab === "meta" && layerEdit.length === picks.length;
   log(`Layers tab offers Edit… per layer: ${t7 ? "ok" : "FAIL"}`);
   layerEdit[0].click();
   const t8 = iv.selected === meta.metaLayers[0].instIdx && iv.advanced === false &&
@@ -89,6 +95,57 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   iv.refresh();
   const t9 = same(doc.toBytes(), baseline);
   log(`undo of the created meta is byte-exact: ${t9 ? "ok" : "FAIL"}`);
+
+  // ── item 113: the same instrument N times = a unison stack over ONE copy ──
+  [...iv.listEl.querySelectorAll(".side-toolbar-inst button")]
+    .find((b) => b.textContent === "New metainstrument…").click();
+  for (let i = 0; i < 100 && !dialogs().some((d) => /New metainstrument/.test(d.textContent)); i++) await sleep(20);
+  const stackDlg = lastDialog();
+  const stackRow = [...stackDlg.querySelectorAll(".meta-pick-row")]
+    .find((r) => Number(r.dataset.slot) === picks[0]);
+  const plus = [...stackRow.querySelectorAll(".meta-step")].find((b) => b.textContent === "+");
+  plus.click(); plus.click(); plus.click();
+  const s1 = stackRow.querySelector(".meta-count").textContent === "×3";
+  log(`the picker counts to 3: ${s1 ? "ok" : "FAIL"}`);
+  const tallyTxt = stackDlg.querySelector(".import-tally").textContent;
+  const s2 = /3 of 25 layers/.test(tallyTxt) && /3 voices per note/.test(tallyTxt);
+  log(`tally states the cap and the voice cost ("${tallyTxt}"): ${s2 ? "ok" : "FAIL"}`);
+  stackDlg.querySelector(".import-filter").value = "Chorded";
+  btnIn(stackDlg, "Create").click();
+  await sleep(80);
+
+  const stackSlot = iv.selected;
+  const stack = doc.instruments[stackSlot];
+  const kids = new Set(stack.metaLayers.map((l) => l.instIdx & 0x3ff));
+  const s3 = stack.isMeta && stack.metaLayers.length === 3 && kids.size === 1 &&
+    [...kids][0] >= 0x100 && doc.selectableInstrumentSlots().includes(picks[0]);
+  log(`×3 builds 3 layers over 1 sub-instrument copy: ${s3 ? "ok" : "FAIL"}`);
+
+  // The chord stack detunes them without touching that shared copy.
+  iv.refresh();
+  const chordBtn = [...iv.panel.querySelectorAll("tbody tr")[0].querySelectorAll(".meta-act")]
+    .find((b) => b.textContent === "Chord…");
+  chordBtn.click();
+  for (let i = 0; i < 100 && !dialogs().some((d) => /Chord stack/.test(d.textContent)); i++) await sleep(20);
+  const chordDlg = lastDialog();
+  const sel2 = chordDlg.querySelector("select");
+  sel2.value = "major"; fire(sel2, "change");
+  const voiceCount = chordDlg.querySelectorAll(".meta-chord-voice").length;
+  btnIn(chordDlg, "Add voices").click();
+  await sleep(60);
+  const detunes = doc.instruments[stackSlot].metaLayers.map((l) => l.detune);
+  const stillOne = new Set(doc.instruments[stackSlot].metaLayers.map((l) => l.instIdx & 0x3ff)).size;
+  // Just intonation, like the Sample Lab's chord maker: 5/4 = 4096·log2(1.25)
+  // ≈ 1319 units, 3/2 ≈ 2396 — not the 12-TET 1365 / 2389.
+  const near = (want) => detunes.some((d) => Math.abs(d - want) <= 1);
+  const s4 = voiceCount === 3 && doc.instruments[stackSlot].metaLayers.length === 5 &&
+    near(1319) && near(2396) && stillOne === 1;
+  log(`chord stack adds a major triad, still one copy (${detunes.join(",")}): ${s4 ? "ok" : "FAIL"}`);
+
+  while (store.undo.canUndo()) store.undo.undo();
+  iv.refresh();
+  const s5 = same(doc.toBytes(), baseline);
+  log(`undo of the whole stack is byte-exact: ${s5 ? "ok" : "FAIL"}`);
 
   // ── item 73: renumber an instrument ──
   const from = doc.selectableInstrumentSlots()[0];
@@ -130,7 +187,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const t12 = hasCheckbox && doc.usedInstrumentSlots().includes(free) &&
     !doc.usedInstrumentSlots().includes(from) && movedRefs.length === 0 &&
     iv.selected === free && jam.currentInst === free;
-  log(`renumber $${from.toString(16)}→$${free.toString(16)}, patterns left alone (${refsBefore.length} refs): ${t12 ? "ok" : "FAIL"}`);
+  log(`renumber $${from.toString(16)}→$${free.toString(16)}, patterns left alone (${refsBefore.length} refs): ${s4 ? "ok" : "FAIL"}`);
   store.undo.undo();
   const t13 = same(doc.toBytes(), baseline);
   log(`undo of the renumber is byte-exact: ${t13 ? "ok" : "FAIL"}`);

@@ -30,7 +30,11 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   iv.refresh(); // selects the first meta
   const metaSlot = iv.selected;
   const isMeta = doc.instruments[metaSlot].isMeta;
-  const layerBtns = [...iv.panel.querySelectorAll(".advCell button")];
+  // The Layers tab's action column carries reorder/duplicate/unlink/remove too
+  // (item 113), so pick the Edit… buttons out of it by label.
+  const editBtns = () => [...iv.panel.querySelectorAll(".advCell button")]
+    .filter((b) => b.textContent === "Edit…");
+  const layerBtns = editBtns();
   const t1 = isMeta && layerBtns.length > 0;
   log(`meta $${metaSlot.toString(16)} layer table has Edit… buttons (${layerBtns.length}): ${t1 ? "ok" : "FAIL"}`);
 
@@ -54,7 +58,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   iv.panel.querySelector(".inst-parent-chip").click();
   const t2b = iv.selected === metaSlot && iv.tab === "meta";
   log(`breadcrumb returns to meta $${metaSlot.toString(16)}: ${t2b ? "ok" : "FAIL"}`);
-  [...iv.panel.querySelectorAll(".advCell button")][btnIdx].click();
+  editBtns()[btnIdx].click();
 
   // Advanced Edit is reached exactly like a regular instrument: Zones → button.
   const tabBtn = (label) => [...iv.tabBar.querySelectorAll("button")].find((b) => b.textContent === label);

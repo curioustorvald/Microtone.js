@@ -6,8 +6,13 @@
 
 import {
   setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp,
-  setMetaBytesOp, setSectionOp, renumberInstrumentOp, deleteInstrumentOp,
+  setMetaRecordOp, setSectionOp, renumberInstrumentOp, deleteInstrumentOp,
+  importBankOp,
 } from "../../doc/ops.js";
+import {
+  metaLayers, metaRecordOf, duplicateLayer, removeLayer, moveLayer, patchLayer,
+  linkCount, clampDetune, META_MAX_LAYERS,
+} from "../../doc/metaedit.js";
 import {
   planRenumberInstrument, instrumentCellRefs,
   planDeleteInstrument, metainstrumentParents,
@@ -20,7 +25,9 @@ import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
-import { hex2, rangeToStr } from "../notenames.js";
+import { hex2, rangeToStr, noteToStr } from "../notenames.js";
+import { ANCHOR_NOTE, stepNoteInTable } from "../pitchtables.js";
+import { UNITS_PER_OCTAVE } from "../../doc/chord.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import {
@@ -1277,58 +1284,186 @@ export class InstrumentsView {
     });
   }
 
+  /** Commit a new layer array for metainstrument `slot`. Structural edits
+   *  (add / duplicate / remove / reorder) change the layer count in byte 1 and
+   *  shift every entry after them, so the whole record is repacked — that is
+   *  setMetaRecordOp's job, not setMetaBytesOp's. */
+  applyMetaLayers(slot, layers) {
+    const inst = this.store.doc.instruments[slot];
+    this.store.undo.apply(setMetaRecordOp(slot, metaRecordOf(inst, layers)));
+    this.refresh();
+  }
+
   renderMeta(inst) {
     const doc = this.store.doc;
     const slot = this.selected;
+    const layers = metaLayers(inst);
+    const preset = this.store.pitchPreset;
+    const commit = (next) => this.applyMetaLayers(slot, next);
+    const full = layers.length >= META_MAX_LAYERS;
+
+    // ── toolbar: how much of the table is spent, and what it costs to play ──
+    const bar = document.createElement("div");
+    bar.className = "meta-bar";
+    const addBtn = document.createElement("button");
+    setIconLabel(addBtn, "filePlus", t("meta.addLayers"));
+    addBtn.title = t("meta.addLayersTitle");
+    addBtn.disabled = full;
+    addBtn.addEventListener("click", async () => {
+      const { showAddMetaLayers } = await import("../popups/newmeta.js");
+      if ((await showAddMetaLayers(this.store, slot)) !== null) this.refresh();
+    });
+    const tally = document.createElement("span");
+    tally.className = "dim meta-tally";
+    tally.textContent = `${t("meta.tally", { n: layers.length, max: META_MAX_LAYERS })} · ` +
+      `${t("meta.voiceCost", { n: layers.length })}`;
+    bar.append(addBtn, tally);
+    this.panel.appendChild(bar);
+
     const table = document.createElement("table");
     table.className = "files-table meta-table";
     table.innerHTML =
       `<thead><tr><th>#</th><th>${escape(t("meta.subInst"))}</th><th>${escape(t("meta.mix"))}</th>` +
-      `<th>${escape(t("meta.detune"))}</th><th>${escape(t("meta.pitchRange"))}</th><th>${escape(t("meta.vel"))}</th><th></th></tr></thead>`;
+      `<th>${escape(t("meta.detune"))}</th><th>${escape(t("meta.pitchRange"))}</th>` +
+      `<th>${escape(t("meta.vel"))}</th><th></th></tr></thead>`;
     const tbody = document.createElement("tbody");
-    (inst.metaLayers ?? []).forEach((l, i) => {
-      const tr = document.createElement("tr");
-      const nameTd = `<td>$${l.instIdx.toString(16).toUpperCase().padStart(3, "0")} ` +
-        `${escape(unescapeName(doc.instrumentName(l.instIdx)) || "")}</td>`;
-      tr.innerHTML = `<td>${i}</td>${nameTd}<td class="mixCell"></td><td class="detCell"></td>` +
-        `<td>${escape(rangeToStr(l.pitchStart, l.pitchEnd))}</td>` +
-        `<td>${l.volStart}‥${l.volEnd}</td><td class="advCell"></td>`;
 
-      // Layer children are not list-selectable (item 59), so this is their only
-      // entry point: open the child in its OWN base editor (item 71) — the same
-      // tabs a top-level instrument gets, Advanced Edit included via Zones.
-      const editBtn = document.createElement("button");
-      editBtn.textContent = t("meta.edit");
-      editBtn.title = t("meta.editTitle");
-      editBtn.addEventListener("click", () => this.openChild(l.instIdx & 0x3ff, slot));
-      tr.querySelector(".advCell").append(editBtn);
+    /** A committing number input. */
+    const numIn = (value, min, max, onCommit, title = "") => {
+      const i = document.createElement("input");
+      i.type = "number"; i.min = min; i.max = max; i.value = value;
+      i.className = "meta-num";
+      if (title) i.title = title;
+      i.addEventListener("change", () =>
+        onCommit(clampN(Math.round(Number(i.value) || 0), min, max)));
+      return i;
+    };
+    const iconBtn = (name, label, title, onClick, disabled = false) => {
+      const b = document.createElement("button");
+      b.className = "meta-act";
+      if (name) setIconLabel(b, name, label);
+      else b.textContent = label;
+      b.title = title;
+      b.disabled = disabled;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+
+    layers.forEach((l, i) => {
+      const links = linkCount(layers, i);
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td class="idxCell"></td><td class="nameCell"></td><td class="mixCell"></td>` +
+        `<td class="detCell"></td><td class="rngCell"></td><td class="velCell"></td>` +
+        `<td class="advCell"></td>`;
+
+      // Layer 0 leads: the first layer that COVERS a trigger plays on the
+      // channel itself and the rest spawn background voices, so record order is
+      // priority (trigger.js triggerMetaOrNote).
+      const idxCell = tr.querySelector(".idxCell");
+      idxCell.textContent = String(i);
+      if (i === 0) {
+        const star = document.createElement("span");
+        star.className = "meta-fg";
+        star.textContent = "▸";
+        star.title = t("meta.foregroundTitle");
+        idxCell.prepend(star);
+      }
+
+      // A linked layer shares its sub-instrument with its siblings: editing it
+      // edits all of them, which is the point of a unison stack and a trap
+      // otherwise — so it is badged, and Unlink is right there.
+      const nameCell = tr.querySelector(".nameCell");
+      const nameTxt = document.createElement("span");
+      nameTxt.textContent = `$${(l.instIdx & 0x3ff).toString(16).toUpperCase().padStart(3, "0")} ` +
+        (unescapeName(doc.instrumentName(l.instIdx)) || "");
+      nameCell.append(nameTxt);
+      if (links > 1) {
+        const badge = document.createElement("span");
+        badge.className = "badge-sm meta-link";
+        badge.textContent = t("meta.linked", { n: links });
+        badge.title = t("meta.linkedTitle", { n: links });
+        nameCell.append(badge);
+      }
 
       // Mix: raw PSO octet (0..255, 159 = 0 dB) + a live dB readout.
-      const mixIn = document.createElement("input");
-      mixIn.type = "number"; mixIn.min = 0; mixIn.max = 255; mixIn.value = l.mixOctet;
-      mixIn.className = "meta-num";
-      const dbEl = document.createElement("span");
-      dbEl.className = "dim meta-db";
-      dbEl.textContent = mixDbLabel(l.mixOctet);
-      mixIn.addEventListener("change", () => {
-        const v = clampN(Math.round(Number(mixIn.value) || 0), 0, 255);
-        this.store.undo.apply(setMetaBytesOp(slot, [[l.rawOffset + 1, v]]));
-        this.refresh();
-      });
-      const mixCell = tr.querySelector(".mixCell");
-      mixCell.append(mixIn, dbEl);
+      tr.querySelector(".mixCell").append(
+        numIn(l.mixOctet, 0, 255, (v) => commit(patchLayer(layers, i, { mixOctet: v }))),
+        Object.assign(document.createElement("span"),
+          { className: "dim meta-db", textContent: mixDbLabel(l.mixOctet) }));
 
-      // Detune: signed 4096-TET relative pitch offset (a semitone ≈ 341).
-      const detIn = document.createElement("input");
-      detIn.type = "number"; detIn.min = -0x8000; detIn.max = 0x7fff; detIn.value = l.detune;
-      detIn.className = "meta-num";
-      detIn.addEventListener("change", () => {
-        let v = clampN(Math.round(Number(detIn.value) || 0), -0x8000, 0x7fff) & 0xffff;
-        this.store.undo.apply(setMetaBytesOp(slot,
-          [[l.rawOffset + 2, v & 0xff], [l.rawOffset + 3, (v >>> 8) & 0xff]]));
-        this.refresh();
+      // Detune. The record stores signed 4096-TET units — a major third is 1365
+      // and a chorus detune is 6 — which nobody thinks in, so the field is CENTS
+      // and ◂ ▸ step whole degrees of the song's own pitch table
+      // (stepNoteInTable, so unequal tables step to real degrees, not by 341).
+      const detCell = tr.querySelector(".detCell");
+      const stepDeg = (dir) => {
+        const note = clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff);
+        commit(patchLayer(layers, i,
+          { detune: clampDetune(stepNoteInTable(note, preset, dir) - ANCHOR_NOTE) }));
+      };
+      const centsIn = document.createElement("input");
+      centsIn.type = "number"; centsIn.className = "meta-num";
+      centsIn.value = centsOfUnits(l.detune).toFixed(1);
+      centsIn.title = t("meta.detuneTitle");
+      centsIn.addEventListener("change", () => {
+        const c = Number(centsIn.value);
+        commit(patchLayer(layers, i,
+          { detune: clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0) }));
       });
-      tr.querySelector(".detCell").append(detIn);
+      detCell.append(
+        iconBtn(null, "◂", t("meta.detuneDownTitle"), () => stepDeg(-1)),
+        centsIn,
+        iconBtn(null, "▸", t("meta.detuneUpTitle"), () => stepDeg(+1)),
+        Object.assign(document.createElement("span"), {
+          className: "dim meta-det-ann",
+          textContent: `${noteToStr(clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff))} · ${l.detune}`,
+        }));
+
+      // Gating rectangle. The new-meta hint has always told people to "narrow
+      // them on the Layers tab"; until item 113 there was nothing here to narrow.
+      const rngCell = tr.querySelector(".rngCell");
+      rngCell.append(
+        numIn(l.pitchStart, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchStart: v })),
+          t("meta.pitchLoTitle")),
+        numIn(l.pitchEnd, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchEnd: v })),
+          t("meta.pitchHiTitle")),
+        Object.assign(document.createElement("span"),
+          { className: "dim meta-rng-ann", textContent: rangeToStr(l.pitchStart, l.pitchEnd) }));
+
+      const velCell = tr.querySelector(".velCell");
+      velCell.append(
+        numIn(l.volStart, 0, 63, (v) => commit(patchLayer(layers, i, { volStart: v })),
+          t("meta.velLoTitle")),
+        numIn(l.volEnd, 0, 63, (v) => commit(patchLayer(layers, i, { volEnd: v })),
+          t("meta.velHiTitle")));
+
+      // Actions. Layer children are not list-selectable (item 59), so "Edit…"
+      // is their only entry point: the child opens in its OWN base editor
+      // (item 71) — the same tabs a top-level instrument gets.
+      const advCell = tr.querySelector(".advCell");
+      advCell.append(
+        iconBtn(null, "▲", t("meta.moveUpTitle"),
+          () => commit(moveLayer(layers, i, -1)), i === 0),
+        iconBtn(null, "▼", t("meta.moveDownTitle"),
+          () => commit(moveLayer(layers, i, +1)), i === layers.length - 1),
+        iconBtn("duplicate", "", t("meta.dupTitle"),
+          () => commit(duplicateLayer(layers, i)), full),
+        iconBtn(null, t("meta.chord"), t("meta.chordTitleBtn"), async () => {
+          const { showChordStack } = await import("../popups/metachord.js");
+          if ((await showChordStack(this.store, slot, i)) !== null) this.refresh();
+        }, full),
+        iconBtn(null, t("meta.unlink"), t("meta.unlinkTitle"), async () => {
+          const { planUnlinkMetaLayer } = await import("../../doc/bankmerge.js");
+          const plan = planUnlinkMetaLayer(doc, slot, i);
+          if (plan.error) { alert(plan.error); return; }
+          this.store.undo.apply(importBankOp(plan));
+          this.refresh();
+        }, links < 2),
+        iconBtn("close", "", t("meta.removeTitle"),
+          () => commit(removeLayer(layers, i)), layers.length <= 1),
+        iconBtn(null, t("meta.edit"), t("meta.editTitle"),
+          () => this.openChild(l.instIdx & 0x3ff, slot)));
 
       tbody.appendChild(tr);
     });
@@ -1353,6 +1488,10 @@ function escape(s) {
 }
 
 function clampN(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Meta layer detune is a signed 4096-TET offset; the Layers tab shows cents.
+const centsOfUnits = (units) => (units * 1200) / UNITS_PER_OCTAVE;
+const unitsOfCents = (cents) => (cents * UNITS_PER_OCTAVE) / 1200;
 
 /** Meta mix octet → a dB readout (159 = 0 dB unity; 0 = silence). */
 function mixDbLabel(octet) {

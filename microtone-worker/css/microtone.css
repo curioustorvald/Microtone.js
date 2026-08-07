@@ -766,6 +766,57 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .meta-table .meta-num { width: 4.5em; }
 .meta-table .meta-db { margin-left: 0.4rem; }
 
+/* Layers tab — the layer-table editor (item 113). */
+.meta-bar {
+  display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.meta-bar .meta-tally { margin-left: auto; font-size: 0.85rem; }
+.meta-table td { vertical-align: middle; white-space: nowrap; }
+.meta-table .idxCell { font-family: "Roboto Mono", monospace; }
+.meta-table .meta-fg { color: var(--accent); margin-right: 0.2rem; }
+.meta-table .meta-link { margin-left: 0.4rem; }
+.meta-table .meta-det-ann,
+.meta-table .meta-rng-ann { margin-left: 0.4rem; font-size: 0.8rem; }
+.meta-table .rngCell .meta-num,
+.meta-table .velCell .meta-num { width: 4em; margin-right: 0.25rem; }
+.meta-table .meta-act {
+  padding: 0.1rem 0.4rem; margin-right: 0.2rem; font-size: 0.85rem;
+}
+.meta-table .meta-act:disabled { opacity: 0.35; }
+/* The row's buttons sit at 0.85rem, where a 1em glyph is ~12px of line art —
+   a touch too small to read beside the ▲ ▼ ◂ ▸ text arrows. */
+.meta-table .meta-act .btn-ico { width: 1.15em; height: 1.15em; }
+
+/* Per-row count stepper in the metainstrument picker. */
+.meta-step {
+  padding: 0.05rem 0.4rem; font-size: 0.9rem; line-height: 1.2;
+  min-width: 1.6rem;
+}
+.meta-picker .meta-pick-row { gap: 0.3rem; padding: 0.15rem 0.4rem; }
+.meta-picker .meta-count {
+  min-width: 2.2rem; text-align: center;
+  color: var(--dim); font-family: "Roboto Mono", monospace; font-size: 0.85rem;
+}
+.meta-picker .picked .meta-count { color: var(--accent); }
+.meta-picker .meta-pick-hit {
+  display: flex; gap: 0.6rem; align-items: baseline; flex: 1;
+  background: none; border: none; padding: 0.1rem 0.2rem;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.meta-picker .picked { background: var(--panel); }
+
+/* Chord stack preview. */
+.meta-chord-preview {
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-2); padding: 0.4rem 0.6rem; margin: 0.4rem 0;
+}
+.meta-chord-voice { display: flex; gap: 0.6rem; align-items: baseline; }
+.meta-chord-voice .meta-chord-note {
+  font-family: "Roboto Mono", monospace; min-width: 4rem;
+}
+.meta-chord-voice.root .meta-chord-note { color: var(--accent); }
+
 .cmd-palette {
   display: flex;
   gap: 0.35rem;
@@ -892,6 +943,13 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .np-derived { margin-top: 0; font-size: 0.8rem; }
 .np-blink-row { min-height: 20px; }
 .np-blink { display: block; }
+.np-tap {
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.15rem 0.9rem; cursor: pointer; font: inherit;
+}
+.np-tap:hover { border-color: var(--accent-2); }
+.np-tap.hit { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.np-tap-read { font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .np-chips { display: inline-flex; gap: 0.3rem; }
 .np-chip {

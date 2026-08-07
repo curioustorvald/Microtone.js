@@ -664,16 +664,24 @@ All imports are single undo steps.
 
 ### Building a metainstrument
 
-**New metainstrument…** ticks up any number of ordinary instruments and stacks
-them into a single new one. Each pick is **copied** into a sub-instrument slot
+**New metainstrument…** picks any number of ordinary instruments and stacks them
+into a single new one. Each pick is **copied** into a sub-instrument slot
 (`$100`+, a range pattern cells cannot address) and the copies become the
 layers, so:
 
 - the instruments you picked stay in the list, still selectable and jammable, and every pattern that already plays them keeps working;
 - the copies share their sources' samples, so the stack costs no sample-pool space.
 
+Each row of the picker has a **count**. Leave it at ×1 for an ordinary layer, or
+raise it to stack the *same* instrument several times — the way a chorded or
+unison instrument is built. A count above 1 makes **one** copy and points that
+many **linked** layers at it, so the whole stack stays a single instrument you
+edit once: retune or refilter it and every voice follows. The tally beside the
+picker reads both limits that matter — the 25-layer table and how many voices a
+note will now cost.
+
 Every layer starts at unity mix (159 = 0 dB) across the whole note and velocity
-range; narrow the ranges, mix and detune on the new instrument's **Layers** tab.
+range; spread and narrow them on the new instrument's **Layers** tab.
 Metainstruments are not offered as picks — the engine resolves a layer directly
 to a sample, so metainstruments cannot be nested.
 
@@ -692,7 +700,11 @@ either way.
 - **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
-- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once; the table lists each layer's pitch/velocity range with editable **mix** (0–255, 159 = 0 dB, live dB readout) and **detune** (signed 4096-TET units). Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
+- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once, and this table is the whole editor for that stack. Each row carries an editable **mix** (0–255, 159 = 0 dB, live dB readout), a **detune** in cents with ◂ ▸ buttons that step a whole degree of the song's own notation, and the **pitch** and **velocity** bounds that decide when the layer sounds at all. The ▸ beside row 0 marks the foreground layer: the first layer covering a trigger plays on the channel itself and the rest spawn background voices, so the order here is priority — **▲ ▼** change it.
+  - **Add layers…** brings in more instruments (the same picker, counts and all), **Duplicate** makes another voice of the layer's own sub-instrument ready to detune, and **Chord…** does a whole chord or unison spread in one action, using the same just intervals and presets as the [chord maker](#the-chord-maker).
+  - Duplicated layers are **linked**: they share one sub-instrument, badged *linked ×n*, so editing it moves every voice of the stack together. When one voice needs to differ, **Unlink** gives that layer its own copy.
+  - Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
+  - The last layer cannot be removed (a metainstrument with no layers is not a metainstrument); delete the whole instrument instead.
 
 ### Advanced Edit (Ixmp patches)
 

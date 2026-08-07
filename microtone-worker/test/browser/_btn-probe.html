@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/flourish.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+window.addEventListener('error', e => log('ERR ' + e.message));
+(async () => { try {
+  const app = document.getElementById("app");
+  const win = await new Promise((resolve) => {
+    const p = setInterval(() => { const w = app.contentWindow;
+      if (w && w.__microtone?.store.doc) { clearInterval(p); resolve(w); } }, 100);
+  });
+  const { store, instrumentsView: iv } = win.__microtone;
+  const doc = store.doc;
+  const meta = doc.usedInstrumentSlots().find((s) => doc.instruments[s].isMeta);
+  win.document.querySelector('#tabs button[data-view="instruments"]').click();
+  iv.selected = meta; iv.tab = "meta"; iv.refresh();
+  await sleep(50);
+  const btns = [...iv.panel.querySelectorAll("tbody tr")[0].querySelectorAll(".meta-act")];
+  btns.forEach((b, i) => {
+    const r = b.getBoundingClientRect();
+    log(`[${i}] title="${b.title.slice(0,28)}" text="${b.textContent}" svg=${!!b.querySelector("svg")} w=${r.width.toFixed(0)} h=${r.height.toFixed(0)}`);
+  });
+} catch (e) { log('THROW ' + e.message); } })();

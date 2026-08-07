@@ -552,6 +552,47 @@ test("item 72: a buildMetaRecord metainstrument sounds both layers", () => {
   assert.ok(out.some((b) => b !== 128), "the meta must produce audio");
 });
 
+// Item 113: LINKED layers — several layers of one meta pointing at the SAME
+// sub-instrument, which is how a unison/chord stack is built ("three pianos"
+// off one editable piano). Nothing in the trigger path keys on instIdx, so the
+// three voices must coexist: applyDuplicateCheck is only ever called with the
+// PATTERN's instrument byte (the meta's slot), never per layer, so a DCT of
+// "same instrument" can't make the siblings cut each other.
+test("item 113: three layers on ONE sub-instrument sound as three detuned voices", () => {
+  const eng = makeTestEngine(); // looping inst in slot 1
+  eng.instruments[1].dupCheckFlag = 0x03;   // DCT "same instrument" — the worst case
+  eng.instruments[1].instrumentFlag = 0x02; // NNA continue
+
+  const third = Math.round((4096 * 4) / 12); // +4 semitones in 4096-TET
+  const fifth = Math.round((4096 * 7) / 12); // +7
+  eng.uploadInstrument(3, buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(1, 159, third, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(1, 159, fifth, 0x0000, 0xffff, 0, 63),
+  ]));
+  assert.equal(eng.instruments[3].metaLayers.length, 3, "duplicate instIdx is legal");
+
+  eng.setMasterVolume(0, 255);
+  eng.jamNote(0, 0, 0x5000, 3);
+  const ts = eng.playheads[0].trackerState;
+  const kids = ts.backgroundVoices.filter((v) => v.active && v.isLayerChild);
+  assert.equal(kids.length, 2, "layers 1-2 spawn background children");
+  assert.equal(ts.voices[0].active, true, "layer 0 is the foreground voice");
+  assert.equal(ts.voices[0].instrumentId, 1);
+
+  // All three sound the SAME sub-instrument at three pitches.
+  assert.ok(kids.every((v) => v.instrumentId === 1));
+  assert.deepEqual(kids.map((v) => v.noteVal).sort((a, b) => a - b),
+    [0x5000 + third, 0x5000 + fifth], "children carry their layer's detune");
+  assert.deepEqual(kids.map((v) => v.layerRelDetune).sort((a, b) => a - b), [third, fifth],
+    "relative detune is measured from the foreground layer");
+  assert.ok(kids.every((v) => v.displayInst === 3), "the header still shows the meta");
+
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  eng.renderChunk(0, out);
+  assert.ok(out.some((b) => b !== 128), "the stack must produce audio");
+});
+
 // item 81: starting playback mid-pattern on a ghosted (Pattern-Ditto, effect 7)
 // row must SOUND — setTrackerRow re-arms the ditto region so the ghost row
 // re-derives its inherited note, instead of the engine seeing no active ditto

@@ -159,6 +159,12 @@ export const BTN_ICON = {
   dot: solid('<circle cx="12" cy="12" r="5"/>'),
   /** Delete this file (✕). */
   close: line('<path d="M6 6l12 12M18 6 6 18"/>'),
+  /** Duplicate this row (⧉) — a card in front of the one it was copied from.
+   *  Deliberately plainer than ICON.duplicate, which is drawn for a context
+   *  menu: at a button's 1em the copied card's text lines smear into a block,
+   *  so only the two outlines survive here. */
+  duplicate: line('<rect x="9" y="9" width="13" height="13" rx="2"/>' +
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
   /** Support the project (♥). */
   heart: solid('<path d="M12 20.6 4.9 13.4a4.4 4.4 0 0 1 0-6.3 4.6 4.6 0 0 1 6.4 0l.7.7.7-.7a4.6 4.6 0 0 1 6.4 0 4.4 4.4 0 0 1 0 6.3z"/>'),
 

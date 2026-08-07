@@ -46,6 +46,33 @@
 
         const inp = (f) => dlg.querySelector(`[data-f="${f}"]`);
 
+        // ── BPM tapper: button taps + Space taps, and a pause resets the count.
+        //    Done first, while rows/beat × speed are still the default 4 × 6
+        //    (= 24 ticks/beat), where the field value IS the tapped tempo. ──
+        const tapBtn = dlg.querySelector(".np-tap");
+        check("tap button present", !!tapBtn);
+        for (let i = 0; i < 4; i++) { tapBtn.click(); if (i < 3) await sleep(300); }
+        const tapped = +inp("bpm").value;                 // 300 ms/beat ≈ 200 BPM
+        check(`tap button sets BPM (~200, got ${tapped})`, Math.abs(tapped - 200) < 12);
+        check("tap readout counts the taps", /4 taps/.test(inp("tapread").textContent));
+
+        // Space taps too — from a non-text target (here the notation list).
+        inp("notes").focus();
+        const space = () => inp("notes").dispatchEvent(new win.KeyboardEvent("keydown",
+          { code: "Space", key: " ", bubbles: true, cancelable: true }));
+        await sleep(2600);                                // let the count reset
+        check("silence resets the count", !/taps/.test(inp("tapread").textContent));
+        for (let i = 0; i < 4; i++) { space(); if (i < 3) await sleep(500); }
+        const tappedSp = +inp("bpm").value;               // 500 ms/beat ≈ 120 BPM
+        check(`Space sets BPM (~120, got ${tappedSp})`, Math.abs(tappedSp - 120) < 8);
+
+        // …but Space inside a text field types a space instead of tapping.
+        inp("name").value = "";
+        inp("name").focus();
+        const ev = new win.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true, cancelable: true });
+        inp("name").dispatchEvent(ev);
+        check("Space in a text field is not a tap", !ev.defaultPrevented);
+
         // ── derived rows/bar updates live from time-sig × rows/beat ──
         inp("rpb").value = "3"; inp("rpb").dispatchEvent(new Event("input", { bubbles: true }));
         inp("tnum").value = "5"; inp("tnum").dispatchEvent(new Event("input", { bubbles: true }));
