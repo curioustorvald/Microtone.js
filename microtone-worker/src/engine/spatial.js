@@ -411,6 +411,10 @@ export function applyElevation(ts, voice, el) {
 // mean "no shift", whatever the channel is doing.
 
 /** Fold a note offset into range: clamped like a stereo pan, wrapped like an angle. */
+export function boundNotePan(ts, off) {
+  return boundNoteOffset(ts, off);
+}
+
 function boundNoteOffset(ts, off) {
   if (ts.surroundModel === SURROUND_STEREO) return clamp(off, -0xff, 0xff);
   return wrapAzimuth(off + AZIMUTH_TURN / 2) - AZIMUTH_TURN / 2;

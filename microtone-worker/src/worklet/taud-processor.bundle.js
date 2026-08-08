@@ -924,6 +924,10 @@ function applyElevation(ts, voice, el) {
 // mean "no shift", whatever the channel is doing.
 
 /** Fold a note offset into range: clamped like a stereo pan, wrapped like an angle. */
+function boundNotePan(ts, off) {
+  return boundNoteOffset(ts, off);
+}
+
 function boundNoteOffset(ts, off) {
   if (ts.surroundModel === SURROUND_STEREO) return clamp(off, -0xff, 0xff);
   return wrapAzimuth(off + AZIMUTH_TURN / 2) - AZIMUTH_TURN / 2;
@@ -2750,6 +2754,11 @@ class Voice {
     // ── Metainstrument layering ──
     this.isLayerChild = false;
     this.layerRelDetune = 0;
+    // How far this layer sits from the meta's centre (layer 0), in note-axis
+    // units — the pan twin of layerRelDetune, re-added by the per-tick sync so
+    // the arrangement ROTATES with the note rather than collapsing (item 118).
+    this.layerRelPan = 0;
+    this.layerRelElevation = 0;
     this.layerMixGain = 1.0;
     this.nnaOverride = -1;
     // Per-voice envelope gates (S $77..$7E).
@@ -3506,6 +3515,7 @@ class Playhead {
       it.metaForeground = false;
       it.noteFading = false;
       it.layerMixGain = 1.0; it.isLayerChild = false; it.layerRelDetune = 0;
+      it.layerRelPan = 0; it.layerRelElevation = 0;
       // "What's playing" state — cleared alongside the volume reset so a stale
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
@@ -4222,6 +4232,17 @@ function advanceAutoVibrato(voice, inst) {
 
 
 /**
+ * Scratch out-box for triggerNote: [notePan, noteElevation, present] as the
+ * INSTRUMENT left them for the trigger just run — `present` is 0 when the
+ * instrument said nothing about panning at all. Only triggerMetaOrNote reads
+ * it, immediately after each triggerNote call, to measure a layer's offset
+ * from layer 0's (item 118). Same one-shot-box idiom as envelope.js's
+ * pfIdxBox / pfTimeBox, and for the same reason: no per-voice field for a
+ * value nothing keeps.
+ */
+const notePanSeedBox = new Float64Array(3);
+
+/**
  * Snapshot the sample-scope state for voice from the base instrument or a
  * resolved Ixmp patch. Patch sentinels: defaultPan 0xFF, defaultNoteVolume 0,
  * vibratoWaveform 0xFF defer to the base instrument.
@@ -4415,6 +4436,8 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
+    voice.layerRelPan = 0;
+    voice.layerRelElevation = 0;
     voice.isLayerChild = false;
     return;
   }
@@ -4436,21 +4459,26 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     return;
   }
   const l0 = layers[0];
-  // Channel pan context as it stands BEFORE layer 0 retriggers. Each child is
-  // seeded with this and then triggered, so a layer's own default pan (its
-  // instrument's byte 177 or its Ixmp patch's) lands on the child instead of
-  // being overwritten by layer 0's result — while a channel pan the pattern set
-  // still carries to every layer that has no default of its own (item 116).
+  // CHANNEL pan context as it stands before layer 0 retriggers — a channel the
+  // pattern placed carries to every layer, and capturing it first keeps layer
+  // 0's own trigger from feeding back into its siblings. Where each layer sits
+  // WITHIN that channel is the note axis's business, handled per child below.
   const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
   const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
-  // The note axis as it stands before layer 0 retriggers, for the same reason
-  // and with the same caveat as chanPan: it may still hold the PREVIOUS note's
-  // zone pan, which a pan-less layer then inherits. Faithful to the pre-split
-  // engine, quirk included (see CLAUDE.TODOLIST.md item 118).
-  const chanNotePan = voice.notePan, chanNoteEl = voice.noteElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
+  // Layer 0 IS the meta's position — the centre the other layers sit around, in
+  // pan exactly as it already is in pitch (layerRelDetune below). A layer that
+  // says nothing about panning has no opinion about where it sits relative to
+  // that centre, so its baseline is 0 rather than layer 0's own value; that is
+  // what keeps a pan-less layer sitting wherever the meta sits (item 116) while
+  // a layer with a pan of its own keeps its distance (item 118).
+  const l0HasPan = notePanSeedBox[2] !== 0;
+  const l0Pan = l0HasPan ? notePanSeedBox[0] : 0;
+  const l0Elevation = l0HasPan ? notePanSeedBox[1] : 0;
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
+  voice.layerRelPan = 0;
+  voice.layerRelElevation = 0;
   voice.isLayerChild = false;
   voice.metaForeground = true;
   for (let k = 1; k < layers.length; k++) {
@@ -4463,13 +4491,24 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.rowPan = chanRowPan;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
-    child.notePan = chanNotePan;
-    child.noteElevation = chanNoteEl;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
     child.layerRelDetune = lk.detune - l0.detune;
+    // The pan twin of layerRelDetune (item 118): how far this layer sits from
+    // the meta's centre, held across the whole note by the per-tick sync so a
+    // note-pan SET ROTATES the arrangement instead of collapsing it onto one
+    // spot. A layer with no pan of its own rides at offset 0.
+    if (notePanSeedBox[2] !== 0) {
+      child.layerRelPan = notePanSeedBox[0] - l0Pan;
+      child.layerRelElevation = notePanSeedBox[1] - l0Elevation;
+    } else {
+      child.layerRelPan = 0;
+      child.layerRelElevation = 0;
+    }
+    child.notePan = boundNotePan(ts, voice.notePan + child.layerRelPan);
+    child.noteElevation = voice.noteElevation + child.layerRelElevation;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
     ts.backgroundVoices.push(child);
   }
@@ -4546,6 +4585,7 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.randomPanBias = inst.panSwing !== 0
     ? Math.trunc(random() * (2 * inst.panSwing + 1)) - inst.panSwing : 0;
   // Default pan / pitch-pan separation: only when the row carried an instrument byte.
+  notePanSeedBox[2] = 0;
   if (instId !== 0) {
     // Everything an INSTRUMENT says about panning lands on the note axis (item
     // 117), never on the channel's own position — the exact mirror of the
@@ -4573,7 +4613,9 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
     if (patchPan !== null) {
       applyNotePanSet(ts, voice, patchPan);
+      notePanSeedBox[2] = 1;
     } else if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
+      notePanSeedBox[2] = 1;
       if (ts.surroundModel === SURROUND_STEREO) {
         applyNotePanSet(ts, voice, inst.defaultPan);
       } else {
@@ -4596,7 +4638,15 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
       const noteDelta = (noteVal - inst.pitchPanCentre) / 4096.0;
       const panShift = Math.trunc(noteDelta * inst.pitchPanSeparation * 4.0);
       applyNotePanSlide(ts, voice, panShift);
+      notePanSeedBox[2] = 1;
     }
+    // What this instrument said about panning, for triggerMetaOrNote to measure
+    // a layer's offset against layer 0's (item 118). Reported as the RESULTING
+    // note-axis value rather than the delta, because a seed replaces where a
+    // slide accumulates; the two callers only ever subtract two of these, so a
+    // pan column value both of them inherited cancels out.
+    notePanSeedBox[0] = voice.notePan;
+    notePanSeedBox[1] = voice.noteElevation;
   }
   // Filter defaults (ACTIVE values; patch 'x' block overrides base inst).
   voice.currentCutoff = voice.activeDefaultCutoff;
@@ -4781,6 +4831,8 @@ function ghostVoice(src, channel) {
   v.metaForeground = src.metaForeground;
   v.noteFading = src.noteFading;
   v.layerMixGain = src.layerMixGain;
+  v.layerRelPan = src.layerRelPan;
+  v.layerRelElevation = src.layerRelElevation;
   v.clipMode = src.clipMode;
   v.bitcrusherDepth = src.bitcrusherDepth;
   v.bitcrusherSkip = src.bitcrusherSkip;
@@ -6234,13 +6286,14 @@ function applyTrackerTick(eng, ts, playhead) {
         bg.rowPan = parent.rowPan;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
-        // BOTH axes follow the parent, exactly as the single pan register did
-        // before the split: the pattern's panning column reaches every layer,
-        // at the cost of a layer's own zone pan surviving only until the first
-        // tick. Pre-existing, and left alone here on purpose — changing it is
-        // an audible change to existing songs (CLAUDE.TODOLIST.md item 118).
-        bg.notePan = parent.notePan;
-        bg.noteElevation = parent.noteElevation;
+        // Both axes follow the parent, the note axis carrying each layer's own
+        // offset from the meta's centre with it (item 118) — the exact shape of
+        // the pitch resync above, `parent + relative`. So the pattern's panning
+        // column and S $80xx reach every layer, AND a kit whose layers pan
+        // apart stays apart for the whole note instead of collapsing onto
+        // layer 0 at the first tick.
+        bg.notePan = boundNotePan(ts, parent.notePan + bg.layerRelPan);
+        bg.noteElevation = parent.noteElevation + bg.layerRelElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];

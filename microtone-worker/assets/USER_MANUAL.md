@@ -454,6 +454,14 @@ Both can appear on the same row and both apply — they are not fighting over on
 setting. If you want the older "everything to one spot" behaviour, put the
 channel where you want it and write the panning column on each note.
 
+**A metainstrument works the same way, one level down.** If its layers sit at
+different places — an SF2 preset whose sub-instruments spread out, a kit built
+by hand — that spread is the instrument's, and panning the note moves the whole
+thing while the layers keep their distances from each other. The layer at the
+top of the Layers tab is the one the pan command lands on; the rest arrange
+themselves around it, exactly as detune is measured from that same layer. A
+layer with no panning of its own just goes wherever the metainstrument goes.
+
 ### The effect column
 
 The first character is the opcode — any base-36 key (**1–9, A–Z**); the caret

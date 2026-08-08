@@ -111,6 +111,11 @@ export class Voice {
     // ── Metainstrument layering ──
     this.isLayerChild = false;
     this.layerRelDetune = 0;
+    // How far this layer sits from the meta's centre (layer 0), in note-axis
+    // units — the pan twin of layerRelDetune, re-added by the per-tick sync so
+    // the arrangement ROTATES with the note rather than collapsing (item 118).
+    this.layerRelPan = 0;
+    this.layerRelElevation = 0;
     this.layerMixGain = 1.0;
     this.nnaOverride = -1;
     // Per-voice envelope gates (S $77..$7E).

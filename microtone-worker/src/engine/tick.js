@@ -20,7 +20,9 @@ import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA, cutLayerChildren,
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
-import { applyPanSet, applyPanSlide, applyNotePanSlide, stepTowardTarget } from "./spatial.js";
+import {
+  applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
+} from "./spatial.js";
 
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
@@ -390,13 +392,14 @@ export function applyTrackerTick(eng, ts, playhead) {
         bg.rowPan = parent.rowPan;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
-        // BOTH axes follow the parent, exactly as the single pan register did
-        // before the split: the pattern's panning column reaches every layer,
-        // at the cost of a layer's own zone pan surviving only until the first
-        // tick. Pre-existing, and left alone here on purpose — changing it is
-        // an audible change to existing songs (CLAUDE.TODOLIST.md item 118).
-        bg.notePan = parent.notePan;
-        bg.noteElevation = parent.noteElevation;
+        // Both axes follow the parent, the note axis carrying each layer's own
+        // offset from the meta's centre with it (item 118) — the exact shape of
+        // the pitch resync above, `parent + relative`. So the pattern's panning
+        // column and S $80xx reach every layer, AND a kit whose layers pan
+        // apart stays apart for the whole note instead of collapsing onto
+        // layer 0 at the first tick.
+        bg.notePan = boundNotePan(ts, parent.notePan + bg.layerRelPan);
+        bg.noteElevation = parent.noteElevation + bg.layerRelElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];

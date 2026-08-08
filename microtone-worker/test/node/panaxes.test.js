@@ -16,7 +16,9 @@ import assert from "node:assert/strict";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, SAMPLING_RATE, setSamplingRate } from "../../src/engine/constants.js";
 import { EffectOp } from "../../src/engine/tables.js";
-import { makeInstPatch, writePatchesBlob } from "../../src/engine/inst.js";
+import {
+  makeInstPatch, writePatchesBlob, buildMetaRecord, makeMetaLayer,
+} from "../../src/engine/inst.js";
 
 setSamplingRate(32000);
 
@@ -210,4 +212,98 @@ test("an NNA ghost keeps sounding at its own note position", () => {
   assert.equal(ghosts.length, 1, "the displaced note carried on");
   assert.equal(ghosts[0].notePan, 0x60 - 0x80, "the ghost kept the zone it was sounding");
   assert.equal(voice0(eng).notePan, 0xa0 - 0x80, "the new note took its own");
+});
+
+// ── metainstrument layers: an arrangement one level down (item 118) ───────
+// A meta whose sub-instruments pan apart is a soundfield, not a point, and the
+// same rule applies to it as to a zone-panned instrument: a note-pan SET places
+// its CENTRE — layer 0, the foreground voice, as it already is for detune — and
+// every layer keeps its distance from that centre for the whole note.
+
+/** Meta in slot 3 layering two zone-panned instruments (1: $60, 2: $A0). */
+function makeMetaEngine(pan0 = 0x60, pan1 = 0xa0) {
+  const eng = makeEngine();
+  const rec = () => {
+    const r = new Uint8Array(256);
+    const w16 = (o, v) => { r[o] = v & 0xff; r[o + 1] = (v >> 8) & 0xff; };
+    w16(4, 1000); w16(6, 32000); w16(12, 1000);
+    r[14] = 1; r[21] = 0x3f; r[171] = 255; r[196] = 255;
+    return r;
+  };
+  eng.uploadInstrument(1, rec());
+  eng.uploadInstrument(2, rec());
+  const zone = (pan) => writePatchesBlob([makeInstPatch({
+    pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+    sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+    defaultPan: pan,
+  })]);
+  if (pan0 !== null) eng.uploadInstrumentPatches(1, zone(pan0));
+  else eng.clearInstrumentPatches(1);
+  if (pan1 !== null) eng.uploadInstrumentPatches(2, zone(pan1));
+  else eng.clearInstrumentPatches(2);
+  eng.uploadInstrument(3, buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(2, 159, 0, 0x0000, 0xffff, 0, 63),
+  ]));
+  return eng;
+}
+
+const kidOf = (eng) =>
+  eng.playheads[0].trackerState.backgroundVoices.filter((v) => v.active && v.isLayerChild)[0];
+
+test("a meta's layers keep their spread for the WHOLE note, not just its first tick", () => {
+  const eng = loadSong(makeMetaEngine(), [{ row: 0, note: 0x5000, inst: 3 }]);
+  render(eng, 1);
+  assert.equal(voice0(eng).notePan, 0x60 - 0x80, "layer 0 at its own pan");
+  assert.equal(kidOf(eng).notePan, 0xa0 - 0x80, "layer 1 at its own");
+  assert.equal(kidOf(eng).layerRelPan, 0x40, "…held as a distance from layer 0");
+  render(eng, 5); // past the per-tick resync that used to flatten it
+  assert.equal(kidOf(eng).notePan, 0xa0 - 0x80, "and it is still there six ticks in");
+});
+
+test("a note-pan SET rotates the whole soundfield, centred on layer 0", () => {
+  const eng = loadSong(makeMetaEngine(), [
+    { row: 0, note: 0x5000, inst: 3 },
+    { row: 1, pan: 0x10, panEff: 0 },
+  ]);
+  render(eng, 9); // into row 1, past its first tick
+  const centre = colFor(0x10) - 0x80;
+  assert.equal(voice0(eng).notePan, centre, "the SET placed the centre");
+  assert.equal(kidOf(eng).notePan, centre + 0x40, "layer 1 rotated with it");
+  assert.equal(kidOf(eng).notePan - voice0(eng).notePan, 0x40, "spread preserved");
+});
+
+test("a channel pan rotates it too, both axes at once", () => {
+  const eng = loadSong(makeMetaEngine(), [
+    { row: 0, note: 0x5000, inst: 3, effect: EffectOp.OP_S, arg: 0x8040 },
+  ]);
+  render(eng, 3);
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x40 - 32, "layer 0 sits left of the channel");
+  assert.equal(voice0(eng).channelPan, 0x40);
+  assert.equal(kidOf(eng).channelPan, 0x40, "the child follows the channel");
+  assert.equal(kidOf(eng).notePan, 0x20, "and keeps its own +32 note offset");
+});
+
+test("a layer with no pan of its own rides at the meta's centre", () => {
+  const eng = loadSong(makeMetaEngine(0x60, null), [
+    { row: 0, note: 0x5000, inst: 3 },
+    { row: 1, pan: 0x10, panEff: 0 },
+  ]);
+  render(eng, 3);
+  assert.equal(kidOf(eng).layerRelPan, 0, "no opinion means no offset");
+  assert.equal(kidOf(eng).notePan, voice0(eng).notePan, "so it sits where layer 0 sits");
+  render(eng, 6);
+  assert.equal(kidOf(eng).notePan, voice0(eng).notePan, "…including after the column moves them");
+  assert.equal(voice0(eng).notePan, colFor(0x10) - 0x80);
+});
+
+test("a pan-less layer 0 still lets the others spread around the commanded point", () => {
+  const eng = loadSong(makeMetaEngine(null, 0xa0), [
+    { row: 0, note: 0x5000, inst: 3, pan: 0x10, panEff: 0 },
+  ]);
+  render(eng, 3);
+  const centre = colFor(0x10) - 0x80;
+  assert.equal(voice0(eng).notePan, centre, "layer 0 takes the column's placement");
+  assert.equal(kidOf(eng).layerRelPan, 0x20, "layer 1's own pan measured from centre");
+  assert.equal(kidOf(eng).notePan, centre + 0x20);
 });
