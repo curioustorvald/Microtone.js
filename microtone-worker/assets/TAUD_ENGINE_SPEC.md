@@ -385,10 +385,10 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 8. **Channel-volume slide** (`N`), the **pan-column slides** (note axis) and effect `P`'s slide (channel axis), on ticks after the first.
 9. **Spatial slide** (`Z`) on ticks after the first ([§11.5](#11-5-the-z-slide)).
 10. **Tremor** (`I`): advance the on/off phase counter; while off, force the row volume to 0.
-11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed × 4`, modulo 256.
+11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed`, modulo 1024.
 12. **Glissando** (`S $1x`): snap the *sounding* pitch to the nearest 12-TET semitone while leaving the note word smooth.
 13. **Tremolo** (`R`): `row_volume = clamp(note_volume + ((lfo × depth) >> 9), 0, 63)`.
-14. **Panbrello** (`Y`): `row_pan = clamp((channel_pan >> 2) + ((lfo × depth) >> 9), 0, 63)`.
+14. **Panbrello** (`Y`): `panbrello_offset = (lfo × depth) >> 7`. This is a signed offset the mixer sums with the two pan axes ([§10.3](#10-3-panning)), **not** a write to either of them — so the LFO swings around wherever the channel and the note have put the voice, without consuming the instrument's own pan seed, and the same offset steers the surround models ([§11](#11-the-spatial-model)). On a tick where `Y` is not active the same step sets it to 0, so a row without `Y` puts the voice back on its base pan. That zero **MUST** be written here and not in the row reset ([§5.1](#5-1-per-row-reset)): a row boundary runs the row pass *after* this one, so a value the row pass clears is still cleared while the new row's first tick renders — one tick of dead centre in the middle of a sweep that spans several rows.
 15. **Arpeggio** (`J`): the tick index modulo 3 selects offset 0, the first argument byte or the second, each shifted left 8 bits (one argument byte is 256 units ≈ 0.75 semitones). This *overrides* the sounding pitch for the tick.
 16. **Retrigger** (`Q`): count ticks and, on reaching the interval, restart the sample at the active play start, clear key-off, reset all four envelope playheads (re-seeding the pitch and filter ones past zero-duration nodes), reset the fadeout, auto-vibrato and filter history, and apply the retrigger volume modifier.
 17. **Auto-vibrato** ([§6.1](#6-1-auto-vibrato)), added on top of the sounding pitch.
@@ -415,7 +415,9 @@ with `t` the ticks since the trigger. The pitch delta is `(lfo × ramp) >> 10`, 
 
 ### 6.2 The LFO
 
-Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator over an 8-bit phase accumulator. The table index is `(phase >> 2) & 63`.
+Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator, but not one phase scale. The command LFOs (`H`, `U`, `R`, `Y`) run a **1024-step** phase advanced by `speed` per tick and indexed `(phase >> 4) & 63`; auto-vibrato, whose rate comes from the instrument record rather than an effect byte, keeps the 256-step phase advanced by `speed × 2` and indexed `(phase >> 2) & 63`.
+
+The wider phase is what makes a command LFO's 8-bit speed byte mean the same *rates* as a 4-bit tracker speed nibble with 16× the resolution: a tracker advancing `x × 4` through 256 steps and Taud advancing `16x` through 1024 are the same oscillator. A speed byte therefore spans 1024 ticks per cycle at `$01` down to 4 at `$FF`, and a converter that nibble-repeats the source nibble (`x` → `17x`, the mapping every other 4-bit field uses) lands 6.25% fast of the source — uniformly, at every speed, which is inaudible on an LFO and worth the one convention across all the nibble fields.
 
 | Waveform | Value |
 |---|---|
@@ -636,12 +638,12 @@ The **fader** is a host-owned 256-step attenuator per channel (0 = unity, 255 = 
 In the stereo model, an equal-energy law:
 
 ```
-pan   = clamp(channel_pan + note_pan + envelope_pan_offset + pan_swing_bias, 0, 255)
+pan   = clamp(channel_pan + note_pan + envelope_pan_offset + pan_swing_bias + panbrello_offset, 0, 255)
 left  = cos(π · pan ÷ 512)
 right = sin(π · pan ÷ 512)
 ```
 
-where `envelope_pan_offset` is `clamp(round(env_pan × 255), 0, 255) − 128` when the pan envelope is present and enabled, and 0 otherwise. There is no runtime choice of panning law.
+where `envelope_pan_offset` is `clamp(round(env_pan × 255), 0, 255) − 128` when the pan envelope is present and enabled, and 0 otherwise, and `panbrello_offset` is the `Y` LFO's signed contribution ([§6](#6-the-tick-pass) step 14), 0 on any row that does not run `Y`. There is no runtime choice of panning law.
 
 `note_pan` is the per-note axis (TAUD_NOTE_EFFECTS.md §3a), a signed offset that is 0 unless an instrument or the panning column has written it — which is why a song that never touches it renders exactly as it did when the engine held one pan register. Note that the clamp is on the SUM: two axes that each sit inside the range can still add to a position outside it, and in a stereo song that saturates. The surround models wrap instead ([§11](#11-the-spatial-model)), so the identity between models holds for a summed position on the front arc.
 
@@ -678,7 +680,7 @@ A planar or spatial song that uses only ordinary pan **MUST** render bit-identic
 The guarantee is scoped to a **summed** position on the front arc (`channel_pan + note_pan`, TAUD_NOTE_EFFECTS.md §3a). The two pan spaces genuinely differ past that point — a stereo song's is a segment and saturates at its ends, a surround song's is a circle and turns — so a song that drives the sum beyond `$00`…`$FF` is no longer "using only ordinary pan" and the models are permitted to differ. In a surround song the effective direction is
 
 ```
-azimuth = wrap(channel_azimuth + note_pan + envelope_pan_offset + pan_swing_bias)
+azimuth = wrap(channel_azimuth + note_pan + envelope_pan_offset + pan_swing_bias + panbrello_offset)
 elevation = channel_elevation + note_elevation
 ```
 

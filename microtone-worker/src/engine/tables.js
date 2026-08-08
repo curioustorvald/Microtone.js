@@ -119,6 +119,17 @@ export const FINETUNE_OFFSET = Int32Array.from([
 ]);
 
 /** LFO sample for vibrato/tremolo waveforms; pos is the 8-bit phase accumulator. */
+/**
+ * The command LFOs (H, U, R, Y) run a 1024-step phase, not the 256-step one
+ * the instrument's auto-vibrato uses, so that their 8-bit speed byte spans the
+ * SAME rate range as a tracker's 4-bit speed nibble with 16× the resolution —
+ * `pos += speed` here against IT's `pos += speed × 4` over 256. Sampling is the
+ * same 64-entry table two bits further up.
+ */
+export function lfoSampleWide(pos, wave) {
+  return lfoSample(pos >>> 2, wave);
+}
+
 export function lfoSample(pos, wave) {
   const idx = (pos >>> 2) & 0x3f;
   switch (wave & 3) {

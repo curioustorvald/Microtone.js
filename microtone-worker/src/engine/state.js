@@ -458,6 +458,7 @@ export class Playhead {
       it.envVolStep = 0.0;
       it.channelPan = 0x80;
       it.rowPan = 32;
+      it.panbrelloOffset = 0;
       it.panAzimuth = 128.0;
       it.panElevation = 0.0;
       it.notePan = 0;

@@ -113,7 +113,7 @@ export function applyTrackerRow(eng, ts, playhead) {
     voice.tremorOn = 0;
     voice.vibratoActive = false;
     voice.tremoloActive = false;
-    voice.panbrelloActive = false;
+    voice.panbrelloActive = false; // the offset itself is the tick pass's (tick.js)
     voice.retrigActive = false;
     voice.tempoSlideDir = 0;
     voice.wSlideDir = 0;

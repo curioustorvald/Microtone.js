@@ -299,7 +299,7 @@ export class Voice {
 
     // Vibrato (H / U).
     this.vibratoActive = false;
-    this.vibratoLfoPos = 0;
+    this.vibratoLfoPos = 0;   // 1024-step phase (lfoSampleWide), not the auto-vib 256
     this.vibratoWave = 0;
     this.vibratoRetrig = true;
     this.vibratoFineShift = 6; // 6 for H, 8 for U
@@ -310,11 +310,16 @@ export class Voice {
     this.tremoloWave = 0;
     this.tremoloRetrig = true;
 
-    // Panbrello (Y).
+    // Panbrello (Y). `panbrelloOffset` is a signed pan offset the mixer sums
+    // alongside notePan and randomPanBias — an OFFSET rather than a write to
+    // either axis, so the LFO swings around wherever the channel and the note
+    // have put the voice without eating the instrument's own pan seed, and so
+    // it reaches the surround path (voiceAzimuth) unchanged.
     this.panbrelloActive = false;
     this.panbrelloLfoPos = 0;
     this.panbrelloWave = 0;
     this.panbrelloRetrig = true;
+    this.panbrelloOffset = 0;
 
     this.glissandoOn = false;
 

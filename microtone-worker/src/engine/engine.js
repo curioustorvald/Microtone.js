@@ -477,11 +477,16 @@ export class TaudEngine {
     if (this.playheads[ph].surroundModel !== SURROUND_STEREO) {
       return Math.round(foldAzimuthToPan(voiceAzimuth(v)));
     }
+    // Panbrello counts here (the surround branch already has it, via
+    // voiceAzimuth): it is a commanded movement the meter should show. The
+    // random pan swing still does not — that is per-trigger jitter, not a
+    // position the song asked for.
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
-      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128, 0), 255);
+      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset,
+        0), 255);
     }
-    return Math.min(Math.max(v.channelPan + v.notePan, 0), 255);
+    return Math.min(Math.max(v.channelPan + v.notePan + v.panbrelloOffset, 0), 255);
   }
 
   /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
@@ -489,7 +494,7 @@ export class TaudEngine {
   getVoiceSpatialAzimuth(ph, vi) {
     const v = this._voice(ph, vi);
     return this.playheads[ph].surroundModel === SURROUND_STEREO
-      ? clamp(v.channelPan + v.notePan, 0, 255) : voiceAzimuth(v);
+      ? clamp(v.channelPan + v.notePan + v.panbrelloOffset, 0, 255) : voiceAzimuth(v);
   }
   getVoiceSpatialElevation(ph, vi) {
     const v = this._voice(ph, vi);

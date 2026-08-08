@@ -209,9 +209,10 @@ export function generateTrackerAudio(eng, playhead, out) {
         if (voice.hasPanEnv && voice.panEnvOn) {
           let envPanRaw = Math.round(voice.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+            voice.panbrelloOffset;
         } else {
-          pan = voice.channelPan + voice.notePan + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         // equal-energy pan law
@@ -279,9 +280,10 @@ export function generateTrackerAudio(eng, playhead, out) {
         if (bg.hasPanEnv && bg.panEnvOn) {
           let envPanRaw = Math.round(bg.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias +
+            bg.panbrelloOffset;
         } else {
-          pan = bg.channelPan + bg.notePan + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         lGain = Math.cos((Math.PI * pan) / 512.0);

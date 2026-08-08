@@ -250,6 +250,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   // 0's own trigger from feeding back into its siblings. Where each layer sits
   // WITHIN that channel is the note axis's business, handled per child below.
   const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanPanbrello = voice.panbrelloOffset;
   const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   // Layer 0 IS the meta's position — the centre the other layers sit around, in
@@ -275,6 +276,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     child.channelVolume = voice.channelVolume;
     child.channelPan = chanPan;
     child.rowPan = chanRowPan;
+    child.panbrelloOffset = chanPanbrello;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
@@ -606,6 +608,9 @@ export function ghostVoice(src, channel) {
   v.filterResonanceCached = src.filterResonanceCached;
   v.randomVolBias = src.randomVolBias;
   v.randomPanBias = src.randomPanBias;
+  // A ghost runs no effects, so its panbrello freezes at the offset it had when
+  // the new note pushed it out of the channel — it keeps sounding where it was.
+  v.panbrelloOffset = src.panbrelloOffset;
   v.noteVal = src.noteVal;
   v.basePitch = src.basePitch;
   v.amigaPeriod = src.amigaPeriod;

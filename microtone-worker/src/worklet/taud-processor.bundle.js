@@ -369,6 +369,17 @@ const FINETUNE_OFFSET = Int32Array.from([
 ]);
 
 /** LFO sample for vibrato/tremolo waveforms; pos is the 8-bit phase accumulator. */
+/**
+ * The command LFOs (H, U, R, Y) run a 1024-step phase, not the 256-step one
+ * the instrument's auto-vibrato uses, so that their 8-bit speed byte spans the
+ * SAME rate range as a tracker's 4-bit speed nibble with 16× the resolution —
+ * `pos += speed` here against IT's `pos += speed × 4` over 256. Sampling is the
+ * same 64-entry table two bits further up.
+ */
+function lfoSampleWide(pos, wave) {
+  return lfoSample(pos >>> 2, wave);
+}
+
 function lfoSample(pos, wave) {
   const idx = (pos >>> 2) & 0x3f;
   switch (wave & 3) {
@@ -955,16 +966,19 @@ function mirrorPanByte(az) {
 
 /**
  * Effective azimuth of a voice: its own angle plus the note-pan offset, the pan
- * envelope's offset and the instrument's random pan swing — the surround twin
- * of the stereo path's pan sum, wrapping where that one clamps.
+ * envelope's offset, the instrument's random pan swing and the panbrello LFO —
+ * the surround twin of the stereo path's pan sum, wrapping where that one
+ * clamps. So a Y that sweeps a stereo song across the front arc sweeps a
+ * surround song along the same arc, and keeps turning past its ends.
  */
 function voiceAzimuth(voice) {
   if (voice.hasPanEnv && voice.panEnvOn) {
     let envPanRaw = Math.round(voice.envPan * 255.0);
     envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias);
+    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+      voice.panbrelloOffset);
   }
-  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias);
+  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias + voice.panbrelloOffset);
 }
 
 /** Effective elevation: the channel's height plus the note's own offset. */
@@ -2942,7 +2956,7 @@ class Voice {
 
     // Vibrato (H / U).
     this.vibratoActive = false;
-    this.vibratoLfoPos = 0;
+    this.vibratoLfoPos = 0;   // 1024-step phase (lfoSampleWide), not the auto-vib 256
     this.vibratoWave = 0;
     this.vibratoRetrig = true;
     this.vibratoFineShift = 6; // 6 for H, 8 for U
@@ -2953,11 +2967,16 @@ class Voice {
     this.tremoloWave = 0;
     this.tremoloRetrig = true;
 
-    // Panbrello (Y).
+    // Panbrello (Y). `panbrelloOffset` is a signed pan offset the mixer sums
+    // alongside notePan and randomPanBias — an OFFSET rather than a write to
+    // either axis, so the LFO swings around wherever the channel and the note
+    // have put the voice without eating the instrument's own pan seed, and so
+    // it reaches the surround path (voiceAzimuth) unchanged.
     this.panbrelloActive = false;
     this.panbrelloLfoPos = 0;
     this.panbrelloWave = 0;
     this.panbrelloRetrig = true;
+    this.panbrelloOffset = 0;
 
     this.glissandoOn = false;
 
@@ -3491,6 +3510,7 @@ class Playhead {
       it.envVolStep = 0.0;
       it.channelPan = 0x80;
       it.rowPan = 32;
+      it.panbrelloOffset = 0;
       it.panAzimuth = 128.0;
       it.panElevation = 0.0;
       it.notePan = 0;
@@ -4464,6 +4484,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   // 0's own trigger from feeding back into its siblings. Where each layer sits
   // WITHIN that channel is the note axis's business, handled per child below.
   const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanPanbrello = voice.panbrelloOffset;
   const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   // Layer 0 IS the meta's position — the centre the other layers sit around, in
@@ -4489,6 +4510,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.channelVolume = voice.channelVolume;
     child.channelPan = chanPan;
     child.rowPan = chanRowPan;
+    child.panbrelloOffset = chanPanbrello;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
@@ -4820,6 +4842,9 @@ function ghostVoice(src, channel) {
   v.filterResonanceCached = src.filterResonanceCached;
   v.randomVolBias = src.randomVolBias;
   v.randomPanBias = src.randomPanBias;
+  // A ghost runs no effects, so its panbrello freezes at the offset it had when
+  // the new note pushed it out of the channel — it keeps sounding where it was.
+  v.panbrelloOffset = src.panbrelloOffset;
   v.noteVal = src.noteVal;
   v.basePitch = src.basePitch;
   v.amigaPeriod = src.amigaPeriod;
@@ -5639,7 +5664,7 @@ function applyTrackerRow(eng, ts, playhead) {
     voice.tremorOn = 0;
     voice.vibratoActive = false;
     voice.tremoloActive = false;
-    voice.panbrelloActive = false;
+    voice.panbrelloActive = false; // the offset itself is the tick pass's (tick.js)
     voice.retrigActive = false;
     voice.tempoSlideDir = 0;
     voice.wSlideDir = 0;
@@ -6100,10 +6125,10 @@ function applyTrackerTick(eng, ts, playhead) {
     // Vibrato (H/U) — base-pitch overlay.
     let pitchToMixer = voice.noteVal;
     if (voice.vibratoActive) {
-      const sine = lfoSample(voice.vibratoLfoPos, voice.vibratoWave);
+      const sine = lfoSampleWide(voice.vibratoLfoPos, voice.vibratoWave);
       const pitchDelta = (sine * voice.mem.huDepth) >> voice.vibratoFineShift;
       pitchToMixer = clamp(voice.noteVal + pitchDelta, 0x20, 0xffff);
-      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed * 4) & 0xff;
+      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed) & 0x3ff;
     }
 
     // Glissando (S$1x) — snap pitchToMixer to nearest semitone (noteVal stays smooth).
@@ -6114,18 +6139,26 @@ function applyTrackerTick(eng, ts, playhead) {
 
     // Tremolo (R) — modulates rowVolume around noteVolume (IT semantics).
     if (voice.tremoloActive) {
-      const sine = lfoSample(voice.tremoloLfoPos, voice.tremoloWave);
+      const sine = lfoSampleWide(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
       voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
-      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed * 4) & 0xff;
+      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed) & 0x3ff;
     }
 
-    // Panbrello (Y).
+    // Panbrello (Y) — a signed offset onto the mixer's pan sum. The shift is 7,
+    // not the 9 the 6-bit pan register wanted, because the sum it joins is the
+    // 8-bit one; the swing per depth unit is the same.
+    //
+    // The zero case belongs HERE and not in the per-row reset: a row boundary
+    // runs applyTrackerRow AFTER this pass (mixer.js), so a value cleared there
+    // stays cleared for the whole of the new row's first tick — which is one
+    // tick of dead-centre in the middle of a sweep that spans several rows.
     if (voice.panbrelloActive) {
-      const sine = lfoSample(voice.panbrelloLfoPos, voice.panbrelloWave);
-      const panDelta = (sine * voice.mem.yDepth) >> 9;
-      voice.rowPan = clamp((voice.channelPan >>> 2) + panDelta, 0, 0x3f);
-      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed * 4) & 0xff;
+      const sine = lfoSampleWide(voice.panbrelloLfoPos, voice.panbrelloWave);
+      voice.panbrelloOffset = (sine * voice.mem.yDepth) >> 7;
+      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed) & 0x3ff;
+    } else {
+      voice.panbrelloOffset = 0;
     }
 
     // Arpeggio (J) — overrides pitchToMixer for this tick.
@@ -6284,6 +6317,7 @@ function applyTrackerTick(eng, ts, playhead) {
         bg.rowVolume = parent.rowVolume;
         bg.channelPan = parent.channelPan;
         bg.rowPan = parent.rowPan;
+        bg.panbrelloOffset = parent.panbrelloOffset;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
         // Both axes follow the parent, the note axis carrying each layer's own
@@ -6539,9 +6573,10 @@ function generateTrackerAudio(eng, playhead, out) {
         if (voice.hasPanEnv && voice.panEnvOn) {
           let envPanRaw = Math.round(voice.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+            voice.panbrelloOffset;
         } else {
-          pan = voice.channelPan + voice.notePan + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         // equal-energy pan law
@@ -6609,9 +6644,10 @@ function generateTrackerAudio(eng, playhead, out) {
         if (bg.hasPanEnv && bg.panEnvOn) {
           let envPanRaw = Math.round(bg.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias +
+            bg.panbrelloOffset;
         } else {
-          pan = bg.channelPan + bg.notePan + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         lGain = Math.cos((Math.PI * pan) / 512.0);
@@ -7186,11 +7222,16 @@ class TaudEngine {
     if (this.playheads[ph].surroundModel !== SURROUND_STEREO) {
       return Math.round(foldAzimuthToPan(voiceAzimuth(v)));
     }
+    // Panbrello counts here (the surround branch already has it, via
+    // voiceAzimuth): it is a commanded movement the meter should show. The
+    // random pan swing still does not — that is per-trigger jitter, not a
+    // position the song asked for.
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
-      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128, 0), 255);
+      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset,
+        0), 255);
     }
-    return Math.min(Math.max(v.channelPan + v.notePan, 0), 255);
+    return Math.min(Math.max(v.channelPan + v.notePan + v.panbrelloOffset, 0), 255);
   }
 
   /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
@@ -7198,7 +7239,7 @@ class TaudEngine {
   getVoiceSpatialAzimuth(ph, vi) {
     const v = this._voice(ph, vi);
     return this.playheads[ph].surroundModel === SURROUND_STEREO
-      ? clamp(v.channelPan + v.notePan, 0, 255) : voiceAzimuth(v);
+      ? clamp(v.channelPan + v.notePan + v.panbrelloOffset, 0, 255) : voiceAzimuth(v);
   }
   getVoiceSpatialElevation(ph, vi) {
     const v = this._voice(ph, vi);
@@ -7778,9 +7819,9 @@ function fillSnapshotInto(eng, playhead, f) {
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);
         envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + v.notePan + envPanRaw - 128;
+        pan = v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset;
       } else {
-        pan = v.channelPan + v.notePan;
+        pan = v.channelPan + v.notePan + v.panbrelloOffset;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255

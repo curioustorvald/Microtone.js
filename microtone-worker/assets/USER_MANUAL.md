@@ -1160,7 +1160,7 @@ sidebar (also at [Note Effects](#effects)).
 | U | Fine vibrato | `$xy00` |
 | V | Global volume | `$xx00` (00–FF) |
 | W | Global vol slide | `$xy00` |
-| Y | Panbrello | `$xy00` — speed, depth |
+| Y | Panbrello | `$xxyy` — speed, depth |
 
 ### Ditto ghosts
 

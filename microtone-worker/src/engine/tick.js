@@ -7,7 +7,7 @@
 
 import { SAMPLING_RATE } from "./constants.js";
 import {
-  lfoSample, amigaSlideTick, linearFreqSlideTick, noteValToFreqHz, freqHzToNoteVal,
+  lfoSampleWide, amigaSlideTick, linearFreqSlideTick, noteValToFreqHz, freqHzToNoteVal,
   clamp,
 } from "./tables.js";
 import { computePlaybackRate, startFastFade } from "./sampler.js";
@@ -206,10 +206,10 @@ export function applyTrackerTick(eng, ts, playhead) {
     // Vibrato (H/U) — base-pitch overlay.
     let pitchToMixer = voice.noteVal;
     if (voice.vibratoActive) {
-      const sine = lfoSample(voice.vibratoLfoPos, voice.vibratoWave);
+      const sine = lfoSampleWide(voice.vibratoLfoPos, voice.vibratoWave);
       const pitchDelta = (sine * voice.mem.huDepth) >> voice.vibratoFineShift;
       pitchToMixer = clamp(voice.noteVal + pitchDelta, 0x20, 0xffff);
-      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed * 4) & 0xff;
+      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed) & 0x3ff;
     }
 
     // Glissando (S$1x) — snap pitchToMixer to nearest semitone (noteVal stays smooth).
@@ -220,18 +220,26 @@ export function applyTrackerTick(eng, ts, playhead) {
 
     // Tremolo (R) — modulates rowVolume around noteVolume (IT semantics).
     if (voice.tremoloActive) {
-      const sine = lfoSample(voice.tremoloLfoPos, voice.tremoloWave);
+      const sine = lfoSampleWide(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
       voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
-      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed * 4) & 0xff;
+      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed) & 0x3ff;
     }
 
-    // Panbrello (Y).
+    // Panbrello (Y) — a signed offset onto the mixer's pan sum. The shift is 7,
+    // not the 9 the 6-bit pan register wanted, because the sum it joins is the
+    // 8-bit one; the swing per depth unit is the same.
+    //
+    // The zero case belongs HERE and not in the per-row reset: a row boundary
+    // runs applyTrackerRow AFTER this pass (mixer.js), so a value cleared there
+    // stays cleared for the whole of the new row's first tick — which is one
+    // tick of dead-centre in the middle of a sweep that spans several rows.
     if (voice.panbrelloActive) {
-      const sine = lfoSample(voice.panbrelloLfoPos, voice.panbrelloWave);
-      const panDelta = (sine * voice.mem.yDepth) >> 9;
-      voice.rowPan = clamp((voice.channelPan >>> 2) + panDelta, 0, 0x3f);
-      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed * 4) & 0xff;
+      const sine = lfoSampleWide(voice.panbrelloLfoPos, voice.panbrelloWave);
+      voice.panbrelloOffset = (sine * voice.mem.yDepth) >> 7;
+      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed) & 0x3ff;
+    } else {
+      voice.panbrelloOffset = 0;
     }
 
     // Arpeggio (J) — overrides pitchToMixer for this tick.
@@ -390,6 +398,7 @@ export function applyTrackerTick(eng, ts, playhead) {
         bg.rowVolume = parent.rowVolume;
         bg.channelPan = parent.channelPan;
         bg.rowPan = parent.rowPan;
+        bg.panbrelloOffset = parent.panbrelloOffset;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
         // Both axes follow the parent, the note axis carrying each layer's own

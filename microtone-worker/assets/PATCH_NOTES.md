@@ -4,6 +4,18 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-09
+
+- Fixed: **Panbrello (`Y`) did nothing at all.** The LFO ran on every tick, but its swing was written to a pan register the mixer had stopped reading when panning went 8-bit, so the sound never moved. `Y $xxyy` — speed, depth — now sweeps the voice across the stereo field for as long as the rows carry it, and `S $5x` picks its waveform as documented.
+- Panbrello swings *around* where the voice already sits, rather than replacing it. A channel placed with `S $80xx` and a note placed by the panning column or by its instrument's own zone keep their positions, and the LFO rocks the sum — so panbrello on a stereo-spread instrument sways the whole spread instead of collapsing it to the centre. In a surround song it turns the source around you along the same arc.
+- A row without `Y` puts the voice straight back on its base pan, and a note pushed out of its channel by a new one (NNA) keeps sounding at the position it was swung to.
+- Fixed: a panbrello held across several rows snapped back to dead centre for the first tick of every row — an audible stutter once per row in the middle of the sweep. The LFO now carries across row boundaries unbroken.
+- The channel header's pan indicator and the master strip's source blobs follow the panbrello sweep, in the Timeline and on the radar alike, instead of sitting still at the channel's base position.
+- Fixed: the Manual's effect table gave Panbrello's argument as `$xy00`; it reads `$xxyy`, as the command palette already said.
+- **Vibrato, fine vibrato, tremolo and panbrello ran far too fast, and now run at the speed the source module asked for.** A converted module's LFO speed could come out anything up to seventeen times quicker than the tracker that wrote it — a slow pitch sway arriving as a warble, a gentle tremolo as a buzz. All four commands now read their speed byte on a scale that matches what IT, ST3, XM and MOD mean by it, to within a few per cent.
+- The speed byte is also sixteen times finer than a tracker's speed nibble, so `H $0100` through `H $FF00` walk from one cycle per thousand-odd ticks up to one per four, with everything in between reachable — worth knowing if you have been fighting the old scale to place a vibrato.
+- **This changes how existing songs play.** Anything with `H`, `U`, `R` or `Y` in it — imported or written here — will sound slower and more like the original than it did. Songs whose vibrato was dialled in by ear against the old behaviour will need their speeds revisited; the depth side is untouched.
+
 ## 2026-08-08
 
 - **Panning now has two independent kinds, the way volume always has.** The **panning column** pans the *note*; **S $80xx** and **P** pan the *channel*; the two add up. Volume has worked like this since the beginning — the volume column sets the note, `M` and `N` set the channel — and panning simply matches it now.

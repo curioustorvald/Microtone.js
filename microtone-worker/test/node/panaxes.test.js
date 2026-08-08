@@ -15,10 +15,15 @@ import assert from "node:assert/strict";
 
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, SAMPLING_RATE, setSamplingRate } from "../../src/engine/constants.js";
-import { EffectOp } from "../../src/engine/tables.js";
+import { EffectOp, lfoSampleWide } from "../../src/engine/tables.js";
 import {
   makeInstPatch, writePatchesBlob, buildMetaRecord, makeMetaLayer,
 } from "../../src/engine/inst.js";
+import { fillSnapshotInto } from "../../src/worklet/engine-commands.js";
+import {
+  SNAP_HEADER_SIZE, SNAP_VOICE_STRIDE, SNAP_V_EFF_PAN, SNAP_V_AZIMUTH,
+} from "../../src/worklet/protocol.js";
+import { MAX_VOICES } from "../../src/engine/constants.js";
 
 setSamplingRate(32000);
 
@@ -306,4 +311,120 @@ test("a pan-less layer 0 still lets the others spread around the commanded point
   assert.equal(voice0(eng).notePan, centre, "layer 0 takes the column's placement");
   assert.equal(kidOf(eng).layerRelPan, 0x20, "layer 1's own pan measured from centre");
   assert.equal(kidOf(eng).notePan, centre + 0x20);
+});
+
+// ── Panbrello (Y) rides the same sum ─────────────────────────────────────
+// Y used to write `rowPan`, the 6-bit register the mixer stopped reading when
+// pan went 8-bit: the LFO ran every tick and the sound never moved. It is an
+// offset onto the pan sum now, which is also what makes it modulate AROUND an
+// instrument's own pan instead of overwriting it.
+
+const Y_SPEED = 0x33, Y_DEPTH = 0x55, Y_ARG = 0x3355;
+/** The offset the engine will hold after `ticks` ticks of Y: the LFO advances
+ *  at the end of each tick, so tick 1 renders phase 0 and tick 2 phase `speed`
+ *  of the 1024-step accumulator. */
+const yOffsetAfter = (ticks) =>
+  (lfoSampleWide(((ticks - 1) * Y_SPEED) & 0x3ff, 0) * Y_DEPTH) >> 7;
+
+/** Worst |L|/|R| tick-energy imbalance over `ticks` — 1.0 is dead centre. */
+function worstImbalance(eng, ticks) {
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  let worst = 1;
+  for (let t = 0; t < ticks; t++) {
+    let eL = 0, eR = 0;
+    for (let i = 0; i < CHUNKS_PER_TICK; i++) {
+      eng.renderChunk(0, out);
+      for (let n = 0; n < TRACKER_CHUNK; n++) {
+        eL += Math.abs(out[n * 2] - 128);
+        eR += Math.abs(out[n * 2 + 1] - 128);
+      }
+    }
+    const ratio = eL / Math.max(eR, 1);
+    worst = Math.max(worst, ratio, 1 / Math.max(ratio, 1e-9));
+  }
+  return worst;
+}
+
+test("Y reaches the mixer at all", () => {
+  const eng = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_Y, arg: Y_ARG },
+  ]);
+  render(eng, 1);
+  assert.equal(voice0(eng).panbrelloOffset, 0, "phase 0 is the centre of the swing");
+  render(eng, 1);
+  const off = yOffsetAfter(2);
+  assert.ok(off !== 0, "the fixture's second tick is off-centre");
+  assert.equal(voice0(eng).panbrelloOffset, off, "(lfo × depth) >> 7, into the 8-bit sum");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x80 + off, "and the meters follow it");
+});
+
+test("Y actually pans the rendered audio", () => {
+  const withY = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_Y, arg: Y_ARG },
+  ]);
+  assert.ok(worstImbalance(withY, 6) > 1.5, "the row sweeps across the stereo field");
+
+  const withoutY = loadSong(makeEngine(), [{ row: 0, note: 0x5000, inst: 1 }]);
+  assert.ok(worstImbalance(withoutY, 6) < 1.1, "…and the same row without Y does not");
+});
+
+test("Y swings around both axes instead of writing either", () => {
+  const eng = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x8040 },
+    { row: 1, effect: EffectOp.OP_Y, arg: Y_ARG, pan: 0x30, panEff: 0 },
+  ]);
+  render(eng, 8); // row 1, second tick
+  const off = yOffsetAfter(2);
+  assert.equal(voice0(eng).panbrelloOffset, off);
+  assert.equal(voice0(eng).channelPan, 0x40, "Y left the channel axis alone");
+  assert.equal(voice0(eng).notePan, colFor(0x30) - 0x80, "…and the note axis too");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x40 + colFor(0x30) - 0x80 + off,
+    "it is a third term on the sum, not a replacement for either");
+});
+
+test("a row without Y puts the voice back on its base pan", () => {
+  const eng = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_Y, arg: Y_ARG },
+  ]);
+  render(eng, 2);
+  assert.ok(voice0(eng).panbrelloOffset !== 0, "swinging during row 0");
+  render(eng, 6); // row 1 carries no Y: the tick pass zeroes the offset again
+  assert.equal(voice0(eng).panbrelloOffset, 0, "stopped");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x80, "back at centre");
+});
+
+// A row boundary runs applyTrackerRow AFTER the tick pass, so anything the row
+// reset clears is still cleared while the new row's FIRST tick renders. Y's
+// offset therefore lives in the tick pass alone; it used to be cleared per row,
+// which put one tick of dead centre into the middle of every sustained sweep.
+test("a sweep held across rows never collapses at the row boundary", () => {
+  const rows = [{ row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_Y, arg: 0x1155 }];
+  for (let r = 1; r < 4; r++) rows.push({ row: r, effect: EffectOp.OP_Y, arg: 0x1155 });
+  const eng = loadSong(makeEngine(), rows);
+  render(eng, 1); // tick 0 of row 0 is the retrigger's own phase zero
+  for (let tick = 1; tick < 24; tick++) {
+    render(eng, 1);
+    assert.ok(voice0(eng).panbrelloOffset !== 0,
+      `tick ${tick} (row ${(tick / 6) | 0}) fell back to centre mid-sweep`);
+  }
+});
+
+// ── what the meters see ──────────────────────────────────────────────────
+// The channel-header pan slider and the master strip's blobs do not read the
+// engine directly: they read the worklet snapshot, which sums pan itself.
+
+test("the snapshot's pan follows the panbrello LFO", () => {
+  const eng = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x80a0 },
+    { row: 1, effect: EffectOp.OP_Y, arg: Y_ARG },
+  ]);
+  const snap = new Float64Array(SNAP_HEADER_SIZE + MAX_VOICES * SNAP_VOICE_STRIDE);
+  render(eng, 8); // row 1, second tick
+  fillSnapshotInto(eng, 0, snap);
+  const off = yOffsetAfter(2);
+  assert.ok(off !== 0);
+  assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_EFF_PAN], 0xa0 + off,
+    "the slider's value carries the swing");
+  assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_AZIMUTH], 0xa0 + off,
+    "and so does the blob's angle, which mirrors it in a stereo song");
 });

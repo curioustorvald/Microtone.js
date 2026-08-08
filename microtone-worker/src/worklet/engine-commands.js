@@ -119,9 +119,9 @@ export function fillSnapshotInto(eng, playhead, f) {
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);
         envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + v.notePan + envPanRaw - 128;
+        pan = v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset;
       } else {
-        pan = v.channelPan + v.notePan;
+        pan = v.channelPan + v.notePan + v.panbrelloOffset;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255

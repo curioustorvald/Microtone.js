@@ -442,16 +442,19 @@ export function mirrorPanByte(az) {
 
 /**
  * Effective azimuth of a voice: its own angle plus the note-pan offset, the pan
- * envelope's offset and the instrument's random pan swing — the surround twin
- * of the stereo path's pan sum, wrapping where that one clamps.
+ * envelope's offset, the instrument's random pan swing and the panbrello LFO —
+ * the surround twin of the stereo path's pan sum, wrapping where that one
+ * clamps. So a Y that sweeps a stereo song across the front arc sweeps a
+ * surround song along the same arc, and keeps turning past its ends.
  */
 export function voiceAzimuth(voice) {
   if (voice.hasPanEnv && voice.panEnvOn) {
     let envPanRaw = Math.round(voice.envPan * 255.0);
     envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias);
+    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+      voice.panbrelloOffset);
   }
-  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias);
+  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias + voice.panbrelloOffset);
 }
 
 /** Effective elevation: the channel's height plus the note's own offset. */
