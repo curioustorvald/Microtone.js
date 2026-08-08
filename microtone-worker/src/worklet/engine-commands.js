@@ -21,7 +21,9 @@ import {
   SNAP_M_PEAK, SNAP_M_TRUE_PEAK, SNAP_M_MEAN_SQUARE, SNAP_M_CLIP,
   SNAP_SCOPE_BASE,
 } from "./protocol.js";
-import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth } from "../engine/spatial.js";
+import {
+  SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth, voiceElevation,
+} from "../engine/spatial.js";
 import { ANALYSIS_MAX_METERS, makeAnalysisReadout } from "../engine/analysis.js";
 
 /** Reused drain target — the snapshot path never allocates. */
@@ -117,9 +119,9 @@ export function fillSnapshotInto(eng, playhead, f) {
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);
         envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + envPanRaw - 128;
+        pan = v.channelPan + v.notePan + envPanRaw - 128;
       } else {
-        pan = v.channelPan;
+        pan = v.channelPan + v.notePan;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
@@ -129,7 +131,7 @@ export function fillSnapshotInto(eng, playhead, f) {
         const az = voiceAzimuth(v);
         f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
         f[o + SNAP_V_AZIMUTH] = az;
-        f[o + SNAP_V_ELEVATION] = v.panElevation;
+        f[o + SNAP_V_ELEVATION] = voiceElevation(v);
       } else {
         f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
         f[o + SNAP_V_ELEVATION] = 0;

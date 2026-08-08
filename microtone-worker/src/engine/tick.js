@@ -20,7 +20,7 @@ import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA, cutLayerChildren,
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
-import { applyPanSet, applyPanSlide, stepTowardTarget } from "./spatial.js";
+import { applyPanSet, applyPanSlide, applyNotePanSlide, stepTowardTarget } from "./spatial.js";
 
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
@@ -163,11 +163,19 @@ export function applyTrackerTick(eng, ts, playhead) {
       if (voice.nSlideDir !== 0) {
         voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir * ts.volStep, 0, ts.volMax);
       }
+      // The panning column slides the NOTE axis, as its SET does (item 117);
+      // P slides the CHANNEL axis, as S $80xx sets it.
       if (voice.panColSlideRight !== 0) {
-        applyPanSlide(ts, voice, voice.panColSlideRight);
+        applyNotePanSlide(ts, voice, voice.panColSlideRight);
       }
       if (voice.panColSlideLeft !== 0) {
-        applyPanSlide(ts, voice, -voice.panColSlideLeft);
+        applyNotePanSlide(ts, voice, -voice.panColSlideLeft);
+      }
+      if (voice.chanPanSlideRight !== 0) {
+        applyPanSlide(ts, voice, voice.chanPanSlideRight);
+      }
+      if (voice.chanPanSlideLeft !== 0) {
+        applyPanSlide(ts, voice, -voice.chanPanSlideLeft);
       }
       // Spherical panning slide (Z, #998.2): one great-circle step per non-first
       // tick, at $xxx/16 azimuth units — X's units, so /8 in the engine's.
@@ -382,6 +390,13 @@ export function applyTrackerTick(eng, ts, playhead) {
         bg.rowPan = parent.rowPan;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
+        // BOTH axes follow the parent, exactly as the single pan register did
+        // before the split: the pattern's panning column reaches every layer,
+        // at the cost of a layer's own zone pan surviving only until the first
+        // tick. Pre-existing, and left alone here on purpose — changing it is
+        // an audible change to existing songs (CLAUDE.TODOLIST.md item 118).
+        bg.notePan = parent.notePan;
+        bg.noteElevation = parent.noteElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];

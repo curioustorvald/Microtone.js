@@ -231,8 +231,12 @@ test("the panning column places a source anywhere on the sphere", () => {
     { row: 0, note: 0x5000, inst: 1, azimuth: 384, elevation: 64, panEff: 0 },
   ]);
   render(eng, 2);
-  assert.equal(voice0(eng).panAzimuth, 384, "behind — the ninth bit reached the engine");
-  assert.equal(voice0(eng).panElevation, 64);
+  // Item 117: the panning column is the NOTE axis in a wide cell too, so the
+  // pair it writes is an offset from the channel's direction — which, with the
+  // channel at its default front, puts the source exactly where the cell says.
+  assert.equal(eng.getVoiceSpatialAzimuth(0, 0), 384, "behind — the ninth bit reached the engine");
+  assert.equal(eng.getVoiceSpatialElevation(0, 0), 64);
+  assert.equal(voice0(eng).panAzimuth, 128, "the channel's own direction is untouched");
 });
 
 test("a planar song keeps the column's azimuth and drops its elevation", () => {
@@ -241,8 +245,9 @@ test("a planar song keeps the column's azimuth and drops its elevation", () => {
     { row: 0, note: 0x5000, inst: 1, azimuth: 300, elevation: 100, panEff: 0 },
   ]);
   render(eng, 2);
-  assert.equal(voice0(eng).panAzimuth, 300);
-  assert.equal(voice0(eng).panElevation, 0);
+  assert.equal(eng.getVoiceSpatialAzimuth(0, 0), 300);
+  assert.equal(eng.getVoiceSpatialElevation(0, 0), 0);
+  assert.equal(voice0(eng).noteElevation, 0, "dropped at the write, not at the mixer");
 });
 
 test("a Z on the same row makes the column a slide TARGET, not a jump", () => {
@@ -268,9 +273,10 @@ test("the column's pan slides rotate by their low byte per tick", () => {
     { row: 1, azimuth: 10, panEff: 1 }, // slide right by 10 per tick
   ]);
   render(eng, 6);
-  const start = voice0(eng).panAzimuth;
+  const start = eng.getVoiceSpatialAzimuth(0, 0);
   render(eng, 6);
-  assert.equal(voice0(eng).panAzimuth - start, 50, "five non-first ticks × 10");
+  assert.equal(eng.getVoiceSpatialAzimuth(0, 0) - start, 50, "five non-first ticks × 10");
+  assert.equal(voice0(eng).panAzimuth, 128, "a column slide turns the note, not the channel");
 });
 
 // ── the second effect ────────────────────────────────────────────────────

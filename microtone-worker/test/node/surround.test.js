@@ -90,10 +90,14 @@ const voice0 = (eng) => eng.playheads[0].trackerState.voices[0];
 test("planar renders a plain-pan song BIT-IDENTICALLY to stereo", () => {
   // Every pan device the front arc can carry: an S $80xx set, a pan-column set,
   // a P slide and a pan-column slide, plus a second voice for the sum.
+  // The column values are chosen so the two axes SUM to a front-arc position
+  // throughout (item 117): that is the scope of the identity claim, since a
+  // channel-plus-note sum that leaves the arc saturates in stereo and wraps
+  // round the circle in a surround model — see the test below.
   const rows = [
     { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x8020 },
     { row: 1, effect: EffectOp.OP_P, arg: 0x0300 },   // slide right
-    { row: 2, pan: 0x3f, panEff: 0 },                  // pan-col SET (hard right)
+    { row: 2, pan: 0x20, panEff: 0 },                  // pan-col SET (just right of centre)
     { row: 3, effect: EffectOp.OP_P, arg: 0x4000 },   // slide left
     { row: 4, note: 0x5100, inst: 1, effect: EffectOp.OP_S, arg: 0x80c0 },
     { row: 5, pan: 0x08, panEff: 2 },                  // pan-col slide left
@@ -101,6 +105,24 @@ test("planar renders a plain-pan song BIT-IDENTICALLY to stereo", () => {
   const stereo = render(loadSong(makeTestEngine(SURROUND_STEREO), rows), 40);
   const planar = render(loadSong(makeTestEngine(SURROUND_PLANAR), rows), 40);
   assert.deepEqual(planar, stereo);
+});
+
+test("past the front arc the two models part company: stereo saturates, planar wraps", () => {
+  const rows = [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x80c0 }, // channel right
+    { row: 1, pan: 0x3f, panEff: 0 },  // …plus a hard-right note offset on top
+  ];
+  const stereo = loadSong(makeTestEngine(SURROUND_STEREO), rows);
+  render(stereo, 12);
+  assert.equal(voice0(stereo).channelPan + voice0(stereo).notePan, 0xc0 + 127,
+    "both axes hold their own value either way");
+  assert.equal(stereo.getVoiceEffectivePan(0, 0), 255, "stereo pan is a segment: it saturates");
+
+  const planar = loadSong(makeTestEngine(SURROUND_PLANAR), rows);
+  render(planar, 12);
+  assert.equal(planar.getVoiceSpatialAzimuth(0, 0), 0xc0 + 127, "planar pan is a circle: it turns");
+  assert.equal(planar.getVoiceEffectivePan(0, 0), 512 - (0xc0 + 127),
+    "and the monitor folds that rear position back onto the front arc");
 });
 
 test("a stereo song ignores X / 4 / Z entirely", () => {
@@ -305,8 +327,13 @@ test("a surround song places a note at the instrument's own azimuth and elevatio
   loadSong(eng, [{ row: 0, note: 0x5000, inst: 1 }]);
   render(eng, 2);
   const v = voice0(eng);
-  assert.equal(v.panAzimuth, 384, "behind the listener — the ninth bit must survive");
-  assert.equal(v.panElevation, 64, "+45°");
+  // Item 117: an instrument's default position is a NOTE-axis offset from the
+  // channel's direction, so it is the effective position that must land on 384
+  // — with the channel at its default front, the two are the same thing.
+  assert.equal(eng.getVoiceSpatialAzimuth(0, 0), 384,
+    "behind the listener — the ninth bit must survive");
+  assert.equal(eng.getVoiceSpatialElevation(0, 0), 64, "+45°");
+  assert.equal(v.panAzimuth, 128, "the channel itself was never moved");
   // The UI's meter still reads a folded byte, so the strip keeps meaning something.
   assert.equal(v.channelPan, 128);
 });
@@ -315,20 +342,21 @@ test("the ninth azimuth bit is what puts a default behind the listener", () => {
   const front = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 0x80 });
   loadSong(front, [{ row: 0, note: 0x5000, inst: 1 }]);
   render(front, 2);
-  assert.equal(voice0(front).panAzimuth, 128, "bit clear = the front arc, as ever");
+  assert.equal(front.getVoiceSpatialAzimuth(0, 0), 128, "bit clear = the front arc, as ever");
 
   const behind = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 0x180 });
   loadSong(behind, [{ row: 0, note: 0x5000, inst: 1 }]);
   render(behind, 2);
-  assert.equal(voice0(behind).panAzimuth, 384, "bit set = the same angle, rear arc");
+  assert.equal(behind.getVoiceSpatialAzimuth(0, 0), 384, "bit set = the same angle, rear arc");
 });
 
 test("a planar song ignores the elevation, a stereo song ignores both", () => {
   const planar = makeInstPosEngine(SURROUND_PLANAR, { azimuth: 384, elevation: 64 });
   loadSong(planar, [{ row: 0, note: 0x5000, inst: 1 }]);
   render(planar, 2);
-  assert.equal(voice0(planar).panAzimuth, 384);
-  assert.equal(voice0(planar).panElevation, 0, "planar songs stay on the horizon");
+  assert.equal(planar.getVoiceSpatialAzimuth(0, 0), 384);
+  assert.equal(planar.getVoiceSpatialElevation(0, 0), 0, "planar songs stay on the horizon");
+  assert.equal(voice0(planar).noteElevation, 0, "dropped at the write, not at the mixer");
 
   // Stereo: byte 177 alone, exactly as before the spatial fields existed.
   const stereo = makeInstPosEngine(SURROUND_STEREO, { azimuth: 0x180, elevation: 64 });

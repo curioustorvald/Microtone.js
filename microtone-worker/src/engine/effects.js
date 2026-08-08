@@ -228,9 +228,9 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       } else if (lo === 0xf && hin !== 0) {
         applyPanSlide(ts, voice, -hin);
       } else if (hin === 0 && lo !== 0) {
-        voice.panColSlideRight = lo;
+        voice.chanPanSlideRight = lo;
       } else if (lo === 0 && hin !== 0) {
-        voice.panColSlideLeft = hin;
+        voice.chanPanSlideLeft = hin;
       }
       break;
     }

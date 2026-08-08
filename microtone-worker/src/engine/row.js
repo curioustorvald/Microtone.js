@@ -119,6 +119,7 @@ export function applyTrackerRow(eng, ts, playhead) {
     voice.wSlideDir = 0;
     voice.volColSlideUp = 0; voice.volColSlideDown = 0;
     voice.panColSlideRight = 0; voice.panColSlideLeft = 0;
+    voice.chanPanSlideRight = 0; voice.chanPanSlideLeft = 0;
     voice.spatialSlideActive = false; // Z re-arms per row, like every other slide
     voice.nSlideDir = 0;
     voice.rowEffect = row.effect;

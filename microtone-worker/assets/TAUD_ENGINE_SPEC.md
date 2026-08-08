@@ -203,8 +203,8 @@ This is how a SoundFont instrument — whose single modulation envelope drives p
 | Default note volume | Seeds the per-note volume axis at trigger, unless the row carries a volume-column SET. A stored 0 means "not present" and falls back to 63 |
 | Initial attenuation | A velocity-independent amplitude multiplier from the decibel octet table. Deliberately **not** folded into the envelope, so the envelope keeps its full 0…63 resolution |
 | Volume swing / pan swing | A random bias drawn **once per trigger**: `⌊random × (2·swing + 1)⌋ − swing`. Volume swing scales output by `1 + bias ÷ 255`; pan swing adds `bias` to the pan sum |
-| Default pan | Applied at trigger, but only when the row carried an instrument byte **and** either the pan envelope's LOOP word has the `p` bit set or the resolved patch supplies its own pan ([§5.3.1](#5-3-1-the-default-position)) |
-| Pitch-pan centre / separation | Also trigger-time, also only with an instrument byte: `pan_shift = ⌊((note − centre) ÷ 4096) × separation × 4⌋`, applied as a pan slide |
+| Default pan | Applied at trigger to the NOTE-pan axis, but only when the row carried an instrument byte **and** either the pan envelope's LOOP word has the `p` bit set or the resolved patch supplies its own pan ([§5.3.1](#5-3-1-the-default-position)) |
+| Pitch-pan centre / separation | Also trigger-time, also only with an instrument byte: `pan_shift = ⌊((note − centre) ÷ 4096) × separation × 4⌋`, applied as a slide on the note-pan axis. It ACCUMULATES across notes on an instrument that brings no default pan of its own, which is IT's arithmetic |
 | Percussion flag | Purely advisory to editors: a retuner or transposer **MUST NOT** move this instrument's notes. The engine ignores it |
 
 ## 5. The row pass
@@ -278,12 +278,14 @@ A trigger takes its default position from one of two places, and either is enoug
 - **The resolved patch's `default pan`**, whenever that is not the `0xFF` sentinel. A patch override needs no further permission — see below.
 - **The base record**, but only when the pan envelope's LOOP word carries the `p` bit ("use default pan").
 
-When both are available the patch wins. What the winner means depends on the song's surround model:
+Whichever applies, it is written to the **note-pan axis** — an offset from the channel's own direction, not a channel position (TAUD_NOTE_EFFECTS.md §3a). An instrument never writes `channel_pan`, exactly as it never writes `channel_vol`: the channel says where the part sits, the instrument says where the note sits within it. With the channel at its `$80` / front default the two coincide, which is why a file that predates the split sounds unchanged; once the pattern has moved the channel with `S $80xx`, `P`, `X` or `Z`, the instrument's whole arrangement rotates with it instead of collapsing onto the commanded point.
+
+The two sources are mutually **exclusive** — they are the same statement at two levels of specificity, so when both are available the patch wins and the base record's fields do not also apply. What the winner means depends on the song's surround model:
 
 - **Stereo** — a pan byte: the instrument's record 177, or the patch's. Unchanged from the days before the spatial fields existed.
 - **Planar or spatial** — the instrument's default **position**: a 9-bit azimuth whose low byte is that same byte 177 and whose ninth bit is record byte 14's `A` flag, plus the signed elevation in record byte 254. A planar song forces the elevation to zero.
 
-A patch overrides the azimuth only, and only within the front arc: a patch record holds an 8-bit pan and no elevation and no ninth bit, so the instrument's height stands whichever pan wins. The pan ENVELOPE offsets the azimuth and leaves the elevation where it is.
+A patch overrides the azimuth only, and only within the front arc: a patch record holds an 8-bit pan and no elevation and no ninth bit, so the instrument's height stands whichever pan wins. The pan ENVELOPE offsets the azimuth on top of both axes and leaves the elevation where it is.
 
 **Why `p` does not gate the patch.** The `p` bit lives in the base record's pan envelope, and a patch may replace that envelope wholesale — its own `p` block carries its own LOOP word. Gating the patch's pan on `p` would therefore let a patch silently disable its own override, and would leave every SoundFont-derived bank centred: those base records carry no pan envelope at all, so `p` is clear, while the per-zone pan sits in each patch's byte 24. The patch's `0xFF` sentinel *is* its enable flag.
 
@@ -305,11 +307,11 @@ If the trigger's instrument is a Metainstrument, the engine first **releases** t
 
 Then it collects every layer whose rectangle contains the trigger, in record order. Under **strict layering** it additionally drops any layer whose own instrument resolves no patch at the (detuned) trigger. If nothing survives, the channel goes **silent** for this note — that is the correct outcome, not a fallback.
 
-Otherwise the first surviving layer sounds on the foreground voice and every further layer spawns a background voice bound to this channel. Each child inherits the parent's channel volume, pan, azimuth and elevation **as they stood before the foreground layer retriggered**, carries the parent's *relative* detune, and takes its own mix gain from the decibel octet table.
+Otherwise the first surviving layer sounds on the foreground voice and every further layer spawns a background voice bound to this channel. Each child inherits the parent's channel volume, note volume, and both pan axes — channel pan, note pan, azimuth and elevation — **as they stood before the foreground layer retriggered**, carries the parent's *relative* detune, and takes its own mix gain from the decibel octet table.
 
 The order matters: the child inherits that channel context *before* it is triggered, so its own trigger can still move it to its own default position ([§5.3.1](#5-3-1-the-default-position)). Inheriting the parent's pan afterwards would flatten every layer onto the first one's position — audible as a SoundFont kit whose layers are meant to pan apart collapsing to a point.
 
-Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune), key-off, note-fading, channel volume, note volume, row volume, pan, azimuth and elevation. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
+Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune), key-off, note-fading, channel volume, note volume, row volume, and both pan axes (channel pan, note pan, azimuth and elevation). The note-pan resync is what carries a panning column written on the meta's channel to every layer; its cost is that a layer's own default position only survives to the first tick, which is the behaviour the pre-split engine had and this specification keeps. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
 
 Layer indices are 10 bits, so layers **MAY** live in the auxiliary instrument bin, which a pattern cell cannot reach. A layer index pointing at another Metainstrument, or at instrument 0, is skipped.
 
@@ -354,8 +356,10 @@ The columns are applied after the note event and before the effect column.
 - **Volume SET** writes the note volume (and rebases the row volume onto it).
 - **Volume slide up/down** arms a per-tick slide for ticks after the first.
 - **Volume fine** applies a one-shot delta at tick 0 — bit 5 of the value is the direction, bits 0…4 the magnitude. A value of 0 is the canonical no-op.
-- **Pan SET** writes the channel pan, scaled from six bits to eight as `(v << 2) | (v >> 4)`. `S $80xx` on the same row **wins** over this.
-- **Pan slides** behave like the volume slides but move the pan, and in a surround song they **wrap** the azimuth where the stereo model clamps.
+- **Pan SET** writes the **note** pan, scaled from six bits to eight as `(v << 2) | (v >> 4)` and taken as an offset from centre. It replaces whatever the instrument seeded, so it is how a composer pans one note of a zone-panned instrument by hand. An `S $80xx` on the same row addresses the other axis and both apply.
+- **Pan slides** behave like the volume slides but move the note pan, and in a surround song they **wrap** the azimuth where the stereo model clamps. They keep their own per-tick accumulator, separate from effect `P`'s, so a `P` and a column slide on one row move the two axes independently.
+
+Both columns write the per-note axis of their quantity and neither can reach the per-channel one (TAUD_NOTE_EFFECTS.md §3, §3a); `M` / `N` and `S $80xx` / `P` / `X` / `4` / `Z` are the commands that can.
 
 The pan column's SET keeps its front-arc meaning in every surround model — six bits cannot express a full turn, and `S $8xxx` and `X` are the commands that can.
 
@@ -376,7 +380,7 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 5. **Pitch slides** (`E`, `F` coarse) on ticks after the first, in the current tone mode.
 6. **Tone portamento** on ticks after the first: step toward the target and stop exactly on it, in note space or Hz space per the tone mode.
 7. **Volume slides** — the effect-column coarse slide and the volume-column slides — on ticks after the first.
-8. **Channel-volume slide** (`N`) and **pan-column slides**, on ticks after the first.
+8. **Channel-volume slide** (`N`), the **pan-column slides** (note axis) and effect `P`'s slide (channel axis), on ticks after the first.
 9. **Spatial slide** (`Z`) on ticks after the first ([§11.5](#11-5-the-z-slide)).
 10. **Tremor** (`I`): advance the on/off phase counter; while off, force the row volume to 0.
 11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed × 4`, modulo 256.
@@ -630,12 +634,14 @@ The **fader** is a host-owned 256-step attenuator per channel (0 = unity, 255 = 
 In the stereo model, an equal-energy law:
 
 ```
-pan   = clamp(channel_pan + envelope_pan_offset + pan_swing_bias, 0, 255)
+pan   = clamp(channel_pan + note_pan + envelope_pan_offset + pan_swing_bias, 0, 255)
 left  = cos(π · pan ÷ 512)
 right = sin(π · pan ÷ 512)
 ```
 
 where `envelope_pan_offset` is `clamp(round(env_pan × 255), 0, 255) − 128` when the pan envelope is present and enabled, and 0 otherwise. There is no runtime choice of panning law.
+
+`note_pan` is the per-note axis (TAUD_NOTE_EFFECTS.md §3a), a signed offset that is 0 unless an instrument or the panning column has written it — which is why a song that never touches it renders exactly as it did when the engine held one pan register. Note that the clamp is on the SUM: two axes that each sit inside the range can still add to a position outside it, and in a stereo song that saturates. The surround models wrap instead ([§11](#11-the-spatial-model)), so the identity between models holds for a summed position on the front arc.
 
 For the planar and spatial models, see [§11](#11-the-spatial-model).
 
@@ -666,6 +672,15 @@ The song table's immutable `ss` flag selects one of three models, and it is immu
 | 2 — spatial | The full sphere |
 
 A planar or spatial song that uses only ordinary pan **MUST** render bit-identically to the same song in stereo mode. The stereo renderer therefore reuses the mixer's own `cos`/`sin` expression, and the object bus preserves the stereo path's factor order and accumulates in binary64. This is not an optimisation detail; it is the compatibility guarantee that lets a song change model without changing sound.
+
+The guarantee is scoped to a **summed** position on the front arc (`channel_pan + note_pan`, TAUD_NOTE_EFFECTS.md §3a). The two pan spaces genuinely differ past that point — a stereo song's is a segment and saturates at its ends, a surround song's is a circle and turns — so a song that drives the sum beyond `$00`…`$FF` is no longer "using only ordinary pan" and the models are permitted to differ. In a surround song the effective direction is
+
+```
+azimuth = wrap(channel_azimuth + note_pan + envelope_pan_offset + pan_swing_bias)
+elevation = channel_elevation + note_elevation
+```
+
+with the same addends as the stereo law, wrapping where that one clamps.
 
 ### 11.2 Angles
 

@@ -916,23 +916,56 @@ function applyElevation(ts, voice, el) {
   voice.panElevation = ts.surroundModel === SURROUND_SPATIAL ? el : 0.0;
 }
 
+// ── Note-pan axis ─────────────────────────────────────────────────────────
+// The channel trio above places the CHANNEL; this pair offsets the note within
+// it. The offset is stored signed with 0 = neutral, so the writers take the
+// same 128-is-centre values every other pan command takes and subtract the
+// centre themselves — an Ixmp patch pan of $80 and a column SET of centre both
+// mean "no shift", whatever the channel is doing.
+
+/** Fold a note offset into range: clamped like a stereo pan, wrapped like an angle. */
+function boundNoteOffset(ts, off) {
+  if (ts.surroundModel === SURROUND_STEREO) return clamp(off, -0xff, 0xff);
+  return wrapAzimuth(off + AZIMUTH_TURN / 2) - AZIMUTH_TURN / 2;
+}
+
+/** Note-pan write: absolute. `pan` is a legacy byte or 9-bit angle, 128 = centre. */
+function applyNotePanSet(ts, voice, pan) {
+  voice.notePan = boundNoteOffset(ts, pan - AZ_FRONT);
+}
+
+/** Note-pan write: signed delta. */
+function applyNotePanSlide(ts, voice, delta) {
+  voice.notePan = boundNoteOffset(ts, voice.notePan + delta);
+}
+
+/** Note-elevation write (wide panning column). Planar songs stay on the horizon. */
+function applyNoteElevation(ts, voice, el) {
+  voice.noteElevation = ts.surroundModel === SURROUND_SPATIAL ? el : 0.0;
+}
+
 /** The integer pan the UI and ghost copies see: the monitoring (folded) byte. */
 function mirrorPanByte(az) {
   return Math.round(foldAzimuthToPan(az));
 }
 
 /**
- * Effective azimuth of a voice: its own angle plus the pan envelope's offset
- * and the instrument's random pan swing — the surround twin of the stereo
- * path's pan sum, wrapping where that one clamps.
+ * Effective azimuth of a voice: its own angle plus the note-pan offset, the pan
+ * envelope's offset and the instrument's random pan swing — the surround twin
+ * of the stereo path's pan sum, wrapping where that one clamps.
  */
 function voiceAzimuth(voice) {
   if (voice.hasPanEnv && voice.panEnvOn) {
     let envPanRaw = Math.round(voice.envPan * 255.0);
     envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-    return wrapAzimuth(voice.panAzimuth + envPanRaw - 128 + voice.randomPanBias);
+    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias);
   }
-  return wrapAzimuth(voice.panAzimuth + voice.randomPanBias);
+  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias);
+}
+
+/** Effective elevation: the channel's height plus the note's own offset. */
+function voiceElevation(voice) {
+  return voice.panElevation + voice.noteElevation;
 }
 
 const angleScratch = new Float64Array(2);
@@ -949,7 +982,7 @@ function voiceGainsCache(bus, voice, sc) {
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
   const az = voiceAzimuth(voice);
-  const el = voice.panElevation;
+  const el = voiceElevation(voice);
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
     sc = {
       az: NaN, el: NaN, chans: 0, renderer: null,
@@ -2727,12 +2760,23 @@ class Voice {
     this.metaForeground = false;
     this.noteFading = false;
 
-    // Two-volume model (TAUD_NOTE_EFFECTS.md §3).
+    // Two-axis volume AND pan model (TAUD_NOTE_EFFECTS.md §3). Both axes work
+    // the same way on either side: the instrument seeds the NOTE axis and the
+    // pattern's channel commands own the CHANNEL axis, and the two combine at
+    // the mixer — volume multiplies, pan adds.
     this.noteVolume = 0x3f;
     this.channelVolume = 0x3f;
     this.rowVolume = 63;
     this.channelPan = 0x80;
     this.rowPan = 32;
+    // Note-pan axis: a signed OFFSET from the channel's position, in the same
+    // 512-units-to-a-turn space as panAzimuth (so on the front arc it is just a
+    // pan-byte delta). 0 = neutral, which is what keeps a song that never
+    // touches it rendering exactly as it did under the single-register model.
+    // Seeded by the Ixmp patch's `default pan` and written by the panning
+    // column; nothing else may write it.
+    this.notePan = 0;
+    this.noteElevation = 0.0;      // the wide panning column's elevation half
 
     // ── Spatial position (#998) — used only when the song is planar/spatial.
     // channelPan stays the legacy integer (and the UI's mirror); panAzimuth is
@@ -2953,8 +2997,12 @@ class Voice {
     // Volume / pan column slides.
     this.volColSlideUp = 0;
     this.volColSlideDown = 0;
-    this.panColSlideRight = 0;
+    // Per-tick pan slides, one pair per axis — the pan twin of nSlideDir (N,
+    // channel volume) vs volColSlide* (the volume column, note volume).
+    this.panColSlideRight = 0;   // the panning column's, on the note axis
     this.panColSlideLeft = 0;
+    this.chanPanSlideRight = 0;  // effect P's, on the channel axis
+    this.chanPanSlideLeft = 0;
     this.nSlideDir = 0;
 
     // Bitcrusher (8) / Overdrive (9).
@@ -3436,6 +3484,8 @@ class Playhead {
       it.rowPan = 32;
       it.panAzimuth = 128.0;
       it.panElevation = 0.0;
+      it.notePan = 0;
+      it.noteElevation = 0.0;
       it.spatialTargetAz = 128.0;
       it.spatialTargetEl = 0.0;
       it.spatialSlideActive = false;
@@ -4393,6 +4443,11 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   // still carries to every layer that has no default of its own (item 116).
   const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
   const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
+  // The note axis as it stands before layer 0 retriggers, for the same reason
+  // and with the same caveat as chanPan: it may still hold the PREVIOUS note's
+  // zone pan, which a pan-less layer then inherits. Faithful to the pre-split
+  // engine, quirk included (see CLAUDE.TODOLIST.md item 118).
+  const chanNotePan = voice.notePan, chanNoteEl = voice.noteElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
@@ -4408,6 +4463,8 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.rowPan = chanRowPan;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
+    child.notePan = chanNotePan;
+    child.noteElevation = chanNoteEl;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
@@ -4490,32 +4547,55 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     ? Math.trunc(random() * (2 * inst.panSwing + 1)) - inst.panSwing : 0;
   // Default pan / pitch-pan separation: only when the row carried an instrument byte.
   if (instId !== 0) {
-    // Pan LOOP word bit 7 = 'p' ("use default pan") gates the BASE record's
-    // byte 177 only. An Ixmp patch's default pan carries its own sentinel
-    // (0xFF = no override) and applies whether or not 'p' is set: the patch is
-    // free to bring its own pan envelope, whose LOOP word REPLACES the base
-    // record's, so gating a patch override on 'p' would let the patch disable
-    // its own pan (item 116). SF2-derived banks are the common case — per-zone
-    // pan on a base record that carries no pan envelope at all.
+    // Everything an INSTRUMENT says about panning lands on the note axis (item
+    // 117), never on the channel's own position — the exact mirror of the
+    // volume side, where an instrument seeds `note_vol` and only M / N may
+    // touch `channel_vol`. That is what lets `S $80xx` ROTATE a zone-panned
+    // instrument instead of being flattened by its next note: the channel says
+    // where the part sits, the instrument says where the note sits within it.
+    //
+    // Two sources, in specificity order, and mutually EXCLUSIVE because they
+    // are the same statement at two levels — an SF2 bank that applied its
+    // record pan AND its zone pan would double every displacement:
+    //
+    //  - An Ixmp patch's default pan is per-ZONE, so a patched instrument's pan
+    //    changes with the note being played. It carries its own sentinel
+    //    (0xFF = no override) and applies whether or not 'p' is set: the patch
+    //    is free to bring its own pan envelope, whose LOOP word REPLACES the
+    //    base record's, so gating a patch override on 'p' would let the patch
+    //    disable its own pan (item 116). SF2-derived banks are the common case.
+    //  - Otherwise pan LOOP word bit 7 = 'p' ("use default pan") gates the base
+    //    record's byte 177.
+    //
+    // The seed gate is unchanged: a trigger that brings NEITHER leaves the note
+    // axis alone, so a pan column SET survives it exactly as it did when both
+    // axes lived in one register.
     const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
-    if (patchPan !== null || ((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
+    if (patchPan !== null) {
+      applyNotePanSet(ts, voice, patchPan);
+    } else if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       if (ts.surroundModel === SURROUND_STEREO) {
-        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
+        applyNotePanSet(ts, voice, inst.defaultPan);
       } else {
         // Surround: the instrument's default is a POSITION (#998). Its azimuth
         // is nine bits (byte 177 + byte 14's `A`), so it can sit behind the
-        // listener, and its elevation comes from record byte 254. An Ixmp patch
-        // can only override the azimuth — the patch record has no elevation
-        // field — so the instrument's height stands whichever pan is used.
-        applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultAzimuth);
-        applyElevation(ts, voice, inst.defaultElevation);
+        // listener, and its elevation comes from record byte 254. Both are read
+        // as offsets from the channel's direction, so an instrument that wants
+        // to sound half-left of wherever the part is placed can say so.
+        applyNotePanSet(ts, voice, inst.defaultAzimuth);
+        applyNoteElevation(ts, voice, inst.defaultElevation);
       }
     }
-    // Pitch-pan separation.
+    // Pitch-pan separation — an instrument property, and pitch-derived, so it
+    // shifts the note axis on top of whichever seed above ran. It still
+    // ACCUMULATES across notes on an instrument that brings no default pan of
+    // its own, which is IT's arithmetic (IT adds PPS to the pan it is holding
+    // and only the default pan re-seeds that); it accumulates in note-axis
+    // units now instead of channel-axis ones.
     if (inst.pitchPanSeparation !== 0) {
       const noteDelta = (noteVal - inst.pitchPanCentre) / 4096.0;
       const panShift = Math.trunc(noteDelta * inst.pitchPanSeparation * 4.0);
-      applyPanSlide(ts, voice, panShift);
+      applyNotePanSlide(ts, voice, panShift);
     }
   }
   // Filter defaults (ACTIVE values; patch 'x' block overrides base inst).
@@ -4640,9 +4720,12 @@ function ghostVoice(src, channel) {
   v.rowVolume = src.rowVolume;
   v.channelPan = src.channelPan;
   v.rowPan = src.rowPan;
-  // Spatial position travels with the ghost: it keeps sounding where it was.
+  // Spatial position travels with the ghost: it keeps sounding where it was —
+  // both axes, since the note it is still sounding brought its own offset.
   v.panAzimuth = src.panAzimuth;
   v.panElevation = src.panElevation;
+  v.notePan = src.notePan;
+  v.noteElevation = src.noteElevation;
   v.spatialTargetAz = src.spatialTargetAz;
   v.spatialTargetEl = src.spatialTargetEl;
   v.currentMixVolume = src.currentMixVolume;
@@ -4798,25 +4881,30 @@ function applyVolColumn(ts, voice, value, sel) {
 }
 
 /**
- * Pan column. S $80xx on the same row wins over the 6-bit SET here.
+ * Pan column — the NOTE pan axis (item 117), the exact counterpart of the
+ * volume column owning `note_vol` while M / N own `channel_vol`. All four
+ * selectors write it, so a column SET places THIS note and leaves the channel's
+ * own position (S $80xx, P, X, Z) standing underneath: on a zone-panned Ixmp
+ * instrument the SET is what overrides the zone, and the channel commands are
+ * what rotate it. There is consequently nothing left to arbitrate when a row
+ * carries both a SET and an S $80xx — they address different registers, so both
+ * apply.
  *
  * The 6-bit SET keeps its front-arc mapping in every surround model — the
  * column has no room for a 360° angle, and S $8xxx / X are the commands that
  * do. The slides, however, wrap with the rest of the pan machinery.
  */
 function applyPanColumn(ts, voice, value, sel) {
-  const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
-                    ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
   switch (sel) {
     case 0:
-      if (!rowHasS80) applyPanSet(ts, voice, (value << 2) | (value >>> 4));
+      applyNotePanSet(ts, voice, (value << 2) | (value >>> 4));
       break;
     case 1: voice.panColSlideRight = value; break;
     case 2: voice.panColSlideLeft = value; break;
     case 3: {
       if (value === 0) return;
       const mag = value & 0x1f;
-      applyPanSlide(ts, voice, (value & 0x20) !== 0 ? mag : -mag);
+      applyNotePanSlide(ts, voice, (value & 0x20) !== 0 ? mag : -mag);
       break;
     }
   }
@@ -4827,25 +4915,26 @@ function applyPanColumn(ts, voice, value, sel) {
  * elevation, so the column alone can place a source anywhere on the sphere —
  * the six bits of the narrow cell only ever reached the front arc.
  *
- * Two rows of the same channel can disagree, and the rules for that are the
- * narrow cell's, extended: `S $8xxx` still wins over a column SET, and a `Z`
- * slide on the same row turns a SET into that slide's TARGET rather than a jump
- * (the column says what effect `4` would have said, and outranks a `4` on the
- * same row for being the more specific statement).
+ * Like the narrow column it is the NOTE axis (item 117) — the wide cell is the
+ * same two lanes at higher resolution, exactly as its volume column is still
+ * `note_vol` with a whole byte instead of six bits — so its azimuth and
+ * elevation are both offsets from wherever the channel is pointing.
+ *
+ * The one exception is a `Z` slide on the same row, which turns the SET into
+ * that slide's TARGET rather than a jump (the column says what effect `4` would
+ * have said, and outranks a `4` on the same row for being the more specific
+ * statement). A Z target names an absolute direction for the CHANNEL to travel
+ * to, so on those rows — and only those — the column speaks for the channel.
  */
 function applyPanColumnWide(ts, voice, row) {
   switch (row.panEff) {
     case 0: {
-      const rowHasS80 = voice.rowEffect === EffectOp.OP_S &&
-                        ((voice.rowEffectArg >>> 12) & 0xf) === 0x8;
-      if (rowHasS80) break;
-      const el = ts.surroundModel === SURROUND_SPATIAL ? row.elevation : 0;
       if (rowSlidesSpatially(row)) {
         voice.spatialTargetAz = row.azimuth;
-        voice.spatialTargetEl = el;
+        voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? row.elevation : 0;
       } else {
-        applyPanSet(ts, voice, row.azimuth);
-        applyElevation(ts, voice, row.elevation);
+        applyNotePanSet(ts, voice, row.azimuth);
+        applyNoteElevation(ts, voice, row.elevation);
       }
       break;
     }
@@ -4856,7 +4945,7 @@ function applyPanColumnWide(ts, voice, row) {
     case 3: {
       const mag = row.azimuth & 0xff;
       if (mag === 0) return;
-      applyPanSlide(ts, voice, (row.azimuth & 0x100) !== 0 ? mag : -mag);
+      applyNotePanSlide(ts, voice, (row.azimuth & 0x100) !== 0 ? mag : -mag);
       break;
     }
   }
@@ -5092,9 +5181,9 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       } else if (lo === 0xf && hin !== 0) {
         applyPanSlide(ts, voice, -hin);
       } else if (hin === 0 && lo !== 0) {
-        voice.panColSlideRight = lo;
+        voice.chanPanSlideRight = lo;
       } else if (lo === 0 && hin !== 0) {
-        voice.panColSlideLeft = hin;
+        voice.chanPanSlideLeft = hin;
       }
       break;
     }
@@ -5504,6 +5593,7 @@ function applyTrackerRow(eng, ts, playhead) {
     voice.wSlideDir = 0;
     voice.volColSlideUp = 0; voice.volColSlideDown = 0;
     voice.panColSlideRight = 0; voice.panColSlideLeft = 0;
+    voice.chanPanSlideRight = 0; voice.chanPanSlideLeft = 0;
     voice.spatialSlideActive = false; // Z re-arms per row, like every other slide
     voice.nSlideDir = 0;
     voice.rowEffect = row.effect;
@@ -5917,11 +6007,19 @@ function applyTrackerTick(eng, ts, playhead) {
       if (voice.nSlideDir !== 0) {
         voice.channelVolume = clamp(voice.channelVolume + voice.nSlideDir * ts.volStep, 0, ts.volMax);
       }
+      // The panning column slides the NOTE axis, as its SET does (item 117);
+      // P slides the CHANNEL axis, as S $80xx sets it.
       if (voice.panColSlideRight !== 0) {
-        applyPanSlide(ts, voice, voice.panColSlideRight);
+        applyNotePanSlide(ts, voice, voice.panColSlideRight);
       }
       if (voice.panColSlideLeft !== 0) {
-        applyPanSlide(ts, voice, -voice.panColSlideLeft);
+        applyNotePanSlide(ts, voice, -voice.panColSlideLeft);
+      }
+      if (voice.chanPanSlideRight !== 0) {
+        applyPanSlide(ts, voice, voice.chanPanSlideRight);
+      }
+      if (voice.chanPanSlideLeft !== 0) {
+        applyPanSlide(ts, voice, -voice.chanPanSlideLeft);
       }
       // Spherical panning slide (Z, #998.2): one great-circle step per non-first
       // tick, at $xxx/16 azimuth units — X's units, so /8 in the engine's.
@@ -6136,6 +6234,13 @@ function applyTrackerTick(eng, ts, playhead) {
         bg.rowPan = parent.rowPan;
         bg.panAzimuth = parent.panAzimuth;
         bg.panElevation = parent.panElevation;
+        // BOTH axes follow the parent, exactly as the single pan register did
+        // before the split: the pattern's panning column reaches every layer,
+        // at the cost of a layer's own zone pan surviving only until the first
+        // tick. Pre-existing, and left alone here on purpose — changing it is
+        // an audible change to existing songs (CLAUDE.TODOLIST.md item 118).
+        bg.notePan = parent.notePan;
+        bg.noteElevation = parent.noteElevation;
       }
     }
     const inst = eng.instruments[bg.instrumentId];
@@ -6381,9 +6486,9 @@ function generateTrackerAudio(eng, playhead, out) {
         if (voice.hasPanEnv && voice.panEnvOn) {
           let envPanRaw = Math.round(voice.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = voice.channelPan + envPanRaw - 128 + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias;
         } else {
-          pan = voice.channelPan + voice.randomPanBias;
+          pan = voice.channelPan + voice.notePan + voice.randomPanBias;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         // equal-energy pan law
@@ -6451,9 +6556,9 @@ function generateTrackerAudio(eng, playhead, out) {
         if (bg.hasPanEnv && bg.panEnvOn) {
           let envPanRaw = Math.round(bg.envPan * 255.0);
           envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = bg.channelPan + envPanRaw - 128 + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias;
         } else {
-          pan = bg.channelPan + bg.randomPanBias;
+          pan = bg.channelPan + bg.notePan + bg.randomPanBias;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
         lGain = Math.cos((Math.PI * pan) / 512.0);
@@ -7030,19 +7135,21 @@ class TaudEngine {
     }
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
-      return Math.min(Math.max(v.channelPan + envPanRaw - 128, 0), 255);
+      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128, 0), 255);
     }
-    return Math.min(Math.max(v.channelPan, 0), 255);
+    return Math.min(Math.max(v.channelPan + v.notePan, 0), 255);
   }
 
   /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
    *  Stereo songs report the pan byte's front-arc position. */
   getVoiceSpatialAzimuth(ph, vi) {
     const v = this._voice(ph, vi);
-    return this.playheads[ph].surroundModel === SURROUND_STEREO ? v.channelPan : voiceAzimuth(v);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO
+      ? clamp(v.channelPan + v.notePan, 0, 255) : voiceAzimuth(v);
   }
   getVoiceSpatialElevation(ph, vi) {
-    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : this._voice(ph, vi).panElevation;
+    const v = this._voice(ph, vi);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : voiceElevation(v);
   }
 
   getVoiceActive(ph, vi) { return this._voice(ph, vi).active; }
@@ -7618,9 +7725,9 @@ function fillSnapshotInto(eng, playhead, f) {
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);
         envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + envPanRaw - 128;
+        pan = v.channelPan + v.notePan + envPanRaw - 128;
       } else {
-        pan = v.channelPan;
+        pan = v.channelPan + v.notePan;
       }
       f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
@@ -7630,7 +7737,7 @@ function fillSnapshotInto(eng, playhead, f) {
         const az = voiceAzimuth(v);
         f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
         f[o + SNAP_V_AZIMUTH] = az;
-        f[o + SNAP_V_ELEVATION] = v.panElevation;
+        f[o + SNAP_V_ELEVATION] = voiceElevation(v);
       } else {
         f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
         f[o + SNAP_V_ELEVATION] = 0;

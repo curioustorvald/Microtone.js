@@ -666,13 +666,45 @@ test("item 116: a patch's default pan applies with the base 'p' bit CLEAR", () =
     }),
   ]));
 
+  // Item 117: a zone pan lands on the NOTE axis, as an offset from centre, so
+  // the channel's own position is left for the pattern to command.
   const ts = eng.playheads[0].trackerState;
   eng.jamNote(0, 0, 0x4000, 1);
   assert.equal(ts.voices[0].activePatchIndex, 0);
-  assert.equal(ts.voices[0].channelPan, 0x20, "low zone takes its own pan");
+  assert.equal(ts.voices[0].notePan, 0x20 - 0x80, "low zone takes its own pan");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x20, "…and that is where it sounds");
   eng.jamNote(0, 0, 0x6000, 1);
   assert.equal(ts.voices[0].activePatchIndex, 1);
-  assert.equal(ts.voices[0].channelPan, 0xe0, "high zone takes its own pan");
+  assert.equal(ts.voices[0].notePan, 0xe0 - 0x80, "high zone takes its own pan");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0xe0);
+  assert.equal(ts.voices[0].channelPan, 0x80, "the channel axis stays where it was");
+});
+
+// Item 117's payoff: the channel pan no longer fights the zone pan, it ROTATES
+// it — the whole zone-panned keyboard swings with S $80xx instead of collapsing
+// onto it at the next note.
+test("item 117: a channel pan rotates a zone-panned instrument", () => {
+  const eng = makeTestEngine();
+  eng.uploadInstrumentPatches(1, writePatchesBlob([
+    makeInstPatch({
+      pitchStart: 0x0000, pitchEnd: 0x4fff, volumeStart: 0, volumeEnd: 63,
+      sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+      defaultPan: 0x60, // 32 left of centre
+    }),
+    makeInstPatch({
+      pitchStart: 0x5000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+      sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+      defaultPan: 0xa0, // 32 right of centre
+    }),
+  ]));
+  const ts = eng.playheads[0].trackerState;
+  ts.voices[0].channelPan = 0x40; // as an S $8040 would leave it
+
+  eng.jamNote(0, 0, 0x4000, 1);
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x40 - 32, "low zone keeps its offset");
+  eng.jamNote(0, 0, 0x6000, 1);
+  assert.equal(eng.getVoiceEffectivePan(0, 0), 0x40 + 32, "high zone keeps its own");
+  assert.equal(ts.voices[0].channelPan, 0x40, "and neither note moved the channel");
 });
 
 test("item 116: the 0xFF sentinel still defers, and still respects 'p'", () => {
@@ -687,15 +719,20 @@ test("item 116: the 0xFF sentinel still defers, and still respects 'p'", () => {
   ]));
   const ts = eng.playheads[0].trackerState;
 
-  // 'p' clear + sentinel patch: nothing writes pan, the channel's own stands.
+  // 'p' clear + sentinel patch: nothing writes pan, both axes stand as they are.
   ts.voices[0].channelPan = 0x11;
   eng.jamNote(0, 0, 0x5000, 1);
   assert.equal(ts.voices[0].channelPan, 0x11, "no pan source: channel pan persists");
+  assert.equal(ts.voices[0].notePan, 0, "…and the note axis stays neutral");
 
-  // 'p' set + sentinel patch: the BASE record's byte 177 lands.
+  // 'p' set + sentinel patch: the BASE record's byte 177 lands — on the note
+  // axis too (item 117: an instrument never writes the channel's own position),
+  // so with the channel at $11 it now sounds $11 offset by the default's $30.
   eng.instruments[1].panEnvLoop |= 0x80;
   eng.jamNote(0, 0, 0x5000, 1);
-  assert.equal(ts.voices[0].channelPan, 0x30, "sentinel defers to the base default pan");
+  assert.equal(ts.voices[0].notePan, 0x30 - 0x80, "sentinel defers to the base default pan");
+  assert.equal(ts.voices[0].channelPan, 0x11, "which still is not a channel write");
+  assert.equal(eng.getVoiceEffectivePan(0, 0), Math.max(0x11 + 0x30 - 0x80, 0));
 });
 
 // A meta layer child used to have its pan overwritten by the PARENT voice's
@@ -724,11 +761,11 @@ test("item 116: each meta layer child keeps its OWN default pan", () => {
 
   const ts = eng.playheads[0].trackerState;
   eng.jamNote(0, 0, 0x5000, 3);
-  assert.equal(ts.voices[0].channelPan, 0x20, "layer 0 pans left");
+  assert.equal(ts.voices[0].notePan, 0x20 - 0x80, "layer 0 pans left");
   const kids = ts.backgroundVoices.filter((v) => v.active && v.isLayerChild);
   assert.equal(kids.length, 1);
   assert.equal(kids[0].instrumentId, 2);
-  assert.equal(kids[0].channelPan, 0xe0, "layer 1 keeps its own pan, not layer 0's");
+  assert.equal(kids[0].notePan, 0xe0 - 0x80, "layer 1 keeps its own pan, not layer 0's");
 });
 
 // …but a layer with NO default pan of its own must still inherit the channel's

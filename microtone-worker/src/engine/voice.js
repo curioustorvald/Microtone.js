@@ -121,12 +121,23 @@ export class Voice {
     this.metaForeground = false;
     this.noteFading = false;
 
-    // Two-volume model (TAUD_NOTE_EFFECTS.md §3).
+    // Two-axis volume AND pan model (TAUD_NOTE_EFFECTS.md §3). Both axes work
+    // the same way on either side: the instrument seeds the NOTE axis and the
+    // pattern's channel commands own the CHANNEL axis, and the two combine at
+    // the mixer — volume multiplies, pan adds.
     this.noteVolume = 0x3f;
     this.channelVolume = 0x3f;
     this.rowVolume = 63;
     this.channelPan = 0x80;
     this.rowPan = 32;
+    // Note-pan axis: a signed OFFSET from the channel's position, in the same
+    // 512-units-to-a-turn space as panAzimuth (so on the front arc it is just a
+    // pan-byte delta). 0 = neutral, which is what keeps a song that never
+    // touches it rendering exactly as it did under the single-register model.
+    // Seeded by the Ixmp patch's `default pan` and written by the panning
+    // column; nothing else may write it.
+    this.notePan = 0;
+    this.noteElevation = 0.0;      // the wide panning column's elevation half
 
     // ── Spatial position (#998) — used only when the song is planar/spatial.
     // channelPan stays the legacy integer (and the UI's mirror); panAzimuth is
@@ -347,8 +358,12 @@ export class Voice {
     // Volume / pan column slides.
     this.volColSlideUp = 0;
     this.volColSlideDown = 0;
-    this.panColSlideRight = 0;
+    // Per-tick pan slides, one pair per axis — the pan twin of nSlideDir (N,
+    // channel volume) vs volColSlide* (the volume column, note volume).
+    this.panColSlideRight = 0;   // the panning column's, on the note axis
     this.panColSlideLeft = 0;
+    this.chanPanSlideRight = 0;  // effect P's, on the channel axis
+    this.chanPanSlideLeft = 0;
     this.nSlideDir = 0;
 
     // Bitcrusher (8) / Overdrive (9).

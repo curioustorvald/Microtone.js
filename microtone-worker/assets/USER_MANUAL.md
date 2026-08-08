@@ -133,7 +133,7 @@ Each cell is five columns:
 - **Note** — the pitch in the song's notation (or a sentinel symbol: `===` key-off, `^^^` cut, `~~~` fade, `~^~` fast fade). Notes that don't sit on the current pitch table are shown snapped to the nearest degree and painted **yellow**. The toolbox **Raw** toggle switches to 4-digit hex words.
 - **Instrument** — two hex digits, `01`–`FF`.
 - **Volume** — a **symbol** cell + two hex digits. The symbol says what the column *does*; the digits are its argument.
-- **Pan** — the same shape, with sideways symbols (00 = left, 20 = centre, 3F = right).
+- **Pan** — the same shape, with sideways symbols (00 = left, 20 = centre, 3F = right). It pans the *note*, not the channel — see [Note volume vs channel volume, note pan vs channel pan](#note-volume-vs-channel-volume-note-pan-vs-channel-pan).
 - **Effect** — a base-36 opcode letter and a 16-bit argument in four hex digits. See [Effect commands](#effect-commands).
 
 #### The volume and panning symbols
@@ -422,6 +422,37 @@ the digits, so you can also just type a value and leave the symbol alone.
 On the two digit positions, **Delete** / **Backspace** / **.** write the no-op
 sentinel so the cell goes blank. The command palette carries a button for every
 operation.
+
+### Note volume vs channel volume, note pan vs channel pan
+
+Volume and panning each come in **two independent kinds**, and knowing which one
+you are writing saves a lot of head-scratching:
+
+| | The **note** kind | The **channel** kind |
+|---|---|---|
+| Volume | the **volume column** | **M** (set) and **N** (slide) |
+| Panning | the **panning column** | **S $80xx** (set), **P** (slide), and **X** / **4** / **Z** in a surround song |
+| Who else writes it | the instrument — its default volume and pan, and an Ixmp zone's | nothing but the commands above |
+| Reset by a new note? | yes, when the note's instrument has a default of its own | no, ever |
+| How they combine | volume multiplies, panning adds | |
+
+The short version: **the mini-lanes are about the note, the effect column is
+about the channel.** A note volume is how hard *this note* was struck; the
+channel volume is how loud that part sits in the mix, and it stays put however
+many notes go by. `M $2000` after a quiet note leaves the note quiet — it has not
+turned anything up, it has set the fader for the channel.
+
+Panning works the same way, and this is what makes zone-panned instruments
+behave. If an instrument pans by pitch — a piano laid out across the stereo
+image, a drum kit with the toms spread out, most things imported from a
+SoundFont — that spread lives on the **note** side. So:
+
+- **S $80xx** *rotates* the whole spread. `S $8040` swings that piano to the left as one instrument; the low keys stay left of the high keys.
+- The **panning column** places one note outright, ignoring where its zone would have put it. Use it when you want *this* note somewhere specific.
+
+Both can appear on the same row and both apply — they are not fighting over one
+setting. If you want the older "everything to one spot" behaviour, put the
+channel where you want it and write the panning column on each note.
 
 ### The effect column
 
@@ -732,6 +763,7 @@ An instrument may carry a list of **Ixmp patches**: per-zone sample bindings ove
 - **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
 - **Zone map** — the patches as rectangles over pitch (x) × velocity (y), with live blobs at each sounding note's pitch/velocity and lit rectangles for zones currently playing. Click a rectangle to select its patch.
 - **Detail form** — the selected patch's rectangle, sample binding (pick any pooled sample — rate and loop follow), play/loop points, rate, detune, loop mode/sustain; pan / note-volume / vibrato-waveform overrides (unchecked = inherit from the base instrument); and the *extra block*: per-patch fadeout, filter cutoff/resonance (IT or SF2 units) and SF2 initial attenuation.
+  - **Pan** — the override is a *note* pan, so a bank whose zones pan apart keeps its spread wherever the channel is pointed, and `S $80xx` rotates the lot ([note vs channel panning](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
   - **Stereo** — makes the patch play a [stereo pair](#stereo-samples): **Ch 2** picks the pooled sample that supplies the second channel (only same-length samples can pair up, since one set of loop points serves both), and **Mode** chooses `L/R` (the channels *are* left and right) or `M/S` (mid/side, decoded to L = M+S, R = M−S at mix time). Binding the patch to a stereo sample sets all of this for you.
 - **Vol / Pan / Filter / Pitch** sub-tabs — per-patch envelope overrides. Ticking *Patch overrides the … envelope* copies the base instrument's envelope as a starting point; the graph then edits exactly like the base envelope tabs (drag nodes, add/remove, sustain/loop ranges, log timescale). **Wave** shows the bound sample with live play positions.
 

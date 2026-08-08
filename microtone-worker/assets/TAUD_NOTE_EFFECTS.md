@@ -110,6 +110,29 @@ The engine carries a third per-tick value, `row_vol`, which is the mixer-facing 
 
 Because the two axes are independent, an `M $4000` (set channel volume to full) issued after a `0.$02` (vol-col SET = 2) leaves the per-note volume untouched at 2 — the channel keeps playing quietly. Conversely, an `N` slide can fade out a channel's overall level while a vol-col SET on a fresh trigger sets the per-note baseline at full.
 
+## 3a. Panning system
+
+Panning has **the same two axes as volume, in the same places**, and a conforming engine **MUST** keep them as two registers:
+
+- **`note_pan`** is the per-note axis: where the NOTE sits. It is a **signed offset**, neutral at zero, and it is the target of everything an INSTRUMENT says about panning — its Default Pan (record byte 177, gated by the pan envelope's `p` bit), an Ixmp patch's per-zone Default Pan ([file format §9.10](TAUD_FILE_FORMAT.md)), and Pitch-Pan Separation — together with all four selectors of the **panning column**. Like `note_vol` it survives across rows; unlike `note_vol` it is re-seeded only by a trigger that actually carries an instrument-level pan, so a panning-column SET stands until an instrument overrides it or the column speaks again.
+- **`channel_pan`** is the per-channel axis: where the PART sits. It is an absolute position — a byte in a stereo song, a 9-bit angle (plus an elevation) in a surround one — and it is the target of **S $80xx, P, X, 4 and Z only**. An instrument **MUST NOT** write it, and a note re-trigger never resets it.
+
+The mixer adds them, then the pan law applies to the sum:
+
+```
+position = channel_pan + note_pan + (pan_env − $80) + random_pan_swing
+```
+
+clamped to `$00..$FF` in a stereo song and wrapped round the circle in a surround one.
+
+**Why two axes.** An instrument whose panning changes with pitch — an Ixmp bank with a per-zone pan, the usual shape of an SF2 import — is a spatial ARRANGEMENT, not a position. Putting the arrangement on the note axis means a channel pan **rotates** it as a whole (`S $8040` swings the entire zone-panned keyboard 64 units left, and each zone keeps its own place within it) instead of flattening it into one spot that the next note immediately overwrites. This is the same rule that already governs a multi-channel sample, whose channels are placed at ITU angles **relative to the source's own direction** (see "Spatial panning effects"): the arrangement is relative, the channel's direction is absolute.
+
+**And what overrides what.** Because the panning column writes the note axis, a column SET is the way to say "this note goes HERE, never mind the zone" — it replaces the instrument's seed for that note, exactly as a volume-column SET replaces the instrument's Default Note Volume. `S $80xx` cannot do that job and no longer tries to: it moves the channel, and the note keeps its offset within it.
+
+**Bit-identity across surround models.** A song whose *summed* position stays on the front arc renders identically whichever surround model it declares. Past the arc the models genuinely differ, because their pan spaces do: a stereo song's is the segment `$00..$FF` and saturates, a surround song's is a circle and turns (the stereo monitor then folds the rear position back onto the front arc).
+
+**Compatibility.** A file that never writes the note axis renders exactly as it did under the single-register engines, since the axis is neutral at zero and the sum degenerates to `channel_pan`. Songs converted from IT / XM / S3M are unaffected in the common case for the same reason: their instrument pans and pan-column writes both land on the note axis, and `channel_pan` stays at its `$80` default unless the song uses S $80xx or P. Where a song uses *both*, the two now COMPOSE where a single register would have had the later write clobber the earlier one.
+
 ## 4. Rows, ticks, patterns, cues
 
 A pattern is a rectangular grid of rows and channels; each cell holds one note event. Playback divides each row into `speed` ticks (effect A); tempo (effect T) sets the duration of one tick. At 125 BPM and speed 6, one row takes 120 ms and one tick 20 ms. Songs play patterns in a cue sequence; effects B and C navigate this sequence.
@@ -123,7 +146,8 @@ A pattern is a rectangular grid of rows and channels; each cell holds one note e
 | Global volume | $80 (mid-scale) |
 | Channel volume | $3F (full) |
 | Note volume | $3F (full; reseeded from instrument's Default Note Volume on every re-trigger) |
-| Pan (all channels) | $80 (centre) |
+| Channel pan (all channels) | $80 (centre) |
+| Note pan | $00 offset (neutral; reseeded from the instrument's Default Pan or its Ixmp zone's on a re-trigger that carries one) |
 | cue index | $0000 |
 
 ## 6. Effect memory groups
@@ -559,7 +583,7 @@ on row parse (N):
 
 ## P $xy00 — Channel panning slide
 
-**Plain.** Slides the channel's persistent pan by `$xy` per non-first tick (or once on tick 0 for fine forms). Encoding is layered on D's structural skeleton, but the *direction* of each nibble follows the IT panning convention: the low nibble of the high byte slides **right**, the high nibble of the high byte slides **left**. Pan ranges over the full 8-bit space (`$00`..`$FF`, $80 centre); P writes the persistent `channel_pan` so the change persists across rows.
+**Plain.** Slides the channel's persistent pan by `$xy` per non-first tick (or once on tick 0 for fine forms). Encoding is layered on D's structural skeleton, but the *direction* of each nibble follows the IT panning convention: the low nibble of the high byte slides **right**, the high nibble of the high byte slides **left**. Pan ranges over the full 8-bit space (`$00`..`$FF`, $80 centre); P writes the persistent `channel_pan` so the change persists across rows. It is the CHANNEL axis's slide, the twin of N on the volume side — the panning column's own slide selectors move `note_pan` (§3a), and an engine **MUST** keep the two per-tick accumulators separate so a P and a column slide running together move both axes.
 
 In surround mode the pan runs right round the listener, so a slide WRAPS at the ends instead of clamping: sliding right past $1FF continues at $000. Where an interpolation has a target (effect `Z`), the path taken is the shorter of the two ways round; if the start and target directions are antipodal, the interpolation path **MUST** be clockwise.
 
@@ -594,7 +618,7 @@ on every per-tick or fine step:
     row_pan     = channel_pan >> 2     # 6-bit pan value used by the mixer
 ```
 
-The mixer reads `channel_pan` (8-bit) directly through the same path as `S $80xx`. P slides interact additively with panbrello (Y) and the panning column's slide selectors, but P has the highest precedence on `channel_pan` because it writes the persistent value rather than a per-row delta.
+The mixer reads `channel_pan` (8-bit) through the same path as `S $80xx`, and sums it with `note_pan` and the pan envelope (§3a). P slides interact additively with panbrello (Y) and with the panning column's slide selectors, the latter now by way of the other axis rather than by sharing the register.
 
 ## O $xxyy — Set sample offset to $xxyy
 
@@ -1097,13 +1121,13 @@ Effect $7..$E applies to ordinary instruments. When used on a metainstrument, th
 
 ## S $80xx — Set channel pan position
 
-**Plain.** Sets the channel pan to `$xx`, with $00 being full left and $FF being full right. $80 is centre. When this command and panning column's Set Pan are both present, this command takes precedence.
+**Plain.** Sets `channel_pan` (§3a) to `$xx`, with $00 being full left and $FF being full right. $80 is centre. It writes the CHANNEL axis, so it places the part and leaves each note's own offset — an Ixmp zone pan, a panning-column SET — standing on top of it: over a zone-panned instrument this command rotates the whole arrangement rather than collapsing it. A panning-column SET on the same row is not a conflict and both **MUST** apply; the two address different registers.
 
 In surround mode, the lower 9 bits encodes angle, $000 being left (0°), $080 being front (90°), $100 being right (180°), $180 being behind (270°), $1FF being almost left (~360°). The angle therefore runs CLOCKWISE seen from above, and its low 8 bits are exactly the stereo pan byte — `S $80xx` keeps its old meaning and lands on the front semicircle.
 
-**Compatibility.** IT `Xxx` maps directly. ST3 `S8x` uses a 4-bit value. Convert by nibble-repeat: ST3 `S83` → Taud `S $8033`. Panning column command `0.$xx` has the same semantics and is the preferred form when a pan column is available in the pattern. ProTracker `8xx` (fine pan) and `E8x` (coarse pan) both map into Taud's 8-bit pan — the ProTracker 8-bit form maps directly; the 4-bit form nibble-repeats.
+**Compatibility.** IT `Xxx` maps directly. ST3 `S8x` uses a 4-bit value. Convert by nibble-repeat: ST3 `S83` → Taud `S $8033`. ProTracker `8xx` (fine pan) and `E8x` (coarse pan) both map into Taud's 8-bit pan — the ProTracker 8-bit form maps directly; the 4-bit form nibble-repeats. All four source commands write one channel pan register, and this is the command that means what they meant, so a converter **SHOULD** emit them here rather than in the panning column: the column's SET is the per-NOTE axis (§3a) and only coincides with them while the channel stays centred.
 
-**Implementation.** Write `channel_pan = arg & $FF`. The pan value is applied at the mixer: `left_gain = (($FF − pan) × $100) >> 8`, `right_gain = (pan × $100) >> 8`, with both applied before the global volume stage.
+**Implementation.** Write `channel_pan = arg & $FF`. The mixer sums it with `note_pan` and the pan envelope (§3a) and applies the equal-energy law to the total: `left_gain = cos(π × position ÷ 512)`, `right_gain = sin(π × position ÷ 512)`, both before the global volume stage.
 
 ## S $Bx00 — Pattern loop
 
@@ -1282,14 +1306,16 @@ NOTE: **`3.00` — is No-op**
 
 ## Panning column effects
 
-The panning column uses the same 6-bit value + 2-bit selector layout:
+The panning column uses the same 6-bit value + 2-bit selector layout. **All four selectors target `note_pan`** — the per-note panning axis (§3a), the exact counterpart of the volume column owning `note_vol`. The per-channel axis (`channel_pan`) is reachable only via S $80xx / P / X / 4 / Z in the main effect column.
 
-- **`0.$xx` — Set pan** (6-bit, $00..$3F mapped onto the channel's 8-bit pan space; $01 = full left, $1F = centre-left, $20 = centre-right, $3F = full right). For 8-bit precision use `S $80xx` instead.
-- **`1.$xx` — Pan slide right** by `$xx` per non-first tick (4-bit).
-- **`2.$xx` — Pan slide left** by `$xx` per non-first tick (4-bit).
-- **`3.$Sx` — Fine pan slide** on tick 0 only, same direction-bit encoding as the volume column's selector 3.
+- **`0.$xx` — Set note_pan** (6-bit, $00..$3F mapped onto the 8-bit pan space; $01 = full left, $1F = centre-left, $20 = centre-right, $3F = full right), read as an offset from centre. It **replaces** whatever the instrument seeded, so it is the way to pan one note of a zone-panned Ixmp instrument by hand. For 8-bit precision use a wide cell's panning column.
+- **`1.$xx` — note_pan slide right** by `$xx` per non-first tick (4-bit).
+- **`2.$xx` — note_pan slide left** by `$xx` per non-first tick (4-bit).
+- **`3.$Sx` — Fine note_pan slide** on tick 0 only, same direction-bit encoding as the volume column's selector 3.
 
-NOTE: **`3.00` — is No-op**. When Set Pan and S $80xx are both present, S-command **MUST** take precedence.
+Because the column writes the per-note axis, an `S $80xx` on the same or a following row moves the per-channel axis independently and the two add at the mixer (§3a) — there is no precedence between them, and an engine **MUST NOT** suppress either when both appear on one row. The column is applied AFTER the row's note trigger, so a SET sharing a row with a note wins over that note's instrument seed.
+
+NOTE: **`3.00` — is No-op**
 
 ## Effects that modifies global behaviour
 

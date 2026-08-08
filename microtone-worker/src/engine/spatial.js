@@ -403,23 +403,56 @@ export function applyElevation(ts, voice, el) {
   voice.panElevation = ts.surroundModel === SURROUND_SPATIAL ? el : 0.0;
 }
 
+// ── Note-pan axis ─────────────────────────────────────────────────────────
+// The channel trio above places the CHANNEL; this pair offsets the note within
+// it. The offset is stored signed with 0 = neutral, so the writers take the
+// same 128-is-centre values every other pan command takes and subtract the
+// centre themselves — an Ixmp patch pan of $80 and a column SET of centre both
+// mean "no shift", whatever the channel is doing.
+
+/** Fold a note offset into range: clamped like a stereo pan, wrapped like an angle. */
+function boundNoteOffset(ts, off) {
+  if (ts.surroundModel === SURROUND_STEREO) return clamp(off, -0xff, 0xff);
+  return wrapAzimuth(off + AZIMUTH_TURN / 2) - AZIMUTH_TURN / 2;
+}
+
+/** Note-pan write: absolute. `pan` is a legacy byte or 9-bit angle, 128 = centre. */
+export function applyNotePanSet(ts, voice, pan) {
+  voice.notePan = boundNoteOffset(ts, pan - AZ_FRONT);
+}
+
+/** Note-pan write: signed delta. */
+export function applyNotePanSlide(ts, voice, delta) {
+  voice.notePan = boundNoteOffset(ts, voice.notePan + delta);
+}
+
+/** Note-elevation write (wide panning column). Planar songs stay on the horizon. */
+export function applyNoteElevation(ts, voice, el) {
+  voice.noteElevation = ts.surroundModel === SURROUND_SPATIAL ? el : 0.0;
+}
+
 /** The integer pan the UI and ghost copies see: the monitoring (folded) byte. */
 export function mirrorPanByte(az) {
   return Math.round(foldAzimuthToPan(az));
 }
 
 /**
- * Effective azimuth of a voice: its own angle plus the pan envelope's offset
- * and the instrument's random pan swing — the surround twin of the stereo
- * path's pan sum, wrapping where that one clamps.
+ * Effective azimuth of a voice: its own angle plus the note-pan offset, the pan
+ * envelope's offset and the instrument's random pan swing — the surround twin
+ * of the stereo path's pan sum, wrapping where that one clamps.
  */
 export function voiceAzimuth(voice) {
   if (voice.hasPanEnv && voice.panEnvOn) {
     let envPanRaw = Math.round(voice.envPan * 255.0);
     envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-    return wrapAzimuth(voice.panAzimuth + envPanRaw - 128 + voice.randomPanBias);
+    return wrapAzimuth(voice.panAzimuth + voice.notePan + envPanRaw - 128 + voice.randomPanBias);
   }
-  return wrapAzimuth(voice.panAzimuth + voice.randomPanBias);
+  return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias);
+}
+
+/** Effective elevation: the channel's height plus the note's own offset. */
+export function voiceElevation(voice) {
+  return voice.panElevation + voice.noteElevation;
 }
 
 const angleScratch = new Float64Array(2);
@@ -436,7 +469,7 @@ function voiceGainsCache(bus, voice, sc) {
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
   const az = voiceAzimuth(voice);
-  const el = voice.panElevation;
+  const el = voiceElevation(voice);
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
     sc = {
       az: NaN, el: NaN, chans: 0, renderer: null,

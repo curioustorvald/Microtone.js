@@ -19,7 +19,7 @@ import { tuningRatioOf } from "./tables.js";
 import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
-import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth } from "./spatial.js";
+import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth, voiceElevation } from "./spatial.js";
 import { generateTrackerAudio } from "./mixer.js";
 import { triggerMetaOrNote, triggerNote } from "./trigger.js";
 import { reconstructDittoState } from "./row.js";
@@ -479,19 +479,21 @@ export class TaudEngine {
     }
     if (v.hasPanEnv && v.panEnvOn) {
       const envPanRaw = Math.min(Math.max(Math.trunc(v.envPan * 255.0), 0), 255);
-      return Math.min(Math.max(v.channelPan + envPanRaw - 128, 0), 255);
+      return Math.min(Math.max(v.channelPan + v.notePan + envPanRaw - 128, 0), 255);
     }
-    return Math.min(Math.max(v.channelPan, 0), 255);
+    return Math.min(Math.max(v.channelPan + v.notePan, 0), 255);
   }
 
   /** Where a voice actually sits (#998): 512-unit azimuth, 128-unit elevation.
    *  Stereo songs report the pan byte's front-arc position. */
   getVoiceSpatialAzimuth(ph, vi) {
     const v = this._voice(ph, vi);
-    return this.playheads[ph].surroundModel === SURROUND_STEREO ? v.channelPan : voiceAzimuth(v);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO
+      ? clamp(v.channelPan + v.notePan, 0, 255) : voiceAzimuth(v);
   }
   getVoiceSpatialElevation(ph, vi) {
-    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : this._voice(ph, vi).panElevation;
+    const v = this._voice(ph, vi);
+    return this.playheads[ph].surroundModel === SURROUND_STEREO ? 0 : voiceElevation(v);
   }
 
   getVoiceActive(ph, vi) { return this._voice(ph, vi).active; }

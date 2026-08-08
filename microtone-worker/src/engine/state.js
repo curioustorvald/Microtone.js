@@ -460,6 +460,8 @@ export class Playhead {
       it.rowPan = 32;
       it.panAzimuth = 128.0;
       it.panElevation = 0.0;
+      it.notePan = 0;
+      it.noteElevation = 0.0;
       it.spatialTargetAz = 128.0;
       it.spatialTargetEl = 0.0;
       it.spatialSlideActive = false;
