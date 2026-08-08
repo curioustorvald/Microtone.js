@@ -221,7 +221,7 @@ export default {
   "files.renameExists": "{name}이(가) 이미 있습니다 — 다른 이름을 선택하세요",
   "files.name": "이름",
   "files.songsHead": "이 프로젝트의 곡",
-  "files.colSong": "연번",
+  "files.colSong": "#",
   "files.colName": "이름",
   "files.colVoices": "보이스",
   "files.colPatterns": "패턴",

@@ -789,7 +789,8 @@ a note that carries an instrument number, and only when the instrument's *Use
 default pan* box is ticked. They are stored in bits that older files leave
 clear, so nothing you already have changes, and a stereo song ignores them
 entirely. An instrument's Ixmp zones can still override the azimuth (they carry
-their own pan), but not the height.
+their own pan) but not the height, and a zone's pan applies whether or not the
+box is ticked — the box gates the instrument's own default, not the zones'.
 
 **The panner.** Rather than working the angles out by hand, press **Panner…**
 on the Timeline or Patterns toolbox (it appears once the song is planar or

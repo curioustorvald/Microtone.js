@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ixmp pan smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- keeps the load event pending on tools/test-server.py so
+       --dump-dom --timeout runs the audio in REAL time -->
+  <img src="/hang" hidden>
+  <script type="module">
+    // Item 116: a SoundFont-derived song's per-zone pan must reach the WORKLET's
+    // voices, not just the pure engine — the fix lives in trigger.js, which the
+    // worklet consumes through its generated bundle.
+    // Run: chromium --headless=new --autoplay-policy=no-user-gesture-required \
+    //        --enable-logging=stderr http://localhost:8737/test/browser/ixmppan-smoke.html
+    import { parseTaud } from "../../src/format/taud-parse.js";
+    import { AudioSystem } from "../../src/audio/audio-system.js";
+
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+
+    try {
+      const params = new URLSearchParams(location.search);
+      const audio = new AudioSystem();
+      await audio.init({ snapshotIntervalMs: 16, forceBundle: params.has("bundle") });
+      await audio.resume();
+      log(`init ok — sampleRate=${audio.context.sampleRate} state=${audio.context.state}`);
+
+      const resp = await fetch("../corpus/Circus%20galop.taud");
+      const doc = parseTaud(new Uint8Array(await resp.arrayBuffer()));
+      log(`parsed Circus galop.taud: ixmp on ${doc.ixmp.length} inst ` +
+          `(${doc.ixmp.map((e) => "$" + e.instId.toString(16) + ":" + e.count).join(" ")})`);
+
+      audio.loadDocument(doc, 0);
+      audio.play(0);
+
+      const pans = new Set();
+      const t0 = Date.now();
+      while (Date.now() - t0 < 6000) {
+        await new Promise((r) => setTimeout(r, 50));
+        for (let v = 0; v < 32; v++) {
+          if (audio.getVoiceActive(v)) pans.add(Math.round(audio.getVoiceEffectivePan(v)));
+        }
+      }
+      audio.stop(0);
+
+      const sorted = [...pans].sort((a, b) => a - b);
+      log(`distinct voice pans seen: ${sorted.length} → ${sorted.join(",")}`);
+      const offCentre = sorted.filter((p) => p !== 128).length;
+      log(offCentre >= 5 && sorted.length >= 6
+        ? "PASS: per-zone Ixmp pan reaches the worklet's voices"
+        : `FAIL: voices are centred (off-centre pans: ${offCentre})`);
+    } catch (e) {
+      log("FAIL: " + (e && e.stack ? e.stack : e));
+    }
+    log("done");
+  </script>
+</body>
+</html>

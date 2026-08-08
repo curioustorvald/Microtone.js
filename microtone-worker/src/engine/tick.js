@@ -332,13 +332,15 @@ export function applyTrackerTick(eng, ts, playhead) {
   for (const voice of ts.voices) {
     if (voice.funkSpeed === 0 || !voice.active) continue;
     const inst = eng.instruments[voice.instrumentId];
-    if (inst.sampleLoopEnd <= inst.sampleLoopStart) continue;
+    // ACTIVE loop, not the base record's — an Ixmp patch brings its own (item 116).
+    if (voice.activeSampleLoopEnd <= voice.activeSampleLoopStart) continue;
     voice.funkAccumulator += voice.funkSpeed;
     if (voice.funkAccumulator >= 0x80) {
       voice.funkAccumulator = 0;
-      const loopLen = Math.max(inst.sampleLoopEnd - inst.sampleLoopStart, 1);
+      const loopLen = Math.max(
+        voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
       voice.funkWritePos = (voice.funkWritePos + 1) % loopLen;
-      inst.toggleFunkBit(voice.funkWritePos);
+      inst.toggleFunkBit(voice.funkWritePos, loopLen);
     }
   }
 

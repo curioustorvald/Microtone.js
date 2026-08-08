@@ -439,7 +439,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 
 **The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
 
-A planar song forces the elevation to zero, as it does for every other source of elevation. The fields are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch cannot override them**: a patch record carries an 8-bit `default pan` and no elevation, so a patch override moves the azimuth onto the front arc while the instrument's elevation stands. The pan ENVELOPE offsets the azimuth and leaves the elevation alone.
+A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set. An **Ixmp patch cannot override them**: a patch record carries an 8-bit `default pan` and no elevation, so a patch override moves the azimuth onto the front arc while the instrument's elevation stands. The patch's own pan is gated by its own `0xFF` sentinel and **not** by `p` ([§9.10](#9-10-ixmp-patch-records)). The pan ENVELOPE offsets the azimuth and leaves the elevation alone.
 
 #### Byte 14 — instrument / sample flags
 
@@ -837,6 +837,8 @@ The first four fields define a rectangle over pitch × volume space. **Patch sel
 
 The IT and XM formats do not define a velocity axis; those converters leave the volume range at 0…63. SoundFont does, and the velocity axis is `round(velocity × 63 ÷ 127)`.
 
+**The sentinels are the only gate.** A `default pan` other than `0xFF` is applied at every trigger the patch wins, whether or not the base record's pan envelope carries its `p` bit; likewise a non-zero `default note volume` and an auto-vibrato waveform other than `0xFF`. A patch may bring its own pan envelope, whose LOOP word replaces the base record's, so a producer **MUST NOT** rely on `p` to enable or suppress a patch's pan — set `0xFF` to defer instead.
+
 **Block order on the wire is always `x`, `v`, `p`, `f`, `P`, `s`**, regardless of bit numbering. A decoder walks them in that order and skips any whose flag is clear. A version byte with only bit 0 set yields the legacy 31-byte record — byte-identical to pre-2026-06-13 patches.
 
 | Block | Size | Contents |
@@ -913,3 +915,4 @@ A writer producing a file that any conforming reader will accept must satisfy al
 | 2026-07-01 | Format version 2: 32-channel cue sheet, 15-bit pattern numbers, 64-byte cues, two instruction words; auxiliary instrument bin ($100…$3FF); `xHDR` 64-channel mode |
 | 2026-07-28 | Ixmp `s` block — multi-channel (stereo) samples |
 | 2026-07-29 | Song table byte 28: the `ss` surround model flag |
+| 2026-08-08 | An Ixmp patch's `default pan` no longer needs the base record's pan-envelope `p` bit — its `0xFF` sentinel is the only gate |

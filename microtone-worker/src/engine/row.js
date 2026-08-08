@@ -7,6 +7,7 @@ import { TaudPlayData, INST_GOBACK, INST_SKIP, INST_JUMP } from "./state.js";
 import {
   triggerMetaOrNote, applyDuplicateCheck, maybeSpawnBackgroundForNNA,
   cutLayerChildren, applyVolColumn, applyPanColumn, applyPanColumnWide,
+  narrowVolAxis,
 } from "./trigger.js";
 import { applyKeyLift } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
@@ -149,7 +150,8 @@ export function applyTrackerRow(eng, ts, playhead) {
         // (PT/FT2/IT/Schism all do this; see AudioAdapter.kt:3050-3061).
         voice.instrumentId = row.instrment;
         const newInst = eng.instruments[voice.instrumentId];
-        const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
+        const newPatch = newInst.resolvePatch(voice.noteVal,
+          narrowVolAxis(ts, voice.noteVolume));
         // applyActiveSample without retrigger (Schism csf_instrument_change).
         applyInstrumentChange(eng, ts, voice, newInst, newPatch);
       }
@@ -209,7 +211,8 @@ export function applyTrackerRow(eng, ts, playhead) {
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
-          const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
+          const newPatch = newInst.resolvePatch(voice.noteVal,
+            narrowVolAxis(ts, voice.noteVolume));
           applyInstrumentChange(eng, ts, voice, newInst, newPatch);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {

@@ -2039,6 +2039,17 @@ function patchChannelPtrs(patch) {
     : [patch.samplePtr];
 }
 
+/**
+ * The Ixmp patch a voice is actually sounding, from the index applyActiveSample
+ * recorded on it (-1 = the base record). Bounds-checked: a mid-playback patch
+ * re-upload (the Advanced editor) can shorten the list under a live voice.
+ */
+function patchAt(inst, patchIndex) {
+  if (inst == null || patchIndex < 0) return null;
+  const patches = inst.extraPatches;
+  return patches !== null && patchIndex < patches.length ? patches[patchIndex] : null;
+}
+
 /** True when the patch plays exactly two channels (the only multi-channel case
  *  the mixer renders today). */
 function patchIsStereo(patch) {
@@ -2422,8 +2433,12 @@ class TaudInst {
   }
 
   // Funk repeat mask — sized for the loop length; stale masks are discarded.
-  toggleFunkBit(loopOffset) {
-    const len = Math.max(this.sampleLoopEnd - this.sampleLoopStart, 1);
+  // `loopLen` is the SOUNDING voice's active loop length — an Ixmp patch brings
+  // its own loop points, so sizing the mask off the base record would index a
+  // patched voice's inversion into the wrong bytes (item 116). Defaults to the
+  // base record's loop for a voice with no patch.
+  toggleFunkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
+    const len = Math.max(loopLen, 1);
     const expectedSize = (len + 7) >> 3;
     let mask = this.funkMask;
     if (mask === null || mask.length !== expectedSize) {
@@ -2434,10 +2449,10 @@ class TaudInst {
     mask[idx >> 3] ^= 1 << (idx & 7);
   }
 
-  funkBit(loopOffset) {
+  funkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
     const mask = this.funkMask;
     if (mask === null) return false;
-    const len = Math.max(this.sampleLoopEnd - this.sampleLoopStart, 1);
+    const len = Math.max(loopLen, 1);
     if (mask.length !== (len + 7) >> 3) { this.funkMask = null; return false; }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     return ((mask[idx >> 3] >>> (idx & 7)) & 1) !== 0;
@@ -3527,9 +3542,12 @@ function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
   const i = Math.min(Math.max(idx, 0), sampleLen - 1);
   let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
-  if (inst.funkMask !== null && inst.sampleLoopEnd > inst.sampleLoopStart) {
-    const ls = inst.sampleLoopStart;
-    if (i >= ls && i < inst.sampleLoopEnd && inst.funkBit(i - ls)) b = b ^ 0xff;
+  // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
+  // funk mask is sized and indexed against whichever loop is sounding (item 116).
+  const ls = voice.activeSampleLoopStart;
+  const le = voice.activeSampleLoopEnd;
+  if (inst.funkMask !== null && le > ls) {
+    if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
   }
   return (b - 127.5) / 127.5;
 }
@@ -4368,6 +4386,13 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     return;
   }
   const l0 = layers[0];
+  // Channel pan context as it stands BEFORE layer 0 retriggers. Each child is
+  // seeded with this and then triggered, so a layer's own default pan (its
+  // instrument's byte 177 or its Ixmp patch's) lands on the child instead of
+  // being overwritten by layer 0's result — while a channel pan the pattern set
+  // still carries to every layer that has no default of its own (item 116).
+  const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
@@ -4376,29 +4401,40 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   for (let k = 1; k < layers.length; k++) {
     const lk = layers[k];
     const child = new Voice();
+    // Match layer 0's channel context so M/pan and the first tick agree; the
+    // trigger below may then move the child's pan to its own default.
+    child.channelVolume = voice.channelVolume;
+    child.channelPan = chanPan;
+    child.rowPan = chanRowPan;
+    child.panAzimuth = chanAzimuth;
+    child.panElevation = chanElevation;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
     child.layerRelDetune = lk.detune - l0.detune;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
-    child.channelVolume = voice.channelVolume;
-    child.channelPan = voice.channelPan;
-    child.rowPan = voice.rowPan;
-    child.panAzimuth = voice.panAzimuth;
-    child.panElevation = voice.panElevation;
     ts.backgroundVoices.push(child);
   }
   capBackgroundVoices(ts);
+}
+
+/**
+ * Narrow a note volume onto the Ixmp/meta rectangle's velocity axis. That axis
+ * is INSTRUMENT data and stays 6-bit in every format version (file format §5.5),
+ * so a wide cell's 8-bit volume must be scaled down for it — 255 → 63. Every
+ * resolvePatch/resolveMetaLayers call site goes through here; one that forgets
+ * silently misses every patch in a v3 song (item 116).
+ */
+function narrowVolAxis(ts, v) {
+  return clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
 }
 
 function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
-  // The velocity rectangle is instrument data and stays 6-bit in every format,
-  // so a wide cell's 8-bit volume is narrowed for the lookup (255 → 63).
-  const narrow = (v) => clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
+  const narrow = (v) => narrowVolAxis(ts, v);
   let seedVolForLookup;
   if (volOverride >= 0) seedVolForLookup = narrow(volOverride);
   else if (instId !== 0) seedVolForLookup = rowVolumeFromDefault(inst, null);
@@ -4454,9 +4490,15 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     ? Math.trunc(random() * (2 * inst.panSwing + 1)) - inst.panSwing : 0;
   // Default pan / pitch-pan separation: only when the row carried an instrument byte.
   if (instId !== 0) {
-    // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
-    if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
-      const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
+    // Pan LOOP word bit 7 = 'p' ("use default pan") gates the BASE record's
+    // byte 177 only. An Ixmp patch's default pan carries its own sentinel
+    // (0xFF = no override) and applies whether or not 'p' is set: the patch is
+    // free to bring its own pan envelope, whose LOOP word REPLACES the base
+    // record's, so gating a patch override on 'p' would let the patch disable
+    // its own pan (item 116). SF2-derived banks are the common case — per-zone
+    // pan on a base record that carries no pan envelope at all.
+    const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
+    if (patchPan !== null || ((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       if (ts.surroundModel === SURROUND_STEREO) {
         applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
       } else {
@@ -4831,6 +4873,7 @@ function rowSlidesSpatially(row) {
 // applyEffectRow (3216), applySEffect (3538), forEachEnvTarget (3633),
 // applyFilterParamEffect (3650), applyRetrigVolMod (4090).
 // Behavioural contract: TAUD_NOTE_EFFECTS.md; implementation truth: the Kotlin.
+
 
 
 
@@ -5292,12 +5335,23 @@ function applyFilterParamEffect(eng, ts, voice, vi, rawArg, isResonance) {
   const push = (v) => {
     if (!targets.has(v.instrumentId)) return;
     const ti = eng.instruments[v.instrumentId];
-    v.filterSfMode = ti.filterSfMode;
+    // The override is instrument-wide and ABSOLUTE: while one is in force every
+    // voice takes it, patch or not. Clearing it ($FFFF) must return each voice
+    // to its OWN default, and for a voice sounding an Ixmp patch with an 'x'
+    // block that is the PATCH's value — falling back to the base record would
+    // retune a patched voice's filter and, when the two disagree on SF vs IT
+    // mode, reinterpret the number in the wrong units (item 116).
+    const patch = patchAt(ti, v.activePatchIndex);
+    const patchExtra = patch !== null && patch.hasExtra;
+    const overridden = ti.cutoffOverride >= 0 || ti.resonanceOverride >= 0;
+    v.filterSfMode = patchExtra && !overridden ? patch.filterSfMode : ti.filterSfMode;
     if (isResonance) {
-      v.activeDefaultResonance = ti.defaultResonance16;
+      v.activeDefaultResonance = ti.resonanceOverride < 0 && patchExtra
+        ? patch.extraResonance : ti.defaultResonance16;
       v.currentResonance = v.activeDefaultResonance;
     } else {
-      v.activeDefaultCutoff = ti.defaultCutoff16;
+      v.activeDefaultCutoff = ti.cutoffOverride < 0 && patchExtra
+        ? patch.extraCutoff : ti.defaultCutoff16;
       v.currentCutoff = v.activeDefaultCutoff;
     }
     v.filterCutoffCached = -1;
@@ -5481,7 +5535,8 @@ function applyTrackerRow(eng, ts, playhead) {
         // (PT/FT2/IT/Schism all do this; see AudioAdapter.kt:3050-3061).
         voice.instrumentId = row.instrment;
         const newInst = eng.instruments[voice.instrumentId];
-        const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
+        const newPatch = newInst.resolvePatch(voice.noteVal,
+          narrowVolAxis(ts, voice.noteVolume));
         // applyActiveSample without retrigger (Schism csf_instrument_change).
         applyInstrumentChange(eng, ts, voice, newInst, newPatch);
       }
@@ -5541,7 +5596,8 @@ function applyTrackerRow(eng, ts, playhead) {
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
-          const newPatch = newInst.resolvePatch(voice.noteVal, voice.noteVolume);
+          const newPatch = newInst.resolvePatch(voice.noteVal,
+            narrowVolAxis(ts, voice.noteVolume));
           applyInstrumentChange(eng, ts, voice, newInst, newPatch);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
@@ -6030,13 +6086,15 @@ function applyTrackerTick(eng, ts, playhead) {
   for (const voice of ts.voices) {
     if (voice.funkSpeed === 0 || !voice.active) continue;
     const inst = eng.instruments[voice.instrumentId];
-    if (inst.sampleLoopEnd <= inst.sampleLoopStart) continue;
+    // ACTIVE loop, not the base record's — an Ixmp patch brings its own (item 116).
+    if (voice.activeSampleLoopEnd <= voice.activeSampleLoopStart) continue;
     voice.funkAccumulator += voice.funkSpeed;
     if (voice.funkAccumulator >= 0x80) {
       voice.funkAccumulator = 0;
-      const loopLen = Math.max(inst.sampleLoopEnd - inst.sampleLoopStart, 1);
+      const loopLen = Math.max(
+        voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
       voice.funkWritePos = (voice.funkWritePos + 1) % loopLen;
-      inst.toggleFunkBit(voice.funkWritePos);
+      inst.toggleFunkBit(voice.funkWritePos, loopLen);
     }
   }
 

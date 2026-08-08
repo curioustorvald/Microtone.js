@@ -9,6 +9,7 @@ import {
   amigaSlideOnce, linearFreqSlideOnce, clamp,
 } from "./tables.js";
 import { computePlaybackRate } from "./sampler.js";
+import { patchAt } from "./inst.js";
 import { applyPastNoteAction } from "./trigger.js";
 import {
   SURROUND_STEREO, SURROUND_SPATIAL,
@@ -470,12 +471,23 @@ export function applyFilterParamEffect(eng, ts, voice, vi, rawArg, isResonance) 
   const push = (v) => {
     if (!targets.has(v.instrumentId)) return;
     const ti = eng.instruments[v.instrumentId];
-    v.filterSfMode = ti.filterSfMode;
+    // The override is instrument-wide and ABSOLUTE: while one is in force every
+    // voice takes it, patch or not. Clearing it ($FFFF) must return each voice
+    // to its OWN default, and for a voice sounding an Ixmp patch with an 'x'
+    // block that is the PATCH's value — falling back to the base record would
+    // retune a patched voice's filter and, when the two disagree on SF vs IT
+    // mode, reinterpret the number in the wrong units (item 116).
+    const patch = patchAt(ti, v.activePatchIndex);
+    const patchExtra = patch !== null && patch.hasExtra;
+    const overridden = ti.cutoffOverride >= 0 || ti.resonanceOverride >= 0;
+    v.filterSfMode = patchExtra && !overridden ? patch.filterSfMode : ti.filterSfMode;
     if (isResonance) {
-      v.activeDefaultResonance = ti.defaultResonance16;
+      v.activeDefaultResonance = ti.resonanceOverride < 0 && patchExtra
+        ? patch.extraResonance : ti.defaultResonance16;
       v.currentResonance = v.activeDefaultResonance;
     } else {
-      v.activeDefaultCutoff = ti.defaultCutoff16;
+      v.activeDefaultCutoff = ti.cutoffOverride < 0 && patchExtra
+        ? patch.extraCutoff : ti.defaultCutoff16;
       v.currentCutoff = v.activeDefaultCutoff;
     }
     v.filterCutoffCached = -1;

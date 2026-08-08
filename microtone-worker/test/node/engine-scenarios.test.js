@@ -10,8 +10,11 @@ import { fileURLToPath } from "node:url";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import { Voice } from "../../src/engine/voice.js";
-import { envPoint, buildMetaRecord, makeMetaLayer } from "../../src/engine/inst.js";
+import {
+  envPoint, buildMetaRecord, makeMetaLayer, makeInstPatch, writePatchesBlob,
+} from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
+import { applyFilterParamEffect } from "../../src/engine/effects.js";
 import {
   advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox, applyKeyLift, forceKeyLift,
 } from "../../src/engine/envelope.js";
@@ -639,4 +642,235 @@ test("mid-pattern seek onto a ditto ghost row re-arms + sounds it (item 81)", ()
   eng2.play(0);
   renderSamples(eng2, 512);
   assert.equal(v2.active, false, "empty row past the ditto stays silent");
+});
+
+// ── Item 116: Ixmp per-patch overrides ──────────────────────────────────────
+// A patch's `default pan` (common byte 24) carries its own "no override"
+// sentinel, 0xFF. It used to be gated behind the BASE record's pan-envelope
+// `p` flag as well, which silently dropped every per-zone pan an SF2-derived
+// bank writes: those base records carry no pan envelope at all, so `p` is
+// clear and the whole keyboard collapsed to centre.
+test("item 116: a patch's default pan applies with the base 'p' bit CLEAR", () => {
+  const eng = makeTestEngine();
+  assert.equal((eng.instruments[1].panEnvLoop >>> 7) & 1, 0, "base record has no 'p' flag");
+  eng.uploadInstrumentPatches(1, writePatchesBlob([
+    makeInstPatch({
+      pitchStart: 0x0000, pitchEnd: 0x4fff, volumeStart: 0, volumeEnd: 63,
+      sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+      defaultPan: 0x20, // hard-ish left
+    }),
+    makeInstPatch({
+      pitchStart: 0x5000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+      sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+      defaultPan: 0xe0, // hard-ish right
+    }),
+  ]));
+
+  const ts = eng.playheads[0].trackerState;
+  eng.jamNote(0, 0, 0x4000, 1);
+  assert.equal(ts.voices[0].activePatchIndex, 0);
+  assert.equal(ts.voices[0].channelPan, 0x20, "low zone takes its own pan");
+  eng.jamNote(0, 0, 0x6000, 1);
+  assert.equal(ts.voices[0].activePatchIndex, 1);
+  assert.equal(ts.voices[0].channelPan, 0xe0, "high zone takes its own pan");
+});
+
+test("item 116: the 0xFF sentinel still defers, and still respects 'p'", () => {
+  const eng = makeTestEngine();
+  eng.instruments[1].defaultPan = 0x30;
+  eng.uploadInstrumentPatches(1, writePatchesBlob([
+    makeInstPatch({
+      pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+      sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+      defaultPan: 0xff, // no override
+    }),
+  ]));
+  const ts = eng.playheads[0].trackerState;
+
+  // 'p' clear + sentinel patch: nothing writes pan, the channel's own stands.
+  ts.voices[0].channelPan = 0x11;
+  eng.jamNote(0, 0, 0x5000, 1);
+  assert.equal(ts.voices[0].channelPan, 0x11, "no pan source: channel pan persists");
+
+  // 'p' set + sentinel patch: the BASE record's byte 177 lands.
+  eng.instruments[1].panEnvLoop |= 0x80;
+  eng.jamNote(0, 0, 0x5000, 1);
+  assert.equal(ts.voices[0].channelPan, 0x30, "sentinel defers to the base default pan");
+});
+
+// A meta layer child used to have its pan overwritten by the PARENT voice's
+// post-trigger pan, so every layer inherited layer 0's position — the second
+// half of the same symptom (an SF2 kit whose layers pan apart played mono).
+test("item 116: each meta layer child keeps its OWN default pan", () => {
+  const eng = makeTestEngine();
+  const rec2 = new Uint8Array(256);
+  const w16 = (o, v) => { rec2[o] = v & 0xff; rec2[o + 1] = (v >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec2[14] = 1; rec2[21] = 0x3f; rec2[171] = 255; rec2[196] = 255;
+  eng.uploadInstrument(2, rec2);
+
+  const zone = (pan) => writePatchesBlob([makeInstPatch({
+    pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+    sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+    defaultPan: pan,
+  })]);
+  eng.uploadInstrumentPatches(1, zone(0x20));
+  eng.uploadInstrumentPatches(2, zone(0xe0));
+
+  eng.uploadInstrument(3, buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(2, 159, 0, 0x0000, 0xffff, 0, 63),
+  ]));
+
+  const ts = eng.playheads[0].trackerState;
+  eng.jamNote(0, 0, 0x5000, 3);
+  assert.equal(ts.voices[0].channelPan, 0x20, "layer 0 pans left");
+  const kids = ts.backgroundVoices.filter((v) => v.active && v.isLayerChild);
+  assert.equal(kids.length, 1);
+  assert.equal(kids[0].instrumentId, 2);
+  assert.equal(kids[0].channelPan, 0xe0, "layer 1 keeps its own pan, not layer 0's");
+});
+
+// …but a layer with NO default pan of its own must still inherit the channel's
+// pan (what the parent's copy was there for): the pattern's pan column and Mxx
+// have to reach every layer.
+test("item 116: a pan-less meta layer still inherits the channel pan", () => {
+  const eng = makeTestEngine();
+  const rec2 = new Uint8Array(256);
+  const w16 = (o, v) => { rec2[o] = v & 0xff; rec2[o + 1] = (v >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec2[14] = 1; rec2[21] = 0x3f; rec2[171] = 255; rec2[196] = 255;
+  eng.uploadInstrument(2, rec2);
+  eng.uploadInstrument(3, buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(2, 159, 0, 0x0000, 0xffff, 0, 63),
+  ]));
+
+  const ts = eng.playheads[0].trackerState;
+  ts.voices[0].channelPan = 0x40;
+  ts.voices[0].rowPan = 0x10;
+  eng.jamNote(0, 0, 0x5000, 3);
+  assert.equal(ts.voices[0].channelPan, 0x40, "layer 0 keeps the channel pan");
+  const kids = ts.backgroundVoices.filter((v) => v.active && v.isLayerChild);
+  assert.equal(kids.length, 1);
+  assert.equal(kids[0].channelPan, 0x40, "the child inherits it too");
+  assert.equal(kids[0].rowPan, 0x10);
+});
+
+// Item 116 (audit): the same "a per-patch override is dropped by a consumer
+// that reads the base record" fault, in three more places.
+
+// The Ixmp/meta rectangle's velocity axis is 6-bit in EVERY format version, so
+// a v3 song's 8-bit note volume must be narrowed for the lookup. triggerNote
+// did; the note-less "instrument byte alone" row did not, so a wide-cell song
+// silently reverted a patched voice to the base sample (the DNV seed is 255,
+// which is outside every 0…63 rectangle).
+test("item 116: wide cells — the inst-change row still resolves the patch", () => {
+  const eng = makeTestEngine();
+  eng.setCellFormat(true); // format v3
+  for (let i = 0; i < 1000; i++) eng.sampleBin[1000 + i] = 128 + ((i % 50) - 25);
+  eng.uploadInstrumentPatches(1, writePatchesBlob([makeInstPatch({
+    pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+    samplePtr: 1000, sampleLength: 1000, samplingRate: 32000,
+    loopEnd: 1000, loopMode: 1,
+  })]));
+
+  const ts = eng.playheads[0].trackerState;
+  const v = ts.voices[0];
+  eng.jamNote(0, 0, 0x5000, 1);
+  assert.equal(v.activeSamplePtr, 1000, "the trigger path narrows and matches");
+  assert.equal(v.noteVolume, 255, "a wide cell seeds an 8-bit note volume");
+
+  // Row 0: no note, instrument 1. Wide cell byte 8 = vol/pan effect nibbles;
+  // SEL_FINE (3) with value 0 is the no-op in both columns.
+  const pat = new Uint8Array(64 * 16);
+  for (let r = 0; r < 64; r++) pat[r * 16 + 8] = (3 << 4) | 3;
+  pat[2] = 1;
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0; cue[1] = 0;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+  renderSamples(eng, 512);
+  assert.equal(v.activeSamplePtr, 1000, "the inst-change row keeps the patch");
+});
+
+// notefx 5/6 set an instrument-wide filter override. It is absolute, so it
+// legitimately wins over a patch — but CLEARING it ($FFFF) used to drop every
+// voice onto the base record, discarding the patch's own 'x' block (and its
+// SF-vs-IT mode, which decides what the number even means).
+test("item 116: clearing the cutoff override returns a patched voice to its patch", () => {
+  const eng = makeTestEngine();
+  eng.instruments[1].defaultCutoff = 0xff; // base: filter OFF, IT mode
+  eng.uploadInstrumentPatches(1, writePatchesBlob([makeInstPatch({
+    pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+    sampleLength: 1000, samplingRate: 32000, loopEnd: 1000, loopMode: 1,
+    hasExtra: true, filterSfMode: true, extraCutoff: 4000, extraResonance: 20,
+  })]));
+
+  const ts = eng.playheads[0].trackerState;
+  const v = ts.voices[0];
+  eng.jamNote(0, 0, 0x5000, 1);
+  assert.equal(v.activeDefaultCutoff, 4000, "the trigger takes the patch's cutoff");
+  assert.equal(v.filterSfMode, true, "and the patch's filter mode");
+
+  applyFilterParamEffect(eng, ts, v, 0, 0x2000, false);
+  assert.equal(v.activeDefaultCutoff, 0x20, "an override is absolute and wins");
+  assert.equal(v.filterSfMode, false, "decoded in the INSTRUMENT's mode");
+
+  applyFilterParamEffect(eng, ts, v, 0, 0xffff, false); // $FFFF clears it
+  assert.equal(v.activeDefaultCutoff, 4000, "clearing returns to the PATCH, not the base");
+  assert.equal(v.filterSfMode, true, "and restores the patch's units");
+
+  // A voice with no patch still falls back to the base record.
+  const v2 = ts.voices[1];
+  eng.instruments[1].extraPatches = null;
+  eng.jamNote(0, 1, 0x5000, 1);
+  assert.equal(v2.activePatchIndex, -1);
+  applyFilterParamEffect(eng, ts, v2, 1, 0xffff, false);
+  assert.equal(v2.activeDefaultCutoff, 0xff, "no patch: the base record stands");
+});
+
+// Funk repeat (S$Fx) inverts bytes inside the LOOP. The mask was sized and
+// indexed off the base record's loop, so on a patched voice — whose loop is the
+// patch's — the inversion landed on the wrong bytes.
+test("item 116: funk repeat follows the patch's loop, not the base record's", () => {
+  const eng = makeTestEngine(); // base inst: loop 0..1000
+  eng.uploadInstrumentPatches(1, writePatchesBlob([makeInstPatch({
+    pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+    samplePtr: 1000, sampleLength: 600, samplingRate: 32000,
+    loopStart: 100, loopEnd: 400, loopMode: 1, // a DIFFERENT loop
+  })]));
+  // The funk walker lives in the per-tick advance, which only runs on a PLAYING
+  // playhead — so this drives a real pattern rather than jamNote.
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1; // row 0: note 0x5000, inst 1
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0; cue[1] = 0;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+
+  const ts = eng.playheads[0].trackerState;
+  const v = ts.voices[0];
+  renderSamples(eng, 512); // row 0 triggers
+  assert.equal(v.activeSampleLoopStart, 100);
+  assert.equal(v.activeSampleLoopEnd, 400);
+
+  v.funkSpeed = 0x40; // arm funk repeat on this voice
+  renderSamples(eng, TRACKER_CHUNK * 8);
+
+  const inst = eng.instruments[1];
+  assert.notEqual(inst.funkMask, null, "the mask was allocated");
+  const patchLoopLen = 400 - 100;
+  assert.equal(inst.funkMask.length, (patchLoopLen + 7) >> 3,
+    "sized to the PATCH's 300-byte loop, not the base record's 1000");
+  assert.ok(v.funkWritePos < patchLoopLen, "the write head wraps on the patch's loop");
 });

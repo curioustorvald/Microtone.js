@@ -203,7 +203,7 @@ This is how a SoundFont instrument — whose single modulation envelope drives p
 | Default note volume | Seeds the per-note volume axis at trigger, unless the row carries a volume-column SET. A stored 0 means "not present" and falls back to 63 |
 | Initial attenuation | A velocity-independent amplitude multiplier from the decibel octet table. Deliberately **not** folded into the envelope, so the envelope keeps its full 0…63 resolution |
 | Volume swing / pan swing | A random bias drawn **once per trigger**: `⌊random × (2·swing + 1)⌋ − swing`. Volume swing scales output by `1 + bias ÷ 255`; pan swing adds `bias` to the pan sum |
-| Default pan | Applied at trigger, but only when the row carried an instrument byte **and** the pan envelope's LOOP word has the `p` bit set |
+| Default pan | Applied at trigger, but only when the row carried an instrument byte **and** either the pan envelope's LOOP word has the `p` bit set or the resolved patch supplies its own pan ([§5.3.1](#5-3-1-the-default-position)) |
 | Pitch-pan centre / separation | Also trigger-time, also only with an instrument byte: `pan_shift = ⌊((note − centre) ÷ 4096) × separation × 4⌋`, applied as a pan slide |
 | Percussion flag | Purely advisory to editors: a retuner or transposer **MUST NOT** move this instrument's notes. The engine ignores it |
 
@@ -273,12 +273,19 @@ Channel volume is **not** reset by a trigger. It belongs to the channel, not the
 
 #### 5.3.1 The default position
 
-The default pan is applied only when the pan envelope's LOOP word carries the `p` bit ("use default pan"). What it applies depends on the song's surround model:
+A trigger takes its default position from one of two places, and either is enough to make it apply:
 
-- **Stereo** — the instrument's pan byte (record 177), or the resolved patch's `default pan` when that is not the `0xFF` sentinel. Unchanged from the days before the spatial fields existed.
+- **The resolved patch's `default pan`**, whenever that is not the `0xFF` sentinel. A patch override needs no further permission — see below.
+- **The base record**, but only when the pan envelope's LOOP word carries the `p` bit ("use default pan").
+
+When both are available the patch wins. What the winner means depends on the song's surround model:
+
+- **Stereo** — a pan byte: the instrument's record 177, or the patch's. Unchanged from the days before the spatial fields existed.
 - **Planar or spatial** — the instrument's default **position**: a 9-bit azimuth whose low byte is that same byte 177 and whose ninth bit is record byte 14's `A` flag, plus the signed elevation in record byte 254. A planar song forces the elevation to zero.
 
 A patch overrides the azimuth only, and only within the front arc: a patch record holds an 8-bit pan and no elevation and no ninth bit, so the instrument's height stands whichever pan wins. The pan ENVELOPE offsets the azimuth and leaves the elevation where it is.
+
+**Why `p` does not gate the patch.** The `p` bit lives in the base record's pan envelope, and a patch may replace that envelope wholesale — its own `p` block carries its own LOOP word. Gating the patch's pan on `p` would therefore let a patch silently disable its own override, and would leave every SoundFont-derived bank centred: those base records carry no pan envelope at all, so `p` is clear, while the per-zone pan sits in each patch's byte 24. The patch's `0xFF` sentinel *is* its enable flag.
 
 Because the ninth bit and the elevation live in bits that were previously unused and are read only in a surround song, a file written before they existed keeps its exact stereo behaviour, and its default pan lands on the front arc — which is what a pan byte has always meant.
 
@@ -288,6 +295,8 @@ If the instrument carries Ixmp patches, the engine walks the list **in order** a
 
 The volume axis used for the lookup is the *pre-patch* seed: the volume column's SET if present; otherwise the instrument's default note volume if the row carried an instrument byte; otherwise the voice's current note volume. Using the post-patch volume would make the lookup depend on its own result.
 
+**That axis is six bits in every format version.** The rectangle is instrument data, and a bank is format-neutral, so a version 3 engine **MUST** narrow its eight-bit note volume onto 0…63 (a shift right by two) before testing it — at *every* lookup, not only at the trigger. A version 3 engine that forgets on one path finds no patch there at all, since the seed a wide cell starts from is 255 and every rectangle written by an IT, XM or SoundFont converter ends at 63. The same narrowing applies to a Metainstrument's layer rectangles, which share the axis.
+
 A patch's "no override" sentinels — default pan `0xFF`, default note volume 0, auto-vibrato waveform `0xFF` — defer to the base record field by field.
 
 ### 5.5 Metainstruments
@@ -296,7 +305,9 @@ If the trigger's instrument is a Metainstrument, the engine first **releases** t
 
 Then it collects every layer whose rectangle contains the trigger, in record order. Under **strict layering** it additionally drops any layer whose own instrument resolves no patch at the (detuned) trigger. If nothing survives, the channel goes **silent** for this note — that is the correct outcome, not a fallback.
 
-Otherwise the first surviving layer sounds on the foreground voice and every further layer spawns a background voice bound to this channel. Each child inherits the parent's channel volume, pan, azimuth and elevation at spawn, carries the parent's *relative* detune, and takes its own mix gain from the decibel octet table.
+Otherwise the first surviving layer sounds on the foreground voice and every further layer spawns a background voice bound to this channel. Each child inherits the parent's channel volume, pan, azimuth and elevation **as they stood before the foreground layer retriggered**, carries the parent's *relative* detune, and takes its own mix gain from the decibel octet table.
+
+The order matters: the child inherits that channel context *before* it is triggered, so its own trigger can still move it to its own default position ([§5.3.1](#5-3-1-the-default-position)). Inheriting the parent's pan afterwards would flatten every layer onto the first one's position — audible as a SoundFont kit whose layers are meant to pan apart collapsing to a point.
 
 Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune), key-off, note-fading, channel volume, note volume, row volume, pan, azimuth and elevation. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
 
@@ -514,6 +525,8 @@ SNES and NES DPCM modes carry per-voice state (the DPCM counter), and a stereo v
 
 `S $Fx` engages ProTracker's "funk repeat": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
 
+The loop the mask covers is the **active** one — an Ixmp patch replaces the base record's loop points, and the mask is sized and indexed against whichever loop the voice is actually sounding.
+
 The mask is instrument-scope runtime state and **MUST** be cleared on a transport reset, or a replay will start from a scrambled sample.
 
 ### 8.5 The sample-end ramp
@@ -571,6 +584,8 @@ Direct Form I, unclamped — the gain normalisation bounds it. The −3.01 dB of
 ### 9.3 Runtime overrides
 
 Effects `5` and `6` set an instrument-wide cutoff or resonance override, targeting the channel's instrument and every layer child's instrument. An argument of `$FFFF` clears the override. In IT mode the high byte is taken; in SoundFont mode the full 16 bits are. Overrides are runtime state and **MUST** be cleared on a transport reset.
+
+An override is **absolute and instrument-wide**: while one is in force every voice of that instrument takes it, decoded and applied in the *instrument's* filter mode, whatever patch the voice resolved. Clearing it returns each sounding voice to **its own** default — the value in its patch's `x` block when it has one, the base record's otherwise. Dropping every voice onto the base record instead would retune a patched voice's filter, and where the patch and the base record disagree on SoundFont-versus-IT mode it would reinterpret the stored number in the wrong units.
 
 ## 10. Mixing
 

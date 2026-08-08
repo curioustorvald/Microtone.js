@@ -231,6 +231,13 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     return;
   }
   const l0 = layers[0];
+  // Channel pan context as it stands BEFORE layer 0 retriggers. Each child is
+  // seeded with this and then triggered, so a layer's own default pan (its
+  // instrument's byte 177 or its Ixmp patch's) lands on the child instead of
+  // being overwritten by layer 0's result — while a channel pan the pattern set
+  // still carries to every layer that has no default of its own (item 116).
+  const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
   triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
@@ -239,29 +246,40 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   for (let k = 1; k < layers.length; k++) {
     const lk = layers[k];
     const child = new Voice();
+    // Match layer 0's channel context so M/pan and the first tick agree; the
+    // trigger below may then move the child's pan to its own default.
+    child.channelVolume = voice.channelVolume;
+    child.channelPan = chanPan;
+    child.rowPan = chanRowPan;
+    child.panAzimuth = chanAzimuth;
+    child.panElevation = chanElevation;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
     child.layerRelDetune = lk.detune - l0.detune;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
-    child.channelVolume = voice.channelVolume;
-    child.channelPan = voice.channelPan;
-    child.rowPan = voice.rowPan;
-    child.panAzimuth = voice.panAzimuth;
-    child.panElevation = voice.panElevation;
     ts.backgroundVoices.push(child);
   }
   capBackgroundVoices(ts);
+}
+
+/**
+ * Narrow a note volume onto the Ixmp/meta rectangle's velocity axis. That axis
+ * is INSTRUMENT data and stays 6-bit in every format version (file format §5.5),
+ * so a wide cell's 8-bit volume must be scaled down for it — 255 → 63. Every
+ * resolvePatch/resolveMetaLayers call site goes through here; one that forgets
+ * silently misses every patch in a v3 song (item 116).
+ */
+export function narrowVolAxis(ts, v) {
+  return clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
 }
 
 export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
-  // The velocity rectangle is instrument data and stays 6-bit in every format,
-  // so a wide cell's 8-bit volume is narrowed for the lookup (255 → 63).
-  const narrow = (v) => clamp(ts.wideCells ? v >> 2 : v, 0, 0x3f);
+  const narrow = (v) => narrowVolAxis(ts, v);
   let seedVolForLookup;
   if (volOverride >= 0) seedVolForLookup = narrow(volOverride);
   else if (instId !== 0) seedVolForLookup = rowVolumeFromDefault(inst, null);
@@ -317,9 +335,15 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
     ? Math.trunc(random() * (2 * inst.panSwing + 1)) - inst.panSwing : 0;
   // Default pan / pitch-pan separation: only when the row carried an instrument byte.
   if (instId !== 0) {
-    // Pan LOOP word bit 7 = 'p' ("use default pan"); patch defaultPan wins unless 0xFF.
-    if (((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
-      const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
+    // Pan LOOP word bit 7 = 'p' ("use default pan") gates the BASE record's
+    // byte 177 only. An Ixmp patch's default pan carries its own sentinel
+    // (0xFF = no override) and applies whether or not 'p' is set: the patch is
+    // free to bring its own pan envelope, whose LOOP word REPLACES the base
+    // record's, so gating a patch override on 'p' would let the patch disable
+    // its own pan (item 116). SF2-derived banks are the common case — per-zone
+    // pan on a base record that carries no pan envelope at all.
+    const patchPan = patch !== null && patch.defaultPan !== 0xff ? patch.defaultPan : null;
+    if (patchPan !== null || ((voice.activePanEnvLoop >>> 7) & 1) !== 0) {
       if (ts.surroundModel === SURROUND_STEREO) {
         applyPanSet(ts, voice, patchPan !== null ? patchPan : inst.defaultPan);
       } else {

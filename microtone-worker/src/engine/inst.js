@@ -62,6 +62,17 @@ export function patchChannelPtrs(patch) {
     : [patch.samplePtr];
 }
 
+/**
+ * The Ixmp patch a voice is actually sounding, from the index applyActiveSample
+ * recorded on it (-1 = the base record). Bounds-checked: a mid-playback patch
+ * re-upload (the Advanced editor) can shorten the list under a live voice.
+ */
+export function patchAt(inst, patchIndex) {
+  if (inst == null || patchIndex < 0) return null;
+  const patches = inst.extraPatches;
+  return patches !== null && patchIndex < patches.length ? patches[patchIndex] : null;
+}
+
 /** True when the patch plays exactly two channels (the only multi-channel case
  *  the mixer renders today). */
 export function patchIsStereo(patch) {
@@ -445,8 +456,12 @@ export class TaudInst {
   }
 
   // Funk repeat mask — sized for the loop length; stale masks are discarded.
-  toggleFunkBit(loopOffset) {
-    const len = Math.max(this.sampleLoopEnd - this.sampleLoopStart, 1);
+  // `loopLen` is the SOUNDING voice's active loop length — an Ixmp patch brings
+  // its own loop points, so sizing the mask off the base record would index a
+  // patched voice's inversion into the wrong bytes (item 116). Defaults to the
+  // base record's loop for a voice with no patch.
+  toggleFunkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
+    const len = Math.max(loopLen, 1);
     const expectedSize = (len + 7) >> 3;
     let mask = this.funkMask;
     if (mask === null || mask.length !== expectedSize) {
@@ -457,10 +472,10 @@ export class TaudInst {
     mask[idx >> 3] ^= 1 << (idx & 7);
   }
 
-  funkBit(loopOffset) {
+  funkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
     const mask = this.funkMask;
     if (mask === null) return false;
-    const len = Math.max(this.sampleLoopEnd - this.sampleLoopStart, 1);
+    const len = Math.max(loopLen, 1);
     if (mask.length !== (len + 7) >> 3) { this.funkMask = null; return false; }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     return ((mask[idx >> 3] >>> (idx & 7)) & 1) !== 0;

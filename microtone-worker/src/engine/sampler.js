@@ -37,9 +37,12 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
   const i = Math.min(Math.max(idx, 0), sampleLen - 1);
   let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
-  if (inst.funkMask !== null && inst.sampleLoopEnd > inst.sampleLoopStart) {
-    const ls = inst.sampleLoopStart;
-    if (i >= ls && i < inst.sampleLoopEnd && inst.funkBit(i - ls)) b = b ^ 0xff;
+  // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
+  // funk mask is sized and indexed against whichever loop is sounding (item 116).
+  const ls = voice.activeSampleLoopStart;
+  const le = voice.activeSampleLoopEnd;
+  if (inst.funkMask !== null && le > ls) {
+    if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
   }
   return (b - 127.5) / 127.5;
 }
