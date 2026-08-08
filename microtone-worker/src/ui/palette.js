@@ -9,42 +9,48 @@ import {
 } from "./edit.js";
 import { t } from "./i18n.js";
 
-// Effect reference (TAUD_NOTE_EFFECTS.md digest): name + argument format.
+// Effect reference (TAUD_NOTE_EFFECTS.md digest): opcode → button label (l).
+// The displayed name/argument-format text is looked up in the language table
+// under `pal.fx.<l>.n` / `pal.fx.<l>.a` (see fxName/fxArg below) — the strings
+// themselves live in lang/en.js (source of truth) and its translations.
 export const FX_INFO = {
-  0x01: { l: "1", n: "Global flags", a: "$ff00 — bits0-1 tone-slide mode, bits2-4 interpolation" },
-  0x04: { l: "4", n: "Spatial slide target", a: "$eeaa — aim a Z slide: aa azimuth (00 left, 40 front, 80 right, C0 behind), ee elevation (signed) · surround songs only" },
-  0x05: { l: "5", n: "Filter cutoff", a: "IT: $xx00 (00..FE) · SF: $xxxx cents · $FFFF = reset override" },
-  0x06: { l: "6", n: "Filter resonance", a: "IT: $xx00 · SF: $xxxx centibels · $FFFF = reset override" },
-  0x07: { l: "7", n: "Pattern ditto", a: "$llrr — copy the last ll rows rr times" },
-  0x08: { l: "8", n: "Bitcrusher", a: "$xyzz — x clip mode, y bit depth (1-7), zz sample-skip · $0000 off" },
-  0x09: { l: "9", n: "Overdrive", a: "$x0zz — x clip mode, zz gain (16+zz)/16 · $0000 off" },
-  0x0a: { l: "A", n: "Set tick rate", a: "$xx00 — ticks per row" },
-  0x0b: { l: "B", n: "Jump to cue", a: "$xxxx — cue index (order jump)" },
-  0x0c: { l: "C", n: "Pattern break", a: "$00xx — next cue, start at row xx" },
-  0x0d: { l: "D", n: "Volume slide", a: "$xy00 — x up / y down per tick · $xF00 fine up, $Fy00 fine down" },
-  0x0e: { l: "E", n: "Pitch slide down", a: "$xxxx units/tick · $Fxxx = fine (once)" },
-  0x0f: { l: "F", n: "Pitch slide up", a: "$xxxx units/tick · $Fxxx = fine (once)" },
-  0x10: { l: "G", n: "Tone portamento", a: "$xxxx — slide speed toward the row's note" },
-  0x11: { l: "H", n: "Vibrato", a: "$xy00 — x speed, y depth" },
-  0x12: { l: "I", n: "Tremor", a: "$xy00 — x+1 ticks on, y+1 ticks off" },
-  0x13: { l: "J", n: "Arpeggio", a: "$xy00 — offsets ×256 (4096-TET) for voices 2/3" },
-  0x14: { l: "K", n: "Vibrato + vol slide", a: "$xy00 — vol slide nibbles; vibrato continues" },
-  0x15: { l: "L", n: "Porta + vol slide", a: "$xy00 — vol slide nibbles; portamento continues" },
-  0x16: { l: "M", n: "Channel volume", a: "$xx00 — set channel volume (00..3F)" },
-  0x17: { l: "N", n: "Channel vol slide", a: "$xy00 — like D but on the channel axis" },
-  0x18: { l: "O", n: "Sample offset", a: "$xxxx — start sample at byte offset" },
-  0x19: { l: "P", n: "Pan slide", a: "$xy00 — x left / y right (IT convention)" },
-  0x1a: { l: "Q", n: "Retrigger", a: "$0xyy — retrig every yy ticks, x = volume modifier" },
-  0x1b: { l: "R", n: "Tremolo", a: "$xy00 — x speed, y depth" },
-  0x1c: { l: "S", n: "Special", a: "$Dx.. delay · $Cx.. cut@tick · $Bx.. loop · $8xx pan ($8xxx = 9-bit angle in surround songs) · $1x gliss · $3/4/5 waveforms · $6x/$Ex delays · $7x NNA/env · $Fx funk" },
-  0x1d: { l: "T", n: "Tempo", a: "$xx00 BPM=xx+25 · $FFxx BPM=xx+280 · $000y/$001y slide" },
-  0x1e: { l: "U", n: "Fine vibrato", a: "$xy00 — x speed, y depth (finer than H)" },
-  0x1f: { l: "V", n: "Global volume", a: "$xx00 — song global volume (00..FF)" },
-  0x20: { l: "W", n: "Global vol slide", a: "$xy00 — fine/coarse like D, on global volume" },
-  0x21: { l: "X", n: "Spatial pan", a: "$eeaa — place the source: aa azimuth (00 left, 40 front, 80 right, C0 behind), ee elevation (signed, 80 = −90°) · surround songs only" },
-  0x22: { l: "Y", n: "Panbrello", a: "$xy00 — x speed, y depth" },
-  0x23: { l: "Z", n: "Spatial pan slide", a: "$0xxx — slide toward the 4-command target at xxx/16 azimuth units per tick · $0000 recalls · surround songs only" },
+  0x01: { l: "1" },
+  0x04: { l: "4" },
+  0x05: { l: "5" },
+  0x06: { l: "6" },
+  0x07: { l: "7" },
+  0x08: { l: "8" },
+  0x09: { l: "9" },
+  0x0a: { l: "A" },
+  0x0b: { l: "B" },
+  0x0c: { l: "C" },
+  0x0d: { l: "D" },
+  0x0e: { l: "E" },
+  0x0f: { l: "F" },
+  0x10: { l: "G" },
+  0x11: { l: "H" },
+  0x12: { l: "I" },
+  0x13: { l: "J" },
+  0x14: { l: "K" },
+  0x15: { l: "L" },
+  0x16: { l: "M" },
+  0x17: { l: "N" },
+  0x18: { l: "O" },
+  0x19: { l: "P" },
+  0x1a: { l: "Q" },
+  0x1b: { l: "R" },
+  0x1c: { l: "S" },
+  0x1d: { l: "T" },
+  0x1e: { l: "U" },
+  0x1f: { l: "V" },
+  0x20: { l: "W" },
+  0x21: { l: "X" },
+  0x22: { l: "Y" },
+  0x23: { l: "Z" },
 };
+
+const fxName = (info) => t(`pal.fx.${info.l}.n`);
+const fxArg = (info) => t(`pal.fx.${info.l}.a`);
 
 export class CommandPalette {
   /** getContext() → {sub, cell, apply(fields)} | null */
@@ -143,7 +149,7 @@ export class CommandPalette {
       case SUB_FX_OP: {
         label(t("pal.effect"));
         for (const [op, info] of Object.entries(FX_INFO)) {
-          btn(info.l, `${info.n} — ${info.a}`, () => ctx.apply({ effect: parseInt(op, 10) }),
+          btn(info.l, `${fxName(info)} — ${fxArg(info)}`, () => ctx.apply({ effect: parseInt(op, 10) }),
             ctx.cell.effect === parseInt(op, 10));
         }
         btn("×", t("pal.clearFxTitle"), () => ctx.apply({ effect: 0, effectArg: 0 }));
@@ -153,7 +159,7 @@ export class CommandPalette {
         const info = FX_INFO[ctx.cell.effect];
         label(t("pal.argument"));
         hint(info
-          ? `${info.l} ${info.n}: ${info.a}`
+          ? `${info.l} ${fxName(info)}: ${fxArg(info)}`
           : ctx.cell.effect === 0 ? t("pal.noEffect") : t("pal.unknownOpcode"));
         break;
       }

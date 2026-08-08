@@ -9,6 +9,8 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 - **Duplicate an instrument.** A **Duplicate** button now sits beside an instrument's name, next to Renumber… and Delete…: it copies the instrument into the lowest free number and selects the copy, so a variant — a shorter fadeout, another filter, a different envelope or zone map — is one click away instead of a re-import. The copy takes its source's name with a `(2)` — then `(3)`, `(4)` — suffix, and the whole thing is one undo step.
 - **The copy costs no sample memory.** Only the instrument's settings and its Ixmp patches are copied; the samples themselves are shared, so duplicating even a 40-zone piano spends one instrument number and not a byte of the sample pool. The flip side is that editing the *sample* still changes what both play — it is one sample; only the settings are separate.
 - **A metainstrument duplicates whole.** Its layer sub-instruments are copied too, so the copy's layers can be retuned or refiltered without moving the original stack, and layers that shared one sub-instrument still share one copy (*linked ×n* survives).
+- Fixed: the command palette's effect-argument hint showed the wrong byte layout for several effects — Vibrato, Tremor, Arpeggio, Retrigger, Tremolo, Fine Vibrato, Panbrello, Global Flags and the Filter Cutoff/Resonance SoundFont form — now it matches the values the engine actually reads.
+- **The command palette's effect reference speaks Korean.** Every effect's name and `$`-argument hint in the Timeline/Patterns bottom bar is now translated, not just the surrounding labels.
 
 ## 2026-08-07
 
