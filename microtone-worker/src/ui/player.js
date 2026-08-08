@@ -40,8 +40,7 @@ for (const ev of ["pointerdown", "keydown"]) {
   window.addEventListener(ev, () => { if (audioReady) ensureAudio(); });
 }
 
-async function loadFile(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+async function loadBytes(name, bytes) {
   try {
     doc = parseTaud(bytes);
   } catch (err) {
@@ -64,7 +63,7 @@ async function loadFile(file) {
   });
 
   $("fileinfo").textContent =
-    `${file.name} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ` +
+    `${name} — ${doc.meta.projectName ?? "untitled"} · ${doc.songs.length} ${doc.songs.length === 1 ? "song" : "songs"} · ` +
     `format v${doc.fmtVer} · ${doc.is64Channel ? 64 : 32}ch` +
     (doc.ixmp.length ? ` · Ixmp on ${doc.ixmp.length} inst` : "");
   $("transport").hidden = false;
@@ -73,6 +72,10 @@ async function loadFile(file) {
   songIndex = 0;
   audio.loadDocument(doc, songIndex);
   refreshBinaural();
+}
+
+async function loadFile(file) {
+  await loadBytes(file.name, new Uint8Array(await file.arrayBuffer()));
 }
 
 /** #998.3: the head model is only meaningful for a surround song, so the
@@ -181,3 +184,12 @@ function drawMeters() {
   requestAnimationFrame(drawMeters);
 }
 requestAnimationFrame(drawMeters);
+
+// ── ?load= bootstrap (demo links) ──
+const bootParams = new URLSearchParams(location.search);
+if (bootParams.has("load")) {
+  const url = bootParams.get("load");
+  fetch(url).then(async (resp) => {
+    await loadBytes(url.split("/").pop(), new Uint8Array(await resp.arrayBuffer()));
+  }).catch((err) => console.error(`PLAYER: load failed ${err.message}`));
+}
