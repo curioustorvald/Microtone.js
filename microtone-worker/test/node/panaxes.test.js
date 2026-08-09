@@ -15,7 +15,9 @@ import assert from "node:assert/strict";
 
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, SAMPLING_RATE, setSamplingRate } from "../../src/engine/constants.js";
-import { EffectOp, lfoSampleWide } from "../../src/engine/tables.js";
+import {
+  EffectOp, lfoSampleWide, advanceLfoPhase, LFO_PHASE_STEPS, MOD_SIN_TABLE,
+} from "../../src/engine/tables.js";
 import {
   makeInstPatch, writePatchesBlob, buildMetaRecord, makeMetaLayer,
 } from "../../src/engine/inst.js";
@@ -322,9 +324,9 @@ test("a pan-less layer 0 still lets the others spread around the commanded point
 const Y_SPEED = 0x33, Y_DEPTH = 0x55, Y_ARG = 0x3355;
 /** The offset the engine will hold after `ticks` ticks of Y: the LFO advances
  *  at the end of each tick, so tick 1 renders phase 0 and tick 2 phase `speed`
- *  of the 1024-step accumulator. */
+ *  of the 1088-step accumulator. */
 const yOffsetAfter = (ticks) =>
-  (lfoSampleWide(((ticks - 1) * Y_SPEED) & 0x3ff, 0) * Y_DEPTH) >> 7;
+  (lfoSampleWide(((ticks - 1) * Y_SPEED) % LFO_PHASE_STEPS, 0) * Y_DEPTH) >> 7;
 
 /** Worst |L|/|R| tick-energy imbalance over `ticks` — 1.0 is dead centre. */
 function worstImbalance(eng, ticks) {
@@ -427,4 +429,36 @@ test("the snapshot's pan follows the panbrello LFO", () => {
     "the slider's value carries the swing");
   assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_AZIMUTH], 0xa0 + off,
     "and so does the blob's angle, which mirrors it in a stereo song");
+});
+
+// ── the phase scale is the nibble-repeat's own factor ────────────────────
+// 1088 = 64 entries x 17 steps, and 17 is what a nibble-repeat multiplies by.
+// That is the whole point: a converted speed byte walks the SAME table entries
+// as the tracker it came from, on the same ticks, rather than 6.25% fast (which
+// is what a power-of-two 1024 would give).
+
+test("a nibble-repeated speed reproduces the source tracker's LFO exactly", () => {
+  for (let x = 1; x < 16; x++) {
+    let trackerPos = 0;       // 8-bit phase, advanced by speed x 4, indexed >> 2
+    let taudPos = 0;          // 1088-step phase, advanced by the repeated byte
+    const speedByte = x * 0x11;
+    for (let tick = 0; tick < 512; tick++) {
+      const trackerSine = MOD_SIN_TABLE[(trackerPos >>> 2) & 0x3f];
+      assert.equal(lfoSampleWide(taudPos, 0), trackerSine,
+        `speed nibble ${x.toString(16)}, tick ${tick}`);
+      trackerPos = (trackerPos + x * 4) & 0xff;
+      taudPos = advanceLfoPhase(taudPos, speedByte);
+    }
+  }
+});
+
+test("the phase wraps on 1088, so a converted LFO never drifts", () => {
+  let pos = 0;
+  for (let i = 0; i < 1000; i++) pos = advanceLfoPhase(pos, 0x33);
+  assert.equal(pos, (1000 * 0x33) % LFO_PHASE_STEPS);
+  assert.ok(pos < LFO_PHASE_STEPS);
+  // 17 steps to an entry: a whole-entry advance lands on entry boundaries.
+  assert.equal(lfoSampleWide(17 * 5, 0), MOD_SIN_TABLE[5]);
+  assert.equal(lfoSampleWide(17 * 5 + 16, 0), MOD_SIN_TABLE[5], "and holds across the entry");
+  assert.equal(lfoSampleWide(17 * 6, 0), MOD_SIN_TABLE[6]);
 });

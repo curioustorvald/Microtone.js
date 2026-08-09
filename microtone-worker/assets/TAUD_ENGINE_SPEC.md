@@ -385,7 +385,7 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 8. **Channel-volume slide** (`N`), the **pan-column slides** (note axis) and effect `P`'s slide (channel axis), on ticks after the first.
 9. **Spatial slide** (`Z`) on ticks after the first ([§11.5](#11-5-the-z-slide)).
 10. **Tremor** (`I`): advance the on/off phase counter; while off, force the row volume to 0.
-11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed`, modulo 1024.
+11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed`, modulo 1088.
 12. **Glissando** (`S $1x`): snap the *sounding* pitch to the nearest 12-TET semitone while leaving the note word smooth.
 13. **Tremolo** (`R`): `row_volume = clamp(note_volume + ((lfo × depth) >> 9), 0, 63)`.
 14. **Panbrello** (`Y`): `panbrello_offset = (lfo × depth) >> 7`. This is a signed offset the mixer sums with the two pan axes ([§10.3](#10-3-panning)), **not** a write to either of them — so the LFO swings around wherever the channel and the note have put the voice, without consuming the instrument's own pan seed, and the same offset steers the surround models ([§11](#11-the-spatial-model)). On a tick where `Y` is not active the same step sets it to 0, so a row without `Y` puts the voice back on its base pan. That zero **MUST** be written here and not in the row reset ([§5.1](#5-1-per-row-reset)): a row boundary runs the row pass *after* this one, so a value the row pass clears is still cleared while the new row's first tick renders — one tick of dead centre in the middle of a sweep that spans several rows.
@@ -415,9 +415,11 @@ with `t` the ticks since the trigger. The pitch delta is `(lfo × ramp) >> 10`, 
 
 ### 6.2 The LFO
 
-Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator, but not one phase scale. The command LFOs (`H`, `U`, `R`, `Y`) run a **1024-step** phase advanced by `speed` per tick and indexed `(phase >> 4) & 63`; auto-vibrato, whose rate comes from the instrument record rather than an effect byte, keeps the 256-step phase advanced by `speed × 2` and indexed `(phase >> 2) & 63`.
+Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator, but not one phase scale. The command LFOs (`H`, `U`, `R`, `Y`) run a **1088-step** phase advanced by `speed` per tick and indexed `⌊phase ÷ 17⌋`; auto-vibrato, whose rate comes from the instrument record rather than an effect byte, keeps the 256-step phase advanced by `speed × 2` and indexed `(phase >> 2) & 63`.
 
-The wider phase is what makes a command LFO's 8-bit speed byte mean the same *rates* as a 4-bit tracker speed nibble with 16× the resolution: a tracker advancing `x × 4` through 256 steps and Taud advancing `16x` through 1024 are the same oscillator. A speed byte therefore spans 1024 ticks per cycle at `$01` down to 4 at `$FF`, and a converter that nibble-repeats the source nibble (`x` → `17x`, the mapping every other 4-bit field uses) lands 6.25% fast of the source — uniformly, at every speed, which is inaudible on an LFO and worth the one convention across all the nibble fields.
+`1088 = 64 × 17`, and the 17 is the same 17 that a **nibble-repeat** multiplies by — the mapping every 4-bit source field uses to reach a Taud byte. The step count is deliberately not a power of two, because carrying that factor is what makes a converted speed byte reproduce the source tracker's oscillator *exactly* instead of approximately. A tracker advances an 8-bit phase by `speed × 4` and indexes `(phase >> 2) & 63`, so at tick `t` its index is `x·t mod 64`. A converted byte `17x` advances by `17x` through 1088 and indexes `⌊phase ÷ 17⌋` = `(17·x·t mod 1088) ÷ 17` = `x·t mod 64` — the same table entry, on the same tick, indefinitely. A power-of-two 1024 would have been 17/16 = 6.25% fast.
+
+An 8-bit speed byte therefore spans the same rate range as a 4-bit nibble with 17× the resolution: 1088 ticks per cycle at `$01`, 4.27 at `$FF` — and `$FF` is exactly where a source tracker's `$F` lands. Both the division and the modulo run once per voice per **tick**, never per sample, so neither costs anything worth a power-of-two compromise.
 
 | Waveform | Value |
 |---|---|

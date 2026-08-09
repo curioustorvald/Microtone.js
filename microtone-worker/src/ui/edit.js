@@ -55,6 +55,13 @@ export function lookahead(pos, scroll, vis, maxScroll) {
   return clamp(scroll); // cursor already inside the central 64%
 }
 
+/** Wheel-scroll step quantized to a multiple of `quantum`, carrying the remainder forward so no distance is lost. */
+export function wheelStep(remainder, rawDelta, quantum = 4) {
+  const total = remainder + rawDelta;
+  const step = Math.trunc(total / quantum) * quantum;
+  return { step, remainder: total - step };
+}
+
 /** Cursor sub-position walk order within one channel: [sub, nib] pairs. */
 function buildPositions(nibbles) {
   const out = [];

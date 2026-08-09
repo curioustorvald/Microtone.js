@@ -47,7 +47,7 @@
   --cv-fx-op: #ff8f71;      /* opcode, and the S/Z sub-command nibble with it */
   --cv-fx-a1: #ffdd00;      /* argument field 1 */
   --cv-fx-a2: #8be400;      /* argument field 2 */
-  --cv-fx-a3: #00e0fc;      /* argument field 3 */
+  --cv-fx-a3: #78DCE7;      /* argument field 3 */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -105,7 +105,7 @@
   --cv-fx-op: #ff8f71;      /* opcode, and the S/Z sub-command nibble with it */
   --cv-fx-a1: #ffdd00;      /* argument field 1 */
   --cv-fx-a2: #8be400;      /* argument field 2 */
-  --cv-fx-a3: #00e0fc;      /* argument field 3 */
+  --cv-fx-a3: #78DCE7;      /* argument field 3 */
 
   /* canvas: samples / instruments */
   --cv-wave: #4ddd7d;
@@ -160,7 +160,7 @@
   --cv-fx-op: #d4319d;
   --cv-fx-a1: #a44500;
   --cv-fx-a2: #3c9200;
-  --cv-fx-a3: #005f69;
+  --cv-fx-a3: #1d66b8;
 
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;

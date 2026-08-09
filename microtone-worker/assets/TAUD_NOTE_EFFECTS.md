@@ -356,13 +356,13 @@ Glissando (S $1x) snaps the output frequency to the nearest semitone ($0155 step
 
 ## H $xxyy — Vibrato with speed $xx and depth $yy
 
-**Plain.** Modulates pitch with a low-frequency oscillator (LFO). `$xx` is the LFO speed (high byte), `$yy` is the depth (low byte). On H rows the LFO accumulator advances at `$xx` per tick through a 1024-step lookup of the selected waveform (see S $3x). The current pitch offset is added to the channel's base pitch for the duration of each tick.
+**Plain.** Modulates pitch with a low-frequency oscillator (LFO). `$xx` is the LFO speed (high byte), `$yy` is the depth (low byte). On H rows the LFO accumulator advances at `$xx` per tick through a 1088-step lookup of the selected waveform (see S $3x). The current pitch offset is added to the channel's base pitch for the duration of each tick.
 
-**Compatibility.** ST3 `Hxy` uses 4-bit nibbles for speed and depth; convert by nibble-repeating each into Taud's bytes: ST3 `H27` → Taud `H $2277`. This preserves the peak depth exactly and the LFO rate to within 6.25% — the nibble-repeat multiplies by 17 where the rate scale wants 16, so a converted LFO runs uniformly 6.25% fast at every speed. That is inaudible on an LFO and buys one nibble convention across every 4-bit field; a converter that wants the rate exact **MAY** emit `x << 4` for the speed byte instead, and both readings sound the same. H and U share memory in Taud (they did in ST3 too).
+**Compatibility.** ST3 `Hxy` uses 4-bit nibbles for speed and depth; convert by nibble-repeating each into Taud's bytes: ST3 `H27` → Taud `H $2277`. This preserves both exactly: the phase is 1088 steps precisely so that the nibble-repeat's factor of 17 divides out, and a converted LFO walks the same waveform entries on the same ticks as the tracker it came from (TAUD_ENGINE_SPEC.md §6.2). Converters **MUST NOT** scale the speed byte any other way — `x << 4` and friends are 6% off and the exactness is free. H and U share memory in Taud (they did in ST3 too).
 
 Unlike ProTracker, ST3 vibrato fires on tick 0 as well; Taud follows ST3.
 
-**Implementation.** The reference sine table is OpenMPT's 64-entry 8-bit table, indexed `pos >> 4` through a 1024-step logical LFO (equivalently, a 1024-sample 16×-oversampled sine peaking at ±$7F). The 1024 steps, rather than the 256 a 4-bit-speed tracker uses, are what let the 8-bit speed byte cover the same rate range 16× more finely — see TAUD_ENGINE_SPEC.md §6.2:
+**Implementation.** The reference sine table is OpenMPT's 64-entry 8-bit table, indexed `⌊pos ÷ 17⌋` through a 1088-step logical LFO (equivalently, a 1088-sample 17×-oversampled sine peaking at ±$7F). The 1088 steps, rather than the 256 a 4-bit-speed tracker uses, are what let the 8-bit speed byte cover the same rate range 17× more finely *and* land exactly on the source's rate under nibble-repeat — see TAUD_ENGINE_SPEC.md §6.2:
 
 ```
 ModSinusTable[64] =
@@ -380,10 +380,10 @@ on row parse (H):
     if (arg & $FF) != 0: memory_HU.depth = arg & $FF
 
 on every tick (including tick 0):
-    sine = ModSinusTable[(lfo_pos >> 4) & $3F]    # signed -$80..+$7F
+    sine = ModSinusTable[lfo_pos ÷ 17]            # signed -$80..+$7F
     pitch_delta = (sine × memory_HU.depth) >> 6
     applied_pitch = base_pitch + pitch_delta
-    lfo_pos = (lfo_pos + memory_HU.speed) & $3FF
+    lfo_pos = (lfo_pos + memory_HU.speed) mod 1088
 ```
 
 At maximum speed and depth ($FFFF), peak `pitch_delta` is `$7F × $FF >> 6 ≈ $1FA` — about 1.5 semitones. On a fresh note, if the current LFO waveform retrigger bit is clear (S $3x with $x < $4), `lfo_pos` resets to 0. When the waveform is "random", a fresh random value is drawn every tick rather than read from the table.
@@ -661,7 +661,7 @@ A note previously silenced by a cut (`^^^` or `SCx` earlier in the row) **MUST N
 
 **Plain.** Modulates volume with an LFO, symmetrically with H's pitch modulation. `$xx` is LFO speed, `$yy` depth; the waveform is selected by S $4x.
 
-**Compatibility.** ST3 `Rxy` uses nibbles; converters **MUST** convert by nibble-repeat, with the same 6.25% rate caveat on the speed byte as H. ST3's volume cap is $40; Taud's is $3F — very deep tremolo that would have briefly clipped at $40 in ST3 **MAY** clip slightly earlier in Taud. R has its own memory slot (not shared with H/U).
+**Compatibility.** ST3 `Rxy` uses nibbles; converters **MUST** convert by nibble-repeat, which reproduces ST3's oscillator exactly — see H. ST3's volume cap is $40; Taud's is $3F — very deep tremolo that would have briefly clipped at $40 in ST3 **MAY** clip slightly earlier in Taud. R has its own memory slot (not shared with H/U).
 
 **Implementation.** Identical machinery to H with a larger shift to fit the narrower volume range:
 
@@ -671,10 +671,10 @@ on row parse (R):
     if (arg & $FF) != 0: memory_R.depth = arg & $FF
 
 on every tick (including tick 0):
-    sine = ModSinusTable[(lfo_pos >> 4) & $3F]
+    sine = ModSinusTable[lfo_pos ÷ 17]
     vol_delta = (sine × memory_R.depth) >> 9
     row_vol = clamp(note_vol + vol_delta, 0, $3F)        # modulate around the per-note axis
-    lfo_pos = (lfo_pos + memory_R.speed) & $3FF
+    lfo_pos = (lfo_pos + memory_R.speed) mod 1088
 ```
 
 The LFO bias is added to `note_vol` (per-note axis, mirroring IT's tremolo on `chan->volume`) and the result lands in `row_vol`, never written back into `note_vol` itself — so the row-end rebase reseats `row_vol` cleanly and tremolo dies on the next row without leaving residue. `channel_vol` is unaffected.
@@ -749,7 +749,7 @@ A tempo slide's memory slot is separate from the set-tempo path and is private t
 
 **Plain.** Modulates panning with an LFO, symmetrically with H's pitch modulation. `$xx` is LFO speed, `$yy` depth; the waveform is selected by S $5x.
 
-**Compatibility.** IT `Yxy` uses nibbles; converters **MUST** convert by nibble-repeat, with the same 6.25% rate caveat on the speed byte as H. IT's panning cap is $40 and Taud pans on $00…$FF, so a converted `Yxy` sweeps the same fraction of the stereo field; where IT clipped at its cap, a stereo song saturates at the ends of the summed pan and a surround song turns past them. Y has its own memory slot.
+**Compatibility.** IT `Yxy` uses nibbles; converters **MUST** convert by nibble-repeat, which reproduces IT's oscillator exactly — see H. IT's panning cap is $40 and Taud pans on $00…$FF, so a converted `Yxy` sweeps the same fraction of the stereo field; where IT clipped at its cap, a stereo song saturates at the ends of the summed pan and a surround song turns past them. Y has its own memory slot.
 
 **Implementation.** Identical machinery to H, producing a **signed pan offset** rather than a write to either pan axis. The mixer sums it with `channel_pan` and `note_pan` (§3a, TAUD_ENGINE_SPEC.md §10.3), which is what lets the LFO swing around wherever the channel and the note have already put the voice — an instrument's zone pan keeps its position and gets modulated, instead of being overwritten — and is what carries Y into the surround models unchanged:
 
@@ -760,9 +760,9 @@ on row parse (Y):
 
 on every tick (including tick 0):
     if panbrello is active for this row:
-        sine = ModSinusTable[(lfo_pos >> 4) & $3F]
+        sine = ModSinusTable[lfo_pos ÷ 17]
         panbrello_offset = (sine × memory_Y.depth) >> 7
-        lfo_pos = (lfo_pos + memory_Y.speed) & $3FF
+        lfo_pos = (lfo_pos + memory_Y.speed) mod 1088
     else:
         panbrello_offset = 0
 ```

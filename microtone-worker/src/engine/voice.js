@@ -299,7 +299,7 @@ export class Voice {
 
     // Vibrato (H / U).
     this.vibratoActive = false;
-    this.vibratoLfoPos = 0;   // 1024-step phase (lfoSampleWide), not the auto-vib 256
+    this.vibratoLfoPos = 0;   // 1088-step phase (lfoSampleWide), not the auto-vib 256
     this.vibratoWave = 0;
     this.vibratoRetrig = true;
     this.vibratoFineShift = 6; // 6 for H, 8 for U

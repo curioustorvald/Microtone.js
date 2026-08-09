@@ -368,17 +368,37 @@ const FINETUNE_OFFSET = Int32Array.from([
   0x0000, 0x0023, 0x0046, 0x0074, 0x0098, 0x00c8, 0x00f9, 0x0110,
 ]);
 
-/** LFO sample for vibrato/tremolo waveforms; pos is the 8-bit phase accumulator. */
-/**
- * The command LFOs (H, U, R, Y) run a 1024-step phase, not the 256-step one
- * the instrument's auto-vibrato uses, so that their 8-bit speed byte spans the
- * SAME rate range as a tracker's 4-bit speed nibble with 16× the resolution —
- * `pos += speed` here against IT's `pos += speed × 4` over 256. Sampling is the
- * same 64-entry table two bits further up.
- */
-function lfoSampleWide(pos, wave) {
-  return lfoSample(pos >>> 2, wave);
+// ── The command LFOs' phase (H, U, R, Y) ────────────────────────────────
+// 64 table entries × 17 steps each. The 17 is not arbitrary and the total is
+// deliberately not a power of two: every 4-bit tracker field converts into
+// Taud by NIBBLE-REPEAT, which multiplies by 17, so a phase whose step count
+// carries that same factor makes a converted speed byte reproduce the source
+// tracker's oscillator EXACTLY rather than approximately.
+//
+// A tracker advances an 8-bit phase by `speed × 4` and indexes `(pos >> 2) &
+// 63`, giving index `x·t mod 64` at tick t. Here a converted byte `17x`
+// advances by `17x` through 1088 and indexes `pos / 17`, giving
+// `(17·x·t mod 1088) / 17` = `x·t mod 64` — the same index, every tick,
+// forever. A power-of-two 1024 would have been 17/16 = 6.25% fast instead.
+//
+// Both are once per voice per TICK, never per sample, so the division and the
+// modulo cost nothing worth a power-of-two compromise.
+const LFO_PHASE_STEPS = 1088;
+const LFO_STEPS_PER_ENTRY = 17;
+
+/** Advance a command LFO's phase by its speed byte. */
+function advanceLfoPhase(pos, speed) {
+  return (pos + speed) % LFO_PHASE_STEPS;
 }
+
+/** Sample a command LFO's 1088-step phase (H, U, R, Y). */
+function lfoSampleWide(pos, wave) {
+  // `idx << 2` re-enters lfoSample at the position its own `>> 2` undoes, so
+  // the two phase scales share one waveform switch (and one random draw).
+  return lfoSample(Math.trunc(pos / LFO_STEPS_PER_ENTRY) << 2, wave);
+}
+
+/** LFO sample for auto-vibrato; pos is the 256-step phase accumulator. */
 
 function lfoSample(pos, wave) {
   const idx = (pos >>> 2) & 0x3f;
@@ -2956,7 +2976,7 @@ class Voice {
 
     // Vibrato (H / U).
     this.vibratoActive = false;
-    this.vibratoLfoPos = 0;   // 1024-step phase (lfoSampleWide), not the auto-vib 256
+    this.vibratoLfoPos = 0;   // 1088-step phase (lfoSampleWide), not the auto-vib 256
     this.vibratoWave = 0;
     this.vibratoRetrig = true;
     this.vibratoFineShift = 6; // 6 for H, 8 for U
@@ -6128,7 +6148,7 @@ function applyTrackerTick(eng, ts, playhead) {
       const sine = lfoSampleWide(voice.vibratoLfoPos, voice.vibratoWave);
       const pitchDelta = (sine * voice.mem.huDepth) >> voice.vibratoFineShift;
       pitchToMixer = clamp(voice.noteVal + pitchDelta, 0x20, 0xffff);
-      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed) & 0x3ff;
+      voice.vibratoLfoPos = advanceLfoPhase(voice.vibratoLfoPos, voice.mem.huSpeed);
     }
 
     // Glissando (S$1x) — snap pitchToMixer to nearest semitone (noteVal stays smooth).
@@ -6142,7 +6162,7 @@ function applyTrackerTick(eng, ts, playhead) {
       const sine = lfoSampleWide(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
       voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
-      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed) & 0x3ff;
+      voice.tremoloLfoPos = advanceLfoPhase(voice.tremoloLfoPos, voice.mem.rSpeed);
     }
 
     // Panbrello (Y) — a signed offset onto the mixer's pan sum. The shift is 7,
@@ -6156,7 +6176,7 @@ function applyTrackerTick(eng, ts, playhead) {
     if (voice.panbrelloActive) {
       const sine = lfoSampleWide(voice.panbrelloLfoPos, voice.panbrelloWave);
       voice.panbrelloOffset = (sine * voice.mem.yDepth) >> 7;
-      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed) & 0x3ff;
+      voice.panbrelloLfoPos = advanceLfoPhase(voice.panbrelloLfoPos, voice.mem.ySpeed);
     } else {
       voice.panbrelloOffset = 0;
     }

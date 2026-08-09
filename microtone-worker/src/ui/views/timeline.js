@@ -12,7 +12,7 @@ import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, lookahead,
+  subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, lookahead, wheelStep,
   colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty,
   volPanStep, volPanState, elevationStep,
 } from "../edit.js";
@@ -42,14 +42,17 @@ const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 // Format v3's wide cell needs three more characters for the panning column's
 // elevation, so the channel column's width follows the document (§5.5).
 const COL_W_WIDE = Math.ceil(CELL_CHARS_WIDE * CHAR_W) + 10;
+const CHAN_STEP_PX = 120; // ≈ one mouse-wheel notch; horizontal scroll's "one channel" reference
 
 export class TimelineView {
   constructor(store, canvas) {
     this.store = store;
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    this.scrollRow = 0;   // top visible absolute row (fractional while wheeling)
+    this.scrollRow = 0;   // top visible absolute row (fractional while wheeling or follow-scrolling)
+    this._wheelRem = 0;   // leftover row-units between wheel notches (see wheel listener below)
     this.scrollCh = 0;    // leftmost visible channel
+    this._wheelChRem = 0; // leftover channel-units between horizontal wheel events
     this.map = null;      // songMap cache
     this.needsRedraw = true;
     this.lastPlayRow = -1; // remembered so resize() can repaint synchronously
@@ -75,10 +78,16 @@ export class TimelineView {
       if (!horiz && this.store.record && this._drag === null &&
           this.wheelEdit(e, d < 0 ? 1 : -1)) return;
       if (horiz) {
-        this.scrollCh = clampInt(this.scrollCh + Math.sign(d), 0, this.maxScrollCh());
-        this.invalidate();
+        const { step, remainder } = wheelStep(this._wheelChRem, d / CHAN_STEP_PX, 1);
+        this._wheelChRem = remainder;
+        if (step !== 0) {
+          this.scrollCh = clampInt(this.scrollCh + step, 0, this.maxScrollCh());
+          this.invalidate();
+        }
       } else {
-        this.scrollBy(d / ROW_H);
+        const { step, remainder } = wheelStep(this._wheelRem, d / ROW_H);
+        this._wheelRem = remainder;
+        if (step !== 0) this.scrollBy(step);
       }
     }, { passive: false });
 

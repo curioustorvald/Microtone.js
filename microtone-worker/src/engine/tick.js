@@ -7,7 +7,8 @@
 
 import { SAMPLING_RATE } from "./constants.js";
 import {
-  lfoSampleWide, amigaSlideTick, linearFreqSlideTick, noteValToFreqHz, freqHzToNoteVal,
+  lfoSampleWide, advanceLfoPhase, amigaSlideTick, linearFreqSlideTick,
+  noteValToFreqHz, freqHzToNoteVal,
   clamp,
 } from "./tables.js";
 import { computePlaybackRate, startFastFade } from "./sampler.js";
@@ -209,7 +210,7 @@ export function applyTrackerTick(eng, ts, playhead) {
       const sine = lfoSampleWide(voice.vibratoLfoPos, voice.vibratoWave);
       const pitchDelta = (sine * voice.mem.huDepth) >> voice.vibratoFineShift;
       pitchToMixer = clamp(voice.noteVal + pitchDelta, 0x20, 0xffff);
-      voice.vibratoLfoPos = (voice.vibratoLfoPos + voice.mem.huSpeed) & 0x3ff;
+      voice.vibratoLfoPos = advanceLfoPhase(voice.vibratoLfoPos, voice.mem.huSpeed);
     }
 
     // Glissando (S$1x) — snap pitchToMixer to nearest semitone (noteVal stays smooth).
@@ -223,7 +224,7 @@ export function applyTrackerTick(eng, ts, playhead) {
       const sine = lfoSampleWide(voice.tremoloLfoPos, voice.tremoloWave);
       const volDelta = (sine * voice.mem.rDepth) >> 9;
       voice.rowVolume = clamp(voice.noteVolume + volDelta * ts.volStep, 0, ts.volMax);
-      voice.tremoloLfoPos = (voice.tremoloLfoPos + voice.mem.rSpeed) & 0x3ff;
+      voice.tremoloLfoPos = advanceLfoPhase(voice.tremoloLfoPos, voice.mem.rSpeed);
     }
 
     // Panbrello (Y) — a signed offset onto the mixer's pan sum. The shift is 7,
@@ -237,7 +238,7 @@ export function applyTrackerTick(eng, ts, playhead) {
     if (voice.panbrelloActive) {
       const sine = lfoSampleWide(voice.panbrelloLfoPos, voice.panbrelloWave);
       voice.panbrelloOffset = (sine * voice.mem.yDepth) >> 7;
-      voice.panbrelloLfoPos = (voice.panbrelloLfoPos + voice.mem.ySpeed) & 0x3ff;
+      voice.panbrelloLfoPos = advanceLfoPhase(voice.panbrelloLfoPos, voice.mem.ySpeed);
     } else {
       voice.panbrelloOffset = 0;
     }

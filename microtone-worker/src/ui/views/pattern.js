@@ -12,7 +12,7 @@ import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../gly
 import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  subCharPos, charToSub, CELL_CHARS, lookahead,
+  subCharPos, charToSub, CELL_CHARS, lookahead, wheelStep,
   colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty, volPanStep, elevationStep,
   subPositions, CELL_CHARS_WIDE,
 } from "../edit.js";
@@ -70,6 +70,7 @@ class PatternPane {
     this.patIdx = 0;
     this.cursor = { row: 0, sub: 0, nib: 0 };
     this.scrollRow = 0;
+    this._wheelRem = 0; // leftover row-units between wheel notches (see attachEvents)
     this.sel = null;    // row-range selection {aRow, row, aSub, sub}
     this._drag = null;  // active pointer-drag anchor {row, sub}
     this.previewing = false;
@@ -128,7 +129,10 @@ class PatternPane {
       // Never wheel-edit mid drag-selection — then the wheel only scrolls (item 57).
       if (this.store.record && this.isActive() && this._drag === null &&
           this.wheelEdit(e, d < 0 ? 1 : -1)) return;
-      this.scrollRow = clampInt(this.scrollRow + Math.round(d / ROW_H), 0, 48);
+      const { step, remainder } = wheelStep(this._wheelRem, d / ROW_H);
+      this._wheelRem = remainder;
+      if (step === 0) return;
+      this.scrollRow = clampInt(this.scrollRow + step, 0, 48);
       this.invalidate();
     }, { passive: false });
 
