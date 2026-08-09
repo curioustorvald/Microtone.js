@@ -926,6 +926,11 @@ export default {
   // ── project view ──
   "proj.untitledProject": "(제목 없는 프로젝트)",
   "proj.projectName": "프로젝트 이름",
+  "proj.projectAuthor": "만든이",
+  "proj.projectCopyright": "저작권",
+  "proj.projectMessageHead": "메시지",
+  "proj.projectMessagePlaceholder": "해설, 인사말, 수록곡 목록 등 프로젝트에 담고 싶은 내용을 적으세요.",
+  "proj.projectMessageHint": "프로젝트에 함께 저장되어 파일을 여는 사람에게 표시됩니다. 만든이와 저작권은 프로젝트 전체를 설명하며, 아래 곡 목록에는 각 곡의 작곡자가 따로 있습니다.",
   "proj.notationDisplayOnly": "기보법 (표시 전용)",
   "proj.song": "곡",
   "proj.songs": "곡",

@@ -3,19 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <title>glyph gallery</title>
+  <!-- The real theme variables: every palette below is READ from this sheet, so
+       the gallery can never drift from what the pattern grids actually paint. -->
+  <link rel="stylesheet" href="../../css/microtone.css" />
   <style>
-    body { background: #16181d; color: #d8dce4; font-family: monospace; padding: 16px; }
-    canvas { display: block; background: #1f232b; border: 1px solid #343a46; margin-bottom: 12px; }
+    body { background: #777777; color: #d8dce4; font-family: monospace; padding: 16px; }
+    canvas { display: block; border: 1px solid #343a46; }
     h3 { color: #f5a623; margin: 10px 0 4px; font-size: 13px; }
+    /* One strip per theme, stacked, each on its own theme's canvas ground. */
+    .row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+    .swatch { display: flex; align-items: center; gap: 8px; }
+    .tag { width: 4ch; color: #f5a623; font-size: 11px; text-align: right; }
     .ctl {
-      position: sticky; top: 0; background: #16181d; z-index: 1;
+      position: sticky; top: 0; background: #777777; z-index: 1;
       display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
       padding: 8px 0; border-bottom: 1px solid #343a46; margin-bottom: 8px;
     }
     .ctl input, .ctl button { background: #262b35; color: #d8dce4; border: 1px solid #404655; }
     .ctl input[type="range"] { width: 220px; }
     #blVal { color: #f5a623; min-width: 6ch; display: inline-block; }
-    #fontStat { color: #7a8290; }
+    #fontStat { color: #f5a623; }
   </style>
 </head>
 <body>
@@ -30,27 +37,85 @@
   </div>
 
   <h3>sentinels: key-off · cut · fade · fast-fade | empty · reserved · interrupt</h3>
-  <canvas id="sent" width="900" height="40"></canvas>
+  <div class="row" id="sent" data-width="900"></div>
   <h3>12-TET: C-4 C#4 D-4 … B-4 | off-grid ("out of tune") = yellow nearest degree</h3>
-  <canvas id="t12" width="900" height="40"></canvas>
+  <div class="row" id="t12" data-width="900"></div>
   <h3>24-TET quarter-tones: C-4 Ct4 C#4 Dp4 D-4 Dt4 …</h3>
-  <canvas id="t24" width="900" height="40"></canvas>
+  <div class="row" id="t24" data-width="900"></div>
   <h3>53-TET Pythagorean multi-accidentals: C- B# A♯♯♯ E♭♭♭ D♭ C♯ B𝄪 F♭♭♭ E♭♭ D- C𝄪 B♯♯♯ F♭♭ E♭ D♯ C♯♯♯ G♭♭♭ (degrees 0..16)</h3>
-  <canvas id="t531" width="900" height="40"></canvas>
+  <div class="row" id="t531" data-width="900"></div>
   <h3>41-TET Kite ticks: ·C ↑C ⇊C# ↓C# ·C# ↑C# ↓D ·D ↑D ⇊D# ↓D# ·D# ↑D# ↓E ·E ↑E ⇈E</h3>
-  <canvas id="t410" width="900" height="40"></canvas>
+  <div class="row" id="t410" data-width="900"></div>
   <h3>Shi'er lü (十二律): 黃4 大4 太4 夾4 姑4 仲4 蕤4 林4 夷4 南4 無4 應4</h3>
-  <canvas id="t10123" width="900" height="40"></canvas>
+  <div class="row" id="t10123" data-width="900"></div>
   <h3>volume column (item 87): empty · set 3F · slide up 0A · slide down 0A · fine up 0A · fine down 0A</h3>
-  <canvas id="volc" width="900" height="40"></canvas>
+  <div class="row" id="volc" data-width="900"></div>
   <h3>panning column: empty · set 20 · slide right 03 · slide left 03 · fine right 03 · fine left 03</h3>
-  <canvas id="panc" width="900" height="40"></canvas>
+  <div class="row" id="panc" data-width="900"></div>
+  <h3>effect column (item 120) — one shade per argument field, S/Z selector nibble in the opcode's ink, reserved dim:<br>
+    empty · G 16-bit · H speed+depth · D nibbles+rsvd · A byte+rsvd · 8 clip/depth/skip · 9 clip/rsvd/amp ·
+    E fine marker+12-bit · T slide · S$80 pan · S$D delay/action/delay · S$C nibble+rsvd · Z speed</h3>
+  <div class="row" id="fxc" data-width="1100"></div>
   <script type="module">
-    import { paintNoteCell, paintVolPanCell, GLYPH } from "../../src/ui/glyphs.js";
+    import { paintNoteCell, paintVolPanCell, paintFxCell, GLYPH } from "../../src/ui/glyphs.js";
     import { pitchTablePresets, ANCHOR_NOTE } from "../../src/ui/pitchtables.js";
 
     const CH = 13, RH = 26; // big cells for inspection
-    const PAL = { note: "#d8dce4", sentinel: "#f5a623", dim: "#7a8290", offGrid: "#f5a623" };
+
+    // ── the three themes, read from css/microtone.css ──
+    // Every ink below is the SAME variable the pattern grids paint with, so a
+    // theme edit shows up here without touching this page. Keys mirror what
+    // timeline.js / pattern.js build: sentinels are --fg2 (the key-off ink),
+    // off-grid notes are --accent, the vol/pan columns are --meter / --cv-col-pan.
+    const THEME_LIST = ["dark", "dim", "light"];
+    const VARS = {
+      bg: "--cv-bg", note: "--fg", sentinel: "--fg2", dim: "--dim", offGrid: "--accent",
+      vol: "--meter", pan: "--cv-col-pan",
+      op: "--cv-fx-op", a1: "--cv-fx-a1", a2: "--cv-fx-a2", a3: "--cv-fx-a3",
+    };
+    const PALETTES = {};
+    for (const theme of THEME_LIST) {
+      // data-theme is what selects the variable block; set it, read, restore.
+      const prev = document.documentElement.dataset.theme;
+      document.documentElement.dataset.theme = theme;
+      const css = getComputedStyle(document.documentElement);
+      PALETTES[theme] = Object.fromEntries(
+        Object.entries(VARS).map(([k, v]) => [k, css.getPropertyValue(v).trim()]));
+      if (prev === undefined) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = prev;
+    }
+
+    /** The three canvases of one row, created on first use and labelled. */
+    function stripsOf(id) {
+      const host = document.getElementById(id);
+      if (host.childElementCount === 0) {
+        for (const theme of THEME_LIST) {
+          const wrap = document.createElement("div");
+          wrap.className = "swatch";
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = theme;
+          const cv = document.createElement("canvas");
+          cv.width = parseInt(host.dataset.width, 10);
+          cv.height = 40;
+          cv.dataset.theme = theme;
+          cv.style.background = PALETTES[theme].bg;
+          wrap.append(tag, cv);
+          host.appendChild(wrap);
+        }
+      }
+      return [...host.querySelectorAll("canvas")].map(
+        (cv) => [cv, PALETTES[cv.dataset.theme]]);
+    }
+
+    /** A cleared, font-ready 2D context for one strip. */
+    function ctxOf(cv) {
+      const ctx = cv.getContext("2d");
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.font = fontStr();
+      ctx.textBaseline = "middle";
+      return ctx;
+    }
 
     let family = null; // null → local fallback stack only
     const fontStr = () => `20px ${family ? `"${family}", ` : ""}ui-monospace, monospace`;
@@ -72,24 +137,33 @@
     // [value, selector] pairs covering every operation of a vol/pan column.
     const VP = [[0, 3], [0x3f, 0], [0x0a, 1], [0x0a, 2], [0x2a, 3], [0x0a, 3]];
     const VP_PAN = [[0, 3], [0x20, 0], [0x03, 1], [0x03, 2], [0x23, 3], [0x03, 3]];
+    // Effect cells: one per argument LAYOUT (see notenames.fxArgFields).
+    const FX = [
+      [0, 0x0000], [16, 0x0155], [17, 0x2277], [13, 0x4000], [10, 0x0600],
+      [8, 0x1234], [9, 0x10ff], [14, 0xf155], [29, 0x0013],
+      [28, 0x8040], [28, 0xd123], [28, 0xc400], [35, 0x0080],
+    ];
 
     function repaint() {
+      for (const [cv, pal] of stripsOf("fxc")) {
+        const ctx = ctxOf(cv);
+        FX.forEach(([op, arg], i) => paintFxCell(ctx, op, arg,
+          8 + i * (CH * 5 + 12), 6, CH, RH, pal)); // pal carries op/a1/a2/a3/dim
+      }
       for (const [id, list, isPan] of [["volc", VP, false], ["panc", VP_PAN, true]]) {
-        const cv = document.getElementById(id);
-        const ctx = cv.getContext("2d");
-        ctx.clearRect(0, 0, cv.width, cv.height);
-        ctx.font = fontStr();
-        ctx.textBaseline = "middle";
-        list.forEach(([v, sel], i) => paintVolPanCell(ctx, v, sel, isPan,
-          8 + i * (CH * 3 + 18), 6, CH, RH, { ink: PAL.note, dim: PAL.dim }));
+        for (const [cv, pal] of stripsOf(id)) {
+          const ctx = ctxOf(cv);
+          list.forEach(([v, sel], i) => paintVolPanCell(ctx, v, sel, isPan,
+            8 + i * (CH * 3 + 18), 6, CH, RH,
+            { ink: isPan ? pal.pan : pal.vol, dim: pal.dim }));
+        }
       }
       for (const [id, notes, preset] of ROWS) {
-        const cv = document.getElementById(id);
-        const ctx = cv.getContext("2d");
-        ctx.clearRect(0, 0, cv.width, cv.height);
-        ctx.font = fontStr();
-        ctx.textBaseline = "middle";
-        notes.forEach((n, i) => paintNoteCell(ctx, n, preset, 8 + i * (CH * 4 + 12), 6, CH, RH, PAL));
+        for (const [cv, pal] of stripsOf(id)) {
+          const ctx = ctxOf(cv);
+          notes.forEach((n, i) =>
+            paintNoteCell(ctx, n, preset, 8 + i * (CH * 4 + 12), 6, CH, RH, pal));
+        }
         console.log("GALLERY: drew " + id);
       }
       console.log("GALLERY: done");

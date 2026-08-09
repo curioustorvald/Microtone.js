@@ -469,6 +469,15 @@ then moves into the four-digit hex argument. The command palette lists every
 opcode with a tooltip, and while on the argument column it documents the
 argument format of the current opcode. **Delete** clears the effect.
 
+The argument is coloured by what it *means*. Almost no command reads its four
+digits as one number — `H` is a speed and a depth, `D` is a slide nibble over a
+reserved byte — so each of a command's argument fields takes its own shade of
+amber, running lighter left to right. Two extras fall out of that: the
+sub-command digit of a multiplexed command keeps the opcode's own darker ink, so
+`S8` and `SD` read as the two-character commands they are; and digits the engine
+*reserves* go dim, which is how you can tell at a glance that the `00` at the end
+of `D 4000` is not a value you can use.
+
 ### Mouse-wheel editing
 
 In record mode, the wheel over any cell steps the hovered column in place:

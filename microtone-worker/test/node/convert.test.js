@@ -194,6 +194,14 @@ test("it2taud under Pyodide → parseable, loadable document", () => {
   // #66: 0-based SNam, no leading-empty shift.
   assert.deepEqual(doc.sampleList().map((s) => s.name),
     ["Aurora", "Synth Pad", "Panflute", "Low Strings", "Open Hihat", "Bass Drum"]);
+  // Item 115.2: IT's song message rides across as PMsg, CR-separated lines
+  // translated to LF and the editor's trailing padding trimmed.
+  const msg = doc.projectString("PMsg");
+  assert.ok(msg.startsWith("\n                               Twilight Tears\n\n"), msg.slice(0, 60));
+  assert.ok(msg.includes("Composed as a very simple example of how to use virtual channels."));
+  assert.ok(!msg.includes("\r"), "CR must not survive into PMsg");
+  assert.ok(!/[ \t]\n/.test(msg), "trailing line padding must be trimmed");
+  assert.ok(!msg.endsWith("\n"), "trailing blank lines must be trimmed");
 });
 
 test("failed conversion raises and leaves the runtime reusable", () => {

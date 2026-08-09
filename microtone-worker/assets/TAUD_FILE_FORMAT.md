@@ -681,9 +681,11 @@ Only a format-version-2 (or later) file **MAY** carry this section; otherwise th
 
 64-channel mode changes the cue stride to 128 bytes and the per-cue channel count to 64. A reader **MUST** consult this section *before* parsing cue sheets.
 
-### 9.2 `PNam`, `PCom`, `PCpr`, `Pmsg` — project strings
+### 9.2 `PNam`, `PCom`, `PCpr`, `PMsg` — project strings
 
-Each holds one UTF-8 string: the project name, author, copyright notice and free-form message respectively.
+Each holds one UTF-8 string: the project name, author, copyright notice and free-form message respectively. A terminating `NUL` is **OPTIONAL**; a reader **MUST** stop at the first `NUL` when one is present and otherwise consume the whole payload.
+
+`PMsg` is the only one of the four that **MAY** carry line breaks. They are `LF` (`0x0A`); a producer converting from a format whose message separates lines with `CR` (ImpulseTracker) or `CRLF` **MUST** translate them, and **SHOULD** trim the trailing padding those formats write.
 
 ### 9.3 `INam` — instrument name table
 

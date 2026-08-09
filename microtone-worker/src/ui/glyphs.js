@@ -19,7 +19,7 @@
 // the cut-like spike at x=0 sits inside a decaying sinc envelope).
 
 import { resolveNoteSymbol } from "./pitchtables.js";
-import { hex2, hex4 } from "./notenames.js";
+import { hex2, hex4, fxArgFields } from "./notenames.js";
 import { volPanOp, volPanArg } from "./edit.js";
 
 export const NOTE_CELL_CHARS = 4;
@@ -321,10 +321,14 @@ function drawTickCode(ctx, code, x, y, w, h) {
 
 /**
  * Flat single-ink palette — every glyph part in one colour. Used for the
- * pattern-ditto ghost cells, which must read as "not really here".
+ * pattern-ditto ghost cells, which must read as "not really here". Covers the
+ * note cell and the effect cell, so one object serves both painters.
  */
 export function monoPalette(colour) {
-  return { note: colour, sentinel: colour, dim: colour, offGrid: colour };
+  return {
+    note: colour, sentinel: colour, dim: colour, offGrid: colour,
+    op: colour, a1: colour, a2: colour, a3: colour,
+  };
 }
 
 /**
@@ -474,6 +478,43 @@ export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palet
   }
   const arg = volPanArg(value, sel, isPan, wide);
   ctx.fillText(digits === 3 ? hex3(arg) : hex2(arg), argX, midY);
+}
+
+/**
+ * Paint the 5-char effect cell (opcode + 4 hex nibbles) at (x, y), colouring
+ * each of the command's ARGUMENT FIELDS separately — item 120.
+ *
+ * A Taud argument is rarely one number: `H $2277` is a speed and a depth,
+ * `D $4000` is one slide nibble over a reserved byte, `S $8040` is a
+ * two-character command carrying a pan. The field map (notenames.fxArgFields)
+ * says which nibble belongs to what; this paints field 1/2/3 in three shades of
+ * amber, the S / Z multiplexer nibble in the opcode's own ink so the command
+ * reads as one token, and reserved nibbles dim because the engine ignores them.
+ *
+ * palette: {op, a1, a2, a3, dim} — monoPalette() collapses all five for the
+ * pattern-ditto ghosts.
+ */
+export function paintFxCell(ctx, effect, arg, x, y, charW, rowH, palette) {
+  const midY = y + rowH / 2;
+  if (effect === 0 && arg === 0) {
+    ctx.fillStyle = palette.dim;
+    ctx.globalAlpha = 0.4;
+    ctx.fillText("·····", x, midY);
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.fillStyle = palette.op;
+  ctx.fillText(effect.toString(36).toUpperCase(), x, midY);
+  const fields = fxArgFields(effect, arg);
+  const inks = [palette.a1, palette.a2, palette.a3];
+  const digits = hex4(arg);
+  for (let i = 0; i < 4; i++) {
+    const f = fields[i];
+    ctx.fillStyle = f === 0 ? palette.op : f < 0 ? palette.dim : inks[f - 1];
+    if (f < 0) ctx.globalAlpha = 0.55; // reserved: present, but not a value
+    ctx.fillText(digits[i], x + (i + 1) * charW, midY);
+    ctx.globalAlpha = 1;
+  }
 }
 
 /**

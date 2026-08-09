@@ -107,7 +107,7 @@ Each detected subsong becomes one entry in the Taud song table.
 
 ### 1.9 Project Data
 
-Everything that is naming or presentation rides in Project Data: instrument names (`INam`), sample names (`SNam`), pattern names (`pNam`), the project name and message (`PNam`, `Pmsg`), and per-song metadata including the display notation and beat divisions (`sMet`).
+Everything that is naming or presentation rides in Project Data: instrument names (`INam`), sample names (`SNam`), pattern names (`pNam`), the project name and message (`PNam`, `PMsg`), and per-song metadata including the display notation and beat divisions (`sMet`).
 
 **`Ixmp` also lives there**, and it is not cosmetic. Omitting Project Data — every converter has a `--no-project-data` flag — collapses each instrument to its single canonical sample, silently discarding keyboard maps, velocity layers, per-sample envelopes and stereo pairs. Use the flag for size experiments, not for output you intend to listen to.
 

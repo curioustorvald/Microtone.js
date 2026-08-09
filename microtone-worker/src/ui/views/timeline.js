@@ -7,9 +7,9 @@ import { PATTERN_EMPTY } from "../../engine/constants.js";
 import {
   AZIMUTH_TURN, ELEVATION_QUARTER, SURROUND_SPATIAL, lateralProjection,
 } from "../../engine/spatial.js";
-import { hex2, hex4, fxToStr } from "../notenames.js";
+import { hex2, hex4 } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
-import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
+import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
   subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, lookahead,
@@ -1049,6 +1049,7 @@ export class TimelineView {
     // ── rows ──
     const cursor = store.cursor;
     const dittoPal = monoPalette(C.ditto); // ghost cells (pattern ditto)
+    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim };
     const sb = this.selBounds(); // block selection bounds (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
@@ -1135,8 +1136,6 @@ export class TimelineView {
         }
         const instS = ghost?.inst != null ? hex2(ghost.inst)
           : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-        const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
-          : fxToStr(cell.effect, cell.effectArg);
 
         ctx.fillStyle = ghost?.inst != null ? C.ditto
           : cell.instrment !== 0 ? C.accent2 : C.dim;
@@ -1156,10 +1155,10 @@ export class TimelineView {
             elevation: wide ? cell.elevation : 0, elevationInk: C.accent2,
           // On the sphere, ear level is a stated position, not an absent one.
           spatial: (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) === SURROUND_SPATIAL });
-        ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
-        if (fxS === "·····") ctx.globalAlpha = 0.4;
-        ctx.fillText(fxS, x + 2 + (wide ? 19 : 16) * CHAR_W, y + ROW_H / 2);
-        ctx.globalAlpha = 1;
+        // Effect column: one shade of amber per argument field (item 120).
+        const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
+        paintFxCell(ctx, fx[0], fx[1], x + 2 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
+          ghost?.fx ? dittoPal : fxPal);
       }
     }
 

@@ -1019,6 +1019,7 @@ def encode_ixmp_payload(patches_by_inst: dict) -> bytes:
 def build_project_data(*, project_name: str = '',
                        author: str = '',
                        copyright_str: str = '',
+                       message: str = '',
                        sample_names=None,
                        instrument_names=None,
                        pattern_names=None,
@@ -1034,6 +1035,9 @@ def build_project_data(*, project_name: str = '',
     When `is_64channel` is set, an xHDR (Extended header) section is emitted with
     Flags1 bit 0 (64-channel mode) — the caller MUST also set the version byte's
     xHDR bit (0x20). This forces a non-empty block even with no other sections.
+
+    `project_name` / `author` / `copyright_str` / `message` become the four
+    project strings PNam / PCom / PCpr / PMsg; each is skipped when empty.
 
     `instrument_names` / `pattern_names` are slot-indexed lists (entry 0 is
     typically empty since slot 0 is reserved); `sample_names` is pool-ordered
@@ -1068,6 +1072,11 @@ def build_project_data(*, project_name: str = '',
         add(b'PCom', author.encode('utf-8', 'replace'))
     if copyright_str:
         add(b'PCpr', copyright_str.encode('utf-8', 'replace'))
+    if message:
+        # PMsg is the one project string that may hold line breaks, and they are
+        # LF ($0A) — a source whose message separates lines with CR (IT) or CRLF
+        # must have been translated before it gets here (TAUD_FILE_FORMAT §9.2).
+        add(b'PMsg', message.encode('utf-8', 'replace'))
 
     add(b'INam', _name_table_blob(instrument_names))
     add(b'SNam', _name_table_blob(sample_names))

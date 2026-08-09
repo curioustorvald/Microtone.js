@@ -23,6 +23,7 @@ const VAR_KEYS = {
   playhead: "--cv-playhead", cursor: "--cv-cursor", caret: "--cv-caret",
   caretNav: "--cv-caret-nav", cueLine: "--cv-cue-line", colPan: "--cv-col-pan",
   sel: "--cv-sel", ditto: "--cv-ditto",
+  fxOp: "--cv-fx-op", fxA1: "--cv-fx-a1", fxA2: "--cv-fx-a2", fxA3: "--cv-fx-a3",
   // canvas: samples / instruments
   wave: "--cv-wave", waveLoop: "--cv-wave-loop", waveMid: "--cv-wave-mid",
   waveFunk: "--cv-wave-funk", playCursor: "--cv-play-cursor",

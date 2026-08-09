@@ -83,6 +83,8 @@ IT_FLAG_LINEAR        = 0x08
 IT_FLAG_OLD_EFFECTS   = 0x10
 IT_FLAG_LINK_GEF      = 0x20   # link G memory with E/F
 
+IT_SPECIAL_MESSAGE    = 0x01   # Special word bit 0: a song message is attached
+
 # Sample flags (Flg byte at IMPS+0x12)
 IT_SMP_ASSOC      = 0x01
 IT_SMP_16BIT      = 0x02
@@ -129,6 +131,7 @@ SIGNATURE        = b'it2taud/TSVM  '   # 14 bytes
 class ITHeader:
     __slots__ = ('title', 'ord_count', 'ins_count', 'smp_count', 'pat_count',
                  'cwt', 'cmwt', 'flags', 'special',
+                 'msg_length', 'msg_offset', 'message',
                  'global_vol', 'mix_vol', 'initial_speed', 'initial_tempo',
                  'pan_sep', 'linear_slides', 'use_instruments',
                  'link_gef', 'old_effects',
@@ -156,6 +159,8 @@ def parse_it_header(data: bytes) -> ITHeader:
     h.initial_speed = data[0x32]
     h.initial_tempo = data[0x33]
     h.pan_sep       = data[0x34]
+    h.msg_length    = struct.unpack_from('<H', data, 0x36)[0]
+    h.msg_offset    = struct.unpack_from('<I', data, 0x38)[0]
     h.linear_slides    = bool(h.flags & IT_FLAG_LINEAR)
     h.use_instruments  = bool(h.flags & IT_FLAG_USE_INST)
     h.link_gef         = bool(h.flags & IT_FLAG_LINK_GEF)
@@ -178,7 +183,33 @@ def parse_it_header(data: bytes) -> ITHeader:
 
     h.pat_ptrs = [struct.unpack_from('<I', data, off + i*4)[0]
                   for i in range(h.pat_count)]
+    # The song message is read HERE because this is the last place that holds the
+    # whole file; assemble_taud only ever sees the parsed header.
+    h.message = read_it_message(data, h)
     return h
+
+
+def read_it_message(data: bytes, h: ITHeader) -> str:
+    """The IT song message, as Taud PMsg text (item 115.2).
+
+    ITTECH: Special bit 0 says a message is attached; MsgLgth/MsgOffset (header
+    0x36 / 0x38) locate it. IT separates lines with a bare CR and pads the block
+    out with NULs (and, in the wild, with trailing blanks the editor's fixed
+    74x-line grid leaves behind) — TAUD_FILE_FORMAT §9.2 wants LF and no
+    padding, so translate and trim. Returns '' when there is no message.
+    """
+    if not (h.special & IT_SPECIAL_MESSAGE) or h.msg_length == 0:
+        return ''
+    start, end = h.msg_offset, h.msg_offset + h.msg_length
+    if start <= 0 or start >= len(data):
+        return ''
+    raw = data[start:min(end, len(data))]
+    nul = raw.find(b'\x00')
+    if nul >= 0:
+        raw = raw[:nul]
+    text = raw.decode('latin-1', errors='replace').replace('\r\n', '\n').replace('\r', '\n')
+    # Drop the trailing space padding on each line, then the trailing blank lines.
+    return '\n'.join(line.rstrip() for line in text.split('\n')).rstrip('\n')
 
 
 # ── IT2.14 / IT2.15 sample decompressor ──────────────────────────────────────
@@ -2307,7 +2338,14 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
                 vprint(f"  ixmp: {sum(len(p) for p in ixmp_patches.values())} "
                        f"patches across {len(ixmp_patches)} instruments")
 
+            # IT's song message becomes PMsg (item 115.2) — the only project
+            # string IT carries beyond the title.
+            it_message = h.message
+            if it_message:
+                vprint(f"  message: {len(it_message)} chars, "
+                       f"{it_message.count(chr(10)) + 1} lines -> PMsg")
             pd_kwargs.update(project_name=h.title,
+                             message=it_message,
                              instrument_names=inst_names,
                              sample_names=smp_names,
                              ixmp_patches=ixmp_patches or None)

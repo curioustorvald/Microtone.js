@@ -97,7 +97,7 @@
         log(`header click mute / ctrl+click solo: ${clickMute && clickSolo ? "ok" : "FAIL"}`);
 
         // ── project rename (PNam) escapes + display decode ──
-        pv.changeProjectName("Neue Œuvre");
+        pv.changeProjectString("PNam", "Neue Œuvre");
         const pn = store.doc.meta.projectName;
         const pnam = store.doc.projSections.find((s) => s.fourcc === "PNam");
         const { parseTaud } = await import("../../src/format/taud-parse.js");
@@ -106,6 +106,26 @@
         const projOk = pn === "Neue \\u0152uvre" && !!pnam && re.meta.projectName === pn &&
           stFile.includes("Neue Œuvre") && !stFile.includes("\\u0152");
         log(`project rename escapes + status shows decoded name: ${projOk ? "ok" : "FAIL"}`);
+
+        // ── item 115: author / copyright escape like the name, the MESSAGE is
+        //    stored as plain UTF-8, and every one of them undoes ──
+        pv.changeProjectString("PCom", "Frédéric");
+        pv.changeProjectString("PCpr", "© 2026");
+        pv.changeProjectString("PMsg", "line one\nline two — Ø");
+        const secOf = (cc) => store.doc.projSections.find((s) => s.fourcc === cc);
+        const re2 = parseTaud(store.doc.toBytes());
+        const doc2 = new (await import("../../src/doc/document.js")).Document(re2);
+        const strOk = doc2.projectString("PCom") === "Fr\\u00E9d\\u00E9ric" &&
+          doc2.projectString("PCpr") === "\\u00A9 2026" &&
+          doc2.projectString("PMsg") === "line one\nline two — Ø" &&
+          pv.stringRow("PCom", "x").querySelector("input").value === "Frédéric";
+        log(`project author/copyright escaped, message kept UTF-8: ${strOk ? "ok" : "FAIL"}`);
+        store.undo.undo();
+        const undoOk = !secOf("PMsg") && !!secOf("PCpr");
+        store.undo.redo();
+        const redoOk = !!secOf("PMsg") &&
+          store.doc.projectString("PMsg") === "line one\nline two — Ø";
+        log(`project message undo/redo: ${undoOk && redoOk ? "ok" : "FAIL"}`);
 
         // (item 60 Project housekeeping is covered by test/browser/cleanup-smoke.html
         //  — it needs real-time + a stubbed alert(), so it lives in its own page.)

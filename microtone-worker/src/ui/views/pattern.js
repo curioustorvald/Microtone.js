@@ -7,8 +7,8 @@
 // ACTIVE column. Column count follows the viewport width (minimum 2).
 // Reference: taut.js VIEW_PATTERN_DETAILS + PREVIEW_CUE_IDX.
 
-import { hex2, fxToStr } from "../notenames.js";
-import { paintNoteCell, paintVolPanCell, monoPalette } from "../glyphs.js";
+import { hex2 } from "../notenames.js";
+import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
@@ -762,6 +762,7 @@ class PatternPane {
     // view has no cue context, so the full 64 rows are assumed.
     const ghosts = dittoGhosts(pattern, pattern.length);
     const dittoPal = monoPalette(C.ditto);
+    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim };
     const sb = this.selRowBounds(); // row-range selection (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < vis; r++) {
@@ -808,13 +809,11 @@ class PatternPane {
           dittoPal, store.rawNoteView);
       } else {
         paintNoteCell(ctx, cell.note, store.pitchPreset, x0, y, CHAR_W, ROW_H,
-          { note: C.fg, sentinel: C.accent, dim: C.dim, offGrid: C.accent },
+          { note: C.fg, sentinel: C.fg2, dim: C.dim, offGrid: C.accent },
           store.rawNoteView);
       }
       const instS = ghost?.inst != null ? hex2(ghost.inst)
         : cell.instrment !== 0 ? hex2(cell.instrment) : "··";
-      const fxS = ghost?.fx ? fxToStr(ghost.fx[0], ghost.fx[1])
-        : fxToStr(cell.effect, cell.effectArg);
       ctx.fillStyle = ghost?.inst != null ? C.ditto
         : cell.instrment !== 0 ? C.accent2 : C.dim;
       ctx.fillText(instS, x0 + 5 * CHAR_W, y + ROW_H / 2);
@@ -829,8 +828,10 @@ class PatternPane {
           elevation: wide ? cell.elevation : 0, elevationInk: C.accent2,
         // On the sphere, ear level is a stated position, not an absent one.
         spatial: (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) === SURROUND_SPATIAL });
-      ctx.fillStyle = ghost?.fx ? C.ditto : fxS === "·····" ? C.dim : C.accent;
-      ctx.fillText(fxS, x0 + (wide ? 19 : 16) * CHAR_W, y + ROW_H / 2);
+      // Effect column: one shade of amber per argument field (item 120).
+      const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
+      paintFxCell(ctx, fx[0], fx[1], x0 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
+        ghost?.fx ? dittoPal : fxPal);
     }
 
     ctx.strokeStyle = C.border;

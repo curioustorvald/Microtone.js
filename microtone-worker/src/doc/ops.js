@@ -861,6 +861,28 @@ export function setSectionOp(fourcc, payload, gestureId = null) {
   };
 }
 
+/** Replace one of the four project strings (§9.2 — PNam / PCom / PCpr / PMsg)
+ *  as one invertible step. Identical to setSectionOp apart from keeping the
+ *  cached doc.meta.projectName in step with the PNam section, which undo and
+ *  redo must both see: the topbar and the Project view read the cache, not the
+ *  payload. `payload` null removes the section. */
+export function setProjectStringOp(fourcc, payload, gestureId = null) {
+  return {
+    type: "setProjectString",
+    fourcc, payload, gestureId,
+    coalesceKey: `section:${fourcc}`,
+    apply(doc) {
+      const i = doc.projSections.findIndex((s) => s.fourcc === fourcc);
+      const prev = i >= 0 ? doc.projSections[i].payload : null;
+      doc.setSection(fourcc, payload);
+      if (fourcc === "PNam") doc.meta.projectName = doc.projectString("PNam");
+      doc.dirty = true;
+      return setProjectStringOp(fourcc, prev, gestureId);
+    },
+    dirty: () => [{ kind: "section", fourcc }],
+  };
+}
+
 /** Refresh the live decoded TaudInst's patches from the (possibly just
  *  swapped) doc.ixmp list — last entry for the slot wins, mirroring the
  *  device upload order. */

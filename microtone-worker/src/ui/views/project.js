@@ -4,7 +4,7 @@
 
 import {
   setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
-  changeInstrumentOp, bulkNotesOp, upgradeCellFormatOp,
+  changeInstrumentOp, bulkNotesOp, upgradeCellFormatOp, setProjectStringOp,
 } from "../../doc/ops.js";
 import { tuningRatioOf } from "../../engine/tables.js";
 import {
@@ -21,7 +21,9 @@ import {
 import { defToPreset } from "../../doc/notation.js";
 import { Song } from "../../doc/document.js";
 import { showModal } from "../widgets/modal.js";
-import { escapeNonAscii, unescapeName } from "../names.js";
+import {
+  decodeProjectString, encodeProjectString, escapeNonAscii, unescapeName,
+} from "../names.js";
 import { t } from "../i18n.js";
 
 // Tuning references, transcribed from terranmon.txt:3316-3324 ("Known standard
@@ -98,6 +100,48 @@ export class ProjectView {
   setTuning(baseNote, freq) {
     this.store.undo.apply(setTuningOp(this.store.songIndex, baseNote, freq));
     this.refresh();
+  }
+
+  /** One line-edit for a project string section (§9.2). */
+  stringRow(fourcc, label, placeholder = "") {
+    const row = document.createElement("div");
+    row.className = "inst-field";
+    row.style.maxWidth = "440px";
+    row.append(document.createTextNode(label));
+    const input = document.createElement("input");
+    input.type = "text";
+    input.dataset.section = fourcc;
+    input.value = decodeProjectString(fourcc, this.store.doc.projectString(fourcc));
+    input.placeholder = placeholder;
+    input.spellcheck = false;
+    input.addEventListener("change", () => this.changeProjectString(fourcc, input.value));
+    row.appendChild(input);
+    return row;
+  }
+
+  /** The project message (PMsg) — free prose, so a box rather than a line, and
+   *  stored as plain UTF-8 (names.js). Empty on a project that has none: the
+   *  section only appears once something is typed. */
+  buildMessage() {
+    const box = document.createElement("div");
+    box.className = "proj-message";
+    const head = document.createElement("h3");
+    head.textContent = t("proj.projectMessageHead");
+    const area = document.createElement("textarea");
+    area.className = "proj-message-text";
+    area.dataset.section = "PMsg";
+    area.rows = 6;
+    area.spellcheck = false;
+    area.placeholder = t("proj.projectMessagePlaceholder");
+    area.value = decodeProjectString("PMsg", this.store.doc.projectString("PMsg"));
+    area.addEventListener("change", () => this.changeProjectString("PMsg", area.value));
+    const hint = document.createElement("p");
+    hint.className = "dim";
+    hint.style.margin = "0.1rem 0 0.4rem";
+    hint.style.fontSize = "0.8rem";
+    hint.textContent = t("proj.projectMessageHint");
+    box.append(head, area, hint);
+    return box;
   }
 
   buildTuning(song) {
@@ -194,28 +238,13 @@ export class ProjectView {
     info.textContent = infoTxt;
     this.root.appendChild(info);
 
-    // Editable PROJECT name (PNam). Song renaming lives on the File tab's
-    // song list. TSVM's string reader is ASCII-only, so any non-ASCII
-    // character is STORED as a \uHHHH escape; the input shows the decoded
-    // text and re-escapes on save.
-    const nameRow = document.createElement("div");
-    nameRow.className = "inst-field";
-    nameRow.style.maxWidth = "440px";
-    nameRow.append(document.createTextNode(t("proj.projectName")));
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.value = unescapeName(doc.meta.projectName ?? "");
-    nameInput.placeholder = t("proj.untitledProject");
-    nameInput.spellcheck = false;
-    nameInput.addEventListener("change", () => this.changeProjectName(nameInput.value));
-    nameRow.appendChild(nameInput);
-    // this.root.appendChild(nameRow);
-    const nameHint = document.createElement("p");
-    nameHint.className = "dim";
-    nameHint.style.margin = "0.1rem 0 0.4rem";
-    nameHint.style.fontSize = "0.8rem";
-    // nameHint.textContent = "Non-ASCII characters are stored as \\uHHHH escapes (TSVM compatibility).";
-    this.root.appendChild(nameHint);
+    // Editable PROJECT strings (§9.2). Song renaming lives on the File tab's
+    // song list. TSVM's string reader is ASCII-only, so any non-ASCII character
+    // of a NAME is stored as a \uHHHH escape; the inputs show the decoded text
+    // and re-escape on save (the message is plain UTF-8 — see names.js).
+    const nameRow = this.stringRow("PNam", t("proj.projectName"), t("proj.untitledProject"));
+    const authorRow = this.stringRow("PCom", t("proj.projectAuthor"));
+    const copyrightRow = this.stringRow("PCpr", t("proj.projectCopyright"));
 
     // Notation (display-only): changes how notes are drawn WITHOUT moving them.
     const preset = presetForNotation(sm?.notation ?? 120, doc);
@@ -262,6 +291,8 @@ export class ProjectView {
     grid.className = "inst-grid";
     grid.append(
       nameRow,
+      authorRow,
+      copyrightRow,
       num(t("proj.bpm"), song.bpm, 25, 535, (v) => this.op("bpm", v)),
       num(t("proj.speedTicks"), song.tickRate, 1, 127, (v) => this.op("tickRate", v)),
       num(t("proj.globalVolume"), song.globalVolume, 0, 255, (v) => this.op("globalVolume", v)),
@@ -291,6 +322,8 @@ export class ProjectView {
       : t("proj.surroundHint");
     if ((song.surroundModel ?? 0) === 0 && !doc.wideCells) surroundHint.hidden = true;
     this.root.appendChild(surroundHint);
+
+    this.root.appendChild(this.buildMessage());
 
     this.root.appendChild(this.buildTuning(song));
 
@@ -528,19 +561,17 @@ export class ProjectView {
     this.refresh();
   }
 
-  /** Rename the project (PNam section). Same \uHHHH escape convention as
-   *  song names; the payload is byte-per-char + NUL (taud.mjs strNul). */
-  changeProjectName(raw) {
+  /** Write one of the four project strings (§9.2 — PNam / PCom / PCpr / PMsg)
+   *  as one undo step. Emptying a field REMOVES its section rather than storing
+   *  a lone NUL, so a project that says nothing carries nothing. */
+  changeProjectString(fourcc, raw) {
     const store = this.store;
-    const escaped = escapeNonAscii(raw);
-    if ((store.doc.meta.projectName ?? "") === escaped) return;
-    store.doc.meta.projectName = escaped;
-    const bytes = [];
-    for (let i = 0; i < escaped.length; i++) bytes.push(escaped.charCodeAt(i) & 0xff);
-    bytes.push(0);
-    store.doc.setSection("PNam", Uint8Array.from(bytes));
-    store.doc.dirty = true;
-    store.emit("status"); // topbar file line shows the project name
+    const current = decodeProjectString(fourcc, store.doc.projectString(fourcc));
+    const text = fourcc === "PMsg" ? String(raw).replace(/\r\n?/g, "\n") : String(raw);
+    if (current === text) return;
+    store.undo.apply(setProjectStringOp(
+      fourcc, text === "" ? null : encodeProjectString(fourcc, text)));
+    if (fourcc === "PNam") store.emit("status"); // topbar file line shows the name
     this.refresh();
   }
 

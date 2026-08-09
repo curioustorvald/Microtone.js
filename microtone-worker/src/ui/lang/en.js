@@ -935,6 +935,11 @@ export default {
   // ── project view ──
   "proj.untitledProject": "(untitled project)",
   "proj.projectName": "Project name",
+  "proj.projectAuthor": "Author",
+  "proj.projectCopyright": "Copyright",
+  "proj.projectMessageHead": "Message",
+  "proj.projectMessagePlaceholder": "Liner notes, greetings, a track list — whatever the project wants to say.",
+  "proj.projectMessageHint": "Stored with the project and shown to anyone who opens it. Author and copyright describe the whole project; the song list below carries each song's own composer.",
   "proj.notationDisplayOnly": "Notation (display only)",
   "proj.song": "song",
   "proj.songs": "songs",

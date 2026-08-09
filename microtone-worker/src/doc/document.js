@@ -332,6 +332,20 @@ export class Document {
   sampleName(index) { return this._nameTable("SNam")[index] ?? ""; }
   patternName(idx) { return this._nameTable("pNam")[idx] ?? ""; }
 
+  /**
+   * One of the four project strings (§9.2): "PNam" / "PCom" / "PCpr" / "PMsg",
+   * decoded as UTF-8 up to the first NUL (the terminator is optional, so a
+   * payload without one is taken whole). Returns null when the section is
+   * absent, which callers distinguish from a section holding "".
+   */
+  projectString(fourcc) {
+    const sec = this.projSections.find((s) => s.fourcc === fourcc);
+    if (!sec) return null;
+    const nul = sec.payload.indexOf(0);
+    const end = nul < 0 ? sec.payload.length : nul;
+    return new TextDecoder().decode(sec.payload.subarray(0, end));
+  }
+
   /** Custom notation definitions from the "nota" section, cached by payload
    *  identity — undo/redo swaps the payload ref, invalidating naturally. */
   customNotations() {

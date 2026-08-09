@@ -42,6 +42,12 @@
   --cv-col-pan: #d08bff;    /* pan column ink */
   --cv-sel: #37506e;        /* block selection fill */
   --cv-ditto: #5f6675;      /* pattern-ditto ghost cells (light grey on dark) */
+  /* effect column (item 120): the opcode, then one shade per ARGUMENT FIELD —
+   * taut.js palette entries 220 / 226 / 231 / 236, so both trackers match. */
+  --cv-fx-op: #ff8f71;      /* opcode, and the S/Z sub-command nibble with it */
+  --cv-fx-a1: #ffdd00;      /* argument field 1 */
+  --cv-fx-a2: #8be400;      /* argument field 2 */
+  --cv-fx-a3: #00e0fc;      /* argument field 3 */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -96,6 +102,10 @@
   --cv-col-pan: #d495ff;
   --cv-sel: #46617f;
   --cv-ditto: #868c95;
+  --cv-fx-op: #ff8f71;      /* opcode, and the S/Z sub-command nibble with it */
+  --cv-fx-a1: #ffdd00;      /* argument field 1 */
+  --cv-fx-a2: #8be400;      /* argument field 2 */
+  --cv-fx-a3: #00e0fc;      /* argument field 3 */
 
   /* canvas: samples / instruments */
   --cv-wave: #4ddd7d;
@@ -145,6 +155,12 @@
   --cv-col-pan: #9c3fb4;
   --cv-sel: #b8d0ec;        /* block selection fill */
   --cv-ditto: #a3a9b4;      /* pattern-ditto ghost cells (dark grey on light) */
+  /* effect column: the same op → field-1 → field-2 → field-3 progression as the
+   * dark themes, re-mixed as dark ink (the ramp runs the other way round). */
+  --cv-fx-op: #d4319d;
+  --cv-fx-a1: #a44500;
+  --cv-fx-a2: #3c9200;
+  --cv-fx-a3: #005f69;
 
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;
@@ -1642,6 +1658,29 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   font-variation-settings:
     "wdth" 100.0;
 }
+
+/* The project strings are prose, not spinner values: give the three line-edits
+   more room than the numeric fields around them (item 115). */
+.inst-field input[data-section] { width: 14rem; }
+
+/* Project message (PMsg, item 115): free prose, so a resizable box rather than
+   the one-line inputs the other project strings use. */
+.proj-message-text {
+  display: block;
+  width: 100%;
+  max-width: 52rem;
+  min-height: 6rem;
+  resize: vertical;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  font-family: "Roboto Mono", ui-monospace, monospace;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.proj-message-text:focus { outline: 1px solid var(--accent); }
 
 /* ── boot splash (item 67) ─────────────────────────────────────────────── */
 .splash {
