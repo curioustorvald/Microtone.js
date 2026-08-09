@@ -182,6 +182,7 @@ export default {
   "common.close": "Close",
   "common.apply": "Apply",
   "common.rename": "Rename",
+  "common.edit": "Edit\u2026",
   "common.import": "Import",
   "common.create": "Create",
   "common.save": "Save",
@@ -230,6 +231,8 @@ export default {
   "files.songsHead": "Songs in this project",
   "files.colSong": "#",
   "files.colName": "name",
+  "files.colComposer": "composer",
+  "files.colCopyright": "copyright",
   "files.colVoices": "voices",
   "files.colPatterns": "patterns",
   "files.wavCap": "Max seconds",
@@ -280,8 +283,10 @@ export default {
   "files.stemsEmpty": "Nothing sounded in the first {n} s — no tracks to export.",
 
   // ── song rename ──
-  "song.renameTitle": "Rename song {n}",
-  "song.renameBtnTitle": "Rename this song",
+  "song.editTitle": "Song {n}",
+  "song.composer": "Composer",
+  "song.copyright": "Copyright",
+  "song.editBtnTitle": "Edit this song's name, composer and copyright",
   "song.deleteBtnTitle": "Delete this song",
 
   // ── sample editor ──
@@ -939,7 +944,7 @@ export default {
   "proj.projectCopyright": "Copyright",
   "proj.projectMessageHead": "Message",
   "proj.projectMessagePlaceholder": "Liner notes, greetings, a track list — whatever the project wants to say.",
-  "proj.projectMessageHint": "Stored with the project and shown to anyone who opens it. Author and copyright describe the whole project; the song list below carries each song's own composer.",
+  "proj.projectMessageHint": "Stored with the project and shown to anyone who opens it. Author and copyright describe the whole project; each song carries its own name, composer and copyright \u2014 edit those in the song list below.",
   "proj.notationDisplayOnly": "Notation (display only)",
   "proj.song": "song",
   "proj.songs": "songs",
@@ -951,7 +956,7 @@ export default {
   "proj.globalVolume": "Global volume",
   "proj.mixingVolume": "Mixing volume",
   "proj.toneSlideMode": "Tone-slide mode",
-  "proj.toneLinear": "Linear (4096-TET)",
+  "proj.toneLinear": "Linear pitch (4096-TET)",
   "proj.toneAmiga": "Amiga period",
   "proj.toneLinearHz": "Linear frequency (Hz)",
   "proj.interpolation": "Interpolation",

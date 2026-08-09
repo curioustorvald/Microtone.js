@@ -48,7 +48,7 @@ export class ProjectView {
   constructor(store, host, cb = {}) {
     this.store = store;
     this.host = host;
-    this.cb = cb; // { renameSong(index) } — the app's interactive rename modal
+    this.cb = cb; // { editSong(index) } — the app's per-song metadata modal
     this.visible = false;
     this.root = document.createElement("div");
     this.root.className = "project-view";
@@ -352,6 +352,7 @@ export class ProjectView {
     const songsTable = document.createElement("table");
     songsTable.className = "files-table";
     songsTable.innerHTML = `<thead><tr><th>${t("files.colSong")}</th><th>${t("files.colName")}</th>` +
+      `<th>${t("files.colComposer")}</th><th>${t("files.colCopyright")}</th>` +
       `<th>${t("files.colVoices")}</th><th>${t("files.colPatterns")}</th><th>${t("proj.colBpm")}</th>` +
       `<th>${t("proj.colSpeed")}</th><th>${t("proj.colOperation")}</th></tr></thead>`;
     const tbody = document.createElement("tbody");
@@ -359,15 +360,19 @@ export class ProjectView {
       const m = doc.meta.songMeta[i];
       const tr = document.createElement("tr");
       if (i === this.store.songIndex) tr.className = "files-current";
+      // Name, composer and copyright are this SONG's (sMet); the project's own
+      // three strings live in the fields at the top of the tab.
       tr.innerHTML =
-        `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || t("instList.unnamed"))}</td><td>${s.numVoices}</td>` +
+        `<td>${i}</td><td>${esc(unescapeName(m?.name || "") || t("instList.unnamed"))}</td>` +
+        `<td class="dim">${esc(unescapeName(m?.composer || ""))}</td>` +
+        `<td class="dim">${esc(unescapeName(m?.copyright || ""))}</td><td>${s.numVoices}</td>` +
         `<td>${s.patterns.length}</td><td>${s.bpm}</td><td>${s.tickRate}</td>`;
       const td = document.createElement("td");
-      const rn = mkBtn(t("common.rename"), async () => {
-        await this.cb.renameSong?.(i);
+      const rn = mkBtn(t("common.edit"), async () => {
+        await this.cb.editSong?.(i);
         this.refresh();
       });
-      rn.title = t("song.renameBtnTitle");
+      rn.title = t("song.editBtnTitle");
       const rm = mkBtn(t("common.delete"), () => this.removeSong(i));
       rm.title = t("song.deleteBtnTitle");
       rm.disabled = doc.songs.length <= 1; // can't delete the last song
@@ -575,20 +580,34 @@ export class ProjectView {
     this.refresh();
   }
 
-  /** Rename song `index` (default: current). Non-ASCII characters are encoded
-   *  as \uHHHH ASCII escapes so the sMet stays TSVM-readable (its string
-   *  parser is not Unicode; the escape is kept verbatim). */
-  changeName(raw, index = this.store.songIndex) {
+  /** Write song `index`'s own sMet strings — name, composer, copyright — from
+   *  whichever of the three the caller passes (the others stay put). Non-ASCII
+   *  characters are encoded as \uHHHH ASCII escapes so the sMet stays
+   *  TSVM-readable (its string parser is not Unicode; the escape is kept
+   *  verbatim). These are the SONG's; the project's own three are §9.2 sections
+   *  and go through changeProjectString. */
+  changeSongMeta(fields, index = this.store.songIndex) {
     const store = this.store;
-    const escaped = escapeNonAscii(raw);
     const sm = store.doc.meta.songMeta[index] ??
       (store.doc.meta.songMeta[index] =
         { notation: 120, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" });
-    if (sm.name === escaped) return;
-    sm.name = escaped;
+    let changed = false;
+    for (const key of ["name", "composer", "copyright"]) {
+      if (fields[key] === undefined) continue;
+      const escaped = escapeNonAscii(fields[key]);
+      if (sm[key] === escaped) continue;
+      sm[key] = escaped;
+      changed = true;
+    }
+    if (!changed) return;
     store.doc.smetEdited = true;
     store.doc.dirty = true;
     this.refresh();
+  }
+
+  /** Rename song `index` (default: current) — the name-only shorthand. */
+  changeName(raw, index = this.store.songIndex) {
+    this.changeSongMeta({ name: raw }, index);
   }
 
   /** Change the song's display notation only — does NOT move any notes. */

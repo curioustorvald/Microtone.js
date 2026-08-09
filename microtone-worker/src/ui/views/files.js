@@ -20,7 +20,7 @@ export class FilesView {
   /**
    * @param host container element
    * @param callbacks { openBytes(name, bytes), currentDoc() → {doc, fileName},
-   *                    songIndex(), importMidi(), renameSong(index) }
+   *                    songIndex(), importMidi(), editSong(index) }
    */
   constructor(store, host, callbacks) {
     this.store = store;

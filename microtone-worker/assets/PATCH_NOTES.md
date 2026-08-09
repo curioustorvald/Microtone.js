@@ -4,6 +4,12 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-10
+
+- Fixed: **the project message box would not take a newline.** Enter — and Space, and every other key the editor binds — was claimed by the app's shortcuts before the box could see it, so the message could only ever be one line. Any multi-line text field now keeps the keys it is being typed into.
+- **Each song's own composer and copyright are editable.** The per-song **Edit…** button on the Project tab's song list now changes the name, the composer and the copyright together; before, the last two could only be set when the project was first created, and there was no way to see or change them afterwards.
+- **The song list shows those credits.** Composer and copyright are columns beside the name, so a project of several songs tells you at a glance who wrote which — no opening each song to find out. The project's own author and copyright, up in the fields at the top of the tab, stay separate: one describes the release, the others describe the tracks.
+
 ## 2026-08-09
 
 - **[BREAKING CHANGES] Vibrato, fine vibrato, tremolo and panbrello ran far too fast, and now run at the speed the source module asked for.** A converted module's LFO speed could come out anything up to seventeen times quicker than the tracker that wrote it — a slow pitch sway arriving as a warble, a gentle tremolo as a buzz. All four commands now read their speed byte on a scale that reproduces what IT, ST3, XM and MOD mean by it exactly — a converted module's LFO steps through the same waveform points on the same ticks as the tracker that wrote it.

@@ -788,9 +788,15 @@ Jamming on the piano keys while the panel is open auditions the instrument live;
 
 ## Project (F6)
 
-Per-song properties, applied live to playback:
+The tab opens with the **project's** own three strings — **Project name**,
+**Author** and **Copyright** — followed by a **Message** box for whatever the
+project wants to say to whoever opens it: liner notes, greetings, a track list.
+The message travels with the file, and importing an ImpulseTracker module brings
+its song message in here. These describe the whole project; each song has its
+own name, composer and copyright, which the songs table at the bottom edits.
 
-- **Name** (and the project name — both stored with `\uHHHH` escapes for non-ASCII, shown decoded).
+Then the per-song properties, applied live to playback:
+
 - **BPM** (25–535) and **Speed** (ticks per row, 1–127).
 - **Global volume** and **Mixing volume** (0–255).
 - **Tone-slide mode** — Linear (4096-TET), Amiga period, or Linear frequency.
@@ -799,8 +805,12 @@ Per-song properties, applied live to playback:
 - **Notation** — the display pitch table. Changing it only relabels notes; use **Retune…** to actually move them (see [Microtonality in depth](#microtonality-in-depth)).
 - **Tuning** — the concert pitch the whole song is played at (see below).
 
-Below, the songs table lets you rename, delete and add songs within the
-project; the top-bar selector switches between them.
+Below, the songs table lists every song in the project with its name, composer
+and copyright; **Edit…** changes all three, **Delete** removes the song, and
+**Add song** appends a fresh one. The top-bar selector switches between them.
+Names, composers and copyrights — the project's and each song's alike — are
+stored with `\uHHHH` escapes for non-ASCII and shown decoded; only the project
+message is stored as plain text.
 
 ### Surround panning
 

@@ -179,6 +179,7 @@ export default {
   "common.close": "닫기",
   "common.apply": "적용",
   "common.rename": "이름 바꾸기",
+  "common.edit": "편집\u2026",
   "common.import": "가져오기",
   "common.create": "생성",
   "common.save": "저장",
@@ -223,6 +224,8 @@ export default {
   "files.songsHead": "이 프로젝트의 곡",
   "files.colSong": "#",
   "files.colName": "이름",
+  "files.colComposer": "작곡가",
+  "files.colCopyright": "저작권",
   "files.colVoices": "보이스",
   "files.colPatterns": "패턴",
   "files.wavCap": "최대 길이 (초)",
@@ -273,8 +276,10 @@ export default {
   "files.stemsEmpty": "처음 {n}초 동안 소리가 없어 내보낼 트랙이 없습니다.",
 
   // ── song rename ──
-  "song.renameTitle": "곡 {n} 이름 바꾸기",
-  "song.renameBtnTitle": "이 곡의 이름을 바꿉니다",
+  "song.editTitle": "곡 {n}",
+  "song.composer": "작곡가",
+  "song.copyright": "저작권",
+  "song.editBtnTitle": "이 곡의 이름, 작곡가, 저작권을 편집합니다",
   "song.deleteBtnTitle": "이 곡을 삭제합니다",
 
   // ── sample editor ──
@@ -930,7 +935,7 @@ export default {
   "proj.projectCopyright": "저작권",
   "proj.projectMessageHead": "메시지",
   "proj.projectMessagePlaceholder": "해설, 인사말, 수록곡 목록 등 프로젝트에 담고 싶은 내용을 적으세요.",
-  "proj.projectMessageHint": "프로젝트에 함께 저장되어 파일을 여는 사람에게 표시됩니다. 만든이와 저작권은 프로젝트 전체를 설명하며, 아래 곡 목록에는 각 곡의 작곡자가 따로 있습니다.",
+  "proj.projectMessageHint": "프로젝트에 함께 저장되어 파일을 여는 사람에게 표시됩니다. 만든이와 저작권은 프로젝트 전체에 해당하며, 아래 곡 목록에서 각 곡의 이름\u00B7작곡가\u00B7저작권을 따로 지정할 수 있습니다.",
   "proj.notationDisplayOnly": "기보법 (표시 전용)",
   "proj.song": "곡",
   "proj.songs": "곡",
@@ -942,7 +947,7 @@ export default {
   "proj.globalVolume": "전체 볼륨",
   "proj.mixingVolume": "믹싱 볼륨",
   "proj.toneSlideMode": "톤 슬라이드 모드",
-  "proj.toneLinear": "선형 (4096-TET)",
+  "proj.toneLinear": "선형 음높이 (4096-TET)",
   "proj.toneAmiga": "Amiga 주기",
   "proj.toneLinearHz": "선형 주파수 (Hz)",
   "proj.interpolation": "보간",

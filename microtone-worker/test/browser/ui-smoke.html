@@ -127,24 +127,45 @@
           store.doc.projectString("PMsg") === "line one\nline two — Ø";
         log(`project message undo/redo: ${undoOk && redoOk ? "ok" : "FAIL"}`);
 
+        // The global key dispatch must keep its hands off a focused TEXTAREA,
+        // or Enter never reaches the message box and a newline is untypeable.
+        win.document.querySelector('#tabs button[data-view="project"]').click();
+        await new Promise((r) => setTimeout(r, 50));
+        const area = win.document.querySelector("textarea.proj-message-text");
+        area?.focus();
+        const ev = new win.KeyboardEvent("keydown",
+          { code: "Enter", key: "Enter", bubbles: true, cancelable: true });
+        area?.dispatchEvent(ev);
+        // defaultPrevented would mean the app swallowed the key before the
+        // textarea could insert its newline.
+        log(`message box keeps Enter (newline typeable): ${area && !ev.defaultPrevented ? "ok" : "FAIL"}`);
+
         // (item 60 Project housekeeping is covered by test/browser/cleanup-smoke.html
         //  — it needs real-time + a stubbed alert(), so it lives in its own page.)
 
-        // ── song rename now lives on the File tab's song list ──
+        // ── the song list lives on the PROJECT tab, and carries each song's own
+        //    name / composer / copyright (sMet), not just the name ──
         const gone = !win.document.getElementById("songRenameBtn");
-        pv.changeName("Renamed Song", 0);
-        const smOk = store.doc.meta.songMeta[0].name === "Renamed Song" && store.doc.smetEdited;
+        pv.changeSongMeta({ name: "Renamed Song", composer: "Frédéric", copyright: "© 2026" }, 0);
+        const sm0 = store.doc.meta.songMeta[0];
+        const smOk = sm0.name === "Renamed Song" && sm0.composer === "Fr\\u00E9d\\u00E9ric" &&
+          sm0.copyright === "\\u00A9 2026" && store.doc.smetEdited;
+        win.document.querySelector('#tabs button[data-view="project"]').click();
+        await new Promise((r) => setTimeout(r, 300));
+        const projHost = win.document.getElementById("projectHost");
+        const songHead = projHost.querySelector(".files-songs-head");
+        const rowBtns = [...projHost.querySelectorAll("table")].at(-1)
+          ?.querySelectorAll("tbody tr:first-child button") ?? [];
+        // Decoded in the table, escaped in the file — the same split the name has.
+        const songListOk = gone && smOk && !!songHead && rowBtns.length === 2 &&
+          projHost.textContent.includes("Renamed Song") &&
+          projHost.textContent.includes("Frédéric") && !projHost.textContent.includes("\\u00E9");
+        log(`Project-tab song list shows name/composer/copyright (topbar ✎ gone): ${songListOk ? "ok" : "FAIL"}`);
         win.document.querySelector('#tabs button[data-view="files"]').click();
         await new Promise((r) => setTimeout(r, 300)); // refresh() is async
         const filesHost = win.document.getElementById("filesHost");
-        const songHead = filesHost.querySelector(".files-songs-head");
-        const renameBtns = [...filesHost.querySelectorAll("table")].at(-1)
-          ?.querySelectorAll("tbody button") ?? [];
         const midiBtnFiles = [...filesHost.querySelectorAll(".files-bar button")]
           .some((b) => b.textContent === "Import MIDI…");
-        const songListOk = gone && smOk && !!songHead && renameBtns.length === store.doc.songs.length &&
-          filesHost.textContent.includes("Renamed Song");
-        log(`File-tab song list + rename buttons (topbar ✎ gone): ${songListOk ? "ok" : "FAIL"}`);
         log(`File-tab Import MIDI… button: ${midiBtnFiles ? "ok" : "FAIL"}`);
 
         // ── the Sample Lab as THE sample editor (item 109): Replace writes the

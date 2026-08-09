@@ -504,19 +504,27 @@ function selectSong(index) {
 
 $("songSel").addEventListener("change", (e) => selectSong(parseInt(e.target.value, 10)));
 
-// Rename song `index` — offered per-row on the File tab's song list (the
-// write goes through ProjectView.changeName so there is one code path). The
-// input shows the DECODED name; changeName re-escapes on save.
-async function renameSongInteractive(index) {
+// Edit song `index`'s own metadata — offered per-row on the Project tab's song
+// list. All three sMet strings, since a project of several songs is exactly
+// where a per-song composer and copyright mean something; the write goes
+// through ProjectView.changeSongMeta so there is one code path. The inputs show
+// the DECODED text; changeSongMeta re-escapes on save.
+async function editSongInteractive(index) {
   if (!store.doc) return;
   const sm = store.doc.meta.songMeta[index];
   const result = await showModal({
-    title: t("song.renameTitle", { n: index }),
-    fields: [{ name: "name", label: t("files.name"), value: unescapeName(sm?.name ?? "") }],
-    okLabel: t("common.rename"),
+    title: t("song.editTitle", { n: index }),
+    fields: [
+      { name: "name", label: t("files.name"), value: unescapeName(sm?.name ?? "") },
+      { name: "composer", label: t("song.composer"), value: unescapeName(sm?.composer ?? "") },
+      { name: "copyright", label: t("song.copyright"), value: unescapeName(sm?.copyright ?? "") },
+    ],
+    okLabel: t("common.apply"),
   });
   if (result === null) return;
-  projectView.changeName(result.name, index);
+  projectView.changeSongMeta({
+    name: result.name, composer: result.composer, copyright: result.copyright,
+  }, index);
   rebuildSongList();
   updateStatus();
 }
@@ -550,7 +558,7 @@ const samplesView = new SamplesView(store, $("samplesHost"), {
 });
 const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
 const projectView = new ProjectView(store, $("projectHost"), {
-  renameSong: (i) => renameSongInteractive(i),
+  editSong: (i) => editSongInteractive(i),
   /**
    * Save the upgraded project under a NEW name and continue working on that
    * one (format v3, §5.5). The original file is left alone deliberately: the
@@ -578,7 +586,7 @@ const filesView = new FilesView(store, $("filesHost"), {
   currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
   songIndex: () => store.songIndex,
   importMidi: () => importMidiInteractive({ toOpfs: true }),
-  renameSong: (i) => renameSongInteractive(i),
+  editSong: (i) => editSongInteractive(i),
 });
 // Welcome screen (item 104) — the Timeline tab's content before a project is
 // loaded. Everything it offers is an existing entry point, wired here rather
@@ -925,6 +933,16 @@ document.addEventListener("click", (e) => {
 });
 
 // ── keyboard dispatch ──
+// A focused text field is TYPING, and the grid shortcuts (and the jam keyboard)
+// must keep their hands off it. TEXTAREA belongs here as much as INPUT does:
+// without it the Project tab's message box never sees an Enter, because the
+// dispatch below claims the key first.
+function isTypingTarget(el) {
+  const tag = el?.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+    el?.isContentEditable === true;
+}
+
 window.addEventListener("keydown", (e) => {
   // Save works anywhere, any time (item 47.4): before the input/dialog and
   // no-doc guards below, so a focused field or open modal can't swallow it.
@@ -937,14 +955,13 @@ window.addEventListener("keydown", (e) => {
     // The welcome screen (F1) and the File tab (F7) stay reachable before
     // anything is loaded — and so does the way back (item 104.1).
     if ((e.code === "F1" || e.code === "F7") && !e.ctrlKey && !e.metaKey && !e.altKey &&
-        e.target.tagName !== "INPUT" && !e.target.closest?.("dialog")) {
+        !isTypingTarget(e.target) && !e.target.closest?.("dialog")) {
       e.preventDefault();
       showView(e.code === "F1" ? "timeline" : "files");
     }
     return;
   }
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" ||
-      e.target.closest?.("dialog")) return;
+  if (isTypingTarget(e.target) || e.target.closest?.("dialog")) return;
 
   // global chords
   if ((e.ctrlKey || e.metaKey) && e.key === "z") {
@@ -1130,8 +1147,7 @@ window.addEventListener("keyup", (e) => {
   // Ctrl/Meta chord that doubles as a piano key (S = Save, A = Select All,
   // G = Goto, Y = Redo) cut all currently playing notes.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" ||
-      e.target.closest?.("dialog")) return;
+  if (isTypingTarget(e.target) || e.target.closest?.("dialog")) return;
   jam.up(e.code);
 });
 // Focus loss eats the keyup, which would leave the audition sounding for ever.
