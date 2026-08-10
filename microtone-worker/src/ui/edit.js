@@ -1,11 +1,19 @@
 // Pattern-cell edit interpreter — pure functions (Node-testable), glued to the
 // canvas views by timeline.js. Column model per cell:
 //   sub 0 = note, 1 = instrument (2 nibbles), 2 = volume, 3 = panning,
-//   sub 4 = effect opcode (base-36), 5 = effect arg (4 nibbles).
+//   sub 4 = effect opcode (base-36), 5 = effect arg (4 nibbles),
+//   sub 6 = SECOND effect opcode, 7 = its arg — format version 3 only, and only
+//           while that column is exposed (§5.5; see the `fx2` flag below).
 // The vol and pan columns are three positions wide: the SYMBOL cell (which
 // operation the column carries) followed by the two argument digits — item 87.
 // The jam map mirrors taut.js SC_JAM: physical-position piano on the A-row
 // (KeyA..KeyK white, KeyW/E/T/Y/U black) — layout-independent via e.code.
+//
+// Every geometry table below is a FUNCTION of two document/view properties —
+// `wide` (the v3 cell) and `fx2` (its second effect column exposed) — so one
+// pair of booleans drives the painter, hit-testing, the cursor walk and the
+// selection highlight alike. `fx2` is meaningless without `wide`: the 8-byte
+// cell has no second effect to show.
 
 import { MIDDLE_C } from "../engine/constants.js";
 import { stepNoteInTable, isAbsolute, snapToAbsoluteDegree } from "./pitchtables.js";
@@ -16,26 +24,38 @@ export const SUB_VOL = 2;
 export const SUB_PAN = 3;
 export const SUB_FX_OP = 4;
 export const SUB_FX_ARG = 5;
-export const NUM_SUBS = 6;
+export const SUB_FX2_OP = 6;
+export const SUB_FX2_ARG = 7;
+export const NUM_SUBS = 8;
 // vol/pan: [symbol][argument hi][argument lo]
 export const SUB_NIBBLES = [1, 2, 3, 3, 1, 4];
 // Format version 3's WIDE cell (file format §5.5) spends the extra room on the
 // panning column: [symbol][elevation hi][elevation lo][azimuth ×3]. The volume
 // column keeps its three positions — its value simply became a whole byte.
 export const SUB_NIBBLES_WIDE = [1, 2, 3, 6, 1, 4];
+// …and with the second effect exposed, one more opcode + 4-nibble argument.
+export const SUB_NIBBLES_WIDE_FX2 = [1, 2, 3, 6, 1, 4, 1, 4];
 
-/** Sub-column widths for the cell format in play. */
-export function subNibbles(wide) { return wide ? SUB_NIBBLES_WIDE : SUB_NIBBLES; }
+/** Sub-column widths for the cell format + column set in play. */
+export function subNibbles(wide, fx2 = false) {
+  if (!wide) return SUB_NIBBLES;
+  return fx2 ? SUB_NIBBLES_WIDE_FX2 : SUB_NIBBLES_WIDE;
+}
 
 // ── shared cell layout (Timeline + Pattern views) ──
 // "♯C-4 01 v3F p20 A0F00": note glyphs 0-3, inst 5-6, vol 8-10, pan 12-14,
 // fx 16-20 → 21 chars per cell. The wide cell inserts three more characters in
-// the panning column: "♯C-4 01 vFF p40 180 A0F00" → 24.
+// the panning column: "♯C-4 01 vFF p40 180 A0F00" → 24, and exposing the second
+// effect appends a sixth group after a separating space: "… A0F00 M8000" → 30.
 export const CELL_CHARS = 21;
 export const CELL_CHARS_WIDE = 24;
+export const CELL_CHARS_WIDE_FX2 = 30;
 
-/** Characters per cell for the format in play. */
-export function cellChars(wide) { return wide ? CELL_CHARS_WIDE : CELL_CHARS; }
+/** Characters per cell for the format + column set in play. */
+export function cellChars(wide, fx2 = false) {
+  if (!wide) return CELL_CHARS;
+  return fx2 ? CELL_CHARS_WIDE_FX2 : CELL_CHARS_WIDE;
+}
 
 /**
  * Lookahead-scroll (item 42): given a cursor position, the current scroll
@@ -72,9 +92,18 @@ function buildPositions(nibbles) {
 }
 export const SUB_POSITIONS = buildPositions(SUB_NIBBLES);
 export const SUB_POSITIONS_WIDE = buildPositions(SUB_NIBBLES_WIDE);
+export const SUB_POSITIONS_WIDE_FX2 = buildPositions(SUB_NIBBLES_WIDE_FX2);
 
-/** Walk order for the format in play. */
-export function subPositions(wide) { return wide ? SUB_POSITIONS_WIDE : SUB_POSITIONS; }
+/** Walk order for the format + column set in play. */
+export function subPositions(wide, fx2 = false) {
+  if (!wide) return SUB_POSITIONS;
+  return fx2 ? SUB_POSITIONS_WIDE_FX2 : SUB_POSITIONS_WIDE;
+}
+
+/** The LAST sub-column of a cell — what a "whole cell" selection reaches to.
+ *  A hidden second effect is outside the selection, and stays untouched by the
+ *  block operations, which is the whole point of hiding it. */
+export function lastSub(fx2 = false) { return fx2 ? SUB_FX2_ARG : SUB_FX_ARG; }
 
 /**
  * Is the given sub-column of `cell` empty — i.e. rendered as dots? Wheel-edit
@@ -97,9 +126,16 @@ export function subIsEmpty(sub, cell) {
              (cell.azimuth ?? 0) === 0 && (cell.elevation ?? 0) === 0;
     case SUB_FX_OP:
     case SUB_FX_ARG: return cell.effect === 0 && cell.effectArg === 0;
+    case SUB_FX2_OP:
+    case SUB_FX2_ARG: return (cell.effect2 ?? 0) === 0 && (cell.effectArg2 ?? 0) === 0;
     default: return true;
   }
 }
+
+// The second effect's character group sits after the first one's, separated by
+// the same single space every other group is: fx1 is 19…23 in a wide cell, so
+// fx2 is 25…29.
+const FX2_OP_CHAR = 25;
 
 /** Character offset + width of a sub-position inside the cell. */
 export function subCharPos(sub, nib, wide = false) {
@@ -110,18 +146,21 @@ export function subCharPos(sub, nib, wide = false) {
     case SUB_PAN: return [12 + nib, 1];   // char 12 is the symbol cell
     case SUB_FX_OP: return [(wide ? 19 : 16), 1];
     case SUB_FX_ARG: return [(wide ? 20 : 17) + nib, 1];
+    case SUB_FX2_OP: return [FX2_OP_CHAR, 1];
+    case SUB_FX2_ARG: return [FX2_OP_CHAR + 1 + nib, 1];
     default: return [0, 1];
   }
 }
 
 // ── logical clipboard columns ──
-// Coarser than the six sub-cursor positions: note / inst / vol / pan / fx (the
-// effect opcode + arg are ONE column). Block copy/paste records which of these
+// Coarser than the sub-cursor positions: note / inst / vol / pan / fx / fx2 (an
+// effect's opcode + arg are ONE column). Block copy/paste records which of these
 // a selection covers, so a partial-column paste overwrites only those bytes.
-export const COL_NOTE = 0, COL_INST = 1, COL_VOL = 2, COL_PAN = 3, COL_FX = 4;
-export const ALL_COLS = [COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX];
-/** Raw cell byte offsets each logical column occupies. */
-export const COL_BYTES = [[0, 1], [2], [3], [4], [5, 6, 7]];
+export const COL_NOTE = 0, COL_INST = 1, COL_VOL = 2, COL_PAN = 3, COL_FX = 4, COL_FX2 = 5;
+export const ALL_COLS = [COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, COL_FX2];
+/** Raw cell byte offsets each logical column occupies. The 8-byte cell has no
+ *  second effect, so COL_FX2 claims nothing there and is a harmless no-op. */
+export const COL_BYTES = [[0, 1], [2], [3], [4], [5, 6, 7], []];
 /**
  * The same thing for either format, as [offset, mask] pairs — the wide cell's
  * byte 8 carries BOTH column selectors (and the azimuth's ninth bit), so a
@@ -134,20 +173,31 @@ export function colByteMasks(wide) {
     [[2, 0xff]],                                  // instrument
     [[3, 0xff], [8, 0x70]],                       // volume value + its selector
     [[4, 0xff], [9, 0xff], [8, 0x8f]],            // azimuth low + elevation + A/selector
-    [[5, 0xff], [6, 0xff], [7, 0xff],             // effect 1…
-     [10, 0xff], [11, 0xff], [12, 0xff]],         // …and the effect 2 it carries
+    [[5, 0xff], [6, 0xff], [7, 0xff]],            // effect 1
+    [[10, 0xff], [11, 0xff], [12, 0xff]],         // effect 2 (§5.5)
   ];
 }
 /** Inclusive [startChar, endChar] span of each column within the cell (for the
- *  selection highlight); contiguous, covering all CELL_CHARS. */
-export const COL_CHAR_RANGE = [[0, 5], [5, 8], [8, 12], [12, 16], [16, 21]];
-export const COL_CHAR_RANGE_WIDE = [[0, 5], [5, 8], [8, 12], [12, 19], [19, 24]];
+ *  selection highlight); contiguous, covering all CELL_CHARS. The last entry is
+ *  degenerate wherever the second effect has no characters of its own, so
+ *  `range[colHi][1]` is safe to read whatever the layout. */
+export const COL_CHAR_RANGE = [[0, 5], [5, 8], [8, 12], [12, 16], [16, 21], [21, 21]];
+export const COL_CHAR_RANGE_WIDE = [[0, 5], [5, 8], [8, 12], [12, 19], [19, 24], [24, 24]];
+export const COL_CHAR_RANGE_WIDE_FX2 =
+  [[0, 5], [5, 8], [8, 12], [12, 19], [19, 24], [24, 30]];
 
-/** Column spans for the format in play. */
-export function colCharRange(wide) { return wide ? COL_CHAR_RANGE_WIDE : COL_CHAR_RANGE; }
+/** Column spans for the format + column set in play. */
+export function colCharRange(wide, fx2 = false) {
+  if (!wide) return COL_CHAR_RANGE;
+  return fx2 ? COL_CHAR_RANGE_WIDE_FX2 : COL_CHAR_RANGE_WIDE;
+}
 
-/** Logical column of a sub-cursor position (fx-op and fx-arg → COL_FX). */
-export function subToCol(sub) { return sub <= COL_PAN ? sub : COL_FX; }
+/** Logical column of a sub-cursor position (each effect's op and arg collapse
+ *  onto that effect's column). */
+export function subToCol(sub) {
+  if (sub <= COL_PAN) return sub;
+  return sub <= SUB_FX_ARG ? COL_FX : COL_FX2;
+}
 
 /** Logical column ids spanned by an inclusive sub-cursor range [subA..subB]. */
 export function colsForSubs(subA, subB) {
@@ -158,10 +208,18 @@ export function colsForSubs(subA, subB) {
 }
 
 /** Map a character offset within a cell to [sub, nib]. */
-export function charToSub(charX, wide = false) {
+export function charToSub(charX, wide = false, fx2 = false) {
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const fxOp = wide ? 19 : 16;
   const panWidth = wide ? 6 : 3;
+  if (wide && fx2) {
+    // The space between the two effect groups belongs to the first one, so a
+    // click that lands just past effect 1's last digit stays on it.
+    if (charX >= FX2_OP_CHAR + 1) {
+      return [SUB_FX2_ARG, clamp(Math.floor(charX - FX2_OP_CHAR - 1), 0, 3)];
+    }
+    if (charX >= FX2_OP_CHAR) return [SUB_FX2_OP, 0];
+  }
   if (charX >= fxOp + 1) return [SUB_FX_ARG, clamp(Math.floor(charX - fxOp - 1), 0, 3)];
   if (charX >= fxOp) return [SUB_FX_OP, 0];
   if (charX >= 12) return [SUB_PAN, clamp(Math.floor(charX - 12), 0, panWidth - 1)];
@@ -618,26 +676,35 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
     return nib === lastNib ? { fields, advanceRow: true } : { fields, advanceNib: true };
   }
 
-  if (sub === SUB_FX_OP) {
+  // Both effect columns are the same column twice over — same base-36 opcode,
+  // same 16-bit argument, same keys — so they differ only in which pair of
+  // fields the action names (§5.5).
+  if (sub === SUB_FX_OP || sub === SUB_FX2_OP) {
+    const second = sub === SUB_FX2_OP;
+    const opKey = second ? "effect2" : "effect";
+    const argKey = second ? "effectArg2" : "effectArg";
     if (isClearKey(code)) {
-      return { fields: { effect: 0, effectArg: 0 }, advanceRow: true };
+      return { fields: { [opKey]: 0, [argKey]: 0 }, advanceRow: true };
     }
     const d = base36Digit(key);
     if (d < 0) return null;
-    return { fields: { effect: d }, advanceNib: true }; // move into the arg nibbles
+    return { fields: { [opKey]: d }, advanceNib: true }; // move into the arg nibbles
   }
 
-  if (sub === SUB_FX_ARG) {
+  if (sub === SUB_FX_ARG || sub === SUB_FX2_ARG) {
+    const second = sub === SUB_FX2_ARG;
+    const argKey = second ? "effectArg2" : "effectArg";
     if (isClearKey(code)) {
-      return { fields: { effectArg: 0 }, advanceRow: true };
+      return { fields: { [argKey]: 0 }, advanceRow: true };
     }
     const d = hexDigit(key);
     if (d < 0) return null;
     const shift = (3 - nib) * 4;
-    const val = (cell.effectArg & ~(0xf << shift)) | (d << shift);
+    const cur = (second ? cell.effectArg2 : cell.effectArg) ?? 0;
+    const val = (cur & ~(0xf << shift)) | (d << shift);
     return nib === 3
-      ? { fields: { effectArg: val & 0xffff }, advanceRow: true }
-      : { fields: { effectArg: val & 0xffff }, advanceNib: true };
+      ? { fields: { [argKey]: val & 0xffff }, advanceRow: true }
+      : { fields: { [argKey]: val & 0xffff }, advanceNib: true };
   }
 
   return null;

@@ -12,9 +12,10 @@ import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../gly
 import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  subCharPos, charToSub, CELL_CHARS, lookahead, wheelStep,
+  SUB_FX2_OP, SUB_FX2_ARG, COL_FX, COL_FX2, lastSub,
+  subCharPos, charToSub, cellChars, lookahead, wheelStep,
   colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty, volPanStep, elevationStep,
-  subPositions, CELL_CHARS_WIDE,
+  subPositions,
 } from "../edit.js";
 import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp, changeInstrumentOp } from "../../doc/ops.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
@@ -46,7 +47,13 @@ const PREVIEW_CUE = 8191; // device-only scratch cue (taut PREVIEW_CUE_IDX idiom
 
 const MIN_PANES = 2;         // spec: at least two columns
 const MAX_PANES = 16;         // sanity cap for very wide viewports
-const MIN_PANE_W = 250;      // px budget per column before we add another
+const MIN_PANE_W = 250;      // floor for the per-column px budget (see paneBudget)
+// Canvas border + breathing room beside the cell. Wide enough that a column is
+// not merely *able* to draw its cell but comfortable doing so — at 12 the v3
+// layouts cleared their last character by a few pixels and read as cramped
+// (user report 2026-08-10). The 8-byte cell is unaffected: it sits on the
+// MIN_PANE_W floor either way.
+const PANE_PAD = 28;
 
 function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -56,11 +63,15 @@ function clampInt(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 // shared toolbar/keyboard to whichever pane is active.
 class PatternPane {
   /** The document's cell format — v3's wide cell changes the column layout
-   *  (§5.5). Every geometry read below goes through these, so one document
-   *  property drives the painter, the cursor walk and hit-testing alike. */
+   *  (§5.5) — and whether THIS pane is showing its second effect. Every
+   *  geometry read below goes through these, so the two flags drive the
+   *  painter, the cursor walk and hit-testing alike. */
   wide() { return this.store.doc?.wideCells === true; }
-  subPos() { return subPositions(this.wide()); }
-  cellChars() { return this.wide() ? CELL_CHARS_WIDE : CELL_CHARS; }
+  fx2() { return this.store.fx2Pane(this.index); }
+  subPos() { return subPositions(this.wide(), this.fx2()); }
+  cellChars() { return cellChars(this.wide(), this.fx2()); }
+  /** The last logical column this pane shows (what "the whole cell" means). */
+  lastCol() { return this.fx2() ? COL_FX2 : COL_FX; }
 
   constructor(container, index) {
     this.container = container;
@@ -104,9 +115,14 @@ class PatternPane {
       if (e.key === "Enter") { this.commitName(); this.canvas.focus?.(); }
       e.stopPropagation(); // keep grid shortcuts from firing while typing a name
     });
+    // Second-effect toggle (§5.5) — this column only. Hidden on anything that
+    // is not a format-v3 project, which has no second effect to show.
+    this.fx2Btn = mkBtn("E2", () => this.store.toggleFx2Pane(this.index));
+    this.fx2Btn.className = "pane-fx2";
     this.info = document.createElement("span");
     this.info.className = "pane-info";
-    this.header.append(this.numEl, prev, this.patInput, next, this.nameInput, this.info);
+    this.header.append(this.numEl, prev, this.patInput, next, this.nameInput,
+      this.fx2Btn, this.info);
 
     this.canvas = document.createElement("canvas");
     this.canvas.className = "pattern-canvas";
@@ -118,7 +134,13 @@ class PatternPane {
 
   isActive() { return this.container.active === this; }
   invalidate() { this.needsRedraw = true; }
-  setIndex(i) { this.index = i; this.numEl.textContent = "#" + (i + 1); }
+  /** Panes are recycled as the viewport resizes, and the second-effect flags are
+   *  kept per pane INDEX, so a re-indexed pane adopts that slot's state. */
+  setIndex(i) {
+    this.index = i;
+    this.numEl.textContent = "#" + (i + 1);
+    this.refreshFx2Btn();
+  }
   applyActiveClass(on) { this.el.classList.toggle("active", on); }
 
   attachEvents() {
@@ -145,8 +167,9 @@ class PatternPane {
       this.container.setActivePane(this); // clicking a column focuses it
       if (e.shiftKey) {
         // Shift+click = full-column selection.
-        if (!this.sel) this.sel = { aRow: this.cursor.row, row: hit.row, aSub: 0, sub: SUB_FX_ARG };
-        else { this.sel.row = hit.row; this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; }
+        const end = lastSub(this.fx2());
+        if (!this.sel) this.sel = { aRow: this.cursor.row, row: hit.row, aSub: 0, sub: end };
+        else { this.sel.row = hit.row; this.sel.aSub = 0; this.sel.sub = end; }
       } else {
         // Mouse-drag carries sub-column granularity.
         this.sel = null;
@@ -275,7 +298,7 @@ class PatternPane {
 
   /** Ctrl+A — select the whole pattern column: every row, all sub-columns. */
   selectColumn() {
-    this.sel = { aRow: 0, row: 63, aSub: 0, sub: SUB_FX_ARG };
+    this.sel = { aRow: 0, row: 63, aSub: 0, sub: lastSub(this.fx2()) };
     this.invalidate();
     this.store.emit("cursor");
   }
@@ -381,7 +404,8 @@ class PatternPane {
     }
     if (!writes.length) return false;
     this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));
-    this.sel = { aRow: start, row: Math.min(start + block.rows - 1, 63), aSub: 0, sub: SUB_FX_ARG };
+    this.sel = { aRow: start, row: Math.min(start + block.rows - 1, 63), aSub: 0,
+      sub: lastSub(this.fx2()) };
     this.invalidate();
     return true;
   }
@@ -397,10 +421,12 @@ class PatternPane {
     this.store.emit("edit"); // repaint the Timeline's name display
   }
 
-  /** Update this column's header — pattern number + name + which cues use it. */
+  /** Update this column's header — pattern number + name + which cues use it,
+   *  plus the second-effect toggle's state. */
   refreshHeader() {
     this.patInput.value = this.patIdx.toString(16).toUpperCase().padStart(4, "0");
     const doc = this.store.doc;
+    this.refreshFx2Btn();
     if (this.nameInput !== document.activeElement) {
       this.nameInput.value = doc ? (unescapeName(doc.patternName(this.patIdx)) || "") : "";
     }
@@ -418,6 +444,29 @@ class PatternPane {
     this.info.textContent = users.length
       ? `${users.length} ${users.length === 1 ? "cue" : "cues"}: ${users.slice(0, 4).join(" ")}${users.length > 4 ? "…" : ""}`
       : "unused";
+  }
+
+  /**
+   * The E2 button: present only on a format-v3 project, lit while this column
+   * shows its second effect, and marked when the pattern USES second effects
+   * that the column is currently hiding — the same "there is something here"
+   * hint the Timeline's channel headers carry.
+   */
+  refreshFx2Btn() {
+    const wide = this.wide();
+    this.fx2Btn.hidden = !wide;
+    if (!wide) return;
+    const on = this.fx2();
+    const has = !on && this.patternHasFx2();
+    this.fx2Btn.classList.toggle("active", on);
+    this.fx2Btn.classList.toggle("has", has);
+    this.fx2Btn.title = t(on ? "pat.fx2HideTitle" : has ? "pat.fx2HasTitle" : "pat.fx2ShowTitle");
+  }
+
+  /** Does this pane's pattern carry any second effect? */
+  patternHasFx2() {
+    const pattern = this.pattern();
+    return !!pattern && pattern.some((c) => c.effect2 !== 0 || c.effectArg2 !== 0);
   }
 
   /** Preview: play just this pattern via the device-only scratch cue (HALT). */
@@ -588,8 +637,15 @@ class PatternPane {
     const row = this.scrollRow + Math.floor(y / ROW_H);
     if (row < 0 || row > 63 || x < GUTTER_W) return null;
     const charX = (x - GUTTER_W - 4) / CHAR_W;
-    const [sub, nib] = charToSub(charX, this.wide());
+    const [sub, nib] = charToSub(charX, this.wide(), this.fx2());
     return { row: clampInt(row, 0, 63), sub, nib };
+  }
+
+  /** Put the cursor back on a sub-column this pane actually shows — called when
+   *  the second effect column is hidden out from under it. */
+  clampCursorSub() {
+    const c = this.cursor;
+    if (c.sub > SUB_FX_ARG && !this.fx2()) { c.sub = SUB_FX_ARG; c.nib = 3; }
   }
 
   moveCursor(dRow) {
@@ -684,12 +740,19 @@ class PatternPane {
       // the plain value; neither ever steps into the no-op sentinel.
       case SUB_VOL: fields = volPanStep(false, cell, dir, this.wide()); break;
       case SUB_PAN:
-        fields = this.wide() && c.nib >= 1 && c.nib <= 2
+        // In a wide cell the panning column's first two digits are the
+        // elevation, which steps on its own signed axis. The nibble comes off
+        // the HIT, like the sub does — this pane has no cursor variable in
+        // scope, and reading one that wasn't there threw on every wheel tick
+        // over a v3 panning column.
+        fields = this.wide() && hit.nib >= 1 && hit.nib <= 2
           ? elevationStep(cell, dir)
           : volPanStep(true, cell, dir, this.wide());
         break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
+      case SUB_FX2_OP: fields = { effect2: clampInt(cell.effect2 + dir, 0, 35) }; break;
+      case SUB_FX2_ARG: fields = { effectArg2: clampInt(cell.effectArg2 + dir, 0, 0xffff) }; break;
     }
     if (fields === null) return false;
     this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, this.cursor.row, fields,
@@ -761,6 +824,7 @@ class PatternPane {
 
     const vis = Math.floor(H / ROW_H) + 1;
     const x0 = GUTTER_W + 4;
+    const fx2 = this.fx2(); // is this column showing its second effect (§5.5)?
     // Pattern-ditto (effect 7) ghosts: the would-be-repeated values, painted
     // grey in whatever sub-columns the repeated rows leave blank. The Patterns
     // view has no cue context, so the full 64 rows are assumed.
@@ -785,11 +849,11 @@ class PatternPane {
       }
       if (sb && row >= sb.r0 && row <= sb.r1) {
         ctx.fillStyle = C.sel;
-        if (sb.colLo === 0 && sb.colHi === 4) {
+        if (sb.colLo === 0 && sb.colHi >= this.lastCol()) {
           ctx.fillRect(GUTTER_W, y, this.cellChars() * CHAR_W + 8, ROW_H);
         } else {
-          const ccr = colCharRange(this.wide());
-          const cs = ccr[sb.colLo][0], ce = ccr[sb.colHi][1];
+          const ccr = colCharRange(this.wide(), fx2);
+          const cs = ccr[sb.colLo][0], ce = ccr[Math.min(sb.colHi, this.lastCol())][1];
           ctx.fillRect(x0 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
         }
       }
@@ -836,6 +900,13 @@ class PatternPane {
       const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
       paintFxCell(ctx, fx[0], fx[1], x0 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
         ghost?.fx ? dittoPal : fxPal);
+      // …and the second effect in the same inks (§5.5). Ditto never reaches it:
+      // effect 7 repeats the SOURCE row's first effect, so the ghost map has no
+      // second slot to fill.
+      if (fx2) {
+        paintFxCell(ctx, cell.effect2, cell.effectArg2,
+          x0 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal);
+      }
     }
 
     ctx.strokeStyle = C.border;
@@ -877,6 +948,15 @@ export class PatternView {
       this.invalidate();
     });
     store.on("edit", () => this.invalidate());
+    // Exposing a second effect widens the cell, so the column COUNT has to be
+    // recomputed — that is what stops a v3 pattern from being clipped by a pane
+    // sized for a narrower one.
+    store.on("fx2", () => {
+      for (const p of this.panes) p.clampCursorSub();
+      if (this.visible) this.layout();
+      this.refreshAllHeaders();
+      this.invalidate();
+    });
 
     this._ro = new ResizeObserver(() => { if (this.visible) this.layout(); });
     this._ro.observe(this.root);
@@ -1005,10 +1085,25 @@ export class PatternView {
     this.store.emit("cursor"); // palette/status follow the active pane
   }
 
+  /**
+   * Px a column needs before the view will add another one.
+   *
+   * Derived from what a cell actually MEASURES rather than a fixed number: a
+   * v3 cell is three characters wider than a v2 one and six wider again with
+   * its second effect showing, and a budget that ignored that produced columns
+   * the grid was clipped by. Whether ANY pane is showing the second effect
+   * decides it for all of them — the panes are equal-width flex children, so
+   * the widest requirement is the one that has to fit.
+   */
+  paneBudget() {
+    const chars = cellChars(this.store.doc?.wideCells === true, this.store.fx2Any());
+    return Math.max(MIN_PANE_W, Math.ceil(chars * CHAR_W) + GUTTER_W + PANE_PAD);
+  }
+
   /** Column count follows the viewport width (spec: minimum 2). */
   layout() {
     const width = this.panesEl.clientWidth || this.root.clientWidth || 0;
-    let want = Math.max(MIN_PANES, Math.floor(width / MIN_PANE_W));
+    let want = Math.max(MIN_PANES, Math.floor(width / this.paneBudget()));
     want = Math.min(want, MAX_PANES);
     while (this.panes.length < want) this.addPane();
     while (this.panes.length > want) this.removePane();

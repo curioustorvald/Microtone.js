@@ -210,6 +210,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
   store.audio?.stop(0);
   store.doc = new Document(parsed);
   store.clearMutes(); // per-song UI state (taut finishLoadCommon)
+  store.clearFx2();   // …and the second effect goes back to hidden
   store.fileName = name;
   store.songIndex = 0;
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
@@ -491,6 +492,7 @@ function selectSong(index) {
   store.songIndex = Math.min(Math.max(index, 0), store.doc.songs.length - 1);
   $("songSel").value = store.songIndex;
   store.clearMutes(); // per-song state (taut finishLoadCommon)
+  store.clearFx2();
   store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
   store.pitchPreset = presetForNotation(store.doc.meta.songMeta[store.songIndex]?.notation ?? 120, store.doc);
   if (store.audio) {
@@ -609,6 +611,10 @@ function refreshToolbox() {
   $("tbBinaural").hidden = !surround;
   $("tbBinaural").textContent = t(store.binaural ? "toolbox.binauralOn" : "toolbox.binauralOff");
   $("tbBinaural").classList.toggle("active", store.binaural);
+  // Second effect column (§5.5): only a format-v3 project HAS one, and the
+  // button is the all-channels switch — the per-channel one is on the channel
+  // header's right-click menu (Timeline) and each column's E2 button (Patterns).
+  refreshFx2Btn();
   // Master strip (item 98) — a Timeline fixture, so the button only means
   // anything there.
   $("tbMaster").hidden = store.view !== "timeline";
@@ -731,6 +737,7 @@ $("langBtn").addEventListener("click", async () => {
 onLangChange(() => {
   $("langBtn").textContent = currentLang().toUpperCase();
   $("tbRaw").textContent = t(store.rawNoteView ? "toolbox.rawOn" : "toolbox.rawOff");
+  refreshToolbox(); // the other imperatively-labelled toolbox buttons
   patternView.buildBar();
   palette.refresh();
   instLookup.render();
@@ -775,6 +782,20 @@ $("tbRaw").addEventListener("click", () => {
   timeline.invalidate();
   patternView.invalidate();
 });
+// Second effect column (§5.5) — hidden by default, because most songs never
+// write one and it costs six characters of the widest column on screen. This
+// button is the ALL-channels switch: on when anything is showing it, and one
+// click puts every channel and every pattern column back the other way.
+function refreshFx2Btn() {
+  const btn = $("tbFx2");
+  const wide = store.doc?.wideCells === true;
+  btn.hidden = !wide;
+  const on = wide && store.fx2Any();
+  btn.textContent = t(on ? "toolbox.fx2On" : "toolbox.fx2Off");
+  btn.classList.toggle("active", on);
+}
+$("tbFx2").addEventListener("click", () => store.setAllFx2(!store.fx2Any()));
+store.on("fx2", () => refreshFx2Btn());
 // Surround radar (#998.6): expands every Timeline channel header into a
 // top-down dial. Collapsed, the pan strip already shows that dial's horizontal
 // shadow, so the toggle is "show me the other axis", not a different reading.

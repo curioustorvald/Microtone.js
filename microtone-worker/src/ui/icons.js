@@ -24,6 +24,18 @@ const slot = (x) => `<rect x="${x}" y="4" width="4" height="16" rx="1" ` +
                     `stroke-dasharray="3 2.4"/>`;
 // A speaker cone, for the mute pair. Left-facing wave/cross drawn separately.
 const speaker = '<path d="M2.5 9.5H6l5-4v13l-5-4H2.5z"/>';
+// The effect-column pair: a narrow filled group (a column the strip shows) and
+// a dashed one the same size (the second effect being revealed or put away).
+const fxCol = (x) => `<rect x="${x}" y="6" width="7.5" height="12" rx="1.2" ` +
+                     `fill="currentColor" stroke="none"/>`;
+const fxGhostCol = (x) => `<rect x="${x}" y="6" width="7.5" height="12" rx="1.2" ` +
+                          `stroke-dasharray="2.6 2.2"/>`;
+// …and the same idea laid out as one channel's row, stacked three deep for the
+// all-channels form.
+const fxRow = (y) => `<rect x="2" y="${y}" width="11" height="3.5" rx="1" ` +
+                     `fill="currentColor" stroke="none"/>` +
+                     `<rect x="15" y="${y}" width="7" height="3.5" rx="1" ` +
+                     `stroke-dasharray="2.4 2"/>`;
 
 export const ICON = {
   /** Insert a channel to the LEFT of this one. */
@@ -60,6 +72,21 @@ export const ICON = {
     '<path d="M14.5 9.4a4.2 4.2 0 0 1 0 5.2M17.6 7a8 8 0 0 1 0 10"/>'),
   /** Unmute everything: every channel standing again. */
   unmuteAll: SVG(bar(2) + bar(10) + bar(18)),
+
+  // ── the second effect column (§5.5) ──
+  // A cell drawn as its column groups: the solid ones are what the strip shows,
+  // the dashed one the effect slot being revealed or put away. The "all" pair
+  // stacks three such strips, matching the unmuteAll idiom of "…and every other
+  // channel too".
+  /** Reveal this channel's second effect column. */
+  fx2Show: SVG(fxCol(1.5) + fxCol(8) + fxGhostCol(14.5)),
+  /** Put it away again. */
+  fx2Hide: SVG(fxCol(1.5) + fxCol(8) + fxGhostCol(14.5) +
+    '<path d="M14 18.5 22.5 10"/>'),
+  /** …on every channel at once. */
+  fx2ShowAll: SVG(fxRow(3.5) + fxRow(10.5) + fxRow(17.5)),
+  fx2HideAll: SVG(fxRow(3.5) + fxRow(10.5) + fxRow(17.5) +
+    '<path d="M3 20.5 21 3.5"/>'),
 
   /** Copy the block selection: the usual two stacked sheets. */
   copy: SVG(

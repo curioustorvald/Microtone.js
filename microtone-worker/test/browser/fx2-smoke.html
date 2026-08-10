@@ -1,0 +1,188 @@
+<!doctype html><meta charset="utf-8"><title>the second effect column (format v3, §5.5)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html" style="width:1400px;height:800px"></iframe>
+<script type="module">
+// Drives the REAL app: a version-3 project's SECOND effect column is hidden by
+// default, can be exposed per channel (Timeline) and per column (Patterns) or
+// everywhere at once, is editable once exposed, and — crucially — is left alone
+// by the block operations while it is hidden.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  const doc = win.document;
+  const { store, timeline, patternView } = M;
+  const E = await import("../../src/ui/edit.js");
+
+  // ── a spatial project, which is what format 3 exists for ────────────────
+  doc.getElementById("newBtn").click();
+  let np = null;
+  for (let i = 0; i < 100 && !np; i++) { np = doc.querySelector("dialog.np-modal"); await sleep(30); }
+  np.querySelectorAll("[data-pan]")[2].click(); // Spatial
+  await sleep(30);
+  np.querySelector(".np-ok").click();
+  for (let i = 0; i < 100 && !store.doc?.wideCells; i++) await sleep(30);
+  check(store.doc.wideCells === true, "a version-3 project is loaded");
+
+  doc.querySelector('[data-view="timeline"]').click();
+  await sleep(200);
+
+  // ── 1. hidden by default, and the toolbox says so ───────────────────────
+  const fx2Btn = doc.getElementById("tbFx2");
+  check(fx2Btn.hidden === false, "the 2nd FX button appears on a v3 project");
+  check(/off/i.test(fx2Btn.textContent), "…reading off", fx2Btn.textContent);
+  check(store.fx2Chan(0) === false, "…and no channel is showing the column");
+  check(timeline.subPosFor(0).length === 17, "…so a strip still has 17 cursor stops",
+    String(timeline.subPosFor(0).length));
+  const narrowW = timeline.colWFor(0);
+
+  // ── 2. per channel, from the channel header's menu ───────────────────────
+  const { fx2Items, runFx2Item } = await import("../../src/ui/gridmenu.js");
+  const items = fx2Items(store, 2);
+  check(items.length === 2, "the header menu offers this-channel + all-channels",
+    items.map((i) => i.id).join(","));
+  check(items[0].id === "fx2Show", "…showing it while it is hidden", items[0].id);
+  runFx2Item(store, "fx2Show", 2);
+  await sleep(60);
+  check(store.fx2Chan(2) === true, "channel 3 now shows its second effect");
+  check(store.fx2Chan(1) === false, "…and its neighbour does not");
+  check(timeline.subPosFor(2).length === 22, "…so THAT strip has 22 cursor stops",
+    String(timeline.subPosFor(2).length));
+  check(timeline.colWFor(2) > narrowW, "…and is wider than its neighbours",
+    `${timeline.colWFor(2)} > ${narrowW}`);
+  check(/on/i.test(fx2Btn.textContent), "the toolbox button followed", fx2Btn.textContent);
+
+  // Strips are laid out by running sum, so the wide one pushes the rest along.
+  const strips = timeline.chanLayout();
+  const byCh = Object.fromEntries(strips.map((s) => [s.ch, s]));
+  check(byCh[3].x === byCh[2].x + timeline.colWFor(2),
+    "the strips after it shift right by exactly its extra width",
+    `${byCh[3].x} vs ${byCh[2].x + timeline.colWFor(2)}`);
+  // …and hit-testing follows the same sum, or clicks would land a column out.
+  const hit = timeline.hitTest(byCh[3].x + 4, timeline.headerH() + 4);
+  check(hit?.ch === 3, "a click inside the shifted strip hits its own channel",
+    String(hit?.ch));
+  const fxHit = timeline.hitTest(byCh[2].x + 2 + 25.5 * 7.9, timeline.headerH() + 4);
+  check(fxHit?.sub === E.SUB_FX2_OP, "…and one on the new group hits the 2nd opcode",
+    String(fxHit?.sub));
+
+  // ── 3. it is really editable ─────────────────────────────────────────────
+  store.record = true;
+  store.cursor = { row: 0, ch: 2, sub: E.SUB_FX2_OP, nib: 0 };
+  const cellAt = () => timeline.cursorCell()?.cell;
+  const edited = cellAt();
+  const press = (k, code) => win.dispatchEvent(new win.KeyboardEvent("keydown",
+    { key: k, code: code ?? ("Key" + k.toUpperCase()), bubbles: true }));
+  press("m");                                        // opcode M (channel volume)
+  await sleep(40);
+  check(edited?.effect2 === 0x16, "typing an opcode writes effect2",
+    String(edited?.effect2));
+  store.cursor = { row: 0, ch: 2, sub: E.SUB_FX2_ARG, nib: 0 };
+  press("8", "Digit8"); press("0", "Digit0"); press("0", "Digit0"); press("0", "Digit0");
+  await sleep(40);
+  check(edited?.effectArg2 === 0x8000, "…and the argument is 16 bits",
+    "$" + edited?.effectArg2?.toString(16));
+  check(edited?.effect === 0 && edited?.effectArg === 0,
+    "…while the FIRST effect slot stayed empty",
+    `${edited?.effect}/${edited?.effectArg}`);
+
+  // ── 4. hiding it puts the cursor back on a column that exists ───────────
+  runFx2Item(store, "fx2Hide", 2);
+  await sleep(60);
+  check(store.cursor.sub === E.SUB_FX_ARG,
+    "hiding the column moves the cursor off it", String(store.cursor.sub));
+  check(edited?.effect2 === 0x16, "…and what it holds is still in the document");
+  // The channel header marks the hidden data, which is how it stays findable.
+  check(timeline.patternHasFx2(timeline.currentPatternFor(2)) === true,
+    "…with the header's E2 hint reporting it");
+
+  // ── 5. a hidden second effect survives the block operations ─────────────
+  // Select the whole cell and delete it: with the column hidden the selection
+  // reaches only as far as the first effect, so the second one is not cleared.
+  timeline.sel = { aRow: 0, aCh: 2, aSub: 0, row: 0, ch: 2, sub: E.lastSub(false) };
+  timeline.deleteSelection();
+  await sleep(40);
+  const after = timeline.cellAt(0, 2)?.cell;
+  check(after?.effect2 === 0x16 && after?.effectArg2 === 0x8000,
+    "clearing a whole VISIBLE cell leaves the hidden second effect alone",
+    `${after?.effect2}/$${after?.effectArg2?.toString(16)}`);
+  // Exposed, the same selection reaches it.
+  runFx2Item(store, "fx2Show", 2);
+  await sleep(40);
+  timeline.sel = { aRow: 0, aCh: 2, aSub: 0, row: 0, ch: 2, sub: E.lastSub(true) };
+  timeline.deleteSelection();
+  await sleep(40);
+  const cleared = timeline.cellAt(0, 2)?.cell;
+  check(cleared?.effect2 === 0 && cleared?.effectArg2 === 0,
+    "…and clearing it with the column SHOWING does clear it",
+    `${cleared?.effect2}/${cleared?.effectArg2}`);
+  store.record = false;
+
+  // ── 6. the Patterns view: per column, and the panes get wider ───────────
+  store.setAllFx2(false);
+  await sleep(40);
+  doc.querySelector('[data-view="pattern"]').click();
+  await sleep(250);
+  const pane = patternView.panes[0];
+  check(pane.cellChars() === 24, "a pattern column starts at the wide-cell layout",
+    String(pane.cellChars()));
+  const budgetNarrow = patternView.paneBudget();
+  const panesNarrow = patternView.panes.length;
+  const fx2PaneBtn = pane.el.querySelector(".pane-fx2");
+  check(!!fx2PaneBtn && !fx2PaneBtn.hidden, "…and carries an E2 button");
+  fx2PaneBtn.click();
+  await sleep(150);
+  check(store.fx2Pane(0) === true, "clicking it exposes that column's second effect");
+  check(patternView.panes[0].cellChars() === 30, "…widening the cell to 30 characters",
+    String(patternView.panes[0].cellChars()));
+  check(patternView.paneBudget() > budgetNarrow,
+    "…and the per-column width budget with it",
+    `${patternView.paneBudget()} > ${budgetNarrow}`);
+  check(patternView.panes.length <= panesNarrow,
+    "…so the view shows no MORE columns than before (they got wider, not thinner)",
+    `${patternView.panes.length} <= ${panesNarrow}`);
+  // The point of the budget: a column is wide enough to draw the whole cell.
+  const paneW = patternView.panes[0].canvas.clientWidth;
+  const needed = 34 + 4 + 30 * 8.5; // GUTTER_W + pad + cellChars × CHAR_W
+  check(paneW >= needed, "the pane is wide enough for the whole cell, uncropped",
+    `${paneW} >= ${Math.ceil(needed)}`);
+
+  // ── 7. the all-channels switch ──────────────────────────────────────────
+  store.setAllFx2(true);
+  await sleep(150);
+  check(store.fx2Chan(0) && store.fx2Chan(31) && store.fx2Pane(1),
+    "one switch exposes every channel and every column");
+  store.setAllFx2(false);
+  await sleep(150);
+  check(!store.fx2Any(), "…and one puts them all back");
+  check(patternView.panes[0].cellChars() === 24, "…restoring the narrower layout",
+    String(patternView.panes[0].cellChars()));
+
+  // ── 8. a version-2 project has no second effect to show ────────────────
+  store.doc.dirty = false;
+  doc.getElementById("newBtn").click();
+  let np2 = null;
+  for (let i = 0; i < 100 && !np2; i++) { np2 = doc.querySelector("dialog.np-modal"); await sleep(30); }
+  np2.querySelectorAll("[data-pan]")[0].click(); // Stereo
+  await sleep(30);
+  np2.querySelector(".np-ok").click();
+  for (let i = 0; i < 100 && store.doc?.wideCells !== false; i++) await sleep(30);
+  await sleep(150);
+  check(store.doc.wideCells === false, "a stereo project is version 2");
+  check(doc.getElementById("tbFx2").hidden === true, "…and the 2nd FX button is gone");
+  check(fx2Items(store, 0).length === 0, "…as is the header menu's row");
+  check(store.fx2Chan(0) === false, "…and no channel can claim to show one");
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+})();
+</script>

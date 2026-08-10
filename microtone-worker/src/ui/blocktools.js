@@ -17,12 +17,12 @@
 import { ICON, fxGlyph } from "./icons.js";
 import { t } from "./i18n.js";
 import { showModal } from "./widgets/modal.js";
-import { COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, SUB_PAN } from "./edit.js";
+import { COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, COL_FX2, SUB_PAN } from "./edit.js";
 import { scaleVolumeAt, transformPanAt, changeInstrumentAt } from "../doc/patterntools.js";
 import { setCellsBytesOp, setCellsFieldsOp, bulkNotesOp } from "../doc/ops.js";
 import { cellToBytes } from "../doc/clipboard.js";
 import { transposePatternNotes, transposeUnitKeys } from "./pitchtables.js";
-import { FX_INFO } from "./palette.js";
+import { FX_INFO, fxName, fxArg } from "./palette.js";
 
 /**
  * The quick effect palette (item 100.5).
@@ -71,11 +71,16 @@ const TOOL_ITEM = {
  * no circle to place anything on.
  */
 export function blockToolItems(cols, { surround = false } = {}) {
-  if (cols.length === 1 && cols[0] === COL_FX) {
+  // Either effect column alone gets the quick palette, writing to that column's
+  // own slot — `fx:` is effect 1, `fx2:` the second effect (§5.5).
+  if (cols.length === 1 && (cols[0] === COL_FX || cols[0] === COL_FX2)) {
+    const prefix = cols[0] === COL_FX2 ? "fx2" : "fx";
+    // The name and the argument format are i18n lookups, not fields on FX_INFO
+    // — reading them off the record gave every cell an `undefined` label.
     return QUICK_FX.map((op) => {
       const info = FX_INFO[op];
-      return { id: `fx:${op}`, label: info.n, icon: fxGlyph(info.l),
-        title: `${info.l} ${info.n} — ${info.a}` };
+      return { id: `${prefix}:${op}`, label: fxName(info), icon: fxGlyph(info.l),
+        title: `${info.l} ${fxName(info)} — ${fxArg(info)}` };
     });
   }
   const items = [];
@@ -90,7 +95,7 @@ export function blockToolItems(cols, { surround = false } = {}) {
 /** True when `id` is one of the second row's actions. */
 export function isBlockTool(id) {
   return typeof id === "string" &&
-    (id.startsWith("fx:") || id in TOOL_ITEM);
+    (id.startsWith("fx:") || id.startsWith("fx2:") || id in TOOL_ITEM);
 }
 
 /** Percussion slots skip a transpose — a kit piece's pitch selects the drum,
@@ -130,7 +135,8 @@ function applyCellBytes(ctx, fn) {
  * Resolves true when the document changed.
  */
 export async function runBlockTool(id, ctx) {
-  if (id.startsWith("fx:")) return applyQuickFx(ctx, parseInt(id.slice(3), 10));
+  if (id.startsWith("fx2:")) return applyQuickFx(ctx, parseInt(id.slice(4), 10), true);
+  if (id.startsWith("fx:")) return applyQuickFx(ctx, parseInt(id.slice(3), 10), false);
   switch (id) {
     case "transpose": return transposeTool(ctx);
     case "instrument": return instrumentTool(ctx);
@@ -170,12 +176,15 @@ async function pannerTool(ctx) {
 
 /** Write an effect opcode across the cells, keeping each one's argument — the
  *  same thing the command palette's opcode chooser does, generalised to a
- *  block. */
-function applyQuickFx(ctx, op) {
+ *  block. `second` aims it at the wide cell's effect 2 (byte 10, §5.5), which
+ *  only exists there. */
+function applyQuickFx(ctx, op, second = false) {
   const wide = ctx.store.doc.wideCells === true;
+  if (second && !wide) return false;
+  const slot = second ? 10 : 5;
   return applyCellBytes(ctx, (bytes) => {
-    if (bytes[5] === op) return false;
-    bytes[5] = op;
+    if (bytes[slot] === op) return false;
+    bytes[slot] = op;
     return true;
   });
 }

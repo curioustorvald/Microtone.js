@@ -909,7 +909,19 @@ What the extra room buys you:
 
 - **An 8-bit volume column.** Volumes run 00–FF instead of 00–3F, so the column has four times the resolution — and its own slides can move by a single unit per tick. Effect-column volume slides (`D`, `K`, `L`, `N`) keep their old arguments and their old speed.
 - **A panning column that holds a position.** Instead of one front-arc value, it carries the **height** (two digits, signed: `00` ear level, `40` = +45°, `C0` = −45°) followed by the **angle** (three digits: `000` left, `080` front, `100` right, `180` behind). The height is drawn in its own colour so the two numbers never read as one, and in a **spatial** song a placed source states its height even when it is `00` — on the sphere, ear level is a position you chose, not an absent value (a planar song has no height to state, and a slide leaves the field unused, so both show dots there). A `Z` slide on the same row turns the column into that slide's *target*, so the source travels there instead of jumping.
-- A second effect slot per cell, which converters can use so that two simultaneous commands from a source file no longer have to fight over one column. The editor does not show it.
+- **A second effect column.** Every cell carries two effect slots instead of one, and the second runs straight after the first on every row and every tick — so two commands that used to fight over one column can both be written. Converters use it so nothing from a source file has to be discarded; you can write it yourself the same way you write the first one.
+
+#### Showing the second effect
+
+The second effect column is **hidden by default**: most songs never write one, and it is six more characters in the widest column on the screen. Three ways to bring it out, all of them in version-3 projects only:
+
+- **2nd FX** in the toolbar shows or hides it on *every* channel and every pattern column at once.
+- **Right-click a channel header** in the Timeline for that one channel — the menu's second row carries **2nd effect** beside the mute controls.
+- **The E2 button** at the top of a Patterns column, for that column alone.
+
+A channel that is *hiding* second effects it actually contains says so: an amber **E2** appears beside the channel number in the Timeline header, and the Patterns column's E2 button is outlined in the same colour. Hiding the column never changes what plays, and never changes what is in the file — a hidden second effect survives copy, paste and delete untouched, because a selection only ever reaches the columns you can see.
+
+Once it is showing, it edits exactly like the first effect: the same opcode letters, the same four argument digits, the same command palette at the foot of the screen, and the same right-click quick-effect cells.
 
 The **Panner…** dialog gains a **Column** button in such a project: it writes the
 position into the panning column and leaves the effect slot free.

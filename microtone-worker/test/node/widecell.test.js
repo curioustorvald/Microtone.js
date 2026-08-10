@@ -637,3 +637,123 @@ test("a spatial song states ear level instead of hiding it", async () => {
   assert.equal(elevationCellText(-64, "set", true), "C0");
   assert.equal(elevationCellText(-1, "up", false), "FF");
 });
+
+// ── the second effect column (§5.5, exposed 2026-08-10) ──────────────────
+
+test("exposing the second effect appends a sixth column group", async () => {
+  const E = await import("../../src/ui/edit.js");
+  // Hidden, the wide cell is what it always was — this is the guarantee that
+  // turning the column off leaves every other geometry read untouched.
+  assert.deepEqual(E.subNibbles(true, false), [1, 2, 3, 6, 1, 4]);
+  assert.equal(E.cellChars(true, false), 24);
+  assert.equal(E.subPositions(true, false).length, 17);
+  // …and shown, one opcode + a 4-nibble argument more.
+  assert.deepEqual(E.subNibbles(true, true), [1, 2, 3, 6, 1, 4, 1, 4]);
+  assert.equal(E.cellChars(true, true), 30);
+  assert.equal(E.subPositions(true, true).length, 22);
+  // The 8-byte cell has no second effect, so the flag cannot widen it.
+  assert.equal(E.cellChars(false, true), 21, "a v2 cell has no second effect");
+  assert.deepEqual(E.subNibbles(false, true), [1, 2, 3, 3, 1, 4]);
+
+  // Clicking maps to the same places the painter draws: fx1 19…23, then a
+  // separating space, then fx2 25…29.
+  assert.deepEqual(E.subCharPos(E.SUB_FX2_OP, 0, true), [25, 1]);
+  assert.deepEqual(E.subCharPos(E.SUB_FX2_ARG, 3, true), [29, 1]);
+  assert.deepEqual(E.charToSub(25, true, true), [E.SUB_FX2_OP, 0]);
+  assert.deepEqual(E.charToSub(26, true, true), [E.SUB_FX2_ARG, 0]);
+  assert.deepEqual(E.charToSub(29.5, true, true), [E.SUB_FX2_ARG, 3]);
+  assert.deepEqual(E.charToSub(24.5, true, true), [E.SUB_FX_ARG, 3],
+    "the gap between the groups belongs to the first one");
+  // With the column hidden, those characters do not exist: a click that far
+  // right stays on the first effect's last digit rather than falling off.
+  assert.deepEqual(E.charToSub(26, true, false), [E.SUB_FX_ARG, 3]);
+
+  // The selection highlight has a span for it, and a degenerate one when it is
+  // hidden — so `range[colHi][1]` is always readable.
+  assert.deepEqual(E.colCharRange(true, true)[E.COL_FX2], [24, 30]);
+  assert.deepEqual(E.colCharRange(true, false)[E.COL_FX2], [24, 24]);
+  assert.deepEqual(E.colCharRange(false)[E.COL_FX2], [21, 21]);
+
+  assert.equal(E.lastSub(true), E.SUB_FX2_ARG);
+  assert.equal(E.lastSub(false), E.SUB_FX_ARG);
+});
+
+test("typing into the second effect column writes effect2, not effect", async () => {
+  const E = await import("../../src/ui/edit.js");
+  const cell = new TaudPlayData();
+  cell.volumeEff = 3; cell.panEff = 3;
+  cell.effect = 0x1c; cell.effectArg = 0x8100; // an S command already in slot 1
+  const ctx = { octave: 4, currentInst: 1, preset: null, rawHex: false, wideCells: true };
+  const key = (k, sub, nib, c) =>
+    E.interpretEditKey({ code: "Key" + k.toUpperCase(), key: k }, sub, nib, c, ctx);
+
+  // "M" is base-36 0x16 — the channel-volume command.
+  let a = key("m", E.SUB_FX2_OP, 0, cell);
+  assert.deepEqual(a.fields, { effect2: 0x16 });
+  assert.ok(a.advanceNib, "the opcode steps into its argument");
+  Object.assign(cell, a.fields);
+
+  for (const [i, d] of [..."8000"].entries()) {
+    a = key(d, E.SUB_FX2_ARG, i, cell);
+    Object.assign(cell, a.fields);
+  }
+  assert.equal(cell.effectArg2, 0x8000);
+  assert.ok(a.advanceRow, "the last argument digit steps to the next row");
+  // Slot 1 never moved.
+  assert.equal(cell.effect, 0x1c);
+  assert.equal(cell.effectArg, 0x8100);
+
+  // Clearing the second opcode clears only the second pair.
+  const clear = E.interpretEditKey({ code: "Delete", key: "Delete" }, E.SUB_FX2_OP, 0, cell, ctx);
+  assert.deepEqual(clear.fields, { effect2: 0, effectArg2: 0 });
+  const clearArg = E.interpretEditKey({ code: "Delete", key: "Delete" }, E.SUB_FX2_ARG, 2, cell, ctx);
+  assert.deepEqual(clearArg.fields, { effectArg2: 0 }, "the opcode survives an argument clear");
+
+  // An empty second effect is "nothing to step" for the wheel, exactly as an
+  // empty first one is.
+  const blank = new TaudPlayData();
+  assert.equal(E.subIsEmpty(E.SUB_FX2_OP, blank), true);
+  blank.effect2 = 0x16;
+  assert.equal(E.subIsEmpty(E.SUB_FX2_OP, blank), false);
+  assert.equal(E.subIsEmpty(E.SUB_FX2_ARG, blank), false);
+});
+
+test("the two effect columns copy and paste independently", async () => {
+  const C = await import("../../src/doc/clipboard.js");
+  const E = await import("../../src/ui/edit.js");
+  const src = new TaudPlayData();
+  src.volumeEff = 3; src.panEff = 3;
+  src.effect = 0x0d; src.effectArg = 0x0102;   // D
+  src.effect2 = 0x16; src.effectArg2 = 0x8000; // M
+  const dst = new TaudPlayData();
+  dst.volumeEff = 3; dst.panEff = 3;
+  dst.effect = 0x10; dst.effectArg = 0x0300;   // G
+  dst.effect2 = 0x21; dst.effectArg2 = 0x00c0; // X
+
+  const sb = C.cellToBytes(src, true);
+  // Copying the FIRST effect column alone leaves the destination's second one
+  // exactly where it was — before the column was exposed, COL_FX dragged the
+  // hidden effect 2 along with it.
+  const a = new TaudPlayData();
+  const ab = C.overlayCols(C.cellToBytes(dst, true), sb, [E.COL_FX], true);
+  for (let i = 0; i < 16; i++) a.setByteWide(i, ab[i]);
+  assert.equal(a.effect, 0x0d);
+  assert.equal(a.effectArg, 0x0102);
+  assert.equal(a.effect2, 0x21, "the destination's second effect is untouched");
+  assert.equal(a.effectArg2, 0x00c0);
+
+  // …and the second column alone moves only the second pair.
+  const b = new TaudPlayData();
+  const bb = C.overlayCols(C.cellToBytes(dst, true), sb, [E.COL_FX2], true);
+  for (let i = 0; i < 16; i++) b.setByteWide(i, bb[i]);
+  assert.equal(b.effect, 0x10, "the destination's first effect is untouched");
+  assert.equal(b.effectArg, 0x0300);
+  assert.equal(b.effect2, 0x16);
+  assert.equal(b.effectArg2, 0x8000);
+
+  // A whole-cell copy still carries both, and naming COL_FX2 on an 8-byte cell
+  // is a no-op rather than an out-of-range write.
+  const narrow = Uint8Array.from([0x00, 0x50, 0x05, 0x20, 0x30, 0x0a, 0x00, 0x0f]);
+  const kept = C.overlayCols(Uint8Array.from(narrow), new Uint8Array(8), [E.COL_FX2]);
+  assert.deepEqual([...kept], [...narrow], "a v2 cell has no second effect to overwrite");
+});

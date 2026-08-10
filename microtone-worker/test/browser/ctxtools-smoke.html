@@ -43,7 +43,7 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
 
   const CHAR_W = 7.9, GUTTER = 76, ROW_H = 16;
-  const colW = timeline.colW();
+  const colW = timeline.colWFor(0);
   const charX = (ch, c) => GUTTER + (ch - timeline.scrollCh) * colW + 2 + c * CHAR_W + 1;
   const rowY = (r) => timeline.headerH() + (r - Math.floor(timeline.scrollRow)) * ROW_H + 8;
   // Character offsets into a narrow cell: note 0-4, inst 5-7, vol 8-11,

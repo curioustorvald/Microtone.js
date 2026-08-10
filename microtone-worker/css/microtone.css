@@ -1359,6 +1359,18 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   font-size: 0.8rem;
 }
 .pattern-pane-hd button { padding: 0.05rem 0.4rem; font-size: 0.85rem; }
+/* Second-effect toggle (§5.5): lit while the column is showing, and outlined in
+ * the effect-column's own ink when the pattern USES second effects that the
+ * column is currently hiding — otherwise there is nothing on screen to say the
+ * data is there. */
+.pattern-pane-hd .pane-fx2 {
+  flex: 0 0 auto;
+  font-family: "Roboto Mono", monospace;
+  font-size: 0.75rem;
+  padding: 0.05rem 0.3rem;
+}
+.pattern-pane-hd .pane-fx2.active { color: var(--accent); border-color: var(--accent); }
+.pattern-pane-hd .pane-fx2.has { color: var(--cv-fx-op); border-color: var(--cv-fx-op); }
 .pattern-pane-hd .pane-info {
   flex: 1 1 3rem;
   min-width: 0;

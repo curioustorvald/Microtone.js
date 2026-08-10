@@ -11,8 +11,8 @@ import {
   emptyCellBytes, cellToBytes, makeBlock, blockCell, overlayCols,
 } from "../../src/doc/clipboard.js";
 import {
-  COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, ALL_COLS, subToCol, colsForSubs,
-  SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, COL_FX2, ALL_COLS, subToCol, colsForSubs,
+  SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG, SUB_FX2_OP, SUB_FX2_ARG,
 } from "../../src/ui/edit.js";
 import { setCellsBytesOp } from "../../src/doc/ops.js";
 import { TaudPlayData } from "../../src/engine/state.js";
@@ -92,10 +92,17 @@ test("subToCol / colsForSubs: sub-cursor → logical columns (fx op+arg = one)",
   assert.equal(subToCol(SUB_PAN), COL_PAN);
   assert.equal(subToCol(SUB_FX_OP), COL_FX);
   assert.equal(subToCol(SUB_FX_ARG), COL_FX);
+  assert.equal(subToCol(SUB_FX2_OP), COL_FX2);
+  assert.equal(subToCol(SUB_FX2_ARG), COL_FX2);
   assert.deepEqual(colsForSubs(SUB_INST, SUB_VOL), [COL_INST, COL_VOL]);
   assert.deepEqual(colsForSubs(SUB_VOL, SUB_INST), [COL_INST, COL_VOL], "order-independent");
-  assert.deepEqual(colsForSubs(SUB_NOTE, SUB_FX_ARG), ALL_COLS, "full span = all columns");
+  assert.deepEqual(colsForSubs(SUB_NOTE, SUB_FX2_ARG), ALL_COLS, "full span = all columns");
   assert.deepEqual(colsForSubs(SUB_FX_OP, SUB_FX_ARG), [COL_FX], "op+arg collapse to fx");
+  assert.deepEqual(colsForSubs(SUB_FX2_OP, SUB_FX2_ARG), [COL_FX2], "…and so do the second's");
+  // A cell whose second effect is HIDDEN spans only as far as the first one, so
+  // the block operations leave the second effect alone (edit.js lastSub).
+  assert.deepEqual(colsForSubs(SUB_NOTE, SUB_FX_ARG),
+    [COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX], "hidden fx2 is outside the span");
 });
 
 test("overlayCols: only the named columns overwrite; others keep dest bytes", () => {

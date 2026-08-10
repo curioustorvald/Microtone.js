@@ -70,26 +70,30 @@ export function mergeCueWord(destWord, srcWord) {
 }
 
 // Byte offsets per logical column, as [offset, mask] pairs (duplicated from
-// edit.js so this pure module stays DOM/UI-free): note / inst / vol / pan / fx.
-// The wide cell needs the masks — its byte 8 carries BOTH column selectors and
-// the azimuth's ninth bit, so a per-column paste works in bits there.
+// edit.js so this pure module stays DOM/UI-free): note / inst / vol / pan / fx /
+// fx2. The wide cell needs the masks — its byte 8 carries BOTH column selectors
+// and the azimuth's ninth bit, so a per-column paste works in bits there.
+// The 8-byte cell has no second effect, so its COL_FX2 entry claims no bytes and
+// naming that column there does nothing at all.
 const COL_BYTE_MASKS = [[[0, 0xff], [1, 0xff]], [[2, 0xff]], [[3, 0xff]], [[4, 0xff]],
-  [[5, 0xff], [6, 0xff], [7, 0xff]]];
+  [[5, 0xff], [6, 0xff], [7, 0xff]], []];
 const COL_BYTE_MASKS_WIDE = [
   [[0, 0xff], [1, 0xff]],
   [[2, 0xff]],
   [[3, 0xff], [8, 0x70]],
   [[4, 0xff], [9, 0xff], [8, 0x8f]],
-  [[5, 0xff], [6, 0xff], [7, 0xff], [10, 0xff], [11, 0xff], [12, 0xff]],
+  [[5, 0xff], [6, 0xff], [7, 0xff]],
+  [[10, 0xff], [11, 0xff], [12, 0xff]],
 ];
 
 /** Overlay only `cols` (logical column ids) of `src` onto `dest` (same format);
  *  returns `dest`. Columns outside the set keep dest's bytes — this is what
- *  makes a partial-column paste leave the other columns unaffected. */
+ *  makes a partial-column paste leave the other columns unaffected, and what
+ *  keeps a HIDDEN second effect intact when a block is pasted over it. */
 export function overlayCols(dest, src, cols, wide = false) {
   const table = wide ? COL_BYTE_MASKS_WIDE : COL_BYTE_MASKS;
   for (const col of cols) {
-    for (const [b, mask] of table[col]) {
+    for (const [b, mask] of table[col] ?? []) {
       dest[b] = (dest[b] & ~mask & 0xff) | (src[b] & mask);
     }
   }

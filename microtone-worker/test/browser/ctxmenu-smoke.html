@@ -57,7 +57,7 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
 
   const GUTTER = 76;
-  const colW = timeline.colW();
+  const colW = timeline.colWFor(0);
   /** Canvas x at the middle of visible channel column `i`. */
   const colX = (i) => GUTTER + i * colW + colW / 2;
   const pat = (cue, ch) => store.song.cues[cue][ch] & 0x7fff;

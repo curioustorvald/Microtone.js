@@ -69,7 +69,7 @@
 
       const canvas = win.document.getElementById("timeline");
       const r = canvas.getBoundingClientRect();
-      const colW = timeline.colW();
+      const colW = timeline.colWFor(0);
       // Character offsets into a narrow cell (edit.js COL_CHAR_RANGE).
       const COL_X = { note: 1, inst: 6, vol: 9, pan: 13, fx: 17 };
       const col = COL_X[params.get("col")];

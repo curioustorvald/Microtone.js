@@ -222,6 +222,47 @@ export function runMuteItem(store, id, ch) {
   return false;
 }
 
+// ── the second effect column (§5.5) ──
+
+/**
+ * Show/hide this channel's SECOND effect, plus the all-channels form of the
+ * same switch. Only a format-v3 document has a second effect at all, so on
+ * anything else this row is empty and the menu simply doesn't mention it.
+ *
+ * It rides on the channel header's row rather than the grid's column tools: the
+ * column is a property of the CHANNEL STRIP — it changes that strip's width —
+ * not of the cells under the pointer.
+ */
+export function fx2Items(store, ch) {
+  if (store.doc?.wideCells !== true) return [];
+  const on = store.fx2Chan(ch);
+  const items = [
+    on
+      ? { id: "fx2Hide", label: t("ctx.fx2Hide"), icon: ICON.fx2Hide,
+          title: t("ctx.fx2HideTitle", { ch: ch + 1 }) }
+      : { id: "fx2Show", label: t("ctx.fx2Show"), icon: ICON.fx2Show,
+          title: t("ctx.fx2ShowTitle", { ch: ch + 1 }) },
+  ];
+  // The all-channels cell always offers the OTHER state, so the pair never
+  // reads as two ways to do the same thing.
+  items.push(store.fx2Any()
+    ? { id: "fx2HideAll", label: t("ctx.fx2HideAll"), icon: ICON.fx2HideAll,
+        title: t("ctx.fx2HideAllTitle") }
+    : { id: "fx2ShowAll", label: t("ctx.fx2ShowAll"), icon: ICON.fx2ShowAll,
+        title: t("ctx.fx2ShowAllTitle") });
+  return items;
+}
+
+/** Run an fx2 cell. View state, so no undo step. True when `id` was one. */
+export function runFx2Item(store, id, ch) {
+  switch (id) {
+    case "fx2Show": case "fx2Hide": store.toggleFx2Chan(ch); return true;
+    case "fx2ShowAll": store.setAllFx2(true); return true;
+    case "fx2HideAll": store.setAllFx2(false); return true;
+  }
+  return false;
+}
+
 /**
  * Insert an empty channel at `at`, shifting that channel and everything right
  * of it one place along — mutes included, which is why the live array goes in.

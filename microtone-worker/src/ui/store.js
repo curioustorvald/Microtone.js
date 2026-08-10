@@ -1,5 +1,9 @@
 // App state + tiny event emitter. Topics: "doc" (loaded/replaced),
-// "edit" (dirty tags), "view", "cursor", "transport".
+// "edit" (dirty tags), "view", "cursor", "transport", "mutes", "fx2".
+
+/** Panes the Patterns view can hold — the fx2 flags are kept per pane INDEX so
+ *  they survive the pane churn a viewport resize causes (pattern.js MAX_PANES). */
+const FX2_PANES = 16;
 
 export class Store {
   constructor() {
@@ -16,7 +20,51 @@ export class Store {
     this.binaural = true;
     this.cursor = { row: 0, ch: 0 }; // absolute song row + channel
     this.voiceMutes = new Array(64).fill(false); // per-channel mute (UI + engine)
+    // Format v3's SECOND effect column (§5.5), exposed per channel (Timeline)
+    // and per pane (Patterns). Hidden by default: most songs never use it, and
+    // it costs six characters of a column that is already the widest thing on
+    // screen. View state, not document state — nothing here is saved.
+    this.fx2Chans = new Array(64).fill(false);
+    this.fx2Panes = new Array(FX2_PANES).fill(false);
     this._subs = new Map();
+  }
+
+  // ── the second effect column ──
+  /** Is the column exposed on channel `ch`? Only a v3 document HAS one. */
+  fx2Chan(ch) { return this.wideCells() && this.fx2Chans[ch] === true; }
+  /** …and the same question for Patterns-view pane `i`. */
+  fx2Pane(i) { return this.wideCells() && this.fx2Panes[i] === true; }
+  wideCells() { return this.doc?.wideCells === true; }
+
+  /** Is it exposed ANYWHERE? Drives the toolbox button's on/off label, and the
+   *  Patterns view's column-width budget. */
+  fx2Any() {
+    if (!this.wideCells()) return false;
+    return this.fx2Chans.some(Boolean) || this.fx2Panes.some(Boolean);
+  }
+
+  toggleFx2Chan(ch) {
+    this.fx2Chans[ch] = !this.fx2Chans[ch];
+    this.emit("fx2");
+  }
+
+  toggleFx2Pane(i) {
+    this.fx2Panes[i] = !this.fx2Panes[i];
+    this.emit("fx2");
+  }
+
+  /** Show/hide the column EVERYWHERE — every channel and every pattern pane. */
+  setAllFx2(on) {
+    this.fx2Chans.fill(on);
+    this.fx2Panes.fill(on);
+    this.emit("fx2");
+  }
+
+  /** Project switch: back to hidden, like the mutes (taut finishLoadCommon). */
+  clearFx2() {
+    this.fx2Chans.fill(false);
+    this.fx2Panes.fill(false);
+    this.emit("fx2");
   }
 
   setVoiceMute(ch, muted) {

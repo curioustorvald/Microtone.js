@@ -5,6 +5,7 @@
 
 import {
   SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
+  SUB_FX2_OP, SUB_FX2_ARG,
   volPanOp, volPanSelect,
 } from "./edit.js";
 import { t } from "./i18n.js";
@@ -49,8 +50,10 @@ export const FX_INFO = {
   0x23: { l: "Z" },
 };
 
-const fxName = (info) => t(`pal.fx.${info.l}.n`);
-const fxArg = (info) => t(`pal.fx.${info.l}.a`);
+/** An effect's display name / argument format. Exported because the right-click
+ *  quick palette (blocktools.js) labels the same opcodes and must not drift. */
+export const fxName = (info) => t(`pal.fx.${info.l}.n`);
+export const fxArg = (info) => t(`pal.fx.${info.l}.a`);
 
 export class CommandPalette {
   /** getContext() → {sub, cell, apply(fields)} | null */
@@ -146,21 +149,31 @@ export class CommandPalette {
         hint(t(wide ? "pal.panHintWide" : "pal.panHint"));
         break;
       }
-      case SUB_FX_OP: {
-        label(t("pal.effect"));
+      // Both effect columns are the same chooser, aimed at a different pair of
+      // fields — the second effect runs after the first on every pass (§5.5),
+      // so it takes the same opcodes and the same arguments.
+      case SUB_FX_OP:
+      case SUB_FX2_OP: {
+        const second = ctx.sub === SUB_FX2_OP;
+        const cur = second ? ctx.cell.effect2 : ctx.cell.effect;
+        const set = (op) => (second ? { effect2: op } : { effect: op });
+        label(t(second ? "pal.effect2" : "pal.effect"));
         for (const [op, info] of Object.entries(FX_INFO)) {
-          btn(info.l, `${fxName(info)} — ${fxArg(info)}`, () => ctx.apply({ effect: parseInt(op, 10) }),
-            ctx.cell.effect === parseInt(op, 10));
+          btn(info.l, `${fxName(info)} — ${fxArg(info)}`, () => ctx.apply(set(parseInt(op, 10))),
+            cur === parseInt(op, 10));
         }
-        btn("×", t("pal.clearFxTitle"), () => ctx.apply({ effect: 0, effectArg: 0 }));
+        btn("×", t("pal.clearFxTitle"), () => ctx.apply(
+          second ? { effect2: 0, effectArg2: 0 } : { effect: 0, effectArg: 0 }));
         break;
       }
-      case SUB_FX_ARG: {
-        const info = FX_INFO[ctx.cell.effect];
+      case SUB_FX_ARG:
+      case SUB_FX2_ARG: {
+        const cur = ctx.sub === SUB_FX2_ARG ? ctx.cell.effect2 : ctx.cell.effect;
+        const info = FX_INFO[cur];
         label(t("pal.argument"));
         hint(info
           ? `${info.l} ${fxName(info)}: ${fxArg(info)}`
-          : ctx.cell.effect === 0 ? t("pal.noEffect") : t("pal.unknownOpcode"));
+          : cur === 0 ? t("pal.noEffect") : t("pal.unknownOpcode"));
         break;
       }
     }

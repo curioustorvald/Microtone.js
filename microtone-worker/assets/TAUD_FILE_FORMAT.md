@@ -304,7 +304,9 @@ One interaction carries over from version 2, and one version-2 rule is gone:
 
 #### Effect 2
 
-A second effect, with the same opcode and 16-bit argument encoding as the first, applied **after** it on every pass — the row pass and each tick pass alike. Where two effects would write the same channel state, the second therefore lands last. The reference editor does not expose it; it exists so that a converter is no longer forced to discard one of two simultaneous source commands.
+A second effect, with the same opcode and 16-bit argument encoding as the first, applied **after** it on every pass — the row pass and each tick pass alike. Where two effects would write the same channel state, the second therefore lands last. It exists so that a converter is no longer forced to discard one of two simultaneous source commands.
+
+An editor **MAY** leave it out of its display — it is the only cell field that carries no meaning unless a song actually writes one, and it costs a sixth column in the widest row on screen. An editor that hides it **MUST** still preserve it through every copy, paste and block operation the hidden column is not part of; silently dropping a command the file declares is **NOT** conforming. Microtone.js hides it by default and exposes it per channel.
 
 #### Upgrading a version-2 song
 

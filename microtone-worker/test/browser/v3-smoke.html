@@ -151,8 +151,10 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   // The cursor walks all seventeen sub-positions of a wide cell.
   const E = await import("../../src/ui/edit.js");
   check(E.subPositions(true).length === 17, "the wide cell has 17 cursor stops");
-  check(M.timeline.colW() > 21 * 8, "…and the channel column grew to fit them",
-    String(M.timeline.colW()));
+  // Strips are sized per CHANNEL now (the second effect column is exposed one
+  // channel at a time), so the width question is asked of a channel.
+  check(M.timeline.colWFor(0) > 21 * 8, "…and the channel column grew to fit them",
+    String(M.timeline.colWFor(0)));
 
   // ── 7b. the Patterns view draws a wide project ──────────────────────────
   // (The pane class does its own drawing and hit-testing, so it needs the

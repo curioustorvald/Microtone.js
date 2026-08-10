@@ -12,7 +12,9 @@ import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import {
   interpretEditKey, interpretBracketKey, rawNoteView, SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
-  subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, lookahead, wheelStep,
+  SUB_FX2_OP, SUB_FX2_ARG, COL_FX, COL_FX2, lastSub,
+  subPositions, subCharPos, charToSub, CELL_CHARS, CELL_CHARS_WIDE, CELL_CHARS_WIDE_FX2,
+  lookahead, wheelStep,
   colsForSubs, subToCol, ALL_COLS, colCharRange, subIsEmpty,
   volPanStep, volPanState, elevationStep,
 } from "../edit.js";
@@ -27,7 +29,7 @@ import { showContextMenu } from "../widgets/contextmenu.js";
 import {
   clipboardItems, channelItems, newPatternItem, insertChannelAt,
   patternSlotItems, isPatternSlotItem, moveSlots, duplicateSlots,
-  muteItems, runMuteItem,
+  muteItems, runMuteItem, fx2Items, runFx2Item,
 } from "../gridmenu.js";
 import { blockToolItems, runBlockTool, isBlockTool } from "../blocktools.js";
 import { t } from "../i18n.js";
@@ -40,8 +42,11 @@ const RADAR_H = 44;    // extra height when the surround radar is expanded (#998
 const GUTTER_W = 76;   // "cue:row | absrow"
 const COL_W = Math.ceil(CELL_CHARS * CHAR_W) + 10;
 // Format v3's wide cell needs three more characters for the panning column's
-// elevation, so the channel column's width follows the document (§5.5).
+// elevation, so the channel column's width follows the document (§5.5) — and
+// six more again on the channels showing their SECOND effect, which is why the
+// strips are no longer all the same width.
 const COL_W_WIDE = Math.ceil(CELL_CHARS_WIDE * CHAR_W) + 10;
+const COL_W_WIDE_FX2 = Math.ceil(CELL_CHARS_WIDE_FX2 * CHAR_W) + 10;
 const CHAN_STEP_PX = 120; // ≈ one mouse-wheel notch; horizontal scroll's "one channel" reference
 
 export class TimelineView {
@@ -58,11 +63,16 @@ export class TimelineView {
     this.lastPlayRow = -1; // remembered so resize() can repaint synchronously
     this.sel = null;       // block selection {aRow, aCh, row, ch} (absolute rows/channels)
     this._drag = null;     // active pointer-drag anchor {aRow, aCh}
+    this._ghosts = new Map(); // per-frame memos, replaced at the top of draw()
+    this._hasFx2 = new Map();
 
     store.on("doc", () => { this.map = null; this.scrollRow = 0; this.scrollCh = 0; this.sel = null; this.invalidate(); });
     store.on("edit", () => { this.map = null; this.invalidate(); });
     store.on("cursor", () => this.invalidate());
     store.on("mutes", () => this.invalidate());
+    // Showing/hiding a second effect changes a strip's WIDTH and its cursor
+    // walk, so the cursor may be standing on a sub-column that just vanished.
+    store.on("fx2", () => { this.clampCursorSub(); this.invalidate(); });
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -134,13 +144,100 @@ export class TimelineView {
   }
   /** The document's cell format — v3's wide cell changes the column layout. */
   wide() { return this.store.doc?.wideCells === true; }
-  colW() { return this.wide() ? COL_W_WIDE : COL_W; }
-  subPos() { return subPositions(this.wide()); }
+  /** Is channel `ch` showing its second effect column (§5.5)? */
+  fx2On(ch) { return this.store.fx2Chan(ch); }
+  /** Width of channel `ch`'s strip — per channel, because the second effect is
+   *  exposed per channel. */
+  colWFor(ch) {
+    if (!this.wide()) return COL_W;
+    return this.fx2On(ch) ? COL_W_WIDE_FX2 : COL_W_WIDE;
+  }
+  /** Cursor walk order within channel `ch` — six sub-columns, or eight. */
+  subPosFor(ch) { return subPositions(this.wide(), this.fx2On(ch)); }
+  /** The last logical column channel `ch` shows (what "the whole cell" means). */
+  lastColFor(ch) { return this.fx2On(ch) ? COL_FX2 : COL_FX; }
 
-  visibleChans() { return Math.floor((this.canvas.width / this.dpr - GUTTER_W) / this.colW()); }
+  /** Canvas width available to the channel strips. */
+  gridW() { return this.canvas.width / this.dpr - GUTTER_W; }
+
+  /**
+   * The visible channel strips, left to right: `[{ch, x, w}]` from `scrollCh`
+   * until the canvas runs out (the last one may be clipped). Strips differ in
+   * width, so every x in this view is a running sum rather than `i * COL_W` —
+   * this is the one place that sum is computed.
+   */
+  chanLayout() {
+    const chans = this.store.doc?.channelCount ?? 0;
+    const W = this.canvas.width / this.dpr;
+    const out = [];
+    let x = GUTTER_W;
+    for (let ch = this.scrollCh; ch < chans && x < W; ch++) {
+      const w = this.colWFor(ch);
+      out.push({ ch, x, w });
+      x += w;
+    }
+    return out;
+  }
+
+  /**
+   * The strip under canvas `x`, or null (in the gutter, or past the last
+   * channel — empty space to the right belongs to no channel).
+   *
+   * `clamp` makes the last strip swallow everything to its right, which is what
+   * a drag wants: pulling the pointer off the end of the grid should keep
+   * extending the block through the last channel rather than stopping dead.
+   * The context menu deliberately does NOT clamp — right-clicking blank space
+   * is not right-clicking channel 32.
+   */
+  stripAt(x, clamp = false) {
+    if (x < GUTTER_W) return null;
+    const chans = this.store.doc?.channelCount ?? 0;
+    let sx = GUTTER_W;
+    let last = null;
+    for (let ch = this.scrollCh; ch < chans; ch++) {
+      const w = this.colWFor(ch);
+      last = { ch, x: sx, w };
+      if (x < sx + w) return last;
+      sx += w;
+    }
+    return clamp ? last : null;
+  }
+
+  /** How many strips fit WHOLE from the current scroll — the count the
+   *  cursor-follow lookahead reasons in. */
+  visibleChans() {
+    const chans = this.store.doc?.channelCount ?? 32;
+    const avail = this.gridW();
+    let acc = 0, n = 0;
+    for (let ch = this.scrollCh; ch < chans; ch++) {
+      const w = this.colWFor(ch);
+      if (acc + w > avail) break;
+      acc += w;
+      n++;
+    }
+    return Math.max(1, n);
+  }
+
+  /** Leftmost channel that still leaves the grid full — walked from the RIGHT,
+   *  since the strips are no longer a fixed width to divide by. */
   maxScrollCh() {
     const chans = this.store.doc?.channelCount ?? 32;
-    return Math.max(0, chans - this.visibleChans());
+    const avail = this.gridW();
+    let acc = 0, first = chans;
+    while (first > 0) {
+      const w = this.colWFor(first - 1);
+      if (acc + w > avail) break;
+      acc += w;
+      first--;
+    }
+    return Math.max(0, Math.min(first, chans - 1));
+  }
+
+  /** Put the cursor back on a sub-column its channel actually shows — called
+   *  when a second effect column is hidden out from under it. */
+  clampCursorSub() {
+    const c = this.store.cursor;
+    if (c.sub > SUB_FX_ARG && !this.fx2On(c.ch)) { c.sub = SUB_FX_ARG; c.nib = 3; }
   }
 
   getMap() {
@@ -171,9 +268,9 @@ export class TimelineView {
    * the dot's own horizontal shadow. A spatial song also gets a height tick on
    * the right edge.
    */
-  paintChannelRadar(ctx, C, x, y, ch, audio, spatialSong) {
+  paintChannelRadar(ctx, C, x, y, ch, colW, audio, spatialSong) {
     const r = (RADAR_H - 10) / 2;
-    const cx = x + (this.colW() - 2) / 2;
+    const cx = x + (colW - 2) / 2;
     const cy = y + RADAR_H / 2 - 3;
     ctx.strokeStyle = C.border;
     ctx.lineWidth = 1;
@@ -219,7 +316,7 @@ export class TimelineView {
 
     if (spatialSong) {
       // Height bar: centre line = ear level, up = above.
-      const bx = x + this.colW() - 10;
+      const bx = x + colW - 10;
       const half = r;
       ctx.strokeStyle = C.border;
       ctx.beginPath();
@@ -260,9 +357,8 @@ export class TimelineView {
     const y = e.clientY - rect.top;
     if (y < this.headerH()) {
       // channel header: click = mute toggle, Ctrl/⌘+click = solo toggle
-      const ch = this.scrollCh + Math.floor((x - GUTTER_W) / this.colW());
-      if (x >= GUTTER_W && ch >= this.scrollCh &&
-          ch < (this.store.doc?.channelCount ?? 0)) {
+      const ch = this.channelAt(x);
+      if (ch >= 0) {
         if (e.ctrlKey || e.metaKey) this.store.toggleSolo(ch);
         else this.store.toggleMute(ch);
       }
@@ -273,8 +369,9 @@ export class TimelineView {
     if (e.shiftKey) {
       // Shift+click extends a FULL-column block from the current cursor.
       const c = this.store.cursor;
-      if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: 0, row: hit.row, ch: hit.ch, sub: SUB_FX_ARG };
-      else { this.sel.row = hit.row; this.sel.ch = hit.ch; this.sel.aSub = 0; this.sel.sub = SUB_FX_ARG; }
+      const end = lastSub(this.fx2On(hit.ch));
+      if (!this.sel) this.sel = { aRow: c.row, aCh: c.ch, aSub: 0, row: hit.row, ch: hit.ch, sub: end };
+      else { this.sel.row = hit.row; this.sel.ch = hit.ch; this.sel.aSub = 0; this.sel.sub = end; }
     } else {
       // Mouse-drag carries sub-column granularity (the hit's sub-position).
       this.sel = null;
@@ -317,11 +414,7 @@ export class TimelineView {
 
   /** Channel under a canvas x — the whole strip, header and grid alike — or -1
    *  when x is in the gutter or past the last channel. */
-  channelAt(x) {
-    if (x < GUTTER_W) return -1;
-    const ch = this.scrollCh + Math.floor((x - GUTTER_W) / this.colW());
-    return ch >= 0 && ch < (this.store.doc?.channelCount ?? 0) ? ch : -1;
-  }
+  channelAt(x) { return this.stripAt(x)?.ch ?? -1; }
 
   /**
    * Context menu (icon-cell palette). Anywhere on a channel — its header or any
@@ -381,7 +474,7 @@ export class TimelineView {
     const onHeader = y < this.headerH();
     const cells = onHeader ? [] : this.toolCells(hit, ch);
     const second = onHeader
-      ? muteItems(store, ch)
+      ? [...muteItems(store, ch), ...fx2Items(store, ch)]
       : (cells.length > 0
           ? blockToolItems(this.toolCols(hit), { surround: surroundModel !== 0 })
           : []);
@@ -396,6 +489,7 @@ export class TimelineView {
     }
     if (isPatternSlotItem(pick)) { this.runSlotItem(pick, slots); return; }
     if (runMuteItem(store, pick, ch)) return;
+    if (runFx2Item(store, pick, ch)) return;
     switch (pick) {
       case "copy": this.copySelection(); break;
       case "cut": this.cutSelection(); break;
@@ -538,7 +632,8 @@ export class TimelineView {
     const map = this.getMap();
     if (!map) return;
     const ch = this.store.cursor.ch;
-    this.sel = { aRow: 0, aCh: ch, aSub: 0, row: map.totalRows - 1, ch, sub: SUB_FX_ARG };
+    this.sel = { aRow: 0, aCh: ch, aSub: 0, row: map.totalRows - 1, ch,
+      sub: lastSub(this.fx2On(ch)) };
     this.invalidate();
     this.store.emit("cursor");
   }
@@ -582,6 +677,7 @@ export class TimelineView {
     const chans = this.store.doc.channelCount;
     c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
     c.ch = clampInt(c.ch + dCh, 0, chans - 1);
+    this.clampCursorSub(); // the channel we landed on may show fewer columns
     this.sel.row = c.row; this.sel.ch = c.ch; this.sel.sub = c.sub;
     this.keepCursorVisible();
     this.store.emit("cursor");
@@ -595,19 +691,30 @@ export class TimelineView {
     if (!map) return;
     this._ensureSel();
     const c = this.store.cursor;
-    const chans = this.store.doc.channelCount;
-    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
-    if (idx < 0) idx = 0;
-    idx += dir;
-    if (idx < 0) {
-      if (c.ch > 0) { c.ch--; idx = this.subPos().length - 1; } else idx = 0;
-    } else if (idx >= this.subPos().length) {
-      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = this.subPos().length - 1;
-    }
-    [c.sub, c.nib] = this.subPos()[idx];
+    this.stepSubCursor(dir);
     this.sel.ch = c.ch; this.sel.sub = c.sub; this.sel.row = c.row;
     this.keepCursorVisible();
     this.store.emit("cursor");
+  }
+
+  /**
+   * Walk the cursor one sub-position, crossing into the neighbouring channel at
+   * either end. The walk order is that CHANNEL's — a channel showing its second
+   * effect has eight sub-columns and its neighbour may have six — so the index
+   * is re-seated against the destination channel's list after every crossing.
+   */
+  stepSubCursor(dir) {
+    const c = this.store.cursor;
+    const chans = this.store.doc.channelCount;
+    let idx = this.subPosFor(c.ch).findIndex(([s, n]) => s === c.sub && n === c.nib);
+    if (idx < 0) idx = 0;
+    idx += dir;
+    if (idx < 0) {
+      if (c.ch > 0) { c.ch--; idx = this.subPosFor(c.ch).length - 1; } else idx = 0;
+    } else if (idx >= this.subPosFor(c.ch).length) {
+      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = this.subPosFor(c.ch).length - 1;
+    }
+    [c.sub, c.nib] = this.subPosFor(c.ch)[idx];
   }
 
   /** Dedupe writes by (pat,row) — channels sharing a pattern would otherwise
@@ -692,7 +799,7 @@ export class TimelineView {
     const map = this.getMap();
     const chans = this.store.doc.channelCount;
     this.sel = {
-      aRow: a.row, aCh: a.ch, aSub: 0, sub: SUB_FX_ARG,
+      aRow: a.row, aCh: a.ch, aSub: 0, sub: lastSub(this.fx2On(a.ch)),
       row: Math.min(a.row + block.rows - 1, map.totalRows - 1),
       ch: Math.min(a.ch + block.chans - 1, chans - 1),
     };
@@ -704,14 +811,13 @@ export class TimelineView {
   hitTest(x, y) {
     if (y < this.headerH()) return null;
     const row = Math.floor(this.scrollRow) + Math.floor((y - this.headerH()) / ROW_H);
-    const colIdx = Math.floor((x - GUTTER_W) / this.colW());
-    const ch = this.scrollCh + colIdx;
     const map = this.getMap();
-    if (!map || row < 0 || row >= map.totalRows || colIdx < 0) return null;
-    const chans = this.store.doc.channelCount;
-    const charX = (x - GUTTER_W - colIdx * this.colW() - 2) / CHAR_W;
-    const [sub, nib] = charToSub(charX, this.wide());
-    return { row, ch: clampInt(ch, 0, chans - 1), sub, nib };
+    if (!map || row < 0 || row >= map.totalRows) return null;
+    const strip = this.stripAt(x, true);
+    if (!strip) return null;
+    const charX = (x - strip.x - 2) / CHAR_W;
+    const [sub, nib] = charToSub(charX, this.wide(), this.fx2On(strip.ch));
+    return { row, ch: strip.ch, sub, nib };
   }
 
   /**
@@ -750,6 +856,8 @@ export class TimelineView {
         break;
       case SUB_FX_OP: fields = { effect: clampInt(cell.effect + dir, 0, 35) }; break;
       case SUB_FX_ARG: fields = { effectArg: clampInt(cell.effectArg + dir, 0, 0xffff) }; break;
+      case SUB_FX2_OP: fields = { effect2: clampInt(cell.effect2 + dir, 0, 35) }; break;
+      case SUB_FX2_ARG: fields = { effectArg2: clampInt(cell.effectArg2 + dir, 0, 0xffff) }; break;
     }
     if (fields === null) return false;
     store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, fields,
@@ -766,6 +874,7 @@ export class TimelineView {
     const chans = this.store.doc.channelCount;
     c.row = clampInt(c.row + dRow, 0, map.totalRows - 1);
     c.ch = clampInt(c.ch + dCh, 0, chans - 1);
+    this.clampCursorSub(); // the channel we landed on may show fewer columns
     this.keepCursorVisible();
     this.store.emit("cursor");
   }
@@ -773,17 +882,7 @@ export class TimelineView {
   /** Move through sub-positions (nibble-level), wrapping across channels. */
   moveSubCursor(dir) {
     this.sel = null; // plain navigation drops any block selection
-    const c = this.store.cursor;
-    const chans = this.store.doc.channelCount;
-    let idx = this.subPos().findIndex(([s, n]) => s === c.sub && n === c.nib);
-    if (idx < 0) idx = 0;
-    idx += dir;
-    if (idx < 0) {
-      if (c.ch > 0) { c.ch--; idx = this.subPos().length - 1; } else idx = 0;
-    } else if (idx >= this.subPos().length) {
-      if (c.ch < chans - 1) { c.ch++; idx = 0; } else idx = this.subPos().length - 1;
-    }
-    [c.sub, c.nib] = this.subPos()[idx];
+    this.stepSubCursor(dir);
     this.keepCursorVisible();
     this.store.emit("cursor");
   }
@@ -935,6 +1034,7 @@ export class TimelineView {
     if (playRow === undefined) playRow = -1;
     this.lastPlayRow = playRow;
     this._ghosts = new Map(); // ditto ghost maps, memoised for this frame only
+    this._hasFx2 = new Map(); // "does this pattern use effect 2", same lifetime
     const C = themeColors();
     const { ctx, store } = this;
     const dpr = this.dpr;
@@ -947,8 +1047,7 @@ export class TimelineView {
     const song = store.song;
     if (!doc || !song) return;
     const map = this.getMap();
-    const chans = doc.channelCount;
-    const visCh = Math.min(this.visibleChans() + 1, chans - this.scrollCh);
+    const strips = this.chanLayout(); // [{ch, x, w}] — widths differ per channel
     const visRows = this.visibleRows() + 1;
     const top = Math.floor(this.scrollRow);
     const audio = store.audio;
@@ -970,26 +1069,33 @@ export class TimelineView {
     const surroundModel = store.doc?.songs[store.songIndex]?.surroundModel ?? 0;
     const surroundSong = surroundModel !== 0;
     const spatialSong = surroundModel === SURROUND_SPATIAL;
-    for (let i = 0; i < visCh; i++) {
-      const ch = this.scrollCh + i;
-      const x = GUTTER_W + i * this.colW();
+    for (const { ch, x, w: colW } of strips) {
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
-      ctx.fillRect(x, 0, this.colW() - 2, headerH - 2);
+      ctx.fillRect(x, 0, colW - 2, headerH - 2);
       const patNum = this.currentPatternFor(ch);
 
       // upper row: channel number (left) + current pattern number (right, amber)
       ctx.fillStyle = C.dim;
       ctx.textAlign = "left";
       ctx.fillText(String(ch + 1).padStart(2, "0"), x + 4, UP_MID);
+      // …and, between them, the hint that this channel is HIDING second effects
+      // it actually carries — the column is off by default, so without this the
+      // only way to find out is to turn it on channel by channel.
+      if (!this.fx2On(ch) && this.patternHasFx2(patNum)) {
+        ctx.fillStyle = C.fxOp;
+        ctx.globalAlpha = 0.75;
+        ctx.fillText("E2", x + 4 + 2.4 * CHAR_W, UP_MID);
+        ctx.globalAlpha = 1;
+      }
       if (patNum !== null && patNum !== PATTERN_EMPTY) {
         ctx.fillStyle = C.accent;
         ctx.textAlign = "right";
-        ctx.fillText(hex4(patNum), x + this.colW() - 6, UP_MID);
+        ctx.fillText(hex4(patNum), x + colW - 6, UP_MID);
         ctx.textAlign = "left";
       }
       // upper row centre: live note + instrument (only while sounding)
       if (audio && audio.getVoiceActive(ch)) {
-        const groupX = x + Math.round((this.colW() - 7 * CHAR_W) / 2);
+        const groupX = x + Math.round((colW - 7 * CHAR_W) / 2);
         paintNoteCell(ctx, audio.getVoiceNote(ch), store.pitchPreset, groupX, UP_Y,
           CHAR_W, NOTE_H, headPal, store.rawNoteView);
         ctx.fillStyle = C.dim;
@@ -998,7 +1104,7 @@ export class TimelineView {
 
       // VU
       const barX = x + 4;
-      const barW = this.colW() - 12;
+      const barW = colW - 12;
       ctx.fillStyle = C.meterBg;
       ctx.fillRect(barX, VU_Y, barW, 7);
       if (audio && audio.getVoiceActive(ch)) {
@@ -1023,7 +1129,7 @@ export class TimelineView {
 
       // expanded radar: the source as it really sits, seen from above
       if (radar) {
-        this.paintChannelRadar(ctx, C, x, RADAR_Y, ch, audio, spatialSong);
+        this.paintChannelRadar(ctx, C, x, RADAR_Y, ch, colW, audio, spatialSong);
       }
 
       // lower row: pattern name, centred + clipped to the column width
@@ -1032,11 +1138,11 @@ export class TimelineView {
         if (nm) {
           ctx.save();
           ctx.beginPath();
-          ctx.rect(x + 2, NAME_Y - 8, this.colW() - 6, 16);
+          ctx.rect(x + 2, NAME_Y - 8, colW - 6, 16);
           ctx.clip();
           ctx.fillStyle = C.fg2;
           ctx.textAlign = "center";
-          ctx.fillText(nm, x + (this.colW() - 2) / 2, NAME_Y);
+          ctx.fillText(nm, x + (colW - 2) / 2, NAME_Y);
           ctx.restore();
           ctx.textAlign = "left";
         }
@@ -1046,11 +1152,11 @@ export class TimelineView {
       if (store.voiceMutes[ch]) {
         ctx.globalAlpha = 0.6;
         ctx.fillStyle = C.bg;
-        ctx.fillRect(x, 0, this.colW() - 2, headerH - 2);
+        ctx.fillRect(x, 0, colW - 2, headerH - 2);
         ctx.globalAlpha = 1;
         ctx.fillStyle = C.fg2;
         ctx.textAlign = "center";
-        ctx.fillText("MUTE", x + (this.colW() - 2) / 2, (VU_Y + PAN_Y) / 2 + 3);
+        ctx.fillText("MUTE", x + (colW - 2) / 2, (VU_Y + PAN_Y) / 2 + 3);
         ctx.textAlign = "left";
       }
     }
@@ -1104,22 +1210,21 @@ export class TimelineView {
         6, y + ROW_H / 2);
 
       // cells
-      for (let i = 0; i < visCh; i++) {
-        const ch = this.scrollCh + i;
-        const x = GUTTER_W + i * this.colW();
+      for (const { ch, x, w: colW } of strips) {
+        const fx2 = this.fx2On(ch);
         if (sb && absRow >= sb.r0 && absRow <= sb.r1 && ch >= sb.c0 && ch <= sb.c1) {
           ctx.fillStyle = C.sel;
-          if (sb.colLo === 0 && sb.colHi === 4) {
-            ctx.fillRect(x - 2, y, this.colW() - 2, ROW_H); // whole cell
+          if (sb.colLo === 0 && sb.colHi >= this.lastColFor(ch)) {
+            ctx.fillRect(x - 2, y, colW - 2, ROW_H); // whole cell
           } else { // partial column band
-            const ccr = colCharRange(this.wide());
-          const cs = ccr[sb.colLo][0], ce = ccr[sb.colHi][1];
+            const ccr = colCharRange(this.wide(), fx2);
+            const cs = ccr[sb.colLo][0], ce = ccr[Math.min(sb.colHi, this.lastColFor(ch))][1];
             ctx.fillRect(x + 2 + cs * CHAR_W - 1, y, (ce - cs) * CHAR_W + 2, ROW_H);
           }
         }
         if (absRow === cursor.row && ch === cursor.ch) {
           ctx.fillStyle = C.cursor;
-          ctx.fillRect(x - 2, y, this.colW() - 2, ROW_H);
+          ctx.fillRect(x - 2, y, colW - 2, ROW_H);
           // sub-column caret: amber in record mode, blue otherwise
           const [cpos, cw] = subCharPos(cursor.sub ?? 0, cursor.nib ?? 0, this.wide());
           ctx.fillStyle = store.record ? C.caret : C.caretNav;
@@ -1168,6 +1273,13 @@ export class TimelineView {
         const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
         paintFxCell(ctx, fx[0], fx[1], x + 2 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
           ghost?.fx ? dittoPal : fxPal);
+        // …and the second effect in the same inks, since it is the same column
+        // twice (§5.5). Ditto never reaches it: effect 7 repeats the SOURCE
+        // row's first effect, and the ghost map has no second slot to fill.
+        if (fx2) {
+          paintFxCell(ctx, cell.effect2, cell.effectArg2,
+            x + 2 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal);
+        }
       }
     }
 
@@ -1178,7 +1290,34 @@ export class TimelineView {
     ctx.lineTo(GUTTER_W - 4.5, H);
     ctx.moveTo(0, this.headerH() - 1.5);
     ctx.lineTo(W, this.headerH() - 1.5);
+    // A rule down each channel BOUNDARY. The headers are already separated by
+    // their alternating panels, but the grid rows are not, and the strips are
+    // no longer a uniform width to count by — so where one channel ends and the
+    // next begins is the division worth drawing. The space between the two
+    // effect groups is separation enough for them.
+    // Sits in the middle of the 10 px every column carries past its last
+    // character, so it never crowds a cell; the last channel gets none, or the
+    // grid would end on a rule with nothing beyond it.
+    const lastCh = (doc.channelCount ?? 0) - 1;
+    for (const { ch, x, w } of strips) {
+      if (ch >= lastCh) continue;
+      const sx = Math.round(x + w - 4) + 0.5;
+      ctx.moveTo(sx, headerH);
+      ctx.lineTo(sx, H);
+    }
     ctx.stroke();
+  }
+
+  /** Does pattern `patNum` carry any second effect? Memoised for the frame —
+   *  one pattern is usually on several channels. Only asked of a v3 document. */
+  patternHasFx2(patNum) {
+    if (!this.wide() || patNum === null || patNum === PATTERN_EMPTY) return false;
+    let has = this._hasFx2.get(patNum);
+    if (has === undefined) {
+      has = this.patternFor(patNum).some((c) => c.effect2 !== 0 || c.effectArg2 !== 0);
+      this._hasFx2.set(patNum, has);
+    }
+    return has;
   }
 }
 
