@@ -828,7 +828,12 @@ ordinary pan lands on the front half of the circle and a song that uses nothing
 but ordinary pan sounds exactly as it did. Pan slides (P and the pan column)
 wrap round the circle instead of stopping at the ends.
 
-Three commands are yours only in a surround song:
+Three commands are yours only in a surround song. `X` writes the very same
+**channel axis** `S $8xxx` does — not a third register — so it places the
+*part*, exactly like `S $80xx` in a stereo song; a zone-panned instrument's
+spread still rotates under it rather than collapsing to one point (see
+[note pan vs channel pan](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
+It only trades the single byte for a sphere:
 
 | Command | Meaning |
 |---|---|
@@ -1184,7 +1189,7 @@ sidebar (also at [Note Effects](#effects)).
 | N | Channel vol slide | `$xy00` |
 | O | Sample offset | `$xxxx` — start at byte offset |
 | P | Pan slide | `$xy00` — left/right |
-| Q | Retrigger | `$0xyy` — every yy ticks, x = volume modifier |
+| Q | Retrigger | `$xy00` — every y ticks, x = volume modifier |
 | R | Tremolo | `$xy00` — speed, depth |
 | S | Special | delays, cuts, loops, waveforms, NNA overrides, funk… |
 | T | Tempo | `$xx00` set · `$FFxx` extended · `$000y/$001y` slide |

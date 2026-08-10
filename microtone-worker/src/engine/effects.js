@@ -249,12 +249,13 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       break;
     }
     case EffectOp.OP_Q: {
+      // Q $xy00 — x = retrigVolMod (bits 12-15), y = retrigInterval (bits 8-11).
       const arg = resolveArg(rawArg, voice.mem.q);
-      const y = arg & 0xff;
+      const y = (arg >>> 8) & 0xf;
       if (y !== 0) {
         voice.mem.q = arg;
         voice.retrigInterval = y;
-        voice.retrigVolMod = (arg >>> 8) & 0xf;
+        voice.retrigVolMod = (arg >>> 12) & 0xf;
         voice.retrigActive = true;
         // Counter persists across rows per spec.
       }
@@ -325,7 +326,9 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
     //    turn IT's X "fine set panning" into S $80xx instead).
     case EffectOp.OP_X: {
       // X $eeaa — place the source: azimuth $aa over the full turn, elevation
-      // $ee signed ($80 = −90°, $7F ≈ +90°).
+      // $ee signed ($80 = −90°, $7F ≈ +90°). Channel axis, not note axis —
+      // applyPanSet is the SAME call S $80xx makes (case 0x8 below), so the two
+      // share one register and either can overwrite the other's azimuth.
       if (ts.surroundModel === SURROUND_STEREO) break;
       anglesFromSpatialArg(rawArg, spatialArg);
       applyPanSet(ts, voice, spatialArg[0]);

@@ -1084,7 +1084,7 @@ export class TimelineView {
       if (!this.fx2On(ch) && this.patternHasFx2(patNum)) {
         ctx.fillStyle = C.fxOp;
         ctx.globalAlpha = 0.75;
-        ctx.fillText("E2", x + 4 + 2.4 * CHAR_W, UP_MID);
+        ctx.fillText("ƒx2", x + 4 + 2.4 * CHAR_W, UP_MID);
         ctx.globalAlpha = 1;
       }
       if (patNum !== null && patNum !== PATTERN_EMPTY) {

@@ -201,6 +201,28 @@ test("X's elevation is negative above $7F and ignored by a planar song", () => {
   assert.equal(voice0(planar).panElevation, 0); // planar songs stay on the horizon
 });
 
+test("X writes the same channel-axis register as S $80xx, not the note axis", () => {
+  const eng = loadSong(makeTestEngine(SURROUND_SPATIAL), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_X, arg: 0x40c0 }, // az 384, el 64
+    { row: 1, effect: EffectOp.OP_S, arg: 0x8100 },                        // S $80xx: az 256 — SAME register X just wrote
+    { row: 2, note: 0x5000, inst: 1 },                                     // fresh note, no pan command at all
+  ]);
+  render(eng, 1);
+  assert.equal(voice0(eng).panAzimuth, 384, "X placed the channel");
+  assert.equal(voice0(eng).panElevation, 64);
+
+  render(eng, 5); // cumulative 6 ticks — into row 1
+  assert.equal(voice0(eng).panAzimuth, 256,
+    "S $80xx overwrote X's exact register — proof they share one channel axis, not two");
+  assert.equal(voice0(eng).panElevation, 64, "S has no elevation term, so X's is untouched");
+
+  render(eng, 6); // cumulative 12 ticks — into row 2, a fresh note with no pan command
+  assert.equal(voice0(eng).panAzimuth, 256,
+    "channel state survives a new note the way S $80xx's channelPan always has");
+  assert.equal(voice0(eng).panElevation, 64);
+  assert.equal(voice0(eng).notePan, 0, "X never touches the note axis");
+});
+
 test("4 aims the slide and Z runs it at $xxx/16 azimuth units per tick", () => {
   const eng = loadSong(makeTestEngine(SURROUND_PLANAR), [
     { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_4, arg: 0x0060 }, // target $60·2 = 192

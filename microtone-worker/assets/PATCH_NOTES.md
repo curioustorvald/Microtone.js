@@ -18,6 +18,7 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 - Fixed: **the project message box would not take a newline.** Enter — and Space, and every other key the editor binds — was claimed by the app's shortcuts before the box could see it, so the message could only ever be one line. Any multi-line text field now keeps the keys it is being typed into.
 - **Each song's own composer and copyright are editable.** The per-song **Edit…** button on the Project tab's song list now changes the name, the composer and the copyright together; before, the last two could only be set when the project was first created, and there was no way to see or change them afterwards.
 - **The song list shows those credits.** Composer and copyright are columns beside the name, so a project of several songs tells you at a glance who wrote which — no opening each song to find out. The project's own author and copyright, up in the fields at the top of the tab, stay separate: one describes the release, the others describe the tracks.
+- Fixed: **`Q` retrigger commands written the way the manual documents them did nothing.** `Q $xy00` puts its volume-modifier and interval digits in the argument's top byte, but the engine read them from the bottom, so a `$xy00`-shaped command always saw a zero interval and was silently ignored; only the undocumented `$00xy` layout ever retriggered.
 
 ## 2026-08-09
 

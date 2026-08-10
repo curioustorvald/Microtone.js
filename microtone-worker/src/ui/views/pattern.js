@@ -117,7 +117,7 @@ class PatternPane {
     });
     // Second-effect toggle (§5.5) — this column only. Hidden on anything that
     // is not a format-v3 project, which has no second effect to show.
-    this.fx2Btn = mkBtn("E2", () => this.store.toggleFx2Pane(this.index));
+    this.fx2Btn = mkBtn("ƒx2", () => this.store.toggleFx2Pane(this.index));
     this.fx2Btn.className = "pane-fx2";
     this.info = document.createElement("span");
     this.info.className = "pane-info";
