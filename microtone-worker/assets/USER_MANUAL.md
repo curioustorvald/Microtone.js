@@ -898,11 +898,18 @@ tell you whether a source is over your head or under your feet.
 in the toolbox. It gives each ear its own arrival time and its own shading of
 the sound, so on headphones a source behind you sounds behind you and one above
 you sounds above you, which is the only way to compose a position you can hear.
-It costs a little colouration, and it is meant for headphones; switch it off to
-hear the plain **stereo fold** everyone gets who never touches the surround
-controls. The fold mirrors what is behind you onto the front (two speakers
-cannot do front and back), leaves left and right where they are, and pulls
-height toward the centre.
+The filters are *measured* — the SADIE project's set, recorded from a real head
+for Google's VR work — rather than a model fitted by ear, so what you hear is
+what a head does with a sound coming from there, down to the notch your own
+outer ear puts in a sound from above. Some directions are a little quieter than
+others because a real head makes them so: behind you loses a few decibels, and
+under your feet more, which is part of how you know where they are.
+
+It costs some CPU (roughly a doubling of what a surround song costs to play),
+and it is meant for headphones; switch it off to hear the plain **stereo fold**
+everyone gets who never touches the surround controls. The fold mirrors what is
+behind you onto the front (two speakers cannot do front and back), leaves left
+and right where they are, and pulls height toward the centre.
 
 **Getting it out.** **Export audio…** on the Files tab (F7) offers the whole
 range — stereo, quadraphonic, 5.1, 7.1 and ambisonic B-format — with a picture

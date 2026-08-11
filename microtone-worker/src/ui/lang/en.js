@@ -59,7 +59,7 @@ export default {
   "toolbox.fx2Title": "Show the second effect column on every channel and every pattern column (version-3 projects). One channel at a time: right-click its header, or use a pattern column's E2 button",
   "toolbox.binauralOn": "Binaural: on",
   "toolbox.binauralOff": "Binaural: off",
-  "toolbox.binauralTitle": "Monitor surround songs through a head model — height and front/back become audible on headphones (off = the stereo downmix)",
+  "toolbox.binauralTitle": "Monitor surround songs through a measured head model — height and front/back become audible on headphones (off = the stereo downmix)",
   "toolbox.panner": "Panner…",
   "toolbox.pannerTitle": "Place the source on the circle / sphere (surround songs)",
   "toolbox.instList": "Instruments",

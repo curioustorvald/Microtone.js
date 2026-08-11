@@ -4,6 +4,13 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-12
+
+- **The binaural monitor now uses measured ears.** The Binaural toggle used to run a head model fitted by ear — an interaural delay, a shadow filter and a pinna notch, all approximations of what a head does. It now decodes the surround scene through the SADIE project's measured head-related filters (the set recorded for Google's VR work), so the arrival times, the head's shadow and the outer ear's own colouring are a real head's rather than a curve someone drew. Behind, above and below are all easier to place, and the front/back difference no longer relies on a brightness trick.
+- **Directions have their own loudness again.** A source dead ahead sits at exactly the level the stereo fold gives it, and everything else keeps the level the measurements say — a few decibels down behind you, more below your feet. That difference is one of the cues you use to hear where something is, and the old model was flattening it away.
+- Turning Binaural on now costs roughly twice the CPU it used to — the price of real filters instead of three small ones. It is still a fraction of a modern machine, and switching it off gives you the stereo fold as before.
+- A **planar** song monitors for a third less than a spatial one, with no loss at all: the harmonics a source on the horizon cannot excite are dropped rather than computed, which is exact, not an approximation.
+
 ## 2026-08-11
 
 - **The two effect columns copy and paste into each other.** Select one effect column, copy, put the caret in the other and paste — the command moves across, so a converter's second effect can be promoted to the first, or a first effect demoted to make room for something else.

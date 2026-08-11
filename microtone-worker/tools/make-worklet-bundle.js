@@ -20,6 +20,7 @@ const FILES = [
   "src/engine/rng.js",
   "src/engine/tables.js",
   "src/engine/spatial.js",
+  "src/engine/hrir-sadie.js",  // …which binaural.js decodes
   "src/engine/binaural.js",
   "src/engine/speakers.js",  // …which analysis.js needs
   "src/engine/analysis.js",  // before state.js (TrackerState builds a tap) AND

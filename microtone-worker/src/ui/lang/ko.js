@@ -56,7 +56,7 @@ export default {
   "toolbox.fx2Title": "모든 채널과 모든 패턴 열에 두 번째 이펙트 칸을 표시합니다 (버전 3 프로젝트). 채널 하나씩 켜려면 헤더를 오른쪽 클릭하거나 패턴 열의 E2 버튼을 누르세요",
   "toolbox.binauralOn": "바이노럴: 켬",
   "toolbox.binauralOff": "바이노럴: 끔",
-  "toolbox.binauralTitle": "서라운드 곡을 머리 모델로 모니터링 — 헤드폰에서 높이와 앞뒤가 들립니다 (끄면 스테레오 다운믹스)",
+  "toolbox.binauralTitle": "서라운드 곡을 실측 머리 모델로 모니터링 — 헤드폰에서 높이와 앞뒤가 들립니다 (끄면 스테레오 다운믹스)",
   "toolbox.panner": "패너…",
   "toolbox.pannerTitle": "원/구면에서 음원 위치 지정 (서라운드 곡)",
   "toolbox.instList": "악기",

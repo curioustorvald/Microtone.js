@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import { TaudEngine } from "../../src/engine/engine.js";
 import * as C from "../../src/engine/constants.js";
 import * as T from "../../src/engine/tables.js";
-import { BinauralRenderer, binauralEarDelay } from "../../src/engine/binaural.js";
+import { BinauralRenderer } from "../../src/engine/binaural.js";
+import { HRIR_LENGTH, HRIR_RATE } from "../../src/engine/hrir-sadie.js";
 
 const AMIGA_A500_LP_FC = 4420.971; // the A500's RC corner, in Hz — rate-independent
 
@@ -113,18 +114,18 @@ test("the Amiga low-pass keeps its corner at 4421 Hz, whatever the rate", () => 
   C.setSamplingRate(48000);
 });
 
-test("the binaural ITD delay line clears the longest ear delay at 48 kHz", () => {
-  // 0.65 ms is ~21 frames at 32 kHz but ~32 at 48 kHz, which the old fixed
-  // 32-frame ring would have wrapped straight into itself.
+test("the binaural HRIR set is rate-converted, not stretched", () => {
+  // The measured set is 256 taps at 48 kHz — the engine's own rate, so the
+  // common path uses it untouched. Any other rate resamples it, and the filter
+  // has to keep its LENGTH IN SECONDS: reading 256 taps at 32 kHz would move
+  // the whole head model 50 % further away from the listener.
+  const seconds = HRIR_LENGTH / HRIR_RATE;
   for (const rate of [32000, 48000, 96000]) {
     const r = new BinauralRenderer(true, rate);
-    let worst = 0;
-    for (let i = 0; i < r.delayInt.length; i++) worst = Math.max(worst, r.delayInt[i]);
-    assert.equal(worst, Math.floor(binauralEarDelay(-1, 1) * rate),
-      `the longest ITD at ${rate} Hz`);
-    assert.ok(worst + 1 < r.ringLen, `${rate} Hz: ${worst} + look-back vs ring ${r.ringLen}`);
-    assert.equal(r.ringLen & (r.ringLen - 1), 0, "ring length is a power of two");
+    assert.ok(Math.abs(r.taps / rate - seconds) < 4 / rate,
+      `${rate} Hz: ${r.taps} taps is ${(1000 * r.taps) / rate} ms, wanted ${1000 * seconds} ms`);
   }
+  assert.equal(new BinauralRenderer(true, HRIR_RATE).taps, HRIR_LENGTH);
 });
 
 test("a song plays at the same speed at either rate", () => {

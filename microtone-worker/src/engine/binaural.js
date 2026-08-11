@@ -1,5 +1,5 @@
-// Binaural monitoring (#998.3) — the render target that makes a surround song
-// AUDIBLE on headphones while you compose it.
+// Binaural monitoring (#998.3, rebuilt for item 128) — the render target that
+// makes a surround song AUDIBLE on headphones while you compose it.
 //
 // Why this exists: playback normally installs StereoRenderer, which folds the
 // rear semicircle onto the front and collapses elevation toward the centre. It
@@ -7,419 +7,263 @@
 // like in front, and height is inaudible. Authoring a position you cannot hear
 // is a non-starter, so this file adds a second monitor path.
 //
-// ── Why virtual speakers ──
-// A SpatialRenderer answers one question — "what GAIN does a source at (az, el)
-// get in each of my channels?" — one broadband scalar per channel. Direction-
-// dependent FILTERING (the interaural delay, the head's shadow, the pinna's
-// spectral cues) cannot be expressed that way. So the bus channels become a
-// fixed ring/sphere of VIRTUAL SPEAKERS, a source is amplitude-panned across
-// them, and the per-speaker HRTF — fixed, therefore precomputable — is applied
-// in `monitorStereo`, which the mixer calls once per frame in order. That
-// ordering is what lets this renderer be stateful (delay lines, filters) while
-// every other renderer stays a pure function.
+// ── How it works ──
+// The bus channels ARE an ambisonic scene: `channelGains` is the SN3D/ACN
+// encode (the same basis as the AmbiX export, spatial.js `encodeSN3D`), so a
+// voice is amplitude-encoded into spherical harmonics exactly as it is for a
+// B-format render. `monitorStereo` then decodes that scene to two ears with the
+// GoogleVR/SADIE spherical-harmonic HRIR set — one 256-tap convolution per
+// ambisonic channel, summed. Because the set is measured, the interaural delay,
+// the head shadow and the pinna's spectral cues arrive with it; there is no
+// head model here to tune, and no per-source filtering at all. The mixer calls
+// `monitorStereo` once per frame IN ORDER, which is what lets this renderer be
+// stateful (the convolution history) while every other renderer stays a pure
+// function.
 //
-// ── The head model ──
-// This is a PARAMETRIC model, not a measured HRTF set (no dependencies, no
-// megabytes of impulse responses, and no per-listener fitting):
-//   * ITD — Woodworth's spherical-head path length, applied to the LOW band
-//     only. Above ~1.1 kHz the ear stops using interaural phase, and delaying
-//     only the low band is also what keeps amplitude panning between two
-//     virtual speakers from combing: the comb notch of the delay DIFFERENCE
-//     between neighbours lands above the crossover, where nothing is delayed.
-//   * ILD — the Brown & Duda head-shadow shelf: unity at DC, α(θ) at HF with
-//     α = 1.05 + 0.95·cos(θ·180/150), corner c/(π·a) ≈ 1.25 kHz.
-//   * Elevation and front/back — OUR OWN cue pair, tuned by ear rather than
-//     measured: a pinna notch that rises with elevation (≈4 kHz below, 7 kHz
-//     at ear level, 12 kHz overhead) and is deepest for frontal sources where
-//     the pinna actually faces the source, plus a shelf that brightens sources
-//     that are above and/or in front. Both are direction-only cues, so they sit
-//     BEFORE the ear split and cost one biquad + one shelf per speaker.
-// Everything is unity-gain at DC, so the output level is calibrated by a single
-// constant against the stereo pan law (a front-centre source reads 0.707 per
-// ear, exactly as the fold gives it).
+// The right ear costs nothing extra: a listener mirrored left↔right is the same
+// listener, and mirroring flips the sign of every harmonic with m < 0 and
+// leaves the rest alone. So one convolution per channel serves both ears —
+// L = Σ_{m≥0} + Σ_{m<0}, R = Σ_{m≥0} − Σ_{m<0}. This is the trick Omnitone's
+// HOAConvolver builds out of Web Audio nodes; here it is the two accumulators
+// in the frame loop.
+//
+// See hrir-sadie.js for the data, its provenance and its licence. What replaced
+// what: this used to be a parametric head (Woodworth ITD, Brown & Duda shadow,
+// a tuned pinna notch) driven from a ring of virtual speakers. Measured beats
+// parametric — front/back and height are now cues a real head measured rather
+// than curves fitted by ear — and the ambisonic basis is both cheaper per
+// source (no per-speaker filter bank) and honest about what the bus carries.
 //
 // Not a port: the Kotlin engine has no surround at all, so this file — like
 // spatial.js — IS the reference implementation.
 
 import { SAMPLING_RATE } from "./constants.js";
+import { AMBISONIC_ORDER_MAX, encodeSN3D } from "./spatial.js";
 import {
-  AZIMUTH_TURN, ELEVATION_QUARTER, directionFromAngles,
-} from "./spatial.js";
+  HRIR_ORDER, HRIR_CHANNELS, HRIR_LENGTH, HRIR_RATE, decodeShHrir,
+} from "./hrir-sadie.js";
 
 /** Monitor modes (playhead state). Fold = StereoRenderer, the default. */
 export const MONITOR_FOLD = 0;
 export const MONITOR_BINAURAL = 1;
 
-/** Head radius (m) and speed of sound (m/s) — the spherical-head model's only
- *  physical constants; a/c is the maximum one-way path detour. */
-const BIN_HEAD_RADIUS = 0.0875;
-const BIN_SOUND_SPEED = 343.0;
+/** The order the HRIR set decodes, capped by the basis spatial.js implements. */
+const BIN_ORDER = Math.min(HRIR_ORDER, AMBISONIC_ORDER_MAX);
+const BIN_SH_COUNT = (BIN_ORDER + 1) * (BIN_ORDER + 1);
 
-/** Amplitude-panning sharpness: gains ∝ max(0, cos γ)^BIN_PAN_EXP, then
- *  energy-normalised. High enough that a source AT a speaker keeps ~83 % of its
- *  energy there, low enough that the pan stays continuous as it moves. */
-const BIN_PAN_EXP = 8;
+/** Azimuth of the front axis — the direction the level contract is fixed at. */
+const BIN_FRONT_AZIMUTH = 128;
 
-/** ITD crossover: only this band is delayed (see the header). */
-const BIN_ITD_LP_HZ = 1100.0;
-/** Pinna-notch centre at ear level, its ± octave swing, depth and width. */
-const BIN_NOTCH_HZ = 7000.0;
-const BIN_NOTCH_OCTAVES = 0.75;
-const BIN_NOTCH_DB = 7.0;
-const BIN_NOTCH_Q = 1.6;
-/** Direction shelf: dB at HF = elevation term + front/back term, at this corner. */
-const BIN_SHELF_HZ = 4000.0;
-const BIN_SHELF_EL_DB = 6.0;
-const BIN_SHELF_FB_DB = 3.0;
+/** Rate conversion of the HRIR set: Kaiser-windowed sinc, resampler.js's β. */
+const BIN_RESAMP_HALF = 24;
+const BIN_RESAMP_BETA = 8.0;
+
 /**
- * Level contract: a source sitting AT a virtual speaker must leave the head
- * with the same total power the stereo pan law would have given it
- * (cos² + sin² = 1). The head's own filters do not obey that on their own — the
- * near ear's shadow shelf BOOSTS by up to 6 dB — so each speaker's feed is
- * scaled by the calibration below. It equalises the SUM of the two ears and
- * leaves their RATIO alone, which is the whole cue. Frequency grid size for
- * that integral (midpoint rule over 0…Nyquist, white-weighted, i.e. what an RMS
- * measurement on broadband noise sees).
+ * ACN channels a source ON THE HORIZON can excite. Y_lm vanishes on the horizon
+ * whenever l − |m| is odd, so for a planar song — where nothing ever leaves the
+ * horizon — dropping those is EXACT, not an approximation, and it buys back six
+ * of the sixteen convolutions. A spatial song keeps the whole set.
  */
-const BIN_CALIB_BANDS = 96;
+export function binauralChannelList(sphere) {
+  const list = [];
+  for (let l = 0; l <= BIN_ORDER; l++) {
+    for (let m = -l; m <= l; m++) {
+      if (sphere || (l - Math.abs(m)) % 2 === 0) list.push(l * l + l + m);
+    }
+  }
+  return Int32Array.from(list);
+}
 
-/** Delay-line length in frames: the smallest power of two that clears the
- *  longest ITD — (a/c)(1 + π/2) ≈ 0.65 ms, so ~21 frames at 32 kHz but ~32 at
- *  48 kHz (item 108), which a fixed 32-frame ring would wrap straight into
- *  itself. Sized from the rate the renderer was built for, plus the one frame
- *  of look-back the fractional tap reads. */
-function binauralRingLen(sampleRate) {
-  const need = Math.ceil(binauralEarDelay(-1.0, 1.0) * sampleRate) + 2;
-  let n = 32;
-  while (n < need) n *= 2;
-  return n;
+/** +1 where mirroring the listener leaves the harmonic alone (m ≥ 0), −1 where
+ *  it flips the sign (m < 0) — the right ear, in one array. */
+function binauralMirrorSigns(acn) {
+  const out = new Int8Array(acn.length);
+  for (let i = 0; i < acn.length; i++) {
+    const k = acn[i];
+    const l = Math.floor(Math.sqrt(k));
+    out[i] = k - (l * l + l) >= 0 ? 1 : -1; // k − (l²+l) IS m
+  }
+  return out;
+}
+
+function binBesselI0(x) {
+  let sum = 1.0;
+  let term = 1.0;
+  const half = x * 0.5;
+  for (let k = 1; k < 24; k++) {
+    term *= (half / k) * (half / k);
+    sum += term;
+    if (term < sum * 1e-17) break;
+  }
+  return sum;
 }
 
 /**
- * Virtual speaker directions as [azimuth, elevation] pairs in engine units.
- * Planar songs get a 12-point horizontal ring (30° apart, with speakers exactly
- * at front/back/left/right); a spatial song adds ±45° rings and the two poles,
- * 26 in all. Denser is smoother and linearly more expensive — this is the
- * playback path, so it is deliberately the coarsest layout that still moves
- * continuously.
+ * Rate-convert the whole set (item 108: the engine runs at 48 kHz, which is the
+ * rate the HRIRs were measured at, but a test or a future device may not).
+ * These are IMPULSE RESPONSES, not signals, so the taps are scaled by 1/ratio:
+ * what has to survive is the filter's response Σh·e^{−jωn}, not the sequence's
+ * amplitude. Length is rounded up to a multiple of four for the convolver's
+ * unrolled inner loop.
  */
-export function binauralSpeakerLayout(sphere) {
-  const out = [];
-  const ring = (count, el) => {
-    for (let k = 0; k < count; k++) out.push([(k * AZIMUTH_TURN) / count, el]);
-  };
-  ring(12, 0);
-  if (sphere) {
-    ring(6, ELEVATION_QUARTER / 2);
-    ring(6, -ELEVATION_QUARTER / 2);
-    out.push([128, ELEVATION_QUARTER], [128, -ELEVATION_QUARTER]);
+function binauralResample(src, srcLen, channels, rate) {
+  const ratio = rate / HRIR_RATE;
+  const cutoff = ratio < 1.0 ? ratio : 1.0;      // of the SOURCE Nyquist
+  const half = Math.ceil(BIN_RESAMP_HALF / cutoff);
+  const dstLen = (Math.ceil(srcLen * ratio) + 3) & ~3;
+  const out = new Float64Array(channels * dstLen);
+  const norm = binBesselI0(BIN_RESAMP_BETA);
+  const scale = 1.0 / ratio;
+  for (let n = 0; n < dstLen; n++) {
+    const t = n / ratio;
+    const lo = Math.max(0, Math.ceil(t - half));
+    const hi = Math.min(srcLen - 1, Math.floor(t + half));
+    for (let i = lo; i <= hi; i++) {
+      const d = t - i;
+      const u = cutoff * d;
+      const sinc = Math.abs(u) < 1e-9 ? 1.0 : Math.sin(Math.PI * u) / (Math.PI * u);
+      const x = d / half;
+      const w = binBesselI0(BIN_RESAMP_BETA * Math.sqrt(1.0 - x * x)) / norm;
+      const g = cutoff * sinc * w * scale;
+      for (let c = 0; c < channels; c++) out[c * dstLen + n] += src[c * srcLen + i] * g;
+    }
   }
   return out;
 }
 
 /**
- * First-order shelf H(s) = (1 + G·s/ω)/(1 + s/ω) — unity at DC, `gainHf` at
- * Nyquist — bilinear-transformed into y = b0·x + b1·x₋₁ − a1·y₋₁. Both the head
- * shadow (G = α) and the direction shelf are this same section.
+ * Level contract: a source dead ahead must leave the head carrying the same
+ * total power the stereo pan law gives it (cos² + sin² = 1, i.e. 0.707 per ear,
+ * exactly what the fold delivers). One scalar does it, folded into the table.
+ * Every other direction is then free to differ, and does — a real head is
+ * quieter behind and below, and that level cue is part of what makes the
+ * direction audible rather than an artefact to flatten out.
  */
-export function binauralShelf(gainHf, fc, fs, out, off) {
-  const k = fs / (Math.PI * fc);
-  out[off] = (1.0 + gainHf * k) / (1.0 + k);
-  out[off + 1] = (1.0 - gainHf * k) / (1.0 + k);
-  out[off + 2] = (1.0 - k) / (1.0 + k);
-  return out;
+function binauralCalibration(hrir, len) {
+  const sh = new Float64Array(BIN_SH_COUNT);
+  encodeSN3D(BIN_FRONT_AZIMUTH, 0.0, BIN_ORDER, sh);
+  const all = Int32Array.from({ length: BIN_SH_COUNT }, (_, k) => k);
+  const mirror = binauralMirrorSigns(all);
+  let energy = 0.0;
+  for (let n = 0; n < len; n++) {
+    let p = 0.0;
+    let q = 0.0;
+    for (let k = 0; k < BIN_SH_COUNT; k++) {
+      const v = sh[k] * hrir[k * len + n];
+      if (mirror[k] > 0) p += v; else q += v;
+    }
+    energy += (p + q) * (p + q) + (p - q) * (p - q);
+  }
+  return 1.0 / Math.sqrt(energy);
+}
+
+/** The decoded, rate-converted, calibrated set — one build per rate, ever. */
+const binauralTables = new Map();
+
+export function binauralHrirTable(rate = SAMPLING_RATE) {
+  let t = binauralTables.get(rate);
+  if (t !== undefined) return t;
+  const raw = decodeShHrir();
+  const hrir = rate === HRIR_RATE
+    ? raw
+    : binauralResample(raw, HRIR_LENGTH, HRIR_CHANNELS, rate);
+  const taps = hrir.length / HRIR_CHANNELS;
+  const gain = binauralCalibration(hrir, taps);
+  for (let i = 0; i < hrir.length; i++) hrir[i] *= gain;
+  t = { hrir, taps };
+  binauralTables.set(rate, t);
+  return t;
 }
 
 /**
- * RBJ peaking section with negative gain — the pinna notch. Unity at DC and at
- * Nyquist (so it colours the cue band and nothing else), `db` deep at `fc`.
- * Written as b0, b1, b2, a1, a2 with a0 divided out.
- */
-export function binauralNotch(db, fc, q, fs, out, off) {
-  const w0 = (2.0 * Math.PI * Math.min(fc, fs * 0.45)) / fs;
-  const cw = Math.cos(w0);
-  const alpha = Math.sin(w0) / (2.0 * q);
-  const a = Math.pow(10.0, -db / 40.0); // db > 0 → a cut
-  const a0 = 1.0 + alpha / a;
-  out[off] = (1.0 + alpha * a) / a0;
-  out[off + 1] = (-2.0 * cw) / a0;
-  out[off + 2] = (1.0 - alpha * a) / a0;
-  out[off + 3] = (-2.0 * cw) / a0;
-  out[off + 4] = (1.0 - alpha / a) / a0;
-  return out;
-}
-
-/**
- * One-way propagation delay (seconds) to an ear at `earY` (+1 left, −1 right)
- * for a source whose direction has left/right component `dy` — Woodworth: the
- * near side arrives early by a·cos, the far side has to creep round the sphere.
- * The ear axis is ±y, so nothing else about the direction matters. Offset so
- * the value is never negative: the absolute delay is inaudible, and a delay
- * line cannot look ahead.
- */
-export function binauralEarDelay(dy, earY) {
-  const cosA = dy * earY; // |d| = 1, so this is the cosine of the angle
-  const a = Math.acos(cosA < -1 ? -1 : cosA > 1 ? 1 : cosA);
-  const t = a <= Math.PI / 2 ? -Math.cos(a) : a - Math.PI / 2;
-  return ((t + 1.0) * BIN_HEAD_RADIUS) / BIN_SOUND_SPEED;
-}
-
-// ── frequency responses, used once per construction by the calibration ────
-// Complex values are [re, im] pairs in a scratch array; none of this runs while
-// audio does.
-
-/** Complex response of a biquad b0,b1,b2 / 1,a1,a2 at digital frequency w. */
-function binBiquadResp(c, off, w, out) {
-  const c1 = Math.cos(w), s1 = Math.sin(w);
-  const c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
-  const nr = c[off] + c[off + 1] * c1 + c[off + 2] * c2;
-  const ni = -(c[off + 1] * s1 + c[off + 2] * s2);
-  const dr = 1 + c[off + 3] * c1 + c[off + 4] * c2;
-  const di = -(c[off + 3] * s1 + c[off + 4] * s2);
-  const den = dr * dr + di * di;
-  out[0] = (nr * dr + ni * di) / den;
-  out[1] = (ni * dr - nr * di) / den;
-  return out;
-}
-
-/** Same, for a first-order section b0,b1 / 1,a1. */
-function binShelfResp(c, off, w, out) {
-  const c1 = Math.cos(w), s1 = Math.sin(w);
-  const nr = c[off] + c[off + 1] * c1;
-  const ni = -(c[off + 1] * s1);
-  const dr = 1 + c[off + 2] * c1;
-  const di = -(c[off + 2] * s1);
-  const den = dr * dr + di * di;
-  out[0] = (nr * dr + ni * di) / den;
-  out[1] = (ni * dr - nr * di) / den;
-  return out;
-}
-
-const binDir = new Float64Array(3);
-
-/**
- * Headphone render target: the bus carries virtual-speaker feeds, and the
- * monitor pair is those feeds through the head model. `numChannels` is the
- * layout size, so this costs (speakers × voices) multiplies per frame in the
- * mixer — the reason the layout stays small.
+ * Headphone render target: the bus carries an ambisonic scene, and the monitor
+ * pair is that scene decoded through the SADIE HRIRs. `numChannels` is the
+ * harmonic count — 16 for a spatial song, 10 for a planar one — so the decode
+ * costs that many taps-long convolutions per frame, and the encode costs the
+ * same handful of multiplies per voice the AmbiX export costs.
  */
 export class BinauralRenderer {
   constructor(sphere = true, sampleRate = SAMPLING_RATE) {
     this.sphere = sphere;
-    this.layout = binauralSpeakerLayout(sphere);
-    this.numChannels = this.layout.length;
+    this.acn = binauralChannelList(sphere);
+    this.numChannels = this.acn.length;
     this.name = `binaural-${sphere ? "3d" : "2d"}`;
     this.sampleRate = sampleRate;
+    this.order = BIN_ORDER;
 
-    const ns = this.numChannels;
-    /** Unit vector per speaker — the panner compares directions, not angles. */
-    this.dirs = new Float64Array(ns * 3);
-    this.notch = new Float64Array(ns * 5);
-    this.shelf = new Float64Array(ns * 3);
-    this.shadow = new Float64Array(ns * 2 * 3);   // [speaker][ear] shelf
-    this.delayInt = new Int32Array(ns * 2);
-    this.delayFrac = new Float64Array(ns * 2);
-
-    for (let s = 0; s < ns; s++) {
-      const [az, el] = this.layout[s];
-      directionFromAngles(az, el, binDir);
-      const dx = binDir[0], dy = binDir[1], dz = binDir[2];
-      this.dirs[s * 3] = dx;
-      this.dirs[s * 3 + 1] = dy;
-      this.dirs[s * 3 + 2] = dz;
-
-      // Direction-only cues (ear-independent): the notch rises with elevation
-      // and is deepest where the pinna faces the source; the shelf brightens
-      // what is above and in front.
-      const front = dx > 0 ? dx : 0;
-      const sinEl = dz;
-      binauralNotch(
-        BIN_NOTCH_DB * (0.35 + 0.65 * front),
-        BIN_NOTCH_HZ * Math.pow(2.0, BIN_NOTCH_OCTAVES * sinEl),
-        BIN_NOTCH_Q, sampleRate, this.notch, s * 5,
-      );
-      const shelfDb = BIN_SHELF_EL_DB * sinEl + BIN_SHELF_FB_DB * dx;
-      binauralShelf(Math.pow(10.0, shelfDb / 20.0), BIN_SHELF_HZ, sampleRate, this.shelf, s * 3);
-
-      for (let ear = 0; ear < 2; ear++) {
-        const earY = ear === 0 ? 1.0 : -1.0;
-        // Brown & Duda: α runs 2.0 at the ear's own axis down to 0.1 at 150°.
-        const theta = Math.acos(Math.max(-1, Math.min(1, dy * earY)));
-        const alpha = 1.05 + 0.95 * Math.cos((theta * 180.0) / 150.0);
-        binauralShelf(alpha, BIN_SOUND_SPEED / (Math.PI * BIN_HEAD_RADIUS),
-          sampleRate, this.shadow, (s * 2 + ear) * 3);
-        const d = binauralEarDelay(dy, earY) * sampleRate;
-        const di = Math.floor(d);
-        this.delayInt[s * 2 + ear] = di;
-        this.delayFrac[s * 2 + ear] = d - di;
-      }
+    const table = binauralHrirTable(sampleRate);
+    this.taps = table.taps;
+    // The set's channels, gathered into bus order so the frame loop walks both
+    // the history and the taps straight forward.
+    this.hrir = new Float64Array(this.numChannels * this.taps);
+    for (let c = 0; c < this.numChannels; c++) {
+      this.hrir.set(table.hrir.subarray(this.acn[c] * this.taps, (this.acn[c] + 1) * this.taps),
+        c * this.taps);
     }
+    this.mirror = binauralMirrorSigns(this.acn);
 
-    // Filter + delay state, all flat and preallocated (this runs per frame).
-    this.notchState = new Float64Array(ns * 2);
-    this.shelfState = new Float64Array(ns * 2);   // [x₋₁, y₋₁]
-    this.shadowState = new Float64Array(ns * 2 * 2);
-    this.lpState = new Float64Array(ns);
-    this.ringLen = binauralRingLen(sampleRate);
-    this.ringMask = this.ringLen - 1;
-    this.ring = new Float64Array(ns * this.ringLen);
-    this.ringPos = 0;
-    this.lpA = 1.0 - Math.exp((-2.0 * Math.PI * BIN_ITD_LP_HZ) / sampleRate);
-    this._g = new Float64Array(ns);
-    this._calibrate();
+    // Convolution history: every sample is written twice, `taps` apart, so a
+    // backwards run of `taps` taps is always one contiguous stretch — no
+    // index masking in the innermost loop.
+    this.hist = new Float64Array(this.numChannels * this.taps * 2);
+    this.histPos = 0;
+    this._sh = new Float64Array(BIN_SH_COUNT);
   }
 
-  /**
-   * Scale each speaker's feed so both ears together carry unit power for unit
-   * broadband input — see BIN_CALIB_BANDS. The gain is folded into the notch's
-   * numerator, which is the first thing every sample meets, so it costs nothing
-   * at run time. Cheap enough to redo whenever the model is rebuilt (once per
-   * song, at most).
-   */
-  _calibrate() {
-    const ns = this.numChannels;
-    const a = new Float64Array(2);
-    const b = new Float64Array(2);
-    for (let s = 0; s < ns; s++) {
-      let acc = 0.0;
-      for (let k = 0; k < BIN_CALIB_BANDS; k++) {
-        const w = (Math.PI * (k + 0.5)) / BIN_CALIB_BANDS;
-        binBiquadResp(this.notch, s * 5, w, a);
-        binShelfResp(this.shelf, s * 3, w, b);
-        // Direction-only stages, common to both ears.
-        const dr = a[0] * b[0] - a[1] * b[1];
-        const di = a[0] * b[1] + a[1] * b[0];
-        // The ITD crossover: the low band is delayed, the high band is not, so
-        // the split is a (mild) comb of its own and belongs in the integral.
-        const lp = this.lpA;
-        const lr = 1 - (1 - lp) * Math.cos(w);
-        const li = (1 - lp) * Math.sin(w);
-        const lden = lr * lr + li * li;
-        const lo_r = (lp * lr) / lden;
-        const lo_i = (-lp * li) / lden;
-        for (let ear = 0; ear < 2; ear++) {
-          const j = s * 2 + ear;
-          const d = this.delayInt[j] + this.delayFrac[j];
-          const cd = Math.cos(w * d), sd = -Math.sin(w * d);
-          // lo·e^{-jwd} + (1 − lo)
-          const pr = lo_r * cd - lo_i * sd + (1 - lo_r);
-          const pi = lo_r * sd + lo_i * cd - lo_i;
-          binShelfResp(this.shadow, j * 3, w, b);
-          const er = pr * b[0] - pi * b[1];
-          const ei = pr * b[1] + pi * b[0];
-          const tr = dr * er - di * ei;
-          const ti = dr * ei + di * er;
-          acc += tr * tr + ti * ti;
-        }
-      }
-      const comp = 1.0 / Math.sqrt(acc / BIN_CALIB_BANDS);
-      this.notch[s * 5] *= comp;
-      this.notch[s * 5 + 1] *= comp;
-      this.notch[s * 5 + 2] *= comp;
-    }
-  }
-
-  /** Reset every filter and delay line (a new song, or a monitor switch). */
+  /** Drop the convolution history (a new song, or a monitor switch). */
   reset() {
-    this.notchState.fill(0);
-    this.shelfState.fill(0);
-    this.shadowState.fill(0);
-    this.lpState.fill(0);
-    this.ring.fill(0);
-    this.ringPos = 0;
+    this.hist.fill(0.0);
+    this.histPos = 0;
   }
 
-  /**
-   * Amplitude-pan a source across the layout: cos^n of the angle to each
-   * speaker, then normalised so the gains SUM to one.
-   *
-   * Sum, not sum-of-squares: loudspeakers in a room decorrelate and add in
-   * power, but here every virtual speaker feeding an ear is the same signal
-   * through a slightly different head, so it adds in AMPLITUDE — energy
-   * normalisation would make a phantom direction 3 dB louder than a source
-   * sitting on a speaker. A direction no speaker can see (only reachable if a
-   * planar layout is handed an elevated source) spreads evenly rather than
-   * falling silent.
-   */
+  /** Ambisonic encode — the bus channel gains for a source at (az, el). */
   channelGains(az, el, out, off) {
-    directionFromAngles(az, el, binDir);
-    const ns = this.numChannels;
-    const dirs = this.dirs;
-    const g = this._g;
-    let sum = 0.0;
-    for (let s = 0; s < ns; s++) {
-      const c = binDir[0] * dirs[s * 3] + binDir[1] * dirs[s * 3 + 1] + binDir[2] * dirs[s * 3 + 2];
-      const w = c > 0 ? Math.pow(c, BIN_PAN_EXP) : 0.0;
-      g[s] = w;
-      sum += w;
-    }
-    if (sum <= 0.0) {
-      const u = 1.0 / ns;
-      for (let s = 0; s < ns; s++) out[off + s] = u;
-      return;
-    }
-    const norm = 1.0 / sum;
-    for (let s = 0; s < ns; s++) out[off + s] = g[s] * norm;
+    const sh = encodeSN3D(az, el, BIN_ORDER, this._sh);
+    const acn = this.acn;
+    for (let c = 0; c < acn.length; c++) out[off + c] = sh[acn[c]];
   }
 
   /**
-   * The head model, one frame at a time (the mixer calls this in frame order,
-   * which is what makes the state below legal). Per speaker: pinna notch →
-   * direction shelf → split at the ITD crossover; per ear: delay the low band,
-   * add the undelayed high band, then the head shadow.
+   * Decode one frame to two ears (the mixer calls this in frame order, which is
+   * what makes the history below legal): one FIR per ambisonic channel, summed
+   * into the symmetric and antisymmetric halves, then L = P + N, R = P − N.
    */
   monitorStereo(data, frames, n, out) {
-    const ns = this.numChannels;
-    const notch = this.notch, nst = this.notchState;
-    const shelf = this.shelf, sst = this.shelfState;
-    const shadow = this.shadow, hst = this.shadowState;
-    const ring = this.ring, pos = this.ringPos;
-    const ringLen = this.ringLen, ringMask = this.ringMask;
-    const dInt = this.delayInt, dFrac = this.delayFrac;
-    const lpA = this.lpA, lp = this.lpState;
-    let l = 0.0;
-    let r = 0.0;
+    const nc = this.numChannels;
+    const taps = this.taps;
+    const hrir = this.hrir;
+    const hist = this.hist;
+    const mirror = this.mirror;
+    const pos = this.histPos;
+    let p = 0.0;
+    let q = 0.0;
 
-    for (let s = 0; s < ns; s++) {
-      const x = data[s * frames + n];
+    for (let c = 0; c < nc; c++) {
+      const base = c * taps * 2;
+      const x = data[c * frames + n];
+      hist[base + pos] = x;
+      hist[base + pos + taps] = x;
 
-      // Pinna notch — transposed direct form II.
-      const nc = s * 5;
-      const y = notch[nc] * x + nst[s * 2];
-      nst[s * 2] = notch[nc + 1] * x - notch[nc + 3] * y + nst[s * 2 + 1];
-      nst[s * 2 + 1] = notch[nc + 2] * x - notch[nc + 4] * y;
-
-      // Direction shelf — first order, y = b0·x + b1·x₋₁ − a1·y₋₁.
-      const sc = s * 3;
-      const sv = shelf[sc] * y + shelf[sc + 1] * sst[s * 2] - shelf[sc + 2] * sst[s * 2 + 1];
-      sst[s * 2] = y;
-      sst[s * 2 + 1] = sv;
-
-      // ITD crossover: the low band goes down the delay line, the high band
-      // bypasses it (and the two sum back to sv when the delay is zero).
-      const lo = lp[s] + lpA * (sv - lp[s]);
-      lp[s] = lo;
-      const hi = sv - lo;
-      const base = s * ringLen;
-      ring[base + (pos & ringMask)] = lo;
-
-      for (let ear = 0; ear < 2; ear++) {
-        const j = s * 2 + ear;
-        const i0 = pos - dInt[j];
-        const f = dFrac[j];
-        const d0 = ring[base + (i0 & ringMask)];
-        const d1 = ring[base + ((i0 - 1) & ringMask)];
-        const ear_in = d0 + (d1 - d0) * f + hi;
-        const hc = j * 3;
-        const hs = shadow[hc] * ear_in + shadow[hc + 1] * hst[j * 2] - shadow[hc + 2] * hst[j * 2 + 1];
-        hst[j * 2] = ear_in;
-        hst[j * 2 + 1] = hs;
-        if (ear === 0) l += hs; else r += hs;
+      // Four accumulators: the tap loop is one long dependent chain of adds
+      // otherwise, and breaking it is worth ~35 % of the whole decode.
+      const hb = c * taps;
+      const head = base + pos + taps;
+      let a0 = 0.0;
+      let a1 = 0.0;
+      let a2 = 0.0;
+      let a3 = 0.0;
+      for (let i = 0; i < taps; i += 4) {
+        a0 += hrir[hb + i] * hist[head - i];
+        a1 += hrir[hb + i + 1] * hist[head - i - 1];
+        a2 += hrir[hb + i + 2] * hist[head - i - 2];
+        a3 += hrir[hb + i + 3] * hist[head - i - 3];
       }
+      const acc = (a0 + a1) + (a2 + a3);
+      if (mirror[c] > 0) p += acc; else q += acc;
     }
 
-    this.ringPos = pos + 1;
-    out[0] = l;
-    out[1] = r;
+    this.histPos = pos + 1 === taps ? 0 : pos + 1;
+    out[0] = p + q;
+    out[1] = p - q;
   }
 }
