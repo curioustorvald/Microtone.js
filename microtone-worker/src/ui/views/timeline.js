@@ -20,7 +20,10 @@ import {
 } from "../edit.js";
 import { setCellOp, setCellsBytesOp, setCuesOp } from "../../doc/ops.js";
 import { dittoGhosts } from "../../doc/ditto.js";
-import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
+import {
+  makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols,
+  fxPasteRemap, remapFxBytes,
+} from "../../doc/clipboard.js";
 import { themeColors } from "../theme.js";
 import { canvasFont } from "../fonts.js";
 import { unescapeName } from "../names.js";
@@ -783,14 +786,19 @@ export class TimelineView {
   paste() {
     const block = this.store.clipboard;
     if (!block) return false;
-    const cols = block.cols ?? ALL_COLS;
+    const wide = this.wide();
+    // An effect-column block pastes into whichever effect column the caret is
+    // on, first slot or second (item 127); everything else lands where it came
+    // from. `cols` follows the remap so the OTHER slot is left alone.
+    const remap = fxPasteRemap(block.cols, subToCol(this.store.cursor.sub ?? 0), wide);
+    const cols = remap ? [remap.to] : (block.cols ?? ALL_COLS);
     const a = this.pasteAnchor();
     const writes = this.dedupeWrites((push) => {
       for (let r = 0; r < block.rows; r++) {
         for (let ch = 0; ch < block.chans; ch++) {
           const t = this.cellAt(a.row + r, a.ch + ch);
           // merge only the block's columns onto the destination cell
-          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell, this.wide()), blockCell(block, r, ch), cols, this.wide()));
+          if (t) push(t.pat, t.rowInCue, overlayCols(cellToBytes(t.cell, wide), remapFxBytes(blockCell(block, r, ch), remap, wide), cols, wide));
         }
       }
     });

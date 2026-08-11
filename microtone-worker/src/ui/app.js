@@ -169,6 +169,7 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
       }
       store.doc.dirty = true;
       store.sync?.loadAll();
+      store.syncVoiceMutes(); // loadAll resets the engine (item 125) — mutes are ours
       store.emit("doc");
       updateStatus();
     } else {
@@ -218,8 +219,10 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     // A channel insert shifts the mute array along with the patterns; the tag
-    // is direction-free because UndoStack replays the forward op's tags.
-    if (dirty.some((tg) => tg.kind === "voices")) store.syncVoiceMutes();
+    // is direction-free because UndoStack replays the forward op's tags. A
+    // "format" tag re-pushes the whole document, which resets the engine (item
+    // 125) — the mutes are the desk's, so they go back down after it.
+    if (dirty.some((tg) => tg.kind === "voices" || tg.kind === "format")) store.syncVoiceMutes();
     store.emit("edit", dirty);
     updateStatus();
   });
@@ -381,8 +384,10 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
   store.undo = new UndoStack(store.doc, (dirty) => {
     store.sync?.onDirty(dirty);
     // A channel insert shifts the mute array along with the patterns; the tag
-    // is direction-free because UndoStack replays the forward op's tags.
-    if (dirty.some((tg) => tg.kind === "voices")) store.syncVoiceMutes();
+    // is direction-free because UndoStack replays the forward op's tags. A
+    // "format" tag re-pushes the whole document, which resets the engine (item
+    // 125) — the mutes are the desk's, so they go back down after it.
+    if (dirty.some((tg) => tg.kind === "voices" || tg.kind === "format")) store.syncVoiceMutes();
     store.emit("edit", dirty);
     updateStatus();
   });

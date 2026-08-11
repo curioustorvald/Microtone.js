@@ -4,6 +4,15 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-11
+
+- **The two effect columns copy and paste into each other.** Select one effect column, copy, put the caret in the other and paste — the command moves across, so a converter's second effect can be promoted to the first, or a first effect demoted to make room for something else.
+- **The caret picks which slot a pasted effect lands in.** The same copied command can go to the first column in one place and the second in another, without copying it twice; the slot you are *not* pasting into keeps whatever it had. Blocks covering both effect columns, and whole-cell blocks, are unambiguous and still land exactly where they came from.
+- **A second effect pastes into a version-2 project too.** There is nothing in one that an ordinary effect column cannot hold, so it drops straight into the effect column of a project that has no second slot of its own.
+- Fixed: **a note that slid into place with `G` after a note-off could arrive silent.** A row carrying a note, an instrument and a tone portamento re-attacks the instrument's envelopes — that is what makes such a row sound again once the previous note has been released — but only the key-off and the fadeout were being cleared, so a volume envelope that had already decayed into its tail held the new note down there. Playing from the note-off row itself hid it, because there was then no sounding note for the portamento to attach to.
+- Fixed: **panning and channel volumes carried over from the last playback, and from the last file.** Nothing put the channels back where the song starts them, so a take that had used `S $80xx`, `M`, `N`, `P`, `X` or `Z` left those settings in force for the next one — and a project opened on top of another inherited its panning wholesale. Both now begin from the song's own defaults. Your mutes and faders are left alone: they belong to the desk, not to the song.
+- **The manual explains the gap between the meter's two bars.** The fill is a true RMS and the line is a true — that is, inter-sample — peak, so a square wave shows a decibel or two between them even though its RMS and its samples' peak are the same number. The bars were right; the explanation was missing.
+
 ## 2026-08-10
 
 - **The second effect column is now editable, in version-3 projects.** Every version-3 cell has always carried two effect slots — the second runs straight after the first on every row and every tick — but only converters could write one. It is now a column like any other: same opcode letters, same four argument digits, same command palette and same right-click quick effects.

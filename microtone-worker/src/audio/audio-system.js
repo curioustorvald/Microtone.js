@@ -184,6 +184,17 @@ export class AudioSystem {
     this.wideCells = (doc.fmtVer ?? 2) >= 3;
     this._post({ t: CMD.SET_CELL_FORMAT, wide: this.wideCells });
 
+    // Then wipe the engine's playback state (item 125), exactly as taut.js's
+    // resetAudioDevice() precedes every taud.uploadTaudFile: the new document
+    // brings patterns, cues and instruments, but nothing in it says where the
+    // previous song's S $80xx left each channel pointing, so without this a file
+    // opened on top of another inherited its panning, channel volumes and
+    // tone/interpolation modes. It follows the cell format because the reset
+    // seeds the per-voice volumes from the layout's full-scale value.
+    // Everything the song table DOES set is written below, after the reset.
+    this._post({ t: CMD.STOP, ph: 0 });
+    this._post({ t: CMD.RESET_PARAMS, ph: 0 });
+
     if (doc.sampleInstImage) {
       const image = doc.sampleInstImage.slice().buffer;
       this._post({ t: CMD.UPLOAD_SAMPLE_INST_BLOB, image }, [image]);

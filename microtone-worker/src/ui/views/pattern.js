@@ -19,7 +19,10 @@ import {
 } from "../edit.js";
 import { setCellOp, setPatternBytesOp, appendPatternOp, bulkNotesOp, setCellsBytesOp, setSectionOp, changeInstrumentOp } from "../../doc/ops.js";
 import { escapeNonAscii, unescapeName } from "../names.js";
-import { makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols } from "../../doc/clipboard.js";
+import {
+  makeBlock, blockCell, cellToBytes, emptyCellBytes, overlayCols,
+  fxPasteRemap, remapFxBytes,
+} from "../../doc/clipboard.js";
 import {
   expandPatternBytes, shrinkPatternBytes,
   scaleVolumeBytes, transformPanBytes, changeInstrumentBytes,
@@ -392,7 +395,12 @@ class PatternPane {
     const block = this.store.clipboard;
     const pattern = this.pattern();
     if (!block || !pattern) return false;
-    const cols = block.cols ?? ALL_COLS;
+    const wide = this.wide();
+    // An effect-column block pastes into whichever effect column the caret is
+    // on, first slot or second (item 127); everything else lands where it came
+    // from. `cols` follows the remap so the OTHER slot is left alone.
+    const remap = fxPasteRemap(block.cols, subToCol(this.cursor.sub), wide);
+    const cols = remap ? [remap.to] : (block.cols ?? ALL_COLS);
     // A block selection is the target: paste lands on its FIRST row, not on the
     // cursor (which sits wherever the drag ended).
     const start = this.selRowBounds()?.r0 ?? this.cursor.row;
@@ -400,7 +408,7 @@ class PatternPane {
     for (let r = 0; r < block.rows; r++) {
       const row = start + r;
       if (row > 63) break;
-      writes.push({ pat: this.patIdx, row, bytes: overlayCols(cellToBytes(pattern[row], this.wide()), blockCell(block, r, 0), cols, this.wide()) });
+      writes.push({ pat: this.patIdx, row, bytes: overlayCols(cellToBytes(pattern[row], wide), remapFxBytes(blockCell(block, r, 0), remap, wide), cols, wide) });
     }
     if (!writes.length) return false;
     this.store.undo.apply(setCellsBytesOp(this.store.songIndex, writes));

@@ -757,3 +757,68 @@ test("the two effect columns copy and paste independently", async () => {
   const kept = C.overlayCols(Uint8Array.from(narrow), new Uint8Array(8), [E.COL_FX2]);
   assert.deepEqual([...kept], [...narrow], "a v2 cell has no second effect to overwrite");
 });
+
+test("an effect block pastes into whichever effect column the caret is on", async () => {
+  const C = await import("../../src/doc/clipboard.js");
+  const E = await import("../../src/ui/edit.js");
+
+  // A block covering ONE effect column is slot-agnostic; anything else is not.
+  assert.deepEqual(C.fxPasteRemap([E.COL_FX2], E.COL_FX, true), { from: E.COL_FX2, to: E.COL_FX });
+  assert.deepEqual(C.fxPasteRemap([E.COL_FX], E.COL_FX2, true), { from: E.COL_FX, to: E.COL_FX2 });
+  assert.equal(C.fxPasteRemap([E.COL_FX], E.COL_FX, true), null, "same slot = nothing to move");
+  assert.equal(C.fxPasteRemap([E.COL_FX2], E.COL_VOL, true), null, "a non-effect caret is left alone");
+  assert.equal(C.fxPasteRemap([E.COL_VOL], E.COL_FX, true), null, "…and so is a non-effect block");
+  assert.equal(C.fxPasteRemap(E.ALL_COLS, E.COL_FX, true), null, "a whole-cell block is not a slot");
+  assert.equal(C.fxPasteRemap([E.COL_FX, E.COL_FX2], E.COL_FX, true), null, "…nor a two-column one");
+  // A v2 cell has no second slot to receive one, but its effect column can
+  // happily take a second effect's bytes.
+  assert.equal(C.fxPasteRemap([E.COL_FX], E.COL_FX2, false), null, "nowhere to put it in a v2 cell");
+  assert.deepEqual(C.fxPasteRemap([E.COL_FX2], E.COL_FX, false), { from: E.COL_FX2, to: E.COL_FX },
+    "…but a second effect pastes down into one");
+
+  // The bytes really move, and the slot they came from is not disturbed —
+  // overlayCols only writes the destination column.
+  const src = new TaudPlayData();
+  src.volumeEff = 3; src.panEff = 3;
+  src.effect = 0x0d; src.effectArg = 0x0102;   // D in slot 1
+  src.effect2 = 0x16; src.effectArg2 = 0x8000; // M in slot 2
+  const dst = new TaudPlayData();
+  dst.volumeEff = 3; dst.panEff = 3;
+  dst.effect = 0x10; dst.effectArg = 0x0300;   // G in slot 1
+  const sb = C.cellToBytes(src, true);
+
+  const read = (bytes) => {
+    const c = new TaudPlayData();
+    for (let i = 0; i < bytes.length; i++) c.setByteWide(i, bytes[i]);
+    return c;
+  };
+  // slot 2 → slot 1: the M lands on the G, and the source cell's own slot 1 (D)
+  // never enters into it.
+  const down = C.fxPasteRemap([E.COL_FX2], E.COL_FX, true);
+  const a = read(C.overlayCols(C.cellToBytes(dst, true), C.remapFxBytes(sb, down, true),
+    [down.to], true));
+  assert.equal(a.effect, 0x16, "the second effect became the first");
+  assert.equal(a.effectArg, 0x8000);
+  assert.equal(a.effect2, 0, "…and the destination's own second slot is untouched");
+
+  // slot 1 → slot 2, the other way round.
+  const up = C.fxPasteRemap([E.COL_FX], E.COL_FX2, true);
+  const b = read(C.overlayCols(C.cellToBytes(dst, true), C.remapFxBytes(sb, up, true),
+    [up.to], true));
+  assert.equal(b.effect, 0x10, "the destination keeps its first effect");
+  assert.equal(b.effectArg, 0x0300);
+  assert.equal(b.effect2, 0x0d, "…and the copied first effect became its second");
+  assert.equal(b.effectArg2, 0x0102);
+
+  // No remap = the bytes are handed through untouched (identity, not a copy).
+  assert.equal(C.remapFxBytes(sb, null, true), sb);
+
+  // Pasting a v3 second effect DOWN into a v2 cell: the output is sized for the
+  // destination, so overlayCols reads bytes that exist.
+  const narrowDst = Uint8Array.from([0x00, 0x50, 0x05, 0x20, 0x30, 0x10, 0x00, 0x03]);
+  const moved = C.remapFxBytes(sb, C.fxPasteRemap([E.COL_FX2], E.COL_FX, false), false);
+  assert.equal(moved.length, 8, "sized for the destination cell");
+  const out = C.overlayCols(Uint8Array.from(narrowDst), moved, [E.COL_FX], false);
+  assert.deepEqual([...out.subarray(5, 8)], [0x16, 0x00, 0x80], "M $8000 in the v2 effect column");
+  assert.deepEqual([...out.subarray(0, 5)], [...narrowDst.subarray(0, 5)], "…and nothing else moved");
+});

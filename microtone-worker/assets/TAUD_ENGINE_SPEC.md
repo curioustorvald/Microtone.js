@@ -242,7 +242,11 @@ Two cases of note word `0x0000` are **not** silent, and both matter:
 - **Instrument byte plus a pitch effect** (`E`, `F` or `G`) on a channel that already has a pitch: this **triggers** the note at the voice's current pitch, so the slide has something to move. Latching the instrument and staying silent — the obvious reading — loses the note.
 - **Instrument byte alone**: latch the instrument, re-resolve its patch and re-seed the note volume from its default note volume, clear key-off and note-fading and reset the fadeout — **without** retriggering the sample. ProTracker, FT2, IT and Schism all behave this way.
 
-A pitch on a row carrying `G` (or `L`, which also takes a target) sets the portamento target instead of retriggering. If such a row also carries an instrument byte, the instrument is latched with the same no-retrigger path.
+A pitch on a row carrying `G` (or `L`, which also takes a target) sets the portamento target instead of retriggering. If such a row also carries an instrument byte, the instrument is latched with the same no-retrigger path **and the note is re-attacked**: the four envelope playheads go back to node 0 exactly as they would on a fresh trigger ([§5.3](#5-3-trigger-sequence)), and the smoothed volume-envelope value is snapped so the attack lands there immediately. Only the sample position stays where it is.
+
+That re-attack is what makes such a row audible at all once the previous note has been released. Clearing key-off without rewinding the envelope re-arms a sustain onto a playhead already sitting in its release tail, and the tail then holds the new note down at whatever level the release had reached — the row appears not to trigger, while starting playback from the row before it, where there is no sounding voice for the portamento to attach to, plays it correctly. FastTracker runs its whole `retrigEnvelopeVibrato` here, and all three of its parts (playheads, sustain, fadeout) are required.
+
+A note-less instrument byte does **not** re-attack. It is the same latch without the rewind, so a released note carries on releasing.
 
 ### 5.3 Trigger sequence
 
@@ -796,9 +800,13 @@ A transport reset restores a well-defined starting state, and getting its scope 
 
 A **full reset** sets BPM 125, tick rate 6, global and mixing volume `0x80`, clears the tuning, restores the tone and interpolation modes from the file's global behaviour flags, re-installs the surround model, clears the Amiga filter states, deactivates every voice, empties the background pool, clears every per-voice effect and envelope state, and clears the per-instrument runtime state (funk masks and filter overrides).
 
-A **play-from-row** reset is narrower and deliberately so: it resets row, tick and jump state, deactivates every voice, **empties the background pool**, clears the per-channel pattern-loop and Ditto state, and reconstructs the Ditto arm state for the starting row — but leaves tempo and volumes alone, because a replay must keep the song's tempo.
+A **play-from-row** reset is narrower and deliberately so: it resets row, tick and jump state, deactivates every voice, **empties the background pool**, clears the per-channel pattern-loop and Ditto state, reconstructs the Ditto arm state for the starting row, and returns every channel to its song-start position and volume — but leaves the playhead's tempo and volumes alone, because a replay must keep the song's tempo.
+
+Returning the CHANNELS is not the same thing as leaving the playhead's tempo alone, and both halves matter. Channel volume and every panning axis (channel position and elevation, the note axis, the spherical slide target), glissando and the `S $7x` per-note overrides are all written by the song's own effects and reset by nothing else — a trigger deliberately leaves them, since they belong to the channel rather than the note — so a play that does not clear them starts wherever the last one finished. What a reset **MUST NOT** touch is the host's own mixer: per-channel mute and fader levels belong to whoever is listening, not to the song, and a replay that silently unmutes a channel is its own bug.
 
 Emptying the background pool is the part that is easy to omit and audible when omitted: a stop leaves ghosts active, and a replay resumes them.
+
+A host loading a new document **MUST** perform a full reset before uploading it. Nothing in a file describes the channel state the previous song left behind, so a document loaded on top of another inherits its panning and channel volumes otherwise.
 
 ## 16. Effects
 

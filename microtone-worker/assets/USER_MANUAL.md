@@ -335,6 +335,16 @@ whether that take clipped. Peak is a **true peak**: the level
 between the samples, which is what a resampler or a decoder runs into even when
 every sample is inside.
 
+The fill is a **true RMS** — the root mean square of the samples themselves,
+with no reference waveform assumed — so a sine reads 3 dB under its peak and a
+square reads level with it. The peak line, being an inter-sample reading, is the
+one that moves: a square wave has no signal between its samples that a
+reconstruction filter can follow without overshooting, so its line sits a decibel
+or two above its own fill, and further still at pitches where the sample rate
+conversion puts the edges between output samples. That gap is the waveform's,
+not the meter's. A filtered square is a different matter: close the instrument's
+filter far enough and what reaches the bus is a sine, gap and all.
+
 **What it measures is up to you** — the chooser at the foot of the meter panel —
 and it need not be what you are listening to. A
 surround song can be metered as stereo, as quadraphonic, 5.1 or 7.1 — those are
@@ -927,6 +937,8 @@ The second effect column is **hidden by default**: most songs never write one, a
 A channel that is *hiding* second effects it actually contains says so: an amber **E2** appears beside the channel number in the Timeline header, and the Patterns column's E2 button is outlined in the same colour. Hiding the column never changes what plays, and never changes what is in the file — a hidden second effect survives copy, paste and delete untouched, because a selection only ever reaches the columns you can see.
 
 Once it is showing, it edits exactly like the first effect: the same opcode letters, the same four argument digits, the same command palette at the foot of the screen, and the same right-click quick-effect cells.
+
+**The two effect columns swap freely.** Select one of them, copy, put the caret in the other and paste — the command moves across. The caret is what picks the slot, so the same copied effect can go to the first column in one place and the second in another, and the slot you are not pasting into keeps whatever it had. A block covering *both* effect columns (or a whole cell) is not ambiguous, so it always lands in the columns it came from. A second effect will also paste into a version-2 project's effect column, since there is nothing in one that an ordinary effect column cannot hold.
 
 The **Panner…** dialog gains a **Column** button in such a project: it writes the
 position into the panning column and leaves the effect slot free.

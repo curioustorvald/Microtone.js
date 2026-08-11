@@ -593,3 +593,71 @@ test("the analysis renderer is a SpatialRenderer like any other", () => {
   r.monitorStereo(data, 8, 0, out);
   assert.ok(out[0] > out[1], "left louder than right");
 });
+
+// ── item 126: is the RMS bar a TRUE RMS? ───────────────────────────────────
+// Asked against a square wave, whose RMS equals its own peak, where the strip
+// showed the two bars ~3 dB apart. It is a true RMS — the gap is on the PEAK
+// side, which is a TRUE peak: the level between the samples. A hard square's
+// edges are reconstructed with overshoot, so its inter-sample peak legitimately
+// sits above every sample it was built from, while its RMS sits exactly on
+// them. (Checked against the real engine too: a square-wave instrument reads
+// rms == sample peak at every pitch, and true peak 1.8 dB above at its own
+// rate, up to ~3 dB where the resampler puts the edges between output samples.)
+
+/** Steady-state readout of a periodic signal fed to both channels of the mix. */
+function steadyMix(gen, frames = 32768) {
+  const tap = new AnalysisTap(ANALYSIS_STEREO, SURROUND_STEREO);
+  const mixL = new Float32Array(TRACKER_CHUNK);
+  const mixR = new Float32Array(TRACKER_CHUNK);
+  const push = (f0) => {
+    for (let n = 0; n < TRACKER_CHUNK; n++) mixL[n] = mixR[n] = gen(f0 + n);
+    tap.begin();
+    tap.finish(TRACKER_CHUNK, mixL, mixR);
+  };
+  push(0); // warm-up: the true-peak detector's 8-tap history has to fill first
+  tap.drain(makeAnalysisReadout());
+  for (let f0 = TRACKER_CHUNK; f0 < frames; f0 += TRACKER_CHUNK) push(f0);
+  return tap.drain(makeAnalysisReadout());
+}
+
+test("the RMS reading is a true RMS", () => {
+  // A square wave: RMS === peak, to the last bit the Float32 mix bus carries.
+  const A = Math.fround(0.8);
+  const sq = steadyMix((i) => ((i % 64) < 32 ? 0.8 : -0.8));
+  assert.equal(sq.peak[0], A);
+  assert.ok(Math.abs(Math.sqrt(sq.meanSquare[0]) - A) < 1e-12,
+    `square RMS ${Math.sqrt(sq.meanSquare[0])} should equal its ${A} peak`);
+
+  // A sine: RMS === peak/√2, i.e. exactly 3.01 dB down. Nothing in the meter
+  // applies that factor itself — it comes out of the waveform.
+  const sine = steadyMix((i) => 0.8 * Math.sin((2 * Math.PI * 500 * i) / 32000));
+  assert.ok(Math.abs(Math.sqrt(sine.meanSquare[0]) - 0.8 * Math.SQRT1_2) < 1e-4,
+    `sine RMS ${Math.sqrt(sine.meanSquare[0])}`);
+
+  // Half-amplitude for half the time: mean square is the average, not the peak.
+  const duty = steadyMix((i) => ((i % 64) < 32 ? 0.8 : 0.0));
+  assert.ok(Math.abs(Math.sqrt(duty.meanSquare[0]) - A * Math.SQRT1_2) < 1e-9,
+    `50% duty RMS ${Math.sqrt(duty.meanSquare[0])}`);
+});
+
+test("the peak reading is a TRUE peak, which is why a square shows a gap", () => {
+  const sq = steadyMix((i) => ((i % 64) < 32 ? 0.8 : -0.8));
+  const rms = Math.sqrt(sq.meanSquare[0]);
+  assert.ok(sq.truePeak[0] > sq.peak[0],
+    "a square's inter-sample peak is above the samples it is made of");
+  const gapDb = 20 * Math.log10(sq.truePeak[0] / rms);
+  assert.ok(gapDb > 1 && gapDb < 3, `square peak-to-RMS gap ${gapDb.toFixed(2)} dB`);
+
+  // A band-limited signal has nothing between its samples to find: both
+  // readings land on the same number, so the gap there is the honest 3.01 dB
+  // of a sine and nothing more.
+  const sine = steadyMix((i) => 0.8 * Math.sin((2 * Math.PI * 500 * i) / 32000));
+  assert.ok(Math.abs(sine.truePeak[0] - sine.peak[0]) < 1e-3, "sine: true peak == sample peak");
+
+  // And a steady DC level reads back as itself — the oversampler's branches are
+  // each normalised to unity DC gain, so it can never invent level out of one.
+  const dc = steadyMix(() => 0.8);
+  assert.ok(Math.abs(dc.truePeak[0] - Math.fround(0.8)) < 1e-9, `DC true peak ${dc.truePeak[0]}`);
+  assert.ok(Math.abs(Math.sqrt(dc.meanSquare[0]) - Math.fround(0.8)) < 1e-9,
+    "…and so does its RMS");
+});

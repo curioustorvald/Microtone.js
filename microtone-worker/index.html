@@ -7,14 +7,7 @@
   <link rel="apple-touch-icon" type="image/png" href="icon-192.png"> <!-- Apple favicon -->
   <title>Microtone</title>
   <link rel="canonical" href="https://microtone.cc/">
-  <!-- Address-bar tint: the default theme's --bg from css/microtone.css. One
-       tag, because the OS preference no longer picks the theme; applyTheme()
-       rewrites it with the active --bg for whoever saved another one. -->
   <meta name="theme-color" content="#2f3134">
-  <!-- Link previews (Bluesky/Mastodon/Discord/Slack). og:image must be an
-       ABSOLUTE URL and must live inside this directory — the deploy root is
-       microtone-worker/, so the repo-root Screenshot1.png is not reachable;
-       screenshot.png is the served copy. -->
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Microtone">
   <meta property="og:url" content="https://microtone.cc/">
@@ -44,13 +37,6 @@
   <link rel="stylesheet" href="css/microtone.css" />
 </head>
 <body class="app-page">
-  <!-- Boot splash (item 67): covers the module-graph load. Hidden markup +
-       an inline classic script (runs during parse, long before app.js's
-       module graph lands; a no-JS page never unhides it). Purely visual —
-       pointer-events:none — and app.js calls window.__splash.done() when
-       the shell is ready. Loading messages live in src/ui/lang/*.js under
-       "splash.msg.*" (the lang files are dependency-free ES modules, so the
-       splash dynamic-imports them directly, ahead of the app). -->
   <div id="splash" class="splash" hidden>
     <div class="splash-brand"><span class="brand brand-red">Micro</span><span class="brand brand-white">tone</span></div>
     <div class="splash-grid" id="splashGrid"><div class="splash-ph"></div></div>
@@ -217,12 +203,7 @@
   </div>
 
   <main id="viewHost" class="view-host">
-    <!-- The stage holds every view (all absolutely positioned); the master
-         strip is a SIBLING so it takes width off the grid instead of covering
-         it, and the canvases' ResizeObserver picks the change up on its own. -->
     <div id="viewStage" class="view-stage">
-      <!-- Welcome screen (item 104): the Timeline tab's content until a project
-           is loaded — start actions, recent projects, patch notes, support. -->
       <div id="welcomeHost" class="view-dom"></div>
       <canvas id="timeline" class="view-canvas" hidden></canvas>
       <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
@@ -243,8 +224,6 @@
     <span id="stFile" class="dim" data-i18n="status.noFile">no file</span>
     <span id="stDirty" class="dirty" data-icon="dot" hidden></span>
     <div class="grow"></div>
-    <!-- Contextual per-view hint, driven by app.js updateHint() (item 78);
-         no data-i18n so applyDom can't clobber the view-specific text. -->
     <span id="stHint" class="dim">Open or import a file to begin</span>
     <a class="gh-link" href="docs.html" target="_blank" rel="noopener" data-icon="external" data-icon-after data-i18n="status.docs" data-i18n-title="status.docsTitle">Docs</a>
   </footer>

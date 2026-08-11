@@ -5782,13 +5782,19 @@ function applyTrackerRow(eng, ts, playhead) {
         // Tone porta: target the note, do not retrigger sample.
         voice.tonePortaTarget = note;
         // Inst byte on a porta row reloads the default volume + clears fade state
-        // without retriggering (Schism csf_instrument_change semantics).
+        // without retriggering (Schism csf_instrument_change semantics), and
+        // RE-ATTACKS the envelopes: the instrument byte is what makes a porta
+        // row after a key-off audible again (item 124). FT2 runs its whole
+        // retrigEnvelopeVibrato here — envelope playheads back to node 0,
+        // sustain re-armed, fadeout reset — and only the sample position stays
+        // put. Without the playhead half, a release that had already decayed
+        // stayed decayed and swallowed the note.
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal,
             narrowVolAxis(ts, voice.noteVolume));
-          applyInstrumentChange(eng, ts, voice, newInst, newPatch);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -5823,8 +5829,13 @@ function applyTrackerRow(eng, ts, playhead) {
 }
 
 // Shared "instrument byte without retrigger" path (no-note-inst and porta+inst rows).
+// `reAttack` additionally rewinds the four envelope playheads the way a fresh
+// trigger does (triggerNote), WITHOUT touching the sample position — the porta
+// row's half of FT2 retrigEnvelopeVibrato. A note-less instrument byte does not
+// re-attack: FT2 leaves such a row decaying, and re-arming its sustain would
+// hold a released note up for ever.
 
-function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = false) {
   applyActiveSample(voice, newInst, newPatch);
   const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
@@ -5832,6 +5843,34 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
   voice.keyOff = false;
   voice.noteFading = false;
   voice.fadeoutVolume = 1.0;
+  if (!reAttack) return;
+  voice.envIndex = 0;
+  voice.envTimeSec = 0.0;
+  voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  // Snap the per-sample-smoothed envelope so the re-attack lands on node 0.
+  voice.envVolMix = voice.envVolume;
+  voice.envVolStep = 0.0;
+  voice.envPanIndex = 0;
+  voice.envPanTimeSec = 0.0;
+  voice.envPan = voice.activePanEnv[0].value / 255.0;
+  voice.hasPanEnv = envPresent(voice.activePanEnvLoop);
+  // Pitch / filter envelope seeds — settle past leading zero-duration nodes.
+  if (voice.hasPitchEnv) {
+    voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
+      voice.activePitchEnvSustain);
+    voice.envPitchIndex = pfIdxBox[0];
+    voice.envPitchTimeSec = pfTimeBox[0];
+  } else {
+    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+  }
+  if (voice.hasFilterEnv) {
+    voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
+      voice.activeFilterEnvSustain);
+    voice.envFilterIndex = pfIdxBox[0];
+    voice.envFilterTimeSec = pfTimeBox[0];
+  } else {
+    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
+  }
 }
 
 function advanceTrackerCue(eng, ts, playhead) {
@@ -7004,9 +7043,11 @@ class TaudEngine {
    *  preview), so it clears the transient per-play state that would otherwise
    *  bleed a prior playback into a fresh start — notably the NNA background
    *  ghosts, which stop() leaves active and a replay would resume (the
-   *  "mysteriously lingering notes" bug). Tempo/volume are deliberately NOT
-   *  touched (a replay must keep the song's tempo — that's why this is not a
-   *  full resetParams). */
+   *  "mysteriously lingering notes" bug), and the CHANNEL-scope mixer state the
+   *  song's own effects write (item 125: pan, elevation, channel volume). The
+   *  playhead's tempo/volume are deliberately NOT touched (a replay must keep
+   *  the song's tempo — that's why this is not a full resetParams), and neither
+   *  is the host's per-channel fader/mute, which belongs to the desk. */
   setTrackerRow(ph, row) {
     const ts = this.playheads[ph].trackerState;
     ts.rowIndex = Math.min(Math.max(row, 0), 63);
@@ -7030,6 +7071,28 @@ class TaudEngine {
       // advances, but nothing did it at play START.
       v.loopStartRow = 0; v.loopCount = 0;
       v.dittoActive = false; v.dittoSourceStart = 0; v.dittoLength = 0; v.dittoEndRow = 0;
+      // Channel-scope state, back to the song-start defaults (item 125). A
+      // trigger deliberately does NOT reset any of this — pan and channel volume
+      // belong to the CHANNEL, not the note — so without a clear here the last
+      // S $80xx / M / N / P / X / Z of the previous play was still in force, and
+      // a song played twice, or a second file opened on top of the first, panned
+      // its notes wherever the last one had left them. Same defaults as
+      // resetParams (state.js).
+      v.channelVolume = ts.volMax;
+      v.channelPan = 0x80;
+      v.rowPan = 32;
+      v.panAzimuth = 128.0;
+      v.panElevation = 0.0;
+      v.notePan = 0;
+      v.noteElevation = 0.0;
+      v.spatialTargetAz = 128.0;
+      v.spatialTargetEl = 0.0;
+      v.spatialSlideActive = false;
+      v.panbrelloOffset = 0;
+      v.glissandoOn = false;
+      // Per-note S $7x overrides (NNA + the four envelope switches).
+      v.nnaOverride = -1;
+      v.volEnvOn = true; v.panEnvOn = true; v.pitchEnvOn = true; v.filterEnvOn = true;
     }
     ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
     // Re-arm any Pattern-Ditto (effect 7) region that a mid-pattern start lands

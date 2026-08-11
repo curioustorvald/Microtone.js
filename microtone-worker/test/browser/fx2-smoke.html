@@ -128,6 +128,68 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
     `${cleared?.effect2}/${cleared?.effectArg2}`);
   store.record = false;
 
+  // ── 5b. copy from one effect column, paste into the other (item 127) ───
+  // Put a D in slot 1 and an M in slot 2 of one row, then move each into the
+  // other slot through the REAL copy/paste path.
+  store.record = true;
+  const srcCell = timeline.cellAt(0, 2).cell;
+  Object.assign(srcCell, { effect: 0x0d, effectArg: 0x0102, effect2: 0x16, effectArg2: 0x8000 });
+  store.emit("edit");
+  // Select just the second effect column of row 0 and copy it.
+  timeline.sel = { aRow: 0, aCh: 2, aSub: E.SUB_FX2_OP, row: 0, ch: 2, sub: E.SUB_FX2_ARG };
+  check(timeline.copySelection(), "the 2nd effect column alone can be copied");
+  check(store.clipboard.cols.length === 1 && store.clipboard.cols[0] === E.COL_FX2,
+    "…as a one-column block", JSON.stringify(store.clipboard.cols));
+  // Paste it onto row 4 with the caret on the FIRST effect column.
+  store.cursor = { row: 4, ch: 2, sub: E.SUB_FX_OP, nib: 0 };
+  timeline.sel = null;
+  timeline.paste();
+  await sleep(40);
+  const pasted = timeline.cellAt(4, 2).cell;
+  check(pasted.effect === 0x16 && pasted.effectArg === 0x8000,
+    "a 2nd-effect block pastes into the 1st effect column",
+    `${pasted.effect}/$${pasted.effectArg.toString(16)}`);
+  check(pasted.effect2 === 0 && pasted.effectArg2 === 0,
+    "…without touching the destination's own 2nd slot",
+    `${pasted.effect2}/${pasted.effectArg2}`);
+  // …and the other way round: copy the FIRST effect, paste onto the second.
+  timeline.sel = { aRow: 0, aCh: 2, aSub: E.SUB_FX_OP, row: 0, ch: 2, sub: E.SUB_FX_ARG };
+  timeline.copySelection();
+  store.cursor = { row: 6, ch: 2, sub: E.SUB_FX2_OP, nib: 0 };
+  timeline.sel = null;
+  timeline.paste();
+  await sleep(40);
+  const pasted2 = timeline.cellAt(6, 2).cell;
+  check(pasted2.effect2 === 0x0d && pasted2.effectArg2 === 0x0102,
+    "a 1st-effect block pastes into the 2nd effect column",
+    `${pasted2.effect2}/$${pasted2.effectArg2.toString(16)}`);
+  check(pasted2.effect === 0 && pasted2.effectArg === 0,
+    "…without touching the destination's own 1st slot",
+    `${pasted2.effect}/${pasted2.effectArg}`);
+  // The caret does not move on a paste, so repeating one at another row goes to
+  // the same SLOT. (Dropping the selection first is what moving the cursor does
+  // for real — a paste leaves one behind, and it outranks the cursor as the
+  // next paste's anchor.)
+  timeline.sel = null;
+  store.cursor = { row: 8, ch: 2, sub: E.SUB_FX2_OP, nib: 0 };
+  timeline.paste();
+  await sleep(40);
+  const again = timeline.cellAt(8, 2).cell;
+  check(again.effect2 === 0x0d && again.effect === 0,
+    "…and pasting again lands in the same column", `${again.effect}/${again.effect2}`);
+  // A WHOLE-CELL block is not slot-agnostic — it still lands where it came from.
+  timeline.sel = { aRow: 0, aCh: 2, aSub: 0, row: 0, ch: 2, sub: E.lastSub(true) };
+  timeline.copySelection();
+  store.cursor = { row: 10, ch: 2, sub: E.SUB_FX_OP, nib: 0 };
+  timeline.sel = null;
+  timeline.paste();
+  await sleep(40);
+  const whole = timeline.cellAt(10, 2).cell;
+  check(whole.effect === 0x0d && whole.effect2 === 0x16,
+    "a whole-cell block keeps both effects in their own slots",
+    `${whole.effect}/${whole.effect2}`);
+  store.record = false;
+
   // ── 6. the Patterns view: per column, and the panes get wider ───────────
   store.setAllFx2(false);
   await sleep(40);
@@ -156,6 +218,27 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   const needed = 34 + 4 + 30 * 8.5; // GUTTER_W + pad + cellChars × CHAR_W
   check(paneW >= needed, "the pane is wide enough for the whole cell, uncropped",
     `${paneW} >= ${Math.ceil(needed)}`);
+
+  // ── 6b. …and the Patterns view has its own paste path (item 127) ────────
+  const p0 = patternView.panes[0];
+  patternView.setActiveIdx(0);
+  p0.setPattern(0);
+  await sleep(80);
+  const prow = p0.pattern()[0];
+  Object.assign(prow, { effect: 0, effectArg: 0, effect2: 0x18, effectArg2: 0x1234 }); // O
+  store.emit("edit");
+  p0.sel = { aRow: 0, row: 0, aSub: E.SUB_FX2_OP, sub: E.SUB_FX2_ARG };
+  check(p0.copySelection(), "a Patterns column can copy its 2nd effect alone");
+  p0.cursor = { row: 12, sub: E.SUB_FX_OP, nib: 0 };
+  p0.sel = null;
+  p0.paste();
+  await sleep(40);
+  const prow12 = p0.pattern()[12];
+  check(prow12.effect === 0x18 && prow12.effectArg === 0x1234,
+    "…and paste it into the 1st effect column",
+    `${prow12.effect}/$${prow12.effectArg.toString(16)}`);
+  check(prow12.effect2 === 0 && prow12.effectArg2 === 0,
+    "…leaving that row's own 2nd slot alone");
 
   // ── 7. the all-channels switch ──────────────────────────────────────────
   store.setAllFx2(true);

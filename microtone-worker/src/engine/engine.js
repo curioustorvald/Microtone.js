@@ -236,9 +236,11 @@ export class TaudEngine {
    *  preview), so it clears the transient per-play state that would otherwise
    *  bleed a prior playback into a fresh start — notably the NNA background
    *  ghosts, which stop() leaves active and a replay would resume (the
-   *  "mysteriously lingering notes" bug). Tempo/volume are deliberately NOT
-   *  touched (a replay must keep the song's tempo — that's why this is not a
-   *  full resetParams). */
+   *  "mysteriously lingering notes" bug), and the CHANNEL-scope mixer state the
+   *  song's own effects write (item 125: pan, elevation, channel volume). The
+   *  playhead's tempo/volume are deliberately NOT touched (a replay must keep
+   *  the song's tempo — that's why this is not a full resetParams), and neither
+   *  is the host's per-channel fader/mute, which belongs to the desk. */
   setTrackerRow(ph, row) {
     const ts = this.playheads[ph].trackerState;
     ts.rowIndex = Math.min(Math.max(row, 0), 63);
@@ -262,6 +264,28 @@ export class TaudEngine {
       // advances, but nothing did it at play START.
       v.loopStartRow = 0; v.loopCount = 0;
       v.dittoActive = false; v.dittoSourceStart = 0; v.dittoLength = 0; v.dittoEndRow = 0;
+      // Channel-scope state, back to the song-start defaults (item 125). A
+      // trigger deliberately does NOT reset any of this — pan and channel volume
+      // belong to the CHANNEL, not the note — so without a clear here the last
+      // S $80xx / M / N / P / X / Z of the previous play was still in force, and
+      // a song played twice, or a second file opened on top of the first, panned
+      // its notes wherever the last one had left them. Same defaults as
+      // resetParams (state.js).
+      v.channelVolume = ts.volMax;
+      v.channelPan = 0x80;
+      v.rowPan = 32;
+      v.panAzimuth = 128.0;
+      v.panElevation = 0.0;
+      v.notePan = 0;
+      v.noteElevation = 0.0;
+      v.spatialTargetAz = 128.0;
+      v.spatialTargetEl = 0.0;
+      v.spatialSlideActive = false;
+      v.panbrelloOffset = 0;
+      v.glissandoOn = false;
+      // Per-note S $7x overrides (NNA + the four envelope switches).
+      v.nnaOverride = -1;
+      v.volEnvOn = true; v.panEnvOn = true; v.pitchEnvOn = true; v.filterEnvOn = true;
     }
     ts.backgroundVoices.length = 0; // drop lingering NNA ghosts from a prior play
     // Re-arm any Pattern-Ditto (effect 7) region that a mid-pattern start lands

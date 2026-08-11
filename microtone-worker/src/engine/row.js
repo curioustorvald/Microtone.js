@@ -9,7 +9,7 @@ import {
   cutLayerChildren, applyVolColumn, applyPanColumn, applyPanColumnWide,
   narrowVolAxis,
 } from "./trigger.js";
-import { applyKeyLift } from "./envelope.js";
+import { applyKeyLift, envPresent, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { startFastFade } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
 
@@ -208,13 +208,19 @@ export function applyTrackerRow(eng, ts, playhead) {
         // Tone porta: target the note, do not retrigger sample.
         voice.tonePortaTarget = note;
         // Inst byte on a porta row reloads the default volume + clears fade state
-        // without retriggering (Schism csf_instrument_change semantics).
+        // without retriggering (Schism csf_instrument_change semantics), and
+        // RE-ATTACKS the envelopes: the instrument byte is what makes a porta
+        // row after a key-off audible again (item 124). FT2 runs its whole
+        // retrigEnvelopeVibrato here — envelope playheads back to node 0,
+        // sustain re-armed, fadeout reset — and only the sample position stays
+        // put. Without the playhead half, a release that had already decayed
+        // stayed decayed and swallowed the note.
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal,
             narrowVolAxis(ts, voice.noteVolume));
-          applyInstrumentChange(eng, ts, voice, newInst, newPatch);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -249,8 +255,13 @@ export function applyTrackerRow(eng, ts, playhead) {
 }
 
 // Shared "instrument byte without retrigger" path (no-note-inst and porta+inst rows).
+// `reAttack` additionally rewinds the four envelope playheads the way a fresh
+// trigger does (triggerNote), WITHOUT touching the sample position — the porta
+// row's half of FT2 retrigEnvelopeVibrato. A note-less instrument byte does not
+// re-attack: FT2 leaves such a row decaying, and re-arming its sustain would
+// hold a released note up for ever.
 import { applyActiveSample, rowVolumeFromDefault } from "./trigger.js";
-function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = false) {
   applyActiveSample(voice, newInst, newPatch);
   const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
@@ -258,6 +269,34 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch) {
   voice.keyOff = false;
   voice.noteFading = false;
   voice.fadeoutVolume = 1.0;
+  if (!reAttack) return;
+  voice.envIndex = 0;
+  voice.envTimeSec = 0.0;
+  voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  // Snap the per-sample-smoothed envelope so the re-attack lands on node 0.
+  voice.envVolMix = voice.envVolume;
+  voice.envVolStep = 0.0;
+  voice.envPanIndex = 0;
+  voice.envPanTimeSec = 0.0;
+  voice.envPan = voice.activePanEnv[0].value / 255.0;
+  voice.hasPanEnv = envPresent(voice.activePanEnvLoop);
+  // Pitch / filter envelope seeds — settle past leading zero-duration nodes.
+  if (voice.hasPitchEnv) {
+    voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
+      voice.activePitchEnvSustain);
+    voice.envPitchIndex = pfIdxBox[0];
+    voice.envPitchTimeSec = pfTimeBox[0];
+  } else {
+    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+  }
+  if (voice.hasFilterEnv) {
+    voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
+      voice.activeFilterEnvSustain);
+    voice.envFilterIndex = pfIdxBox[0];
+    voice.envFilterTimeSec = pfTimeBox[0];
+  } else {
+    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
+  }
 }
 
 export function advanceTrackerCue(eng, ts, playhead) {

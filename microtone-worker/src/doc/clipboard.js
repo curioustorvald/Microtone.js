@@ -86,6 +86,54 @@ const COL_BYTE_MASKS_WIDE = [
   [[10, 0xff], [11, 0xff], [12, 0xff]],
 ];
 
+// ── the two effect columns are interchangeable (item 127) ──
+// Effect 1 and effect 2 are the SAME column twice over — same opcode, same
+// 16-bit argument, differing only in which runs first — so a block cut from one
+// has to be pastable into the other. The clipboard therefore treats a block
+// covering exactly ONE effect column as slot-agnostic: it lands in whichever
+// effect column the caret is standing on, and only the byte offsets differ.
+// (Column ids duplicated from edit.js, like the mask tables above, so this
+// module stays DOM/UI-free.)
+const COL_FX = 4, COL_FX2 = 5;
+/** First byte of each effect column in a wide cell (§5.5). */
+const FX_SLOT_BYTE = { [COL_FX]: 5, [COL_FX2]: 10 };
+
+/**
+ * The slot move a paste needs, or null for "paste where it came from".
+ *
+ * `targetCol` is the column the CARET is on — not the block's own, and not the
+ * selection's: the caret is the one part of this the user is holding, so it is
+ * what picks the slot, and it stays put across a paste so repeating one goes to
+ * the same place. Everything else (a multi-column block, a non-effect target, a
+ * cell with no second effect to speak of) is left exactly as it was.
+ */
+export function fxPasteRemap(blockCols, targetCol, wide) {
+  if (!blockCols || blockCols.length !== 1) return null;
+  const from = blockCols[0];
+  if (!(from in FX_SLOT_BYTE) || !(targetCol in FX_SLOT_BYTE)) return null;
+  if (from === targetCol) return null;
+  // Only a wide cell HAS a second slot to receive one. The other direction
+  // needs no such guard: a second effect carries nothing a version-2 effect
+  // column cannot hold, so it pastes into one as happily as into a v3 one.
+  if (targetCol === COL_FX2 && !wide) return null;
+  return { from, to: targetCol };
+}
+
+/**
+ * A block cell's bytes with its effect slot moved per `remap`, sized for the
+ * DESTINATION cell so `overlayCols` can read the target offsets — a block
+ * copied from a narrow project is only 8 bytes and has no byte 10 to read.
+ * Returns `cellBytes` untouched when there is nothing to move.
+ */
+export function remapFxBytes(cellBytes, remap, wide = true) {
+  if (!remap) return cellBytes;
+  const out = new Uint8Array(cellSize(wide));
+  out.set(cellBytes.subarray(0, Math.min(cellBytes.length, out.length)));
+  const from = FX_SLOT_BYTE[remap.from], to = FX_SLOT_BYTE[remap.to];
+  for (let i = 0; i < 3; i++) out[to + i] = cellBytes[from + i] ?? 0;
+  return out;
+}
+
 /** Overlay only `cols` (logical column ids) of `src` onto `dest` (same format);
  *  returns `dest`. Columns outside the set keep dest's bytes — this is what
  *  makes a partial-column paste leave the other columns unaffected, and what
