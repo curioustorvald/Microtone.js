@@ -22,12 +22,13 @@ import { parseTaud } from "../../src/format/taud-parse.js";
 import { loadIntoEngine, renderSong } from "../../src/audio/offline-render.js";
 import {
   dbfs, meterFrac, correlation, availableScopes, effectiveScopes, SCOPE_KINDS,
-  scopeAxes, scopeLabels, blobView, MeterBallistics,
+  scopeAxes, scopeLabels, blobView, radView, MeterBallistics,
   scopePanelHeight, scopePanelsThatFit, parseInk,
   slewTowards, integrateCorrelation, SCOPE_GAIN_SLEW_MS, CORR_INTEGRATE_MS,
   scopeAutoGain, SCOPE_GAIN_FILL, SCOPE_GAIN_HEADROOM, SCOPE_GAIN_MAX,
   METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
   SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
+  SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE,
   SCOPE_SELECT_H, SCOPE_CORR_H, SPLIT_H, MAX_SCOPE_PANELS,
 } from "../../src/ui/views/masterstrip.js";
 
@@ -342,11 +343,15 @@ test("dBFS and the meter scale", () => {
 });
 
 test("scopes on offer, and their axes", () => {
-  assert.deepEqual(availableScopes(SURROUND_STEREO), [SCOPE_BLOBS, SCOPE_TOP]);
-  assert.deepEqual(availableScopes(SURROUND_PLANAR), [SCOPE_BLOBS, SCOPE_TOP]);
-  // Spatial: both families, three planes each — blobs first, then Lissajous.
+  // A stereo or planar song has no height, so only the top of each family
+  // survives — the radiation monitor's included: with no Z it is a figure of
+  // revolution about the left-right axis, which is still a reading.
+  assert.deepEqual(availableScopes(SURROUND_STEREO), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
+  assert.deepEqual(availableScopes(SURROUND_PLANAR), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
+  // Spatial: all three families, three planes each, each family whole.
   assert.deepEqual(availableScopes(SURROUND_SPATIAL),
-    [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
+    [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
+      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE]);
 
   // A stereo song's top view is the mid/side goniometer; a surround song's is
   // left-right against front-back.
@@ -358,32 +363,46 @@ test("scopes on offer, and their axes", () => {
   assert.equal(scopeAxes(SCOPE_BLOBS, false), null);
 });
 
-test("the blobs family draws the same three planes as the Lissajous one", () => {
+test("all three families draw the same three planes", () => {
   assert.equal(blobView(SCOPE_BLOBS), "top");
   assert.equal(blobView(SCOPE_BLOBS_FRONT), "front");
   assert.equal(blobView(SCOPE_BLOBS_SIDE), "side");
-  assert.equal(blobView(SCOPE_TOP), null, "a Lissajous kind is not a blobs kind");
+  assert.equal(blobView(SCOPE_TOP), null, "a Goniometer kind is not a blobs kind");
+  assert.equal(radView(SCOPE_RAD), "top");
+  assert.equal(radView(SCOPE_RAD_FRONT), "front");
+  assert.equal(radView(SCOPE_RAD_SIDE), "side");
+  assert.equal(radView(SCOPE_BLOBS), null, "a blobs kind is not a radiation kind");
+  assert.equal(blobView(SCOPE_RAD), null, "…and the other way round");
 
-  // A blobs panel and the Lissajous panel of the same plane must be oriented
-  // the same way, or a pair of them side by side would contradict each other.
-  for (const [blob, liss] of [[SCOPE_BLOBS_FRONT, SCOPE_FRONT], [SCOPE_BLOBS_SIDE, SCOPE_SIDE]]) {
-    const a = scopeLabels(blob, false);
-    const b = scopeLabels(liss, false);
-    assert.deepEqual(
-      [a.left, a.right, a.top, a.bottom], [b.left, b.right, b.top, b.bottom],
-      `${blob} vs ${liss}`,
-    );
+  // Panels of the same plane must be oriented the same way whatever family they
+  // belong to, or a pair of them side by side would contradict each other.
+  for (const [plane, kinds] of [
+    ["front", [SCOPE_BLOBS_FRONT, SCOPE_FRONT, SCOPE_RAD_FRONT]],
+    ["side", [SCOPE_BLOBS_SIDE, SCOPE_SIDE, SCOPE_RAD_SIDE]],
+    // The top trio agrees too — for a surround song, where all three have a
+    // front-back axis. (A stereo song's Goniometer top plots the mono sum
+    // instead, and says so on its own edges.)
+    ["top", [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]],
+  ]) {
+    const want = scopeLabels(kinds[0], false);
+    for (const kind of kinds.slice(1)) {
+      const got = scopeLabels(kind, false);
+      assert.deepEqual(
+        [got.left, got.right, got.top, got.bottom],
+        [want.left, want.right, want.top, want.bottom],
+        `${plane}: ${kind} vs ${kinds[0]}`,
+      );
+    }
   }
-  // The top pair agrees too — for a surround song, where both have a front-back
-  // axis. (A stereo song's Lissajous top plots the mono sum instead, and says so.)
-  const bt = scopeLabels(SCOPE_BLOBS, false);
-  const lt = scopeLabels(SCOPE_TOP, false);
-  assert.deepEqual([bt.left, bt.right, bt.top, bt.bottom], [lt.left, lt.right, lt.top, lt.bottom]);
   assert.equal(scopeLabels(SCOPE_BLOBS, true).top, "F", "a blobs dial is a map, whatever the song");
+  assert.equal(scopeLabels(SCOPE_RAD, true).top, "F", "…and so is a radiation dial");
 
-  // The extra two are a CHOICE: a new panel is handed the original four first.
-  assert.deepEqual(SCOPE_KINDS.slice(0, 4), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]);
-  assert.deepEqual(SCOPE_KINDS.slice(4), [SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE]);
+  // A new panel is handed the three TOP views first — one of each family, which
+  // is the strip at its most useful — then the rest of the planes, and the two
+  // extra blobs views last of all: those are a CHOICE, not something the strip
+  // hands you on its own.
+  assert.deepEqual(SCOPE_KINDS.slice(0, 3), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
+  assert.deepEqual(SCOPE_KINDS.slice(-2), [SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE]);
 });
 
 test("a panel's choice survives a song that cannot show it", () => {
@@ -394,18 +413,18 @@ test("a panel's choice survives a song that cannot show it", () => {
   // rather than repeating a view — and the WISHES are untouched, which is what
   // makes them come back when the song goes spatial again.
   assert.deepEqual(effectiveScopes(wishes, SURROUND_STEREO),
-    [SCOPE_BLOBS, SCOPE_TOP, null, null]);
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, null]);
   assert.deepEqual(effectiveScopes(wishes, SURROUND_PLANAR),
-    [SCOPE_BLOBS, SCOPE_TOP, null, null]);
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, null]);
   assert.deepEqual(wishes, [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE], "wishes mutated");
 
   // An unshowable wish borrows a view nothing else is showing…
   assert.deepEqual(effectiveScopes([SCOPE_FRONT, SCOPE_SIDE], SURROUND_STEREO),
     [SCOPE_BLOBS, SCOPE_TOP]);
 
-  // ONE PANEL PER VIEW is a hard ceiling: a stereo or planar song draws two,
-  // whatever is configured and however tall the window is. A third panel would
-  // only repeat what the one beside it is already showing.
+  // ONE PANEL PER VIEW is a hard ceiling: a stereo or planar song draws as many
+  // as it has views, whatever is configured and however tall the window is. One
+  // more would only repeat what the panel beside it is already showing.
   for (const model of [SURROUND_STEREO, SURROUND_PLANAR]) {
     for (const wish of [
       [SCOPE_BLOBS, SCOPE_TOP, SCOPE_TOP],           // a duplicate…
@@ -418,7 +437,7 @@ test("a panel's choice survives a song that cannot show it", () => {
         `model ${model}, wishes ${wish}: drew ${drawn}`);
     }
   }
-  // A spatial song has six views, so six panels is its ceiling.
+  // A spatial song has nine views, so nine panels is its ceiling.
   assert.equal(
     effectiveScopes([...SCOPE_KINDS, SCOPE_TOP], SURROUND_SPATIAL).filter((k) => k !== null).length,
     availableScopes(SURROUND_SPATIAL).length);

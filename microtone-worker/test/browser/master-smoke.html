@@ -1,9 +1,12 @@
 <!doctype html><meta charset="utf-8"><title>master strip (item 98)</title>
 <pre id="out">running… (needs a real audio-capable browser; ~8s)</pre>
 <img src="/hang" hidden>
-<!-- Tall enough for the default two scope panels: a scope panel is a fixed
-     size, so how many fit is a property of the viewport (item 98 note 2). -->
-<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1000px"></iframe>
+<!-- Tall enough for the default two scope panels AND for a column that can
+     still hold one more than a stereo song has views to put in it — that spare
+     row is what lets the "+" checks below tell "no room" apart from "no view
+     left". A scope panel is a fixed size, so how many fit is a property of the
+     viewport (item 98 note 2). -->
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1240px"></iframe>
 <script type="module">
 // Drives the REAL app: the master strip's layout, its choosers per surround
 // model, the engine-side analysis tap it installs, live meters/scopes while the
@@ -76,18 +79,18 @@ function painted(cv) {
   const scopes = () => [...masterStrip.scopeSel[0].options].map((o) => o.value);
   check(targets().join() === "stereo", "a stereo song offers only the stereo meter", targets().join());
   check(masterStrip.targetSel.disabled, "…and there is nothing to choose");
-  check(scopes().join() === "blobs,top,hide", "a stereo song offers the two flat scopes", scopes().join());
+  check(scopes().join() === "blobs,top,rad,hide", "a stereo song offers the three flat scopes", scopes().join());
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 1));
   await sleep(80);
   check(targets().join() === "stereo,quad,5.1,7.1,ambisonic", "a planar song offers every target", targets().join());
-  check(scopes().join() === "blobs,top,hide", "…but still no vertical-plane scopes", scopes().join());
+  check(scopes().join() === "blobs,top,rad,hide", "…but still no vertical-plane scopes", scopes().join());
   check(masterStrip.target === "5.1", "planar defaults to metering 5.1", masterStrip.target);
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(80);
-  check(scopes().join() === "blobs,blobsfront,blobsside,top,front,side,hide",
-    "a spatial song offers both families in all three planes", scopes().join());
+  check(scopes().join() === "blobs,blobsfront,blobsside,top,front,side,rad,radfront,radside,hide",
+    "a spatial song offers all three families in all three planes", scopes().join());
   check(masterStrip.target === "ambisonic", "spatial defaults to the ambisonic field", masterStrip.target);
 
   // ── 3. the tap reaches the engine, and the strip draws live ──────────────
@@ -124,12 +127,12 @@ function painted(cv) {
   check(painted(masterStrip.scopeCanvas[1]), "scope B painted");
   check(painted(masterStrip.meterCanvas), "meter/fader painted");
 
-  // ── 3a. the Lissajous panel is a CRT beam (item 106) ─────────────────────
+  // ── 3a. the Goniometer panel is a CRT beam (item 106) ─────────────────────
   // The scope keeps its phosphor between frames and sweeps only the samples
   // that arrived since the last one, so what is on screen is a continuous
   // trace with energy behind it rather than a window's worth of dots.
   const beamCell = masterStrip.beams[1];
-  check(!!beamCell && beamCell.beam.totalEnergy() > 0, "the Lissajous panel has a lit beam",
+  check(!!beamCell && beamCell.beam.totalEnergy() > 0, "the Goniometer panel has a lit beam",
     beamCell ? beamCell.beam.totalEnergy().toFixed(1) : "no beam");
   check(masterStrip.beams[0] === null, "…and a blobs panel does not pay for one");
   check(masterStrip.freshFrames > 0 && masterStrip.freshFrames < 4096,
@@ -158,6 +161,44 @@ function painted(cv) {
   const gain750 = masterStrip.scopeGain[1];
   check(gain50 > 20, "the scope gain does not snap in one frame", gain50.toFixed(1));
   check(gain750 < gain50 / 2, "…but it does get there", `${gain50.toFixed(1)} → ${gain750.toFixed(1)}`);
+
+  // ── 3b. the radiation panel is one field seen through many cameras ───────
+  // Item 129: the analysis is per STRIP, not per panel — put two radiation
+  // views up and there must still be exactly one soundfield behind them.
+  doc.getElementById("playSong").click();
+  await sleep(400);
+  for (const [i, kind] of [[0, "rad"], [1, "radfront"]]) {
+    masterStrip.scopeSel[i].value = kind;
+    masterStrip.scopeSel[i].dispatchEvent(new win.Event("change"));
+  }
+  await sleep(600);
+  const field = masterStrip.radField;
+  check(!!field && field.ready, "the radiation panels built a field");
+  check(field.live && field.presence > 0.5, "…and it is present while the song plays",
+    field ? field.presence.toFixed(3) : "no field");
+  check(field.peak > 0, "…with a peak to normalise against", field?.peak.toExponential(2));
+  check(masterStrip.radCells[0] !== null && masterStrip.radCells[1] !== null,
+    "both panels have a camera");
+  check(masterStrip.radCells[0].view !== masterStrip.radCells[1].view,
+    "…their own cameras");
+  check(painted(masterStrip.scopeCanvas[0]) && painted(masterStrip.scopeCanvas[1]),
+    "both radiation panels painted");
+  // The surface carries the spectrum: at least one vertex is coloured.
+  let inked = 0;
+  for (let i = 0; i < field.ink.length; i++) if (field.ink[i] > 0) inked++;
+  check(inked > field.ink.length / 4, "the surface is spectrally coloured", String(inked));
+  // Stop, and it fades rather than freezing on the ring's last window.
+  const litRad = field.presence;
+  doc.getElementById("stopBtn").click();
+  await sleep(1600);
+  check(masterStrip.radField.presence < litRad * 0.2,
+    "…and the surface fades once the music stops",
+    `${litRad.toFixed(3)} → ${masterStrip.radField.presence.toFixed(3)}`);
+  masterStrip.scopeSel[0].value = "blobs";
+  masterStrip.scopeSel[0].dispatchEvent(new win.Event("change"));
+  masterStrip.scopeSel[1].value = "top";
+  masterStrip.scopeSel[1].dispatchEvent(new win.Event("change"));
+  await sleep(120);
 
   // ── 4. the fader is the SONG's global volume, one undo step per drag ─────
   const before = store.song.globalVolume;
@@ -217,7 +258,7 @@ function painted(cv) {
   await sleep(120);
   check(masterStrip.scopes.join() === wishes, "a stereo song does not rewrite them",
     masterStrip.scopes.join());
-  check(sorted(masterStrip.effective) === "blobs,top" &&
+  check(sorted(masterStrip.effective) === "blobs,rad,top" &&
     masterStrip.effective.length === masterStrip.scopes.length,
     "…it just stops drawing the ones it cannot show", String(masterStrip.effective));
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
@@ -240,15 +281,15 @@ function painted(cv) {
   // re-picked which panels are drawable but never re-laid the stack out, so the
   // button kept the answer it gave for the previous model.)
   const addBtn = strip.querySelector(".ms-head .icon-btn");
-  masterStrip.setPanelCount(2);
+  masterStrip.setPanelCount(3);
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
   await sleep(150);
   check(masterStrip.geometry().capacity > masterStrip.drawn, "…room to spare",
     `${masterStrip.geometry().capacity} vs ${masterStrip.drawn}`);
-  check(addBtn.hidden, "a stereo song has both its views up, so + steps aside");
+  check(addBtn.hidden, "a stereo song has all three of its views up, so + steps aside");
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(150);
-  check(!addBtn.hidden, "…and a spatial song has four more, so + comes back");
+  check(!addBtn.hidden, "…and a spatial song has six more, so + comes back");
 
   // ── the ONE state: what the strip believes is always what is on screen ────
   // (Regression: a geometric "fit" and the panel list were two states that only

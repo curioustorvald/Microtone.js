@@ -1,4 +1,4 @@
-// Current-limited CRT beam (item 106) — how the master strip's Lissajous scopes
+// Current-limited CRT beam (item 106) — how the master strip's Goniometer scopes
 // are drawn.
 //
 // A vectorscope is not a scatter plot. The thing it is imitating has ONE beam
@@ -11,7 +11,7 @@
 //     as a fog at high frequencies — the very case where the shape matters.
 //   * a SLOW beam is BRIGHT. The gun delivers a roughly constant charge per unit
 //     TIME, so the ink it leaves per unit LENGTH goes as 1/speed: the turning
-//     points of a Lissajous figure, where the beam dwells, burn in while the
+//     points of a Goniometer figure, where the beam dwells, burn in while the
 //     fast diagonal between them stays faint. That contrast is the reading —
 //     it is what tells you where the energy actually sits.
 //   * a FAST beam is dimmer still, because the deflection amplifier cannot hold

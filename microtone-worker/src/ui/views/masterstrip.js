@@ -51,6 +51,9 @@ import { setSongScalarOp } from "../../doc/ops.js";
 import { themeColors } from "../theme.js";
 import { paintSpatialDot } from "../spatialdot.js";
 import { CrtBeam, beamCoreInk } from "../crtbeam.js";
+import {
+  RAD_BANDS, RAD_VIEWS, RadiationField, RadiationView, srgbToLinear,
+} from "../radiation.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 
@@ -63,10 +66,17 @@ const traceX = new Float32Array(SCOPE_FRAMES);
 const traceY = new Float32Array(SCOPE_FRAMES);
 
 /**
- * Scope kinds. The blobs family draws the SOURCES (one dot per sounding
- * channel) and the Lissajous family draws the SOUND, but both are the same
- * three views of the same space — top, front and side — so a pair of panels can
- * show you where the parts are and where the energy went, on matching axes.
+ * Scope kinds — three families over the same three views of the same space
+ * (top, front and side), so any two panels sit side by side on matching axes
+ * and answer different questions about the same moment:
+ *
+ *   * BLOBS draws the SOURCES: one dot per sounding channel, where the engine
+ *     has it.
+ *   * TOP/FRONT/SIDE are the goniometers: the SOUND, as a pair of the field's
+ *     own axes.
+ *   * RAD is the radiation monitor (item 129, src/ui/radiation.js): the whole
+ *     coherent field as one spectrally-coloured solid.
+ *
  * HIDE is the chooser's own "drop this panel" entry.
  */
 export const SCOPE_BLOBS = "blobs";
@@ -75,6 +85,9 @@ export const SCOPE_BLOBS_SIDE = "blobsside";
 export const SCOPE_TOP = "top";
 export const SCOPE_FRONT = "front";
 export const SCOPE_SIDE = "side";
+export const SCOPE_RAD = "rad";
+export const SCOPE_RAD_FRONT = "radfront";
+export const SCOPE_RAD_SIDE = "radside";
 export const SCOPE_HIDE = "hide";
 
 /** Meter scale, in dBFS. Above 0 exists because an object bus is not clamped. */
@@ -218,7 +231,8 @@ export function integrateCorrelation(sums, ll, rr, lr, frames, tauMs = CORR_INTE
  * strip hands you on its own.
  */
 export const SCOPE_KINDS = [
-  SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
+  SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_FRONT, SCOPE_SIDE,
+  SCOPE_RAD_FRONT, SCOPE_RAD_SIDE, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
 ];
 
 /**
@@ -230,15 +244,22 @@ export const SCOPE_KINDS = [
 export const MAX_SCOPE_PANELS = SCOPE_KINDS.length;
 
 /**
- * Which scope kinds a surround model can express, in chooser order (the blobs
- * family, then the Lissajous family). Z is identically zero unless the song is
- * spatial, so every vertical-plane view would be a flat line — item 98's
+ * Which scope kinds a surround model can express, in chooser order (each family
+ * whole, in the order they were added). Z is identically zero unless the song
+ * is spatial, so every vertical-plane view would be a flat line — item 98's
  * "nonsensical options are hidden".
+ *
+ * The radiation monitor's top view survives the cut on a stereo song and earns
+ * its place there: with no X and no Z the surface becomes a figure of
+ * revolution about the left-right axis, which is a sphere for mono, a cardioid
+ * for a hard pan, and a figure of eight with a null through the middle for an
+ * anti-phase pair — the phase reading, as a shape.
  */
 export function availableScopes(model) {
   return model === SURROUND_SPATIAL
-    ? [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE]
-    : [SCOPE_BLOBS, SCOPE_TOP];
+    ? [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
+      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE]
+    : [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD];
 }
 
 /** Which plane a blobs kind is drawn in, or null if it is not a blobs kind. */
@@ -251,16 +272,26 @@ export function blobView(kind) {
   }
 }
 
+/** Which camera a radiation kind is drawn through, or null if it is not one. */
+export function radView(kind) {
+  switch (kind) {
+    case SCOPE_RAD: return "top";
+    case SCOPE_RAD_FRONT: return "front";
+    case SCOPE_RAD_SIDE: return "side";
+    default: return null;
+  }
+}
+
 /**
- * The four edge labels for any kind. A blobs dial is a MAP, so its labels are
- * the directions themselves; the Lissajous kinds carry theirs on the axes they
- * plot. Both families use the same screen orientation per plane, which is what
- * lets a blobs panel and a Lissajous panel sit next to each other and agree.
+ * The four edge labels for any kind. A blobs or radiation dial is a MAP, so its
+ * labels are the directions themselves; the Goniometer kinds carry theirs on
+ * the axes they plot. All three families use the same screen orientation per
+ * plane, which is what lets any two panels sit next to each other and agree.
  */
 export function scopeLabels(kind, stereoSong) {
   const axes = scopeAxes(kind, stereoSong);
   if (axes) return axes;
-  switch (blobView(kind)) {
+  switch (blobView(kind) ?? radView(kind)) {
     case "front": return { left: "L", right: "R", top: "U", bottom: "D" };
     case "side": return { left: "F", right: "B", top: "U", bottom: "D" };
     default: return { left: "L", right: "R", top: "F", bottom: "B" };
@@ -298,7 +329,7 @@ export function effectiveScopes(scopes, model) {
 }
 
 /**
- * The B-format components a Lissajous kind plots, as {h, v} ring indices, plus
+ * The B-format components a Goniometer kind plots, as {h, v} ring indices, plus
  * the labels for the four edges. `stereoSong` swaps the top view's vertical
  * from front-back (which it does not have) to the mono sum.
  */
@@ -406,6 +437,12 @@ export class MasterStrip {
     this._wasPlaying = false;
     this.scopeGain = new Array(MAX_SCOPE_PANELS).fill(1); // auto-gain per panel
     this.beams = new Array(MAX_SCOPE_PANELS).fill(null);  // CRT beam per panel
+    // The radiation family (item 129): ONE field, however many cameras are
+    // looking at it, and none at all until a panel asks for one.
+    this.radField = null;
+    this.radCells = new Array(MAX_SCOPE_PANELS).fill(null);
+    this._radInkSig = null;
+    this._radBandLin = null;
     // The scopes draw the samples that arrived SINCE THE LAST FRAME and let the
     // phosphor hold the rest, so the strip has to remember where in the ring it
     // stopped. −1 is "no idea", which draws nothing and joins nothing.
@@ -595,7 +632,13 @@ export class MasterStrip {
           sel.appendChild(o);
         }
       }
-      sel.value = this.effective[this.slots[p]];
+      const kind = this.effective[this.slots[p]];
+      sel.value = kind;
+      // The radiation panel's colour key is five unlabelled swatches — small
+      // enough to live in the dial's corner, which means the band edges
+      // themselves have to be readily accessible rather than always visible.
+      this.scopeCanvas[p].title = radView(kind) === null ? ""
+        : `${t("master.scope.radKey")}: ${RAD_BANDS.map((b) => b.label).join(" · ")}`;
     }
   }
 
@@ -663,6 +706,7 @@ export class MasterStrip {
   /** Blank every scope's phosphor and forget where in the ring the beam was. */
   resetBeams() {
     for (const cell of this.beams) cell?.beam.clear();
+    this.radField?.reset();
     this._lastWrite = -1;
     this.freshFrames = 0;
     this.traceGap = true;
@@ -971,9 +1015,45 @@ export class MasterStrip {
     }
 
     const C = themeColors();
+    this.updateRadiation(C, dt);
     const n = this.panelCount();
     for (let i = 0; i < n; i++) this.drawScope(i, C);
     this.drawMeters(C);
+  }
+
+  /**
+   * The one soundfield the radiation panels share (item 129 §12: one field, one
+   * surface, three possible observations). Analysed once per frame however many
+   * of them are up, and not at all when none is — the FFT, the smoothing and
+   * the surface are the whole cost of the family, and the cameras are cheap.
+   */
+  updateRadiation(C, dt) {
+    if (!this.slots.some((wish) => radView(this.effective[wish]) !== null)) return;
+    const audio = this.store.audio;
+    if (!audio) return;
+    if (this.radField === null) this.radField = new RadiationField();
+    const f = this.radField;
+    // Playing but nothing new this interval is normal (the worker tops the ring
+    // up in bursts), and the surface HOLDS through it exactly as the meters do.
+    // Stopped is different: the ring keeps its last window forever, so the
+    // surface has to be told to let go of it.
+    if (audio.isPlaying()) {
+      f.analyse(audio.scopeRing(), this.readout.ringWrite | 0, SAMPLING_RATE, this.freshFrames);
+    } else {
+      f.fade();
+    }
+    f.smooth(dt);
+    f.build(dt, this.radBandLin(C));
+  }
+
+  /** The five band inks in linear light, re-derived only on a theme change. */
+  radBandLin(C) {
+    const sig = RAD_BANDS.map((b) => C[b.ink]).join();
+    if (sig !== this._radInkSig) {
+      this._radInkSig = sig;
+      this._radBandLin = RAD_BANDS.map((b) => parseInk(C[b.ink]).map(srgbToLinear));
+    }
+    return this._radBandLin;
   }
 
   // ── scopes ──
@@ -1012,7 +1092,9 @@ export class MasterStrip {
     const stereoSong = this.model() === SURROUND_STEREO;
     const axes = scopeAxes(kind, stereoSong);
     const blobs = blobView(kind);
+    const rad = radView(kind);
     if (blobs !== null) this.drawBlobs(ctx, C, cx, cy, r, blobs);
+    else if (rad !== null) this.drawRadiation(ctx, C, cx, cy, r, i, rad);
     else if (axes) this.drawTrace(ctx, C, cx, cy, r, axes, i, kind);
 
     // Edge labels — which way is which (item 98: "all four label the direction").
@@ -1052,7 +1134,7 @@ export class MasterStrip {
       // Orthographic projection of the source onto the dial's plane: the unit
       // direction the engine has it at, with the axis we are looking ALONG
       // dropped. +x front, +y left, +z up (spatial.js), and the screen mapping
-      // is the one the matching Lissajous view uses.
+      // is the one the matching Goniometer view uses.
       directionFromAngles(az, el, dirScratch);
       let x, y;
       if (view === "front") {        // left-right against height
@@ -1075,6 +1157,66 @@ export class MasterStrip {
         ctx.arc(x, y, dotR, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+  }
+
+  /**
+   * The radiation monitor (item 129): the coherent field as a solid, seen
+   * through one of three orthographic cameras. All the work — the analysis, the
+   * surface and its colours — has already happened in updateRadiation; a panel
+   * is only a projection and a rasteriser, which is what makes three of them
+   * cost barely more than one.
+   */
+  drawRadiation(ctx, C, cx, cy, r, slot, view) {
+    const f = this.radField;
+    if (f === null) return;
+    const size = Math.ceil(2 * r) + 2;
+    const cell = this.radCell(slot, size, C.cvBg);
+    cell.view.render(f, RAD_VIEWS[view], cell.image.data, cell.ground, cell.core);
+    cell.ctx.putImageData(cell.image, 0, 0);
+    ctx.drawImage(cell.canvas, cx - size / 2, cy - size / 2);
+    this.drawSpectrumKey(ctx, C, cx - r, cy + r + 8, r);
+  }
+
+  /** One panel's camera, its blit canvas and its ImageData. Nothing in here
+   *  carries over between frames, so unlike a beam cell it survives every
+   *  change but a resize. */
+  radCell(slot, size, ground) {
+    let c = this.radCells[slot];
+    if (c === null || c.size !== size) {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const cctx = canvas.getContext("2d");
+      c = this.radCells[slot] = {
+        size, groundCss: null, ground: [0, 0, 0], core: [255, 255, 255],
+        canvas, ctx: cctx,
+        image: cctx.createImageData(size, size), view: new RadiationView(size),
+      };
+    }
+    if (c.groundCss !== ground) {
+      c.groundCss = ground;
+      c.ground = parseInk(ground);
+      c.core = beamCoreInk(c.ground);
+    }
+    return c;
+  }
+
+  /**
+   * The band legend (item 129 §9), five swatches low to high in the corner the
+   * dial's edge labels leave free. Colour on the surface is SPECTRUM and never
+   * level — a quiet cymbal and a loud one are the same colour — so a key that
+   * is always on screen is what makes the colour mean anything at all.
+   */
+  drawSpectrumKey(ctx, C, x, y, r) {
+    // It shares the bottom edge with the centred direction label, so the
+    // swatches narrow with the dial rather than running into it, and a dial too
+    // small for a legible key gets none (the panel's tooltip still carries it).
+    const w = Math.min(7, Math.floor((r - 6) / 5));
+    if (w < 2) return;
+    for (let b = 0; b < RAD_BANDS.length; b++) {
+      ctx.fillStyle = C[RAD_BANDS[b].ink];
+      ctx.fillRect(x + b * (w + 1), y, w, 3);
     }
   }
 

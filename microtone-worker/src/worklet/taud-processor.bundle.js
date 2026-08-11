@@ -1684,7 +1684,7 @@ class SpeakerRenderer {
 //   * "where is the energy in the room?" — the vectorscopes. That is a question
 //     about the SOUND FIELD, not about any particular set of speakers, so the
 //     scope tap is always first-order B-format (ACN/SN3D: W Y Z X). The three
-//     Lissajous views are then literally axis pairs of that field — top = Y·X
+//     Goniometer views are then literally axis pairs of that field — top = Y·X
 //     (left-right against front-back), front = Y·Z, side = X·Z — and no view
 //     needs a decode. A STEREO song has no front-back axis at all, so its tap
 //     is taken from the finished mix instead: W = (L+R)/√2, Y = (L−R)/√2, which

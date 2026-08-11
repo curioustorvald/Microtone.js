@@ -11,8 +11,10 @@
            --autoplay-policy=no-user-gesture-required --timeout=15000 \
            "http://localhost:8932/test/browser/master-visual.html?theme=dark"
        ?theme=light for the light theme; ?model=0|1|2 picks the surround model
-       (0 = stereo, the mid/side goniometer; 2 = spatial, all four scopes);
-       ?a=/&b= choose the two scope kinds (blobs|top|front|side);
+       (0 = stereo, the mid/side goniometer; 2 = spatial, every scope);
+       ?n= sets how many panels are up; ?a=/&b=/&c= choose their kinds —
+       blobs|blobsfront|blobsside for the sources, top|front|side for the
+       goniometers, rad|radfront|radside for the radiation monitor (item 129);
        ?target= forces the metering target (stereo|quad|5.1|7.1|ambisonic). -->
   <img src="/hang" hidden>
   <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
@@ -54,7 +56,8 @@
         masterStrip.targetSel.value = params.get("target");
         masterStrip.targetSel.dispatchEvent(new win.Event("change"));
       }
-      for (const [key, i] of [["a", 0], ["b", 1]]) {
+      if (params.get("n")) masterStrip.setPanelCount(parseInt(params.get("n"), 10));
+      for (const [key, i] of [["a", 0], ["b", 1], ["c", 2]]) {
         const v = params.get(key);
         if (!v) continue;
         masterStrip.scopeSel[i].value = v;

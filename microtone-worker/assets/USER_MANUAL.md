@@ -265,11 +265,11 @@ app in a window too short for the panels you had, the ones that no longer fit
 are closed rather than left half-drawn, so what you see is always what the strip
 thinks it has.
 
-**The vectorscopes** come in two families, and both draw the same three views of
-the same space, on the same axes — **top** (left–right against front–back),
-**front** (left–right against height) and **side** (front–back against height).
-Each labels its own edges, so there is never a question of which way round it
-is, and a *Blobs* panel next to a *Lissajous* panel of the same view line up.
+**The vectorscopes** come in three families, and all of them draw the same three
+views of the same space, on the same axes — **top** (left–right against
+front–back), **front** (left–right against height) and **side** (front–back
+against height). Each labels its own edges, so there is never a question of
+which way round it is, and any two panels showing the same view line up.
 
 *Blobs* shows the **sources**: a dot for every sounding channel, drawn where the
 engine actually has it — the same reading as the Panner and the channel radars.
@@ -279,12 +279,12 @@ the top view a dot carries the height cue (it grows as it rises and casts a
 shadow) because a dial seen from above cannot otherwise tell up from down; on
 the other two, height is the vertical axis and needs no cue.
 
-*Lissajous* traces the **sound** itself rather than the channels. A stereo song
+*Goniometer* traces the **sound** itself rather than the channels. A stereo song
 has no front–back axis and a planar song has no height, so every view that would
 be a flat line is simply not offered — which leaves a stereo song with the two
 top views.
 
-A Lissajous view is drawn the way the instrument it is named after drew it: as a
+A Goniometer view is drawn the way the hardware instrument of the same name drew it: as a
 **beam**, dragged from where one sample was to where the next one is, leaving
 light behind it. So the trace is a connected figure rather than a scatter of
 dots, and three things about a real screen come with it.
@@ -318,6 +318,61 @@ some room inside the rim. The gain glides over about
 a third of a second rather than snapping, so a transient briefly overruns the
 dial instead of yanking the whole figure smaller — the shape has to hold still
 enough to compare from one moment to the next.
+
+*Radiation* is the third family, and the only one that draws the field as a
+**solid object**. For every direction around you it works out what the encoded
+soundfield actually radiates that way, and pushes the surface of a sphere out by
+that much: a mix with no direction to it is a sphere, one leaning forward grows a
+lobe out of the front, a null in some direction is a dent. The three views are
+the same object seen from three places — switching a panel from *top* to *front*
+moves the camera and nothing else — so a lobe you see leaning left in one is the
+same lobe leaning up in another.
+
+What makes it worth having next to the goniometer is that it is built from the
+field **before** the levels are taken, so what you are looking at is
+interference and not a set of independent readings. Two identical sources sixty
+degrees apart do not draw two lobes; they draw one, between them, because that
+is what the sound does — the phantom centre you would hear. Flip the phase of
+one of them and that centre becomes a **null**, and the same two sources fly
+apart into two lobes with a hole between them. Two sources on opposite sides of
+you collapse into a featureless sphere in phase, and into a figure of eight with
+a dead plane through the middle out of phase. None of that is drawn as a special
+case; it is the shape the arithmetic produces.
+
+**Colour is spectrum, never level.** The field is analysed in five bands, and
+each direction is tinted by the mixture it is carrying: bass through to air
+runs salmon, yellow, green, cyan, violet — the same ramp as the effect columns —
+and the five swatches in the corner of the dial are the key. A direction with
+one band in it takes that band's colour; a broadband one comes out near-neutral.
+A quiet cymbal and a loud one are the same colour and different sizes, which is
+the only way round that makes a colour scale mean anything. Hover the panel for
+the exact frequencies.
+
+The analysis behind both the shape and the colour is **tilted by 4.5 dB per
+octave**, lows down and highs up. Music is not a flat spectrum — it falls away
+with frequency at roughly that rate — so an untilted analyser would hand almost
+the whole surface to the bass and every song would be a salmon ball. With the
+tilt, a normally balanced mix reads as a balanced surface, and what you see is
+this mix rather than the shape of music in general. A song that really is
+bass-heavy still shows it; it just has to be bass-heavy for its own material
+rather than merely for being music. The tilt is on the analysis only: the fade
+that takes the surface away when the music stops reads the field's true level,
+so a loud bass passage never fades out for being low.
+
+The surface is **auto-sized** like the goniometer, so its shape is readable at
+any level and the meters below remain the absolute reading. It shades and shrugs
+off jitter over about a fifth of a second, with a slower hand on the colour so
+the hue does not strobe, and when the music stops it fades out rather than
+freezing on its last window. A **latitude/longitude grid** rides on the surface —
+that is what lets you see how far the sphere has been pushed out or pulled in —
+and the far side of the shell shows faintly through the near one, so a lobe
+pointing away from you is behind rather than gone.
+
+A stereo song keeps the top view of this one too, and it is worth a look: with
+no front–back and no height the surface becomes a figure of revolution about
+the left–right axis, which is a sphere for a mono mix, a cardioid leaning to
+one side for a hard pan, and a figure of eight with a null straight through the
+middle for anything out of phase.
 
 Under each scope is the **correlation meter**, a thin bar growing out of the
 centre: nothing at all when the mix folds to mono cleanly, wider as the two

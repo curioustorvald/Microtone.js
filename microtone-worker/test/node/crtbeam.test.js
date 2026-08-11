@@ -1,5 +1,5 @@
 // The current-limited CRT beam (item 106) — the painter behind the master
-// strip's Lissajous scopes.
+// strip's Goniometer scopes.
 //
 // src/ui/crtbeam.js touches no DOM on purpose, so everything below drives the
 // REAL painter rather than a model of it: the energy buffer is inspected
