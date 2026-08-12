@@ -9,8 +9,8 @@
 // Different sources occupy different tiles, so they separate.
 //
 // ── The parameters, per bin ──
-// First-order B-format gives a complex pressure W and a complex velocity
-// v = (X, Y, Z). From them, three real quantities:
+// The ring is SECOND-ORDER B-format. Order 1 gives a complex pressure W and a
+// complex velocity v = (X, Y, Z); from them, three real quantities:
 //
 //     P  = |W|²                     the pressure power
 //     Ia = Re{ conj(W)·v }          the ACTIVE intensity — net transport
@@ -47,10 +47,25 @@
 // and an in-phase pair have no residue at all, an anti-phase pair is nothing
 // but residue, and real material is a mixture — which is the point.
 //
-// First order cannot recover the two bearings of an anti-phase pair (W = 0 and
-// v ∝ d₁ − d₂ leave them underdetermined), so the axis is the honest answer:
-// two distinct sources, maximally apart, along the direction the field is
-// actually oscillating in.
+// ── …and order 2 says WHERE the two of them are ──
+// At first order that residue is only an AXIS. Worse, it is the same axis
+// whatever the separation: two anti-phase sources at ±15° and at ±90° encode to
+// identical W Y Z X, so a first-order display has to draw both of them a full
+// 180° apart and overstate the width of every one.
+//
+// Order 2 breaks it. For an anti-phase pair the order-2 field is a pure
+// quadrupole,
+//
+//     T = a·sin2θ·(ĉ ûᵀ + û ĉᵀ)
+//
+// with û the dipole axis order 1 already gave and ĉ the bearing the pair
+// straddles. Since ĉ ⊥ û, one matrix-vector product recovers both:
+//
+//     T û = a·sin2θ·ĉ        ⇒   ĉ = normalise(T û),  cos θ = |T û| / |v|
+//
+// and the two sources are ĉ·cos θ ± û·sin θ. Exact, in three dimensions, at any
+// bearing and any elevation — so an anti-phase pair is drawn where it actually
+// is rather than flung to the edges.
 //
 // ── What the splats carry ──
 //   position  the intensity direction, at the radius above (or the rim, for
@@ -59,23 +74,20 @@
 //   SIZE      the tile's level in DECIBELS, after the same +4.5 dB/oct tilt
 //   ALPHA     how much of that direction is still being HELD — see below
 //
-// ── Alpha is held-ness, and it cannot come from the audio ──
-// A release tail and a quiet note are the same signal; nothing in the B-format
-// ring can tell them apart. So opacity is driven by the engine's own voices,
-// across the wire as SNAP_V_SUSTAIN: 1 while a key is down however quiet the
-// note, the decaying tail once it is up. A quiet held note therefore stays
-// solid and a loud one that has just been released begins to disperse.
-//
-// The splats are frequency tiles and the voices are voices, so the two are
-// married by DIRECTION: the voices build an angular field of held-ness and each
-// splat reads its own bearing out of it. Two voices in the same direction that
-// disagree are blurred together, which is the honest limit of the attribution.
+// ── Size and opacity are both the level ──
+// A splat's size and its opacity are the same reading — its level in decibels,
+// after the same tilt the radiation surface uses. Loud is big and solid, quiet
+// is small and faint, and the two never disagree with one another. (An earlier
+// pass drove opacity from whether the note's key was still down; it made a song
+// with no key-offs at all read as a flat wall, and one reading per channel is
+// worth more than two that compete.)
 //
 // Nothing here touches the DOM: the analyser owns typed arrays and the renderer
 // fills a caller's RGBA bytes, exactly as crtbeam.js and radiation.js do.
 
-import { SCOPE_CHANNELS, SCOPE_FRAMES, SCOPE_W, SCOPE_Y, SCOPE_Z, SCOPE_X } from "../engine/analysis.js";
-import { directionFromAngles } from "../engine/spatial.js";
+import {
+  SCOPE_CHANNELS, SCOPE_FRAMES, SCOPE_W, SCOPE_Y, SCOPE_Z, SCOPE_X, SCOPE_ORDER2,
+} from "../engine/analysis.js";
 import { Fft, RAD_BANDS, RAD_NBANDS, radTilt } from "./radiation.js";
 
 /** Analysis window and hop — the radiation monitor's, so both families see the
@@ -98,8 +110,8 @@ export const CLOUD_R_MAX = 1;
 export const CLOUD_FILL = 0.94;
 
 /** Splat size, as a fraction of the dial's radius, over CLOUD_SIZE_DB of level.
- *  Size is the tile's LEVEL and alpha is its held-ness, so the two readings
- *  never fight for the same channel. */
+ *  Opacity follows the same decibels over the same range, so size and weight
+ *  say one thing together instead of two things at once. */
 export const CLOUD_SIG_MIN = 0.018;
 export const CLOUD_SIG_MAX = 0.075;
 export const CLOUD_SIZE_DB = 40;
@@ -109,10 +121,9 @@ export const CLOUD_SIZE_DB = 40;
 export const CLOUD_TAU_MS = 230;
 export const CLOUD_FLOOR = 1e-4;
 
-/** Angular sharpness of the voice → direction attribution (see the header). */
-export const CLOUD_SUSTAIN_SHARPNESS = 6;
-/** Held-ness where no voice is anywhere near: nothing to say, so say "held". */
-export const CLOUD_SUSTAIN_DEFAULT = 1;
+/** Faintest a splat gets at the bottom of CLOUD_SIZE_DB, so the quiet end of
+ *  the spectrum thins out rather than vanishing outright. */
+export const CLOUD_ALPHA_MIN = 0.06;
 
 /** Energy that develops to ~63% ink, as a fraction of the frame's peak. */
 export const CLOUD_REF = 0.42;
@@ -145,7 +156,14 @@ export function cloudHalfAngle(r) {
   return Math.acos(r < 0 ? 0 : r > 1 ? 1 : r);
 }
 
-/** Level in dB below the frame's loudest tile → splat σ, in dial radii. */
+/** Level in dB below the frame's loudest bin → splat opacity, 0…1. */
+export function cloudLevelAlpha(db) {
+  const t = 1 + db / CLOUD_SIZE_DB;
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  return CLOUD_ALPHA_MIN + (1 - CLOUD_ALPHA_MIN) * u;
+}
+
+/** Level in dB below the frame's loudest bin → splat σ, in dial radii. */
 export function cloudSigma(db) {
   const t = 1 + db / CLOUD_SIZE_DB; // 1 at the peak, 0 at the bottom of the range
   const u = t < 0 ? 0 : t > 1 ? 1 : t;
@@ -168,6 +186,7 @@ export function cloudAlpha(energy, ref = CLOUD_REF, gamma = CLOUD_GAMMA) {
 /** Splat record stride in the flat array: dir(3), radius, sigma, alpha, band. */
 const S_DX = 0, S_DY = 1, S_DZ = 2, S_R = 3, S_SIG = 4, S_A = 5, S_BAND = 6;
 const S_STRIDE = 7;
+const INV_SQRT3 = 1 / Math.sqrt(3);
 
 /**
  * One analysis of the soundfield into splats. The strip owns exactly one
@@ -185,10 +204,14 @@ export class CloudField {
       ss += w * w;
     }
     this.norm = 1 / ((n / 2) * ss);
-    this.re1 = new Float64Array(n);
-    this.im1 = new Float64Array(n);
-    this.re2 = new Float64Array(n);
-    this.im2 = new Float64Array(n);
+    // Nine real channels ride in five complex transforms, two channels to a
+    // transform (the last carries only ACN 8).
+    this.fre = [];
+    this.fim = [];
+    for (let i = 0; i < 5; i++) {
+      this.fre.push(new Float64Array(n));
+      this.fim.push(new Float64Array(n));
+    }
 
     const half = n >> 1;
     this.band = new Int8Array(half);   // −1 = outside every band
@@ -200,17 +223,10 @@ export class CloudField {
     this.pending = 0;
     this.ready = false;
 
-    // The voice → direction attribution table.
-    this.vDir = new Float64Array(64 * 3);
-    this.vVol = new Float64Array(64);
-    this.vSus = new Float64Array(64);
-    this.vCount = 0;
-    this._dir = new Float64Array(3);
   }
 
   reset() {
     this.count = 0;
-    this.vCount = 0;
     this.pending = 0;
     this.ready = false;
   }
@@ -230,58 +246,19 @@ export class CloudField {
     }
   }
 
-  /**
-   * Read the engine's voices into the angular held-ness table. Only sounding
-   * voices count, weighted by how loud they are — a silent voice has no opinion
-   * about the direction it happens to sit in.
-   */
-  readVoices(audio) {
-    this.vCount = 0;
-    if (!audio) return;
-    const n = Math.min(audio.channelCount(), 64);
-    for (let ch = 0; ch < n; ch++) {
-      if (!audio.getVoiceActive(ch)) continue;
-      const vol = audio.getVoiceEffectiveVolume(ch);
-      if (!(vol > 0.001)) continue;
-      directionFromAngles(audio.getVoiceAzimuth(ch), audio.getVoiceElevation(ch), this._dir);
-      const i = this.vCount++;
-      this.vDir[i * 3] = this._dir[0];
-      this.vDir[i * 3 + 1] = this._dir[1];
-      this.vDir[i * 3 + 2] = this._dir[2];
-      this.vVol[i] = vol;
-      this.vSus[i] = audio.getVoiceSustain(ch);
-    }
-  }
-
-  /** Write one splat: size from its own level in dB, alpha from how much of
-   *  that bearing is still being held. */
+  /** Write one splat. Size and opacity are the same reading — its own level in
+   *  decibels below the loudest bin of the window. */
   _emit(splats, count, dx, dy, dz, r, rel, band) {
     const o = count * S_STRIDE;
+    const db = 10 * Math.log10(rel > 1e-12 ? rel : 1e-12);
     splats[o + S_DX] = dx;
     splats[o + S_DY] = dy;
     splats[o + S_DZ] = dz;
     splats[o + S_R] = r;
-    splats[o + S_SIG] = cloudSigma(10 * Math.log10(rel > 1e-12 ? rel : 1e-12));
-    splats[o + S_A] = this.sustainAt(dx, dy, dz);
+    splats[o + S_SIG] = cloudSigma(db);
+    splats[o + S_A] = cloudLevelAlpha(db);
     splats[o + S_BAND] = band;
     return count + 1;
-  }
-
-  /** Held-ness in one direction: the voices' own, weighted by how near they
-   *  point and how loud they are. */
-  sustainAt(dx, dy, dz) {
-    let num = 0;
-    let den = 0;
-    for (let i = 0; i < this.vCount; i++) {
-      const c = dx * this.vDir[i * 3] + dy * this.vDir[i * 3 + 1] + dz * this.vDir[i * 3 + 2];
-      if (c <= 0) continue; // the far hemisphere has nothing to do with this bearing
-      let k = c;
-      for (let p = 1; p < CLOUD_SUSTAIN_SHARPNESS; p++) k *= c;
-      const w = k * this.vVol[i];
-      num += w * this.vSus[i];
-      den += w;
-    }
-    return den > 1e-9 ? num / den : CLOUD_SUSTAIN_DEFAULT;
   }
 
   /**
@@ -291,29 +268,30 @@ export class CloudField {
    *
    * @returns {boolean} whether a new window was analysed
    */
-  analyse(ring, ringWrite, rate, fresh, audio) {
+  analyse(ring, ringWrite, rate, fresh) {
     this.setSampleRate(rate);
     this.pending += fresh;
     if (this.pending < CLOUD_HOP && this.ready) return false;
     this.pending = 0;
     this.ready = true;
-    this.readVoices(audio);
 
     const n = this.n;
     const w = this.win;
-    const re1 = this.re1, im1 = this.im1, re2 = this.re2, im2 = this.im2;
+    const fre = this.fre, fim = this.fim;
     let idx = (((ringWrite - n) % SCOPE_FRAMES) + SCOPE_FRAMES) % SCOPE_FRAMES;
     for (let i = 0; i < n; i++) {
       const o = idx * SCOPE_CHANNELS;
       const g = w[i];
-      re1[i] = ring[o + SCOPE_W] * g;
-      im1[i] = ring[o + SCOPE_Y] * g;
-      re2[i] = ring[o + SCOPE_Z] * g;
-      im2[i] = ring[o + SCOPE_X] * g;
+      // Channel pairs: (W,Y) (Z,X) (ACN4,ACN5) (ACN6,ACN7) (ACN8, —).
+      for (let t = 0; t < 5; t++) {
+        const a = t * 2;
+        fre[t][i] = ring[o + a] * g;
+        fim[t][i] = a + 1 < SCOPE_CHANNELS ? ring[o + a + 1] * g : 0;
+      }
       idx = idx + 1 === SCOPE_FRAMES ? 0 : idx + 1;
     }
-    this.fft.run(re1, im1);
-    this.fft.run(re2, im2);
+    for (let t = 0; t < 5; t++) this.fft.run(fre[t], fim[t]);
+    const re1 = fre[0], im1 = fim[0], re2 = fre[1], im2 = fim[1];
 
     // Two passes: the splat's SIZE is its level relative to the loudest bin,
     // which is not known until every bin has been measured. The first keeps the
@@ -326,6 +304,7 @@ export class CloudField {
     const raw = this._raw ?? (this._raw = new Float64Array(half));
     const sw = this._sw ?? (this._sw = new Float64Array(half * 2));      // W re,im
     const sv = this._sv ?? (this._sv = new Float64Array(half * 6));      // v re×3, im×3
+    const s2 = this._s2 ?? (this._s2 = new Float64Array(half * 10));     // order 2, re×5, im×5
     for (let k = 1; k < half; k++) {
       const b = this.band[k];
       if (b < 0) { raw[k] = 0; continue; }
@@ -339,6 +318,20 @@ export class CloudField {
       const xr = (im2[k] + im2[kr]) * 0.5;
       const xi = (re2[kr] - re2[k]) * 0.5;
       sw[k * 2] = wr; sw[k * 2 + 1] = wi;
+      // The five order-2 harmonics (ACN 4..8), unpacked the same way — they
+      // are what locates an anti-phase pair.
+      const o10 = k * 10;
+      for (let c = 0; c < 5; c++) {
+        const t = 2 + (c >> 1);
+        const pr = fre[t], pi = fim[t];
+        if ((c & 1) === 0) {                    // the real half of that pair
+          s2[o10 + c] = (pr[k] + pr[kr]) * 0.5;
+          s2[o10 + 5 + c] = (pi[k] - pi[kr]) * 0.5;
+        } else {                                // the imaginary half
+          s2[o10 + c] = (pi[k] + pi[kr]) * 0.5;
+          s2[o10 + 5 + c] = (pr[kr] - pr[k]) * 0.5;
+        }
+      }
       // v is stored (front, left, up) — the order every direction here uses.
       const o6 = k * 6;
       sv[o6] = xr; sv[o6 + 1] = yr; sv[o6 + 2] = zr;
@@ -359,6 +352,7 @@ export class CloudField {
         const band = this.band[k];
         const wr = sw[k * 2], wi = sw[k * 2 + 1];
         const o6 = k * 6;
+        const o10 = k * 10;
         const xr = sv[o6], yr = sv[o6 + 1], zr = sv[o6 + 2];
         const xi = sv[o6 + 3], yi = sv[o6 + 4], zi = sv[o6 + 5];
 
@@ -392,20 +386,49 @@ export class CloudField {
         // what an out-of-phase pair is heard as.
         const wRes = vres * 0.5 * share;
         if (wRes > floor) {
-          // The residue oscillates along an axis; for an anti-phase pair, where
-          // the pressure has cancelled away entirely, the velocity IS that axis
-          // and its ellipse degenerates to a line — so the longer of the real
-          // and imaginary parts is exactly it.
+          // The residue oscillates along an axis. Its ellipse degenerates to a
+          // line for the case that matters, so the longer of the real and
+          // imaginary parts IS that axis — and the same part of the order-2
+          // field is the quadrupole that goes with it.
           const lr = xr * xr + yr * yr + zr * zr;
           const li = xi * xi + yi * yi + zi * zi;
-          let ax, ay, az, len;
-          if (lr >= li) { ax = xr; ay = yr; az = zr; len = Math.sqrt(lr); }
-          else { ax = xi; ay = yi; az = zi; len = Math.sqrt(li); }
+          const useRe = lr >= li;
+          const len = Math.sqrt(useRe ? lr : li);
           if (len > 1e-30) {
-            ax /= len; ay /= len; az /= len;
+            const ux = (useRe ? xr : xi) / len;
+            const uy = (useRe ? yr : yi) / len;
+            const uz = (useRe ? zr : zi) / len;
+            // T û, where T is the traceless quadrupole the order-2 channels
+            // carry: ĉ = normalise(T û) and cos θ = |T û| / |v|.
+            const q = o10 + (useRe ? 0 : 5);
+            const mxy = s2[q] * INV_SQRT3;
+            const myz = s2[q + 1] * INV_SQRT3;
+            const mzz = s2[q + 2] * (2 / 3);
+            const mxz = s2[q + 3] * INV_SQRT3;
+            const dxy = s2[q + 4] * INV_SQRT3 * 2; // Mxx − Myy
+            const mxx = -mzz / 2 + dxy / 2;
+            const myy = -mzz / 2 - dxy / 2;
+            const cx = mxx * ux + mxy * uy + mxz * uz;
+            const cy = mxy * ux + myy * uy + myz * uz;
+            const cz = mxz * ux + myz * uy + mzz * uz;
+            const cLen = Math.sqrt(cx * cx + cy * cy + cz * cz);
             const halfW = wRes * 0.5 * invPeakDb;
-            count = this._emit(splats, count, ax, ay, az, 1, halfW, band);
-            count = this._emit(splats, count, -ax, -ay, -az, 1, halfW, band);
+            let cosT = cLen / len;
+            if (!(cosT > 0)) cosT = 0;
+            if (cosT > 1) cosT = 1;
+            if (cLen > 1e-30 && cosT > 1e-4) {
+              // Both bearings, exactly: ĉ·cos θ ± û·sin θ.
+              const sinT = Math.sqrt(1 - cosT * cosT);
+              const hx = cx / cLen, hy = cy / cLen, hz = cz / cLen;
+              count = this._emit(splats, count, hx * cosT + ux * sinT,
+                hy * cosT + uy * sinT, hz * cosT + uz * sinT, 1, halfW, band);
+              count = this._emit(splats, count, hx * cosT - ux * sinT,
+                hy * cosT - uy * sinT, hz * cosT - uz * sinT, 1, halfW, band);
+            } else {
+              // No usable quadrupole — the pair really is on the axis.
+              count = this._emit(splats, count, ux, uy, uz, 1, halfW, band);
+              count = this._emit(splats, count, -ux, -uy, -uz, 1, halfW, band);
+            }
           }
         }
       }

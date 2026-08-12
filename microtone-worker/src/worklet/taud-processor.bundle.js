@@ -1734,9 +1734,26 @@ const ANALYSIS_AMBISONIC = "ambisonic";
  * also what the wire pays.
  */
 const SCOPE_FRAMES = 4096;
-/** W, Y, Z, X — ACN 0..3, the ring's interleave order. */
-const SCOPE_CHANNELS = 4;
+/**
+ * SECOND-ORDER ACN/SN3D — W Y Z X, then the five order-2 harmonics, in the
+ * ring's interleave order.
+ *
+ * The scopes and the radiation surface only ever read the first four, and for
+ * them order 1 IS the field. The soundfield cloud needs the rest, because at
+ * first order some genuinely different scenes are the SAME four numbers: two
+ * sources in anti-phase cancel in W entirely, and a pair at ±15° then encodes
+ * identically to a pair at ±90°. Nothing downstream can undo that. The order-2
+ * quadrupole breaks the tie and recovers both bearings exactly (see cloud.js).
+ *
+ * COST: the ring is the snapshot's largest block, and this takes it from 64 KiB
+ * to 144 KiB. It is still built only while the strip is on screen.
+ */
+const SCOPE_CHANNELS = 9;
 const SCOPE_W = 0, SCOPE_Y = 1, SCOPE_Z = 2, SCOPE_X = 3;
+/** First of the five order-2 harmonics (ACN 4..8). */
+const SCOPE_ORDER2 = 4;
+/** The ambisonic order the ring carries. */
+const SCOPE_ORDER = 2;
 
 /** Widest metered channel set (7.1). Bounds the snapshot's meter block. */
 const ANALYSIS_MAX_METERS = 8;
@@ -1886,11 +1903,8 @@ class AnalysisRenderer {
   }
 
   channelGains(az, el, out, off) {
-    const sh = encodeSN3D(az, el, 1, this._sh);
-    out[off] = sh[0];
-    out[off + 1] = sh[1];
-    out[off + 2] = sh[2];
-    out[off + 3] = sh[3];
+    const sh = encodeSN3D(az, el, SCOPE_ORDER, this._sh);
+    for (let c = 0; c < SCOPE_CHANNELS; c++) out[off + c] = sh[c];
     if (this.speakers !== null) this.speakers.channelGains(az, el, out, off + SCOPE_CHANNELS);
   }
 
@@ -2003,6 +2017,15 @@ class AnalysisTap {
       ring[rw + 1] = y;
       ring[rw + 2] = z;
       ring[rw + 3] = x;
+      // The order-2 harmonics ride along untouched; a stereo song has none (it
+      // has no bus at all), and its ring simply carries zeros there.
+      if (data === null) {
+        for (let c = SCOPE_ORDER2; c < SCOPE_CHANNELS; c++) ring[rw + c] = 0;
+      } else {
+        for (let c = SCOPE_ORDER2; c < SCOPE_CHANNELS; c++) {
+          ring[rw + c] = data[c * busFrames + n];
+        }
+      }
       this.ringWrite = (this.ringWrite + 1) % SCOPE_FRAMES;
 
       this.fieldEnergy += (w * w + x * x + y * y + z * z) * 0.5;
@@ -7539,19 +7562,7 @@ const SNAP_V_ENV_FILTER_IDX = 14;
 const SNAP_V_ENV_FILTER_TIME = 15;
 const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
 const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
-/**
- * SUSTAIN (item 133) — how much of this voice is still being HELD, 0..1, as
- * distinct from how loud it is. 1 while the key is down, however quiet the note
- * is; after the key-off it is the release tail itself (the fadeout times the
- * volume envelope), falling to 0 as the voice rings out.
- *
- * The soundfield cloud draws it as opacity, so a quiet held note stays solid
- * and a loud one that has just been released begins to disperse. Nothing in the
- * B-format ring can carry this — a release tail and a quiet note are the same
- * signal — so it has to come across the wire from the engine's own voices.
- */
-const SNAP_V_SUSTAIN = 18;
-const SNAP_VOICE_STRIDE = 19;
+const SNAP_VOICE_STRIDE = 18;
 
 const SNAP_MAX_VOICES = 64;
 
@@ -7951,12 +7962,6 @@ function fillSnapshotInto(eng, playhead, f) {
       const faderGain = (255 - v.fader) / 255.0;
       let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
       f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
-      // Held-ness, not loudness (SNAP_V_SUSTAIN): 1 with the key down whatever
-      // the envelope is doing, and the release tail alone once it is up. The
-      // fadeout starts at 1 on the key-off, so after it this is exactly the
-      // part of `ev` that the RELEASE is responsible for.
-      const sus = v.keyOff ? v.fadeoutVolume * (v.volEnvOn ? v.envVolMix : 1.0) : 1.0;
-      f[o + SNAP_V_SUSTAIN] = sus < 0 ? 0 : sus > 1 ? 1 : sus;
       let pan;
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);

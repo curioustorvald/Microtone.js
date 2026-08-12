@@ -395,20 +395,15 @@ special written to put it there.
 stereo pair and you no longer hear a centre image at all — you hear two separate
 sources, wide apart — so the display must not drop it in the middle beside the
 in-phase case. It does not: when two sources cancel in pressure they are still
-moving the air, and that leftover motion is drawn as a **pair of splats on the
-rim**, at both ends of the axis the sound is oscillating along. So an in-phase
-pair collapses inward as it widens, and an out-of-phase one flies apart. (First
-order cannot recover the two original bearings in that case — the axis is the
-honest answer.)
+moving the air, and that leftover motion is drawn as **a pair of splats on the
+rim, at the two bearings the sources are actually at**. So an in-phase pair
+collapses inward as it widens, while an out-of-phase one stays out at the edge
+in two places — which is what you hear.
 
-**Size is level; fading is release.** A splat's size is its level in decibels,
-so the loud parts of the image are the big ones. Its opacity is a different
-question — how much of that direction is still being *held*. A quiet note with
-its key still down is fully solid; a loud one you have just released starts to
-disperse as it rings out, and is gone by the time you stop hearing it. That is
-not something the sound itself can tell you, since a release tail and a quiet
-note are the same signal, so this one reading comes from the engine's own voices
-rather than from the field.
+**Size and opacity are both the level.** A splat's size is its level in
+decibels, and its opacity follows the same decibels over the same range, so the
+loud parts of the image are big and solid and the quiet ones small and faint.
+The two never disagree, which keeps a busy cloud readable.
 
 The cloud **accumulates**: each analysis is laid over what is already there and
 the whole thing fades, so a moving image draws a trail and what you see is the

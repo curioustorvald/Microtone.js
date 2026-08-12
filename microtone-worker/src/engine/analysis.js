@@ -58,9 +58,26 @@ export const ANALYSIS_AMBISONIC = "ambisonic";
  * also what the wire pays.
  */
 export const SCOPE_FRAMES = 4096;
-/** W, Y, Z, X — ACN 0..3, the ring's interleave order. */
-export const SCOPE_CHANNELS = 4;
+/**
+ * SECOND-ORDER ACN/SN3D — W Y Z X, then the five order-2 harmonics, in the
+ * ring's interleave order.
+ *
+ * The scopes and the radiation surface only ever read the first four, and for
+ * them order 1 IS the field. The soundfield cloud needs the rest, because at
+ * first order some genuinely different scenes are the SAME four numbers: two
+ * sources in anti-phase cancel in W entirely, and a pair at ±15° then encodes
+ * identically to a pair at ±90°. Nothing downstream can undo that. The order-2
+ * quadrupole breaks the tie and recovers both bearings exactly (see cloud.js).
+ *
+ * COST: the ring is the snapshot's largest block, and this takes it from 64 KiB
+ * to 144 KiB. It is still built only while the strip is on screen.
+ */
+export const SCOPE_CHANNELS = 9;
 export const SCOPE_W = 0, SCOPE_Y = 1, SCOPE_Z = 2, SCOPE_X = 3;
+/** First of the five order-2 harmonics (ACN 4..8). */
+export const SCOPE_ORDER2 = 4;
+/** The ambisonic order the ring carries. */
+export const SCOPE_ORDER = 2;
 
 /** Widest metered channel set (7.1). Bounds the snapshot's meter block. */
 export const ANALYSIS_MAX_METERS = 8;
@@ -210,11 +227,8 @@ export class AnalysisRenderer {
   }
 
   channelGains(az, el, out, off) {
-    const sh = encodeSN3D(az, el, 1, this._sh);
-    out[off] = sh[0];
-    out[off + 1] = sh[1];
-    out[off + 2] = sh[2];
-    out[off + 3] = sh[3];
+    const sh = encodeSN3D(az, el, SCOPE_ORDER, this._sh);
+    for (let c = 0; c < SCOPE_CHANNELS; c++) out[off + c] = sh[c];
     if (this.speakers !== null) this.speakers.channelGains(az, el, out, off + SCOPE_CHANNELS);
   }
 
@@ -327,6 +341,15 @@ export class AnalysisTap {
       ring[rw + 1] = y;
       ring[rw + 2] = z;
       ring[rw + 3] = x;
+      // The order-2 harmonics ride along untouched; a stereo song has none (it
+      // has no bus at all), and its ring simply carries zeros there.
+      if (data === null) {
+        for (let c = SCOPE_ORDER2; c < SCOPE_CHANNELS; c++) ring[rw + c] = 0;
+      } else {
+        for (let c = SCOPE_ORDER2; c < SCOPE_CHANNELS; c++) {
+          ring[rw + c] = data[c * busFrames + n];
+        }
+      }
       this.ringWrite = (this.ringWrite + 1) % SCOPE_FRAMES;
 
       this.fieldEnergy += (w * w + x * x + y * y + z * z) * 0.5;

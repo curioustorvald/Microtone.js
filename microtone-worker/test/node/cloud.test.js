@@ -15,12 +15,13 @@ import assert from "node:assert/strict";
 import {
   SCOPE_FRAMES, SCOPE_CHANNELS, SCOPE_W, SCOPE_Y, SCOPE_Z, SCOPE_X,
 } from "../../src/engine/analysis.js";
-import { anglesFromDirection } from "../../src/engine/spatial.js";
+import { encodeSN3D, anglesFromDirection } from "../../src/engine/spatial.js";
 import { RAD_BANDS, RAD_NBANDS } from "../../src/ui/radiation.js";
 import {
   CloudField, CloudView, CLOUD_FILL, CLOUD_HOP, CLOUD_SIG_MIN, CLOUD_SIG_MAX,
-  CLOUD_SUSTAIN_DEFAULT,
-  cloudRadius, cloudPairRadius, cloudHalfAngle, cloudSigma, cloudDecay, cloudAlpha,
+  CLOUD_ALPHA_MIN,
+  cloudRadius, cloudPairRadius, cloudHalfAngle, cloudSigma, cloudLevelAlpha,
+  cloudDecay, cloudAlpha,
 } from "../../src/ui/cloud.js";
 
 const RATE = 48000;
@@ -31,32 +32,27 @@ const bearing = (d, e = 0) => {
 };
 const FRONT = bearing(0), LEFT = bearing(90), RIGHT = bearing(-90);
 
+/** Azimuth/elevation in the engine's units, from a bearing in degrees. */
+const AZ = (d) => 128 - (d * 512) / 360;
+const EL = (e) => (e * 128) / 90;
+
+/**
+ * A ring carrying `sources` encoded to the tap's own order — the real
+ * encoder, so the order-2 harmonics the cloud reads are the ones the engine
+ * would actually have produced.
+ */
 function ringOf(sources) {
   const ring = new Float32Array(SCOPE_FRAMES * SCOPE_CHANNELS);
-  for (const { dir, hz, amp = 1, phase = 0 } of sources) {
+  const sh = new Float64Array(16);
+  for (const { at, hz, amp = 1, phase = 0 } of sources) {
+    encodeSN3D(AZ(at[0]), EL(at[1] ?? 0), 2, sh);
     for (let i = 0; i < SCOPE_FRAMES; i++) {
       const v = amp * Math.sin((2 * Math.PI * hz * i) / RATE + phase);
       const o = i * SCOPE_CHANNELS;
-      ring[o + SCOPE_W] += v;
-      ring[o + SCOPE_Y] += v * dir[1];
-      ring[o + SCOPE_Z] += v * dir[2];
-      ring[o + SCOPE_X] += v * dir[0];
+      for (let c = 0; c < SCOPE_CHANNELS; c++) ring[o + c] += v * sh[c];
     }
   }
   return ring;
-}
-
-/** A stand-in for the AudioSystem's voice accessors. */
-function voices(list) {
-  const out = new Float64Array(2);
-  return {
-    channelCount: () => list.length,
-    getVoiceActive: (i) => list[i].vol > 0,
-    getVoiceEffectiveVolume: (i) => list[i].vol,
-    getVoiceAzimuth: (i) => (anglesFromDirection(...list[i].dir, out), out[0]),
-    getVoiceElevation: (i) => (anglesFromDirection(...list[i].dir, out), out[1]),
-    getVoiceSustain: (i) => list[i].sustain,
-  };
 }
 
 const S_STRIDE = 7, S_DX = 0, S_DY = 1, S_DZ = 2, S_R = 3, S_SIG = 4, S_A = 5;
@@ -95,9 +91,9 @@ test("an in-phase pair images at cos θ, measured end to end", () => {
   for (const t of [0, 15, 30, 45, 60, 75, 90]) {
     const f = new CloudField();
     const src = t === 0
-      ? [{ dir: bearing(0), hz: 700, amp: 2 }]
-      : [{ dir: bearing(t), hz: 700 }, { dir: bearing(-t), hz: 700 }];
-    f.analyse(ringOf(src), 0, RATE, 0, null);
+      ? [{ at: [0], hz: 700, amp: 2 }]
+      : [{ at: [t], hz: 700 }, { at: [-t], hz: 700 }];
+    f.analyse(ringOf(src), 0, RATE, 0);
     const s = splatsOf(f);
     assert.ok(s.length > 0, `±${t}° produced nothing`);
     const want = cloudPairRadius((t * Math.PI) / 180);
@@ -134,7 +130,7 @@ test("the accumulator's curves", () => {
 
 test("a single source lands at the rim, in its own direction", () => {
   const f = new CloudField();
-  f.analyse(ringOf([{ dir: bearing(35, 20), hz: 700 }]), 0, RATE, 0, null);
+  f.analyse(ringOf([{ at: [35, 20], hz: 700 }]), 0, RATE, 0);
   const s = splatsOf(f);
   assert.ok(s.length > 0, "something was found");
   const want = bearing(35, 20);
@@ -148,32 +144,41 @@ test("a single source lands at the rim, in its own direction", () => {
 test("an in-phase pair either side of you is in-head; an ANTI-phase one is not", () => {
   // In phase: the classic phantom centre, heard inside the head.
   const inp = new CloudField();
-  inp.analyse(ringOf([{ dir: LEFT, hz: 700 }, { dir: RIGHT, hz: 700 }]), 0, RATE, 0, null);
+  inp.analyse(ringOf([{ at: [90], hz: 700 }, { at: [-90], hz: 700 }]), 0, RATE, 0);
   for (const sp of splatsOf(inp)) assert.ok(sp.r < 0.05, `radius ${sp.r} should be in-head`);
 
   // Invert one and there is no phantom centre at all — you hear two separate
-  // sources. The pressure cancels, so the excess velocity becomes a PAIR of
-  // splats on the rim rather than anything in the middle.
-  for (const t of [30, 60, 90]) {
+  // sources. Order 2 puts them back where they ACTUALLY are: the order-2
+  // quadrupole carries the bearing the pair straddles, which order 1 alone
+  // cannot (at first order a pair at ±15° and one at ±90° are the same four
+  // numbers, so a first-order display has to fling both to the edges).
+  for (const [phi, th] of [[0, 15], [0, 30], [0, 60], [40, 25], [-70, 45], [110, 20]]) {
     const f = new CloudField();
     f.analyse(ringOf([
-      { dir: bearing(t), hz: 700 },
-      { dir: bearing(-t), hz: 700, phase: Math.PI },
-    ]), 0, RATE, 0, null);
+      { at: [phi + th], hz: 700 },
+      { at: [phi - th], hz: 700, phase: Math.PI },
+    ]), 0, RATE, 0);
     const s = splatsOf(f);
-    assert.ok(s.length > 0, `±${t}° anti-phase produced nothing`);
-    for (const sp of s) assert.ok(sp.r > 0.95, `±${t}°: radius ${sp.r} should be at the rim`);
-    // Two ends of one axis, in opposite directions, in equal number.
-    const plus = s.filter((x) => x.d[1] > 0.5).length;
-    const minus = s.filter((x) => x.d[1] < -0.5).length;
-    assert.ok(plus > 0 && minus > 0, `±${t}°: expected both ends, got ${plus}/${minus}`);
-    assert.equal(plus, minus, `±${t}°: the pair should be balanced`);
+    assert.ok(s.length > 0, `${phi}°±${th}° produced nothing`);
+    for (const sp of s) assert.ok(sp.r > 0.95, `${phi}°±${th}°: r ${sp.r} should be at the rim`);
+    // Every splat lands on one of the two true bearings, and both are used.
+    const want = [phi + th, phi - th].map((b) => bearing(b));
+    let hitA = 0, hitB = 0;
+    for (const sp of s) {
+      const dot = (w) => sp.d[0] * w[0] + sp.d[1] * w[1] + sp.d[2] * w[2];
+      const a = dot(want[0]), b = dot(want[1]);
+      assert.ok(Math.max(a, b) > 0.999,
+        `${phi}°±${th}°: splat off both bearings by ${deg(Math.acos(Math.max(a, b))).toFixed(1)}°`);
+      if (a > b) hitA++; else hitB++;
+    }
+    assert.ok(hitA > 0 && hitB > 0, `${phi}°±${th}°: only one bearing used (${hitA}/${hitB})`);
+    assert.equal(hitA, hitB, `${phi}°±${th}°: the pair should be balanced`);
   }
 });
 
 test("uncorrelated sources separate — the reading the surface cannot give", () => {
   const f = new CloudField();
-  f.analyse(ringOf([{ dir: LEFT, hz: 700 }, { dir: RIGHT, hz: 1600 }]), 0, RATE, 0, null);
+  f.analyse(ringOf([{ at: [90], hz: 700 }, { at: [-90], hz: 1600 }]), 0, RATE, 0);
   const s = splatsOf(f);
   const left = s.filter((x) => x.d[1] > 0.9 && x.r > CLOUD_FILL * 0.9);
   const right = s.filter((x) => x.d[1] < -0.9 && x.r > CLOUD_FILL * 0.9);
@@ -183,57 +188,57 @@ test("uncorrelated sources separate — the reading the surface cannot give", ()
 
 test("silence produces no splats at all", () => {
   const f = new CloudField();
-  f.analyse(new Float32Array(SCOPE_FRAMES * SCOPE_CHANNELS), 0, RATE, 0, null);
+  f.analyse(new Float32Array(SCOPE_FRAMES * SCOPE_CHANNELS), 0, RATE, 0);
   assert.equal(f.count, 0);
 });
 
 test("the analysis is paced by the audio, not the frame rate", () => {
   const f = new CloudField();
-  const ring = ringOf([{ dir: FRONT, hz: 700 }]);
-  assert.equal(f.analyse(ring, 0, RATE, 0, null), true, "the first window always runs");
-  assert.equal(f.analyse(ring, 0, RATE, 8, null), false, "8 frames is not a hop");
-  assert.equal(f.analyse(ring, 0, RATE, CLOUD_HOP, null), true, "a hop's worth is");
+  const ring = ringOf([{ at: [0], hz: 700 }]);
+  assert.equal(f.analyse(ring, 0, RATE, 0), true, "the first window always runs");
+  assert.equal(f.analyse(ring, 0, RATE, 8), false, "8 frames is not a hop");
+  assert.equal(f.analyse(ring, 0, RATE, CLOUD_HOP), true, "a hop's worth is");
   f.reset();
   assert.equal(f.count, 0);
   assert.equal(f.ready, false);
 });
 
-// ── held-ness: the part that cannot come from the audio ───────────────────
+// ── size and opacity are one reading ────────────────────────────────────────
 
-test("alpha is held-ness, and a quiet HELD note keeps it", () => {
-  const f = new CloudField();
-  // Same volume both sides; only the key state differs.
-  f.readVoices(voices([
-    { dir: LEFT, vol: 0.05, sustain: 1 },      // very quiet, key still down
-    { dir: RIGHT, vol: 0.9, sustain: 0.04 },   // loud, but ringing out
-  ]));
-  assert.equal(f.vCount, 2);
-  assert.ok(f.sustainAt(...LEFT) > 0.95, "quiet but held reads as held");
-  assert.ok(f.sustainAt(...RIGHT) < 0.1, "loud but releasing reads as releasing");
-  // A bearing with no voice anywhere near it has nothing to say.
-  assert.equal(f.sustainAt(...FRONT), CLOUD_SUSTAIN_DEFAULT);
+test("opacity follows the level, on the same decibels as the size", () => {
+  assert.equal(cloudLevelAlpha(0), 1, "the loudest bin is fully opaque");
+  assert.ok(cloudLevelAlpha(-6) < 1 && cloudLevelAlpha(-6) > cloudLevelAlpha(-24));
+  assert.equal(cloudLevelAlpha(-999), CLOUD_ALPHA_MIN, "the quiet end thins, not vanishes");
+  // Size and opacity move together — never one up and the other down.
+  let prevA = Infinity, prevS = Infinity;
+  for (let db = 0; db >= -50; db -= 5) {
+    const a = cloudLevelAlpha(db), sg = cloudSigma(db);
+    assert.ok(a <= prevA + 1e-12 && sg <= prevS + 1e-12, `${db} dB went the wrong way`);
+    prevA = a; prevS = sg;
+  }
 });
 
-test("…and it reaches the splats", () => {
+test("a loud bin is bigger AND more opaque than a quiet one", () => {
   const f = new CloudField();
-  const audio = voices([
-    { dir: LEFT, vol: 0.8, sustain: 1 },
-    { dir: RIGHT, vol: 0.8, sustain: 0.02 },
-  ]);
-  f.analyse(ringOf([{ dir: LEFT, hz: 700 }, { dir: RIGHT, hz: 1600 }]), 0, RATE, 0, audio);
+  f.analyse(ringOf([
+    { at: [60], hz: 700, amp: 1 },
+    { at: [-60], hz: 1600, amp: 0.05 },
+  ]), 0, RATE, 0);
   const s = splatsOf(f);
-  const left = s.filter((x) => x.d[1] > 0.9);
-  const right = s.filter((x) => x.d[1] < -0.9);
-  assert.ok(left.length && right.length, "both sides produced splats");
-  for (const sp of left) assert.ok(sp.alpha > 0.9, `held splat alpha ${sp.alpha}`);
-  for (const sp of right) assert.ok(sp.alpha < 0.1, `releasing splat alpha ${sp.alpha}`);
+  const loud = s.filter((x) => x.d[1] > 0.5);
+  const quiet = s.filter((x) => x.d[1] < -0.5);
+  assert.ok(loud.length && quiet.length, "both sources produced splats");
+  const big = Math.max(...loud.map((x) => x.sig));
+  const small = Math.max(...quiet.map((x) => x.sig));
+  assert.ok(big > small, `sizes ${big} vs ${small}`);
+  assert.ok(Math.max(...loud.map((x) => x.alpha)) > Math.max(...quiet.map((x) => x.alpha)));
 });
 
 // ── the accumulator ───────────────────────────────────────────────────────
 
 test("the cloud accumulates and then dies away", () => {
   const f = new CloudField();
-  f.analyse(ringOf([{ dir: bearing(30, 10), hz: 700 }]), 0, RATE, 0, null);
+  f.analyse(ringOf([{ at: [30, 10], hz: 700 }]), 0, RATE, 0);
   const view = new CloudView(64);
   const bandLin = RAD_BANDS.map(() => [1, 1, 1]);
   const basis = { h: [0, -1, 0], v: [1, 0, 0], d: [0, 0, 1] };
@@ -253,7 +258,7 @@ test("the cloud accumulates and then dies away", () => {
 
 test("develop paints where the cloud is and nowhere else", () => {
   const f = new CloudField();
-  f.analyse(ringOf([{ dir: bearing(90), hz: 700 }]), 0, RATE, 0, null); // hard left
+  f.analyse(ringOf([{ at: [90], hz: 700 }]), 0, RATE, 0); // hard left
   const size = 64;
   const view = new CloudView(size);
   view.splat(f, { h: [0, -1, 0], v: [1, 0, 0], d: [0, 0, 1] },
@@ -276,9 +281,9 @@ test("every band is drawable", () => {
   assert.equal(RAD_BANDS.length, RAD_NBANDS);
   const f = new CloudField();
   const src = RAD_BANDS.map((b, i) => ({
-    dir: bearing(i * 60), hz: Math.sqrt(b.lo * b.hi), amp: 1,
+    at: [i * 60], hz: Math.sqrt(b.lo * b.hi), amp: 1,
   }));
-  f.analyse(ringOf(src), 0, RATE, 0, null);
+  f.analyse(ringOf(src), 0, RATE, 0);
   const bands = new Set();
   for (let i = 0; i < f.count; i++) bands.add(f.splats[i * S_STRIDE + 6]);
   assert.equal(bands.size, RAD_NBANDS, `only bands ${[...bands]} appeared`);

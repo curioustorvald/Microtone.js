@@ -99,19 +99,7 @@ export const SNAP_V_ENV_FILTER_IDX = 14;
 export const SNAP_V_ENV_FILTER_TIME = 15;
 export const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
 export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
-/**
- * SUSTAIN (item 133) — how much of this voice is still being HELD, 0..1, as
- * distinct from how loud it is. 1 while the key is down, however quiet the note
- * is; after the key-off it is the release tail itself (the fadeout times the
- * volume envelope), falling to 0 as the voice rings out.
- *
- * The soundfield cloud draws it as opacity, so a quiet held note stays solid
- * and a loud one that has just been released begins to disperse. Nothing in the
- * B-format ring can carry this — a release tail and a quiet note are the same
- * signal — so it has to come across the wire from the engine's own voices.
- */
-export const SNAP_V_SUSTAIN = 18;
-export const SNAP_VOICE_STRIDE = 19;
+export const SNAP_VOICE_STRIDE = 18;
 
 export const SNAP_MAX_VOICES = 64;
 

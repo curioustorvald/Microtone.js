@@ -13,7 +13,7 @@ import {
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
-  SNAP_V_AZIMUTH, SNAP_V_ELEVATION, SNAP_V_SUSTAIN,
+  SNAP_V_AZIMUTH, SNAP_V_ELEVATION,
   SNAP_VOICE_STRIDE, SNAP_GLOBAL_VOLUME,
   SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
   SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
@@ -115,12 +115,6 @@ export function fillSnapshotInto(eng, playhead, f) {
       const faderGain = (255 - v.fader) / 255.0;
       let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
       f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
-      // Held-ness, not loudness (SNAP_V_SUSTAIN): 1 with the key down whatever
-      // the envelope is doing, and the release tail alone once it is up. The
-      // fadeout starts at 1 on the key-off, so after it this is exactly the
-      // part of `ev` that the RELEASE is responsible for.
-      const sus = v.keyOff ? v.fadeoutVolume * (v.volEnvOn ? v.envVolMix : 1.0) : 1.0;
-      f[o + SNAP_V_SUSTAIN] = sus < 0 ? 0 : sus > 1 ? 1 : sus;
       let pan;
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);

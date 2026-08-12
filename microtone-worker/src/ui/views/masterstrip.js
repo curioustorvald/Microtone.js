@@ -1070,11 +1070,8 @@ export class MasterStrip {
     f.build(dt, this.radBandLin(C));
   }
 
-  /**
-   * The one spatial image the cloud panels share (item 133). Unlike the other
-   * families this one also reads the ENGINE's voices — a release tail and a
-   * quiet note are the same signal, so held-ness cannot come out of the ring.
-   */
+  /** The one spatial image the cloud panels share (item 133) — analysed once
+   *  per strip, projected per panel. */
   updateCloud(C, dt) {
     if (!this.slots.some((wish) => cloudView(this.effective[wish]) !== null)) return;
     const audio = this.store.audio;
@@ -1086,7 +1083,7 @@ export class MasterStrip {
     // lay down; the decay itself is theirs, and happens in drawCloud.
     this.cloudFresh = audio.isPlaying()
       && this.cloudField.analyse(audio.scopeRing(), this.readout.ringWrite | 0,
-        SAMPLING_RATE, this.freshFrames, audio);
+        SAMPLING_RATE, this.freshFrames);
   }
 
   /** The five band inks in linear light, re-derived only on a theme change. */
