@@ -56,6 +56,7 @@ function jobSpec(m) {
         isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
         rpb: m.rpb ?? null, trimPatches: m.trimPatches === true,
         stereoSamples: m.stereoSamples === true,
+        keepDuplicatePatterns: m.keepDuplicatePatterns === true,
       }),
       inputs,
       output: "/out.taud",

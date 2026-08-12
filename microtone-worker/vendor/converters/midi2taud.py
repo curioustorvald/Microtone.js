@@ -6,7 +6,7 @@ Usage:
                          [--perc-force-mapping BANK INST]
                          [--rpb N] [--speed N] [--fadeout N]
                          [--bend-epsilon CENTS] [--drum-keyoff]
-                         [--loop] [--loop-at-eot]
+                         [--loop] [--loop-at-eot] [--no-dedup-patterns]
                          [-v] [--no-project-data]
 
     # Batch / directory mode (terranmon.txt:3342-3401):
@@ -91,6 +91,12 @@ Behaviour (per midi2taud.md):
     into whole-bar cues (the largest multiple of its bar length that fits in 64
     rows) so the tracker's bar/beat highlighting (sMet beat divisions) lines up
     with the music.
+  * Byte-identical patterns are pooled into one copy by default (a repeated bar,
+    and every silent column, costs one pattern for the whole song). The cue sheet
+    then references the same pattern from several cues, so an edit to one of them
+    changes all of its occurrences; --no-dedup-patterns gives every cue×voice
+    cell its own private pattern instead, which is what you want when the import
+    is a starting point for editing rather than a finished song.
   * Looping. A MIDI that carries its own loop markers is ALWAYS made to loop at
     those points (regardless of --loop); --loop additionally loops a marker-less
     MIDI start-to-end. Recognised loop-marker conventions (case-insensitive,
@@ -3258,11 +3264,23 @@ def build_song_section(song: Song, speed: int, rpb: int, src_path: str,
             vprint(f"  loop: {loop_src} → rows [{rs}, {re}) via {how} "
                    f"({n_cues} cue(s) after loop trim)")
 
-    pat_bin, remap, n_unique = deduplicate_patterns(pat_bin, n_cues * n_voices)
+    n_pats = n_cues * n_voices
+    if args.dedup_patterns:
+        pat_bin, remap, n_unique = deduplicate_patterns(pat_bin, n_pats)
+    else:
+        # --no-dedup-patterns: keep one pattern per cue×voice cell, so no two
+        # cues ever share a pattern and editing one leaves the others alone.
+        remap, n_unique = {i: i for i in range(n_pats)}, n_pats
+    # The cue-planning guard above counted cues BEFORE loop injection, which may
+    # have split one; re-check now that the real pattern count is known.
+    if n_unique > NUM_PATTERNS_MAX:
+        sys.exit(f"error: song needs {n_unique} patterns > {NUM_PATTERNS_MAX} limit"
+                 + ("" if args.dedup_patterns else " (drop --no-dedup-patterns)"))
     n_breaks = sum(1 for ft in song.timesig_ft
                    if 0 < (ft - shift_ft) // speed < total_rows)
-    vprint(f"  patterns: {n_cues * n_voices} → {n_unique} unique; "
-           f"{n_cues} cue(s), {n_voices} voice(s), {total_rows} rows"
+    vprint(f"  patterns: {n_pats} → {n_unique} unique"
+           + ("" if args.dedup_patterns else " (de-duplication off)")
+           + f"; {n_cues} cue(s), {n_voices} voice(s), {total_rows} rows"
            + (f"; {n_breaks} time-signature break(s)" if n_breaks > 0 else ""))
 
     # ── Pattern names (pNam): "{track name} {bar}-{dup}" ──
@@ -3643,6 +3661,16 @@ def main():
                     help='With --loop: loop precisely at End-of-Track instead of '
                          'rounding the loop-end up to a full bar (no effect without '
                          '--loop, or when the MIDI has its own loop markers)')
+    ap.add_argument('--no-dedup-patterns', action='store_false',
+                    dest='dedup_patterns', default=True,
+                    help='Give every cue x voice cell its own pattern instead of '
+                         'pooling byte-identical ones. By default a repeated bar '
+                         '(and every silent column) is stored once and referenced '
+                         'from each cue that uses it, which means editing one '
+                         'occurrence in a tracker changes ALL of them. Pass this '
+                         'flag when the import is a starting point for editing: '
+                         'every cue becomes independent, at the cost of a bigger '
+                         'pattern count (still capped at the 32767 limit)')
     ap.add_argument('--no-force-synth-loop', action='store_false',
                     dest='force_synth_loop', default=True,
                     help='Disable the default synth-loop behaviour. By default, '

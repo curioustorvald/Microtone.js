@@ -20,6 +20,7 @@ import {
   runConverter, buildArgv,
 } from "../../src/convert/convert-core.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
+import { CUE_EMPTY, NUM_PATTERNS_MAX } from "../../src/format/taud-const.js";
 import { tuningRatioOf } from "../../src/engine/tables.js";
 import { presetForNotation, surveyTuning } from "../../src/ui/pitchtables.js";
 import { Document, combineTpif, sampleSpans, isStereoSample } from "../../src/doc/document.js";
@@ -56,6 +57,7 @@ function convert(fileName, opts = {}) {
     argv: buildArgv({
       isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
       rpb: opts.rpb ?? null, trimPatches: opts.trimPatches === true,
+      keepDuplicatePatterns: opts.keepDuplicatePatterns === true,
     }),
     inputs,
     output: "/out.taud",
@@ -115,6 +117,25 @@ test("buildArgv opts IN to patch trimming only when asked (item 75)", () => {
     ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches"]);
   assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.xm", outPath: "/out.taud", trimPatches: true }),
     ["/in.xm", "/out.taud", "-v"]);
+});
+
+test("buildArgv opts IN to keeping duplicate patterns only when asked", () => {
+  const base = { isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" };
+  // Default: NO flag — the converter pools byte-identical patterns.
+  assert.deepEqual(buildArgv(base), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, keepDuplicatePatterns: false }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, keepDuplicatePatterns: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--no-dedup-patterns"]);
+  // Stacks with the other MIDI options, in argparse-safe order.
+  assert.deepEqual(buildArgv({ ...base, rpb: 8, trimPatches: true, stereoSamples: true,
+                               keepDuplicatePatterns: true }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches",
+     "--stereo-samples", "--no-dedup-patterns"]);
+  // Pattern pooling is a MIDI-converter concern — tracker argv never carries it.
+  assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.mod", outPath: "/out.taud",
+                               keepDuplicatePatterns: true }),
+    ["/in.mod", "/out.taud", "-v"]);
 });
 
 /** A minimal 4-channel "M.K." module: one pattern, one note per row, each a
@@ -342,6 +363,53 @@ test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; 
     assert.ok(rows2 > 0 && rows16 > 0, "both conversions produced rows");
     assert.ok(rows16 > rows2 * 2,
       `expected 16-rpb (${rows16}) to far exceed 2-rpb (${rows2})`);
+  });
+
+test("midi2taud --no-dedup-patterns unshares patterns without changing the song (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const song = (bytes) => parseTaud(bytes).songs[0];
+    const pooled = song(convert("M_E1M1.mid"));                              // default
+    const unshared = song(convert("M_E1M1.mid", { keepDuplicatePatterns: true }));
+
+    // The cue sheet is the same shape either way — only what its words POINT AT
+    // changes, so walk both cue×voice grids and compare the pattern each cell
+    // resolves to. Byte-identical everywhere ⇒ the song is note-for-note the same.
+    assert.equal(unshared.cues.length, pooled.cues.length);
+    const cellAt = (s, c, ch) => {
+      const w = s.cues[c][ch] & CUE_EMPTY;
+      return w === CUE_EMPTY ? "-" : Buffer.from(s.patterns[w]).toString("hex");
+    };
+    for (let c = 0; c < pooled.cues.length; c++) {
+      for (let ch = 0; ch < pooled.cues[c].length; ch++) {
+        assert.equal(cellAt(unshared, c, ch), cellAt(pooled, c, ch),
+          `cue ${c} channel ${ch} differs`);
+      }
+    }
+
+    // How often each pattern index is referenced. Pooling MUST produce reuse on
+    // a song this repetitive (E1M1's silent columns alone repeat), and the flag
+    // MUST remove all of it: one private pattern per occupied cue×voice cell.
+    const refCounts = (s) => {
+      const n = new Map();
+      for (const words of s.cues) {
+        for (const w of words) {
+          const p = w & CUE_EMPTY;
+          if (p !== CUE_EMPTY) n.set(p, (n.get(p) ?? 0) + 1);
+        }
+      }
+      return n;
+    };
+    const pooledRefs = refCounts(pooled), unsharedRefs = refCounts(unshared);
+    assert.ok([...pooledRefs.values()].some((n) => n > 1),
+      "the default build should share at least one pattern between cues");
+    assert.deepEqual([...unsharedRefs.values()].filter((n) => n > 1), [],
+      "--no-dedup-patterns must leave no pattern referenced twice");
+    // Same number of occupied cells, spread over strictly more patterns.
+    assert.equal(unsharedRefs.size, [...pooledRefs.values()].reduce((a, b) => a + b, 0));
+    assert.ok(unshared.patterns.length > pooled.patterns.length,
+      `unshared (${unshared.patterns.length}) should exceed pooled (${pooled.patterns.length})`);
+    assert.ok(unshared.patterns.length <= NUM_PATTERNS_MAX);
   });
 
 test("midi2taud keeps every zone by default; --trim-unused-patches drops the untriggered ones (item 75; skips without the SF2)",

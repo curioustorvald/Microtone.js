@@ -1,0 +1,192 @@
+<!doctype html><meta charset="utf-8"><title>Timeline row trough (item 136)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/town.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// The row-number trough down the left of the Timeline: dragging it selects
+// whole song rows, and its right-click menu inserts or deletes them (shifting
+// the rest of the song) and sets the beat/bar row highlighting. town.taud has
+// cues of three different lengths (16 / 64 / 32), so the row maths here is
+// exercised against a song whose cues are NOT all the same size.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+window.addEventListener("error", (e) => log("ERROR " + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, timeline } = M;
+  const cv = doc.getElementById("timeline");
+
+  // timeline.js layout: GUTTER_W 76, ROW_H 16, HEADER_H 58 (no radar).
+  const TROUGH_X = 20, ROW_H = 16;
+  const rowY = (row) => timeline.headerH() + (row - Math.floor(timeline.scrollRow)) * ROW_H + 8;
+  const at = (x, y) => {
+    const r = cv.getBoundingClientRect();
+    return { clientX: r.left + x, clientY: r.top + y };
+  };
+  const totalRows = () => store.song.songMap().totalRows;
+
+  const menuAt = async (x, y) => {
+    cv.dispatchEvent(new win.MouseEvent("contextmenu", {
+      ...at(x, y), bubbles: true, cancelable: true, button: 2 }));
+    let dlg = null;
+    for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return dlg;
+  };
+  const rowIds = (dlg, n) => [...dlg.querySelectorAll(`.ctx-row:nth-child(${n}) .ctx-cell`)]
+    .map((c) => c.dataset.id);
+  const cell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
+  const dismiss = async (dlg) => { dlg?.dispatchEvent(new win.Event("cancel", { cancelable: true })); await sleep(40); };
+  /** The modal a row tool opens: fill its fields, then OK. */
+  const modal = async (values) => {
+    let dlg = null;
+    for (let i = 0; i < 80 && !dlg; i++) { dlg = doc.querySelector("dialog.modal"); await sleep(20); }
+    if (!dlg) return false;
+    for (const [name, v] of Object.entries(values)) {
+      const input = dlg.querySelector(`[name="${name}"]`);
+      if (input) input.value = String(v);
+    }
+    dlg.querySelector(".modal-buttons button").click();
+    await sleep(120);
+    return true;
+  };
+
+  // ── the trough selects whole rows ──
+  timeline.scrollRow = 0;
+  timeline.sel = null;
+  timeline.invalidate();
+  await sleep(60);
+  cv.dispatchEvent(new win.PointerEvent("pointerdown", {
+    ...at(TROUGH_X, rowY(4)), bubbles: true, pointerId: 1, button: 0, buttons: 1 }));
+  cv.dispatchEvent(new win.PointerEvent("pointermove", {
+    ...at(TROUGH_X, rowY(7)), bubbles: true, pointerId: 1, buttons: 1 }));
+  cv.dispatchEvent(new win.PointerEvent("pointerup", {
+    ...at(TROUGH_X, rowY(7)), bubbles: true, pointerId: 1, button: 0, buttons: 0 }));
+  await sleep(60);
+  const band = timeline.selBounds();
+  check(!!band && band.r0 === 4 && band.r1 === 7, "a trough drag selects the rows it covers",
+    band ? `${band.r0}..${band.r1}` : "no selection");
+  check(!!band && band.c0 === 0 && band.c1 === store.doc.channelCount - 1,
+    "…across every channel", band ? `${band.c0}..${band.c1}` : "");
+  check(timeline.isRowBand(), "…and reads as a row band");
+
+  // ── the menu ──
+  let dlg = await menuAt(TROUGH_X, rowY(5));
+  check(!!dlg, "right-click in the trough opens a menu");
+  if (!dlg) { log(`\n${fails} FAILED`); return; }
+  check(rowIds(dlg, 1).join() === "rowsAbove,rowsBelow,rowsDelete",
+    "first row: the three row commands", rowIds(dlg, 1).join());
+  check(rowIds(dlg, 2).join() === "patsAbove,patsBelow",
+    "second row: the empty-pattern inserts", rowIds(dlg, 2).join());
+  check(rowIds(dlg, 3).join() === "beats", "third row: the row highlights",
+    rowIds(dlg, 3).join());
+  check(cell(dlg, "rowsDelete").title.includes("4"),
+    "the labels say how many rows the click covers", cell(dlg, "rowsDelete").title);
+  await dismiss(dlg);
+
+  // ── delete rows ──
+  // Four rows: the confirm() prompt only appears past that, and a headless
+  // browser answers every confirm with "no".
+  const before = totalRows();
+  const rowKey = (r) => {
+    const parts = [];
+    for (let ch = 0; ch < store.doc.channelCount; ch++) {
+      const c = timeline.cellAt(r, ch);
+      parts.push(c ? `${c.cell.note}:${c.cell.instrment}` : "-");
+    }
+    return parts.join("|");
+  };
+  const after8 = rowKey(8);
+  const limits = () => store.song.songMap().entries.map((e) => e.rowLimit);
+  const wasLimits = limits();
+  dlg = await menuAt(TROUGH_X, rowY(5));
+  cell(dlg, "rowsDelete").click();
+  await sleep(200);
+  check(totalRows() === before - 4, "delete takes the four selected rows out of the song",
+    `${before} → ${totalRows()}`);
+  check(rowKey(4) === after8, "…and what was below them moved up");
+  // The point of item 136.2: the music slides through a cue grid that stays put,
+  // so only the song's LAST cue is any shorter.
+  check(limits().slice(0, -1).join() === wasLimits.slice(0, -1).join(),
+    "every cue but the last keeps its length");
+  check(limits().pop() === wasLimits[wasLimits.length - 1] - 4,
+    "…and the song ends four rows earlier", `${limits().pop()}`);
+  check(timeline.selBounds() === null, "the selection is dropped: it described rows that moved");
+
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }));
+  await sleep(200);
+  check(totalRows() === before, "undo puts them back", String(totalRows()));
+
+  // ── insert rows ──
+  const key3 = rowKey(3);
+  dlg = await menuAt(TROUGH_X, rowY(3));
+  cell(dlg, "rowsAbove").click();
+  check(await modal({ count: 6 }), "insert opens a dialog asking how many");
+  await sleep(200);
+  check(totalRows() === before + 6, "six blank rows went in above row 3",
+    `${before} → ${totalRows()}`);
+  check(rowKey(9) === key3, "…and the row that was there moved down by six");
+  const blank = timeline.cellAt(3, 0);
+  check(blank === null || blank.cell.note === 0, "the inserted rows are empty",
+    blank ? String(blank.cell.note) : "no pattern");
+
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }));
+  await sleep(200);
+  check(totalRows() === before, "undo takes them out again", String(totalRows()));
+
+  // ── empty pattern row (the structural alternative) ──
+  const pats = () => store.song.patterns.filter(Boolean).length;
+  const wasPats = pats();
+  const cues = () => store.song.songMap().entries.length;
+  const wasCues = cues();
+  dlg = await menuAt(TROUGH_X, rowY(20)); // inside the second cue
+  cell(dlg, "patsAbove").click();
+  await sleep(200);
+  check(cues() === wasCues + 1, "an empty pattern row is one more cue", `${wasCues} → ${cues()}`);
+  check(pats() === wasPats, "…and it rebuilds no pattern at all", `${wasPats} → ${pats()}`);
+  check(totalRows() > before, "the song is longer by that cue's length");
+
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }));
+  await sleep(200);
+  check(totalRows() === before && cues() === wasCues, "undo removes it again");
+
+  // ── row highlights (item 136.1) ──
+  const was = store.beats();
+  dlg = await menuAt(TROUGH_X, rowY(2));
+  cell(dlg, "beats").click();
+  check(await modal({ pri: 3, sec: 12 }), "the highlights cell opens the beat dialog");
+  check(store.beats().pri === 3 && store.beats().sec === 12,
+    "the song's row highlighting follows", JSON.stringify(store.beats()));
+  check(store.doc.smetEdited === true, "…and it is marked for the sMet rewrite at save");
+  store.setBeats(was.pri, was.sec);
+
+  // The Project tab edits the same two numbers.
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F6", bubbles: true }));
+  await sleep(150);
+  const fields = [...doc.querySelectorAll(".project-view .inst-field")];
+  const priField = fields.find((f) => f.textContent.trim().startsWith("Rows per beat"));
+  check(!!priField, "the Project tab has a rows-per-beat field");
+  if (priField) {
+    const input = priField.querySelector("input");
+    input.value = "7";
+    input.dispatchEvent(new win.Event("change", { bubbles: true }));
+    await sleep(120);
+    check(store.beats().pri === 7, "…which writes the same setting", String(store.beats().pri));
+    store.setBeats(was.pri, was.sec);
+  }
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+ } catch (err) { log("THREW " + err.stack); }
+})();
+</script>

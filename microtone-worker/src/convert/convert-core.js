@@ -112,13 +112,18 @@ except SystemExit as e:
  *  song never triggers — off by default, so an imported bank keeps each preset's
  *  full zone map and Housekeeping ("Cleanup instrument patches") decides later.
  *  Worth turning on when the untrimmed pool overflows the converter's 8 MB
- *  budget: that path resamples EVERY sample down, costing quality song-wide. */
+ *  budget: that path resamples EVERY sample down, costing quality song-wide.
+ *  `keepDuplicatePatterns` (MIDI only) opts IN to --no-dedup-patterns: every
+ *  cue×voice cell gets its own pattern instead of sharing one copy of each
+ *  distinct bar, so editing a repeat can't change the other occurrences. */
 export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null,
-                            trimPatches = false, stereoSamples = false }) {
+                            trimPatches = false, stereoSamples = false,
+                            keepDuplicatePatterns = false }) {
   if (!isMidi) return [inPath, outPath, "-v"];
   const argv = [inPath, sf2Path, outPath, "-v"];
   if (rpb != null && rpb !== "auto") argv.push("--rpb", String(rpb));
   if (trimPatches) argv.push("--trim-unused-patches");
   if (stereoSamples) argv.push("--stereo-samples");
+  if (keepDuplicatePatterns) argv.push("--no-dedup-patterns");
   return argv;
 }

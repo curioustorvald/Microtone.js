@@ -35,6 +35,7 @@ import {
   muteItems, runMuteItem, fx2Items, runFx2Item,
 } from "../gridmenu.js";
 import { blockToolItems, runBlockTool, isBlockTool } from "../blocktools.js";
+import { rowBandItems, cueItems, beatItems, runRowTool, isRowTool } from "../rowtools.js";
 import { t } from "../i18n.js";
 
 const FONT_PX = 13; // family comes from --cv-font via fonts.js
@@ -66,6 +67,7 @@ export class TimelineView {
     this.lastPlayRow = -1; // remembered so resize() can repaint synchronously
     this.sel = null;       // block selection {aRow, aCh, row, ch} (absolute rows/channels)
     this._drag = null;     // active pointer-drag anchor {aRow, aCh}
+    this._troughDrag = null; // active row-band drag down the trough {aRow}
     this._ghosts = new Map(); // per-frame memos, replaced at the top of draw()
     this._hasFx2 = new Map();
 
@@ -367,6 +369,7 @@ export class TimelineView {
       }
       return;
     }
+    if (this.inTrough(x)) { this.troughPointerDown(e, y); return; }
     const hit = this.hitTest(x, y);
     if (!hit) return;
     if (e.shiftKey) {
@@ -386,9 +389,62 @@ export class TimelineView {
     this.invalidate();
   }
 
+  // ── the row trough (item 136) ──
+  // The numbered gutter down the left addresses SONG ROWS rather than cells, so
+  // it selects and acts on whole rows: a drag there is a row band across every
+  // channel, which is what the insert/delete row commands take as their span.
+
+  /** Is canvas `x` in the trough (rather than over a channel strip)? */
+  inTrough(x) { return x < GUTTER_W; }
+
+  /** Absolute row at canvas `y`, clamped into the song (a drag that runs off
+   *  the top or bottom keeps extending to the end, it does not stop dead). */
+  rowAt(y) {
+    const map = this.getMap();
+    if (!map || map.totalRows === 0) return -1;
+    const r = Math.floor(this.scrollRow) + Math.floor((y - this.headerH()) / ROW_H);
+    return clampInt(r, 0, map.totalRows - 1);
+  }
+
+  /** True when the selection is a full-width band — what a trough drag makes,
+   *  and what the row commands describe themselves against. */
+  isRowBand() {
+    const b = this.selBounds();
+    return !!b && b.c0 === 0 && b.c1 >= (this.store.doc?.channelCount ?? 1) - 1;
+  }
+
+  /** Select a row band from `a` to `b`, every channel, every sub-column. */
+  selectRowBand(a, b) {
+    const last = (this.store.doc?.channelCount ?? 1) - 1;
+    this.sel = { aRow: a, aCh: 0, aSub: 0, row: b, ch: last, sub: lastSub(this.fx2On(last)) };
+  }
+
+  troughPointerDown(e, y) {
+    const row = this.rowAt(y);
+    if (row < 0) return;
+    // Shift extends the band that is already there (or from the cursor row),
+    // exactly as it does in a spreadsheet's row headers.
+    const anchor = e.shiftKey ? (this.sel?.aRow ?? this.store.cursor.row) : row;
+    this.selectRowBand(anchor, row);
+    this._troughDrag = { aRow: anchor };
+    this.canvas.setPointerCapture?.(e.pointerId);
+    this.store.cursor.row = row;
+    this.store.emit("cursor");
+    this.invalidate();
+  }
+
   onPointerMove(e) {
-    if (!this._drag) return;
+    if (!this._drag && !this._troughDrag) return;
     const rect = this.canvas.getBoundingClientRect();
+    if (this._troughDrag) {
+      const row = this.rowAt(e.clientY - rect.top);
+      if (row < 0) return;
+      this.selectRowBand(this._troughDrag.aRow, row);
+      this.store.cursor.row = row;
+      this.store.emit("cursor");
+      this.invalidate();
+      return;
+    }
     const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (!hit) return;
     // ANY drag makes a block — including one that never leaves the cell, or
@@ -407,9 +463,10 @@ export class TimelineView {
   }
 
   onPointerUp(e) {
-    if (this._drag) {
+    if (this._drag || this._troughDrag) {
       this.canvas.releasePointerCapture?.(e.pointerId);
       this._drag = null;
+      this._troughDrag = null;
     }
   }
 
@@ -438,6 +495,10 @@ export class TimelineView {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    if (this.inTrough(x)) {
+      if (y >= this.headerH()) await this.troughMenu(e, y);
+      return;
+    }
     const ch = this.channelAt(x);
     if (ch < 0) return;
     const chans = store.doc.channelCount;
@@ -510,6 +571,48 @@ export class TimelineView {
       case "insLeft": this.insertChannel(ch); break;
       case "insRight": this.insertChannel(ch + 1); break;
       case "newPat": this.createPattern(loc.entry.cue, ch, hit.row, emptySlots); break;
+    }
+  }
+
+  /**
+   * The trough's own menu (item 136): the row commands over the band that was
+   * right-clicked, and the row highlighting underneath them.
+   *
+   * The band is the trough's own row selection when the click landed inside it,
+   * and otherwise the single row under the pointer — which is also what a
+   * right-click OUTSIDE the selection means: you are pointing at this row, not
+   * at the one you selected earlier.
+   */
+  async troughMenu(e, y) {
+    const store = this.store;
+    if (!store.doc || !store.song) return;
+    const row = this.rowAt(y);
+    if (row < 0) return;
+    const b = this.isRowBand() ? this.selBounds() : null;
+    const band = b && row >= b.r0 && row <= b.r1
+      ? { row0: b.r0, row1: b.r1 }
+      : { row0: row, row1: row };
+    if (band.row0 === row && band.row1 === row) {
+      // Acting on one row: put the cursor on it, so what happens next is
+      // visibly about the row that was clicked.
+      this.selectRowBand(row, row);
+      store.cursor.row = row;
+      store.emit("cursor");
+      this.invalidate();
+    }
+    const n = band.row1 - band.row0 + 1;
+    const pick = await showContextMenu(e.clientX, e.clientY,
+      [rowBandItems(n), cueItems(), beatItems()]);
+    if (!isRowTool(pick)) return;
+    if (await runRowTool(pick, { store, ...band })) {
+      // The order list may be a different shape now: drop the selection, put
+      // the cursor back inside the song and rebuild the map.
+      this.sel = null;
+      this.map = null;
+      const total = this.getMap()?.totalRows ?? 0;
+      store.cursor.row = clampInt(store.cursor.row, 0, Math.max(0, total - 1));
+      store.emit("cursor");
+      this.invalidate();
     }
   }
 
@@ -1174,6 +1277,7 @@ export class TimelineView {
     const dittoPal = monoPalette(C.ditto); // ghost cells (pattern ditto)
     const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim };
     const sb = this.selBounds(); // block selection bounds (or null)
+    const rowBand = this.isRowBand(); // …and whether it spans every channel
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < visRows; r++) {
       const absRow = top + r;
@@ -1204,7 +1308,14 @@ export class TimelineView {
       }
 
       // gutter: "cue:row" (cue is 4-digit hex); beat rows highlighted; the
-      // cursor row gets its own background so it's findable at a glance
+      // cursor row gets its own background so it's findable at a glance.
+      // A row BAND (a trough drag) is marked in the trough too — the grid
+      // highlight alone leaves it invisible wherever the channels are empty,
+      // which is exactly where a row edit is easiest to get wrong.
+      if (rowBand && absRow >= sb.r0 && absRow <= sb.r1) {
+        ctx.fillStyle = C.sel;
+        ctx.fillRect(0, y, GUTTER_W - 4, ROW_H);
+      }
       if (absRow === cursor.row) {
         ctx.fillStyle = C.cursor;
         ctx.fillRect(0, y, GUTTER_W - 4, ROW_H);

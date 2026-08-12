@@ -287,6 +287,7 @@ export class ProjectView {
     });
     notationRow.appendChild(makerBtn);
 
+    const beats = this.store.beats();
     const grid = document.createElement("div");
     grid.className = "inst-grid";
     grid.append(
@@ -295,6 +296,11 @@ export class ProjectView {
       copyrightRow,
       num(t("proj.bpm"), song.bpm, 25, 535, (v) => this.op("bpm", v)),
       num(t("proj.speedTicks"), song.tickRate, 1, 127, (v) => this.op("tickRate", v)),
+      // Row highlighting (item 136.1) — the grids' beat/bar banding. Display
+      // only: nothing about playback reads these, which is why they are plain
+      // sMet writes rather than song scalars with an op behind them.
+      num(t("rows.beatPri"), beats.pri, 1, 255, (v) => this.setBeats(v, beats.sec)),
+      num(t("rows.beatSec"), beats.sec, 1, 255, (v) => this.setBeats(beats.pri, v)),
       num(t("proj.globalVolume"), song.globalVolume, 0, 255, (v) => this.op("globalVolume", v)),
       num(t("proj.mixingVolume"), song.mixingVolume, 0, 255, (v) => this.op("mixingVolume", v)),
       sel(t("proj.toneSlideMode"), song.globalFlags & 3, [
@@ -329,9 +335,10 @@ export class ProjectView {
 
     const tuning = document.createElement("p");
     tuning.className = "dim";
-    let tuningTxt = "";
-    if (sm) tuningTxt += t("proj.tuningBeat", { pri: sm.beatPri, sec: sm.beatSec });
-    tuningTxt += t("proj.tuningPatterns", { pat: song.patterns.length, cues: song.lastUsedCue() + 1 });
+    // (The beat/bar divisions used to be read out here; they are two editable
+    // fields in the grid above now — item 136.1.)
+    const tuningTxt =
+      t("proj.tuningPatterns", { pat: song.patterns.length, cues: song.lastUsedCue() + 1 });
     tuning.textContent = tuningTxt.replace(/^ · /, "");
     this.root.appendChild(tuning);
 
@@ -608,6 +615,13 @@ export class ProjectView {
   /** Rename song `index` (default: current) — the name-only shorthand. */
   changeName(raw, index = this.store.songIndex) {
     this.changeSongMeta({ name: raw }, index);
+  }
+
+  /** Row highlighting (item 136.1): rows per beat / per bar. Same two numbers
+   *  the Timeline trough's own menu edits — the store owns the write so the two
+   *  routes cannot drift. */
+  setBeats(pri, sec) {
+    if (this.store.setBeats(pri, sec)) this.refresh();
   }
 
   /** Change the song's display notation only — does NOT move any notes. */

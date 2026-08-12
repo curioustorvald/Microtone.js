@@ -127,4 +127,36 @@ export class Store {
       sec: sm?.beatSec > 0 ? sm.beatSec : 16,
     };
   }
+
+  /**
+   * Change them (item 136.1). They are sMet fields, so this is document
+   * metadata — but like the notation selector and the song names it is written
+   * straight rather than through the undo stack: sMet is regenerated wholesale
+   * at save time (Document._rebuildSMet) and has no op of its own.
+   *
+   * Returns true when something changed, so a caller can skip the repaint.
+   */
+  setBeats(pri, sec) {
+    const doc = this.doc;
+    if (!doc) return false;
+    const sm = doc.meta.songMeta[this.songIndex] ??
+      (doc.meta.songMeta[this.songIndex] =
+        { notation: 120, beatPri: 4, beatSec: 16, name: "", composer: "", copyright: "" });
+    const p = clampByte(pri), s = clampByte(sec);
+    if (sm.beatPri === p && sm.beatSec === s) return false;
+    sm.beatPri = p;
+    sm.beatSec = s;
+    doc.smetEdited = true;
+    doc.dirty = true;
+    this.emit("edit");   // the two grids band their rows on these
+    this.emit("status"); // …and the file is now unsaved
+    return true;
+  }
+}
+
+/** sMet stores each division in one byte, and 0 means "unset" (the reader falls
+ *  back to 4/16), so the writable range starts at 1. */
+function clampByte(v) {
+  const n = Math.round(Number(v) || 0);
+  return n < 1 ? 1 : n > 255 ? 255 : n;
 }

@@ -118,7 +118,8 @@ From top to bottom:
 ## Timeline (F1)
 
 The Timeline unrolls the entire song: every channel side by side, every cue
-stacked vertically. The left gutter shows `cue:row`; channel headers carry
+stacked vertically. The left gutter — the *trough* — shows `cue:row` and selects
+whole song rows; channel headers carry
 live VU/pan meters, the channel's current pitch, and the name of the pattern while playing.
 
 ### Reading a cell
@@ -227,6 +228,55 @@ song's channel count is fixed at 32 or 64, so the last channel falls off the
 end — you are asked first if it is carrying anything. Cue commands (pattern
 length, halt, jump) stay on the channel they were written on and are never moved
 by the shift. The whole insert is one **Ctrl+Z**.
+
+### The row trough
+
+The numbered gutter down the left addresses **song rows** rather than cells, so
+it selects and edits whole rows. Drag it to select a band of rows across every
+channel (**Shift+click** extends one); right-click it for the row commands:
+
+| Item | Action |
+|---|---|
+| **Rows above** / **Rows below** | Insert blank rows before or after the band, asking how many first — the whole song below slides down |
+| **Delete rows** | Take the selected rows out of the song; the whole song below slides up to close the gap |
+| **Patterns above** / **Patterns below** | Insert an empty pattern on every channel — a blank cue as long as the one you clicked — without moving anything |
+| **Row highlights** | How many rows to a beat and to a bar |
+
+Insert and delete act on the **whole song**, every channel at once, in one
+**Ctrl+Z**.
+
+A row here is a row of the *song*, not of a pattern, and the cue boundaries stay
+where they are: the music **slides through** them. Delete four rows in the middle
+of the second cue and the first four rows of the third cue move up into it, the
+fourth cue's move into the third, all the way down, and the song ends four rows
+earlier than it did. Every cue keeps the length it had — only the last one is
+shorter — so a bar line drawn by a cue boundary stays put while the notes move
+past it. Insert is the same in reverse, with the rows pushed off the bottom
+landing in the last cue, or in a new one when it is already full.
+
+That is what makes these two the expensive commands. Every pattern from the edit
+to the end of the song now holds a different stretch of music and has to be
+rebuilt — and where a pattern is **shared**, the sharing decides what happens to
+it: one that another cue still plays whole is left exactly as it was and the
+edited cue gets its own copy, so a shift never moves notes in music it did not
+pass through. Channels that were playing the same pattern at the same point go
+on sharing one; the numbers the rebuilt cues let go of are used again rather than
+left behind, so a shift costs roughly as many patterns as it frees. Cue commands
+follow too — pattern lengths track the new lengths, and jumps still point at the
+music they were aimed at.
+
+Two edits avoid all of that, because they mean exactly the same thing as plain
+cue surgery and are taken as such: **deleting a whole number of cues** (select
+from one cue boundary to another) simply drops them from the order list, and
+**inserting at a cue boundary** simply adds a blank cue. Neither touches a
+pattern. **Patterns above / below** is the third of them, and the one to reach
+for when what you want is a blank bar: it costs nothing, changes no pattern, and
+leaves every bit of sharing alone.
+
+**Row highlights** are the song's own **rows per beat** and **rows per bar**,
+4 and 16 unless the file says otherwise. They only decide how the Timeline and
+Patterns grids are banded; nothing about playback reads them. The same two
+numbers are on the [Project](#project-f6) tab.
 
 ### Picking up an instrument
 
@@ -920,6 +970,7 @@ own name, composer and copyright, which the songs table at the bottom edits.
 Then the per-song properties, applied live to playback:
 
 - **BPM** (25–535) and **Speed** (ticks per row, 1–127).
+- **Rows per beat** and **Rows per bar** — the row highlighting the grids are banded with (display only). Also on the Timeline trough's right-click menu, see [The row trough](#the-row-trough).
 - **Global volume** and **Mixing volume** (0–255).
 - **Tone-slide mode** — Linear (4096-TET), Amiga period, or Linear frequency.
 - **Interpolation** — Fast sinc, None (ZOH), Amiga 500, Amiga 1200, SNES gaussian, NES DPCM.
@@ -1162,9 +1213,10 @@ runtime (a few seconds); a progress popup streams the converter's log.
 
 MIDI needs a SoundFont for its instruments. Use **Import MIDI…** and choose
 the **bundled GeneralUser-GS** bank or pick your own `.sf2`. The result loads
-as an unsaved project. Two options shape the conversion:
+as an unsaved project. A few options shape the conversion:
 
 - **Rows/beat** — pins the pattern grid. *Auto* picks it from the time signatures and note onsets.
+- **Keep duplicate patterns** (off by default) — the converter normally stores one copy of each distinct pattern and points every cue that repeats it at that same copy, so a song that plays the same bar eight times spends one pattern on it (and a column that is silent all the way through costs exactly one for the whole song). That is compact, but it also means editing such a pattern in one cue changes it in every cue that shares it — the [Patterns](#patterns-f3) view names the cues that would follow along. Tick this box and each cue gets its own private patterns, so the import behaves like something you tracked by hand. The music is note-for-note identical either way; only the pattern count differs, and duplicates cost almost nothing on disk because they compress away.
 - **Import stereo instruments in stereo** (off by default) — SoundFont instruments built from a stereo sample pair normally arrive mixed down to mono. Tick this to keep both channels as a [stereo sample](#stereo-samples); it doubles what each such instrument costs in the 8 MB pool, so a big bank may end up resampled harder to fit. The same option appears on the **Import MIDI…** dialog and on the SoundFont preset picker (Instruments → Import…).
 - **Trim unused patches** (off by default) — each SoundFont preset is imported with its **whole** key/velocity zone map, so an imported instrument stays playable across the entire keyboard, not just at the notes this particular song happens to use. The extra zones are inert: the song sounds exactly the same either way. Tick the box to keep only the zones the song triggers, which makes the bank considerably smaller. You can always trim later with **Project → Housekeeping → Cleanup instrument patches**.
 

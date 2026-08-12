@@ -30,6 +30,23 @@ const fxCol = (x) => `<rect x="${x}" y="6" width="7.5" height="12" rx="1.2" ` +
                      `fill="currentColor" stroke="none"/>`;
 const fxGhostCol = (x) => `<rect x="${x}" y="6" width="7.5" height="12" rx="1.2" ` +
                           `stroke-dasharray="2.6 2.2"/>`;
+// Song rows for the trough menu: a row that is there, and the dashed slot one
+// is about to become. A row is 16 wide and only 4 or 5 tall, which is nowhere
+// near enough to hold ghostAt's plus as well as the dashes — so these say "the
+// new one" with the dashes alone, and WHICH one by where it sits in the stack,
+// exactly as the channel inserts do.
+const rowBar = (y) => `<rect x="4" y="${y}" width="16" height="4" rx="1" ` +
+                      `fill="currentColor" stroke="none"/>`;
+const rowSlot = (y) => `<rect x="4" y="${y}" width="16" height="5" rx="1.5" ` +
+                       `stroke-dasharray="3 2.4"/>`;
+// …and a whole ROW OF PATTERNS — one card per channel — for the cue inserts
+// beside them, so "a row of the song" and "a pattern on every channel" are
+// visibly two different things.
+const patRow = (y) => [3, 9.5, 16].map((x) =>
+  `<rect x="${x}" y="${y}" width="5" height="5" rx="1" fill="currentColor" stroke="none"/>`)
+  .join("");
+const patSlot = (y) => `<rect x="2.5" y="${y}" width="19" height="5" rx="1.5" ` +
+                       `stroke-dasharray="3 2.4"/>`;
 // …and the same idea laid out as one channel's row, stacked three deep for the
 // all-channels form.
 const fxRow = (y) => `<rect x="2" y="${y}" width="11" height="3.5" rx="1" ` +
@@ -87,6 +104,28 @@ export const ICON = {
   fx2ShowAll: SVG(fxRow(3.5) + fxRow(10.5) + fxRow(17.5)),
   fx2HideAll: SVG(fxRow(3.5) + fxRow(10.5) + fxRow(17.5) +
     '<path d="M3 20.5 21 3.5"/>'),
+
+  // ── the row trough (item 136) ──
+  // Song ROWS, turned ninety degrees from the channel bars above so the two
+  // families never read as the same pair of actions: solid rules are rows that
+  // are there, the dashed one is the row being made — the same "filled pair +
+  // dashed slot" grammar as the channel inserts.
+  /** Insert blank rows ABOVE this one: the gap opens at the top. */
+  rowsAbove: SVG(rowSlot(2.5) + rowBar(11) + rowBar(18)),
+  /** …and BELOW it. */
+  rowsBelow: SVG(rowBar(2) + rowBar(9) + rowSlot(16)),
+  /** Delete rows: the row between the two that stay is struck out. */
+  rowsDelete: SVG(rowBar(2) + rowBar(18) + '<path d="M7.5 9 16.5 15M16.5 9 7.5 15"/>'),
+  /** Insert an empty pattern row (a blank cue) ABOVE this one… */
+  patsAbove: SVG(patSlot(2.5) + patRow(10) + patRow(17)),
+  /** …and BELOW it. */
+  patsBelow: SVG(patRow(2) + patRow(9) + patSlot(16.5)),
+  /** Row highlights: the beat and bar banding the trough is read against. */
+  beats: SVG(
+    '<rect x="2.5" y="2.5" width="19" height="4" rx="1.2" fill="currentColor" stroke="none"/>' +
+    '<path d="M4 9.5h16M4 13h16"/>' +
+    '<rect x="2.5" y="15.5" width="19" height="2.5" rx="1" fill="currentColor" stroke="none"/>' +
+    '<path d="M4 21h16"/>'),
 
   /** Copy the block selection: the usual two stacked sheets. */
   copy: SVG(

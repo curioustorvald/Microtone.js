@@ -107,7 +107,8 @@ ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmu
 // ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
 
 async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
-                                            trimPatches = false, stereoSamples = false } = {}) {
+                                            trimPatches = false, stereoSamples = false,
+                                            keepDuplicatePatterns = false } = {}) {
   let sf2 = sf2Override;
   if (!sf2 && converterFor(name).isMidi) {
     $("stFile").textContent = t("midi.needSf");
@@ -117,7 +118,8 @@ async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
   const progress = showImportProgress(`Importing ${name}`);
   try {
     const out = await convertToTaud(name, bytes,
-      { sf2, rpb, trimPatches, stereoSamples, onStatus: progress.log });
+      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
+        onStatus: progress.log });
     progress.done();
     return out;
   } catch (err) {
@@ -131,10 +133,12 @@ async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
 
 // ── document loading ──
 async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null,
-                                        trimPatches = false, stereoSamples = false } = {}) {
+                                        trimPatches = false, stereoSamples = false,
+                                        keepDuplicatePatterns = false } = {}) {
   let converted = false;
   if (converterFor(name)) {
-    bytes = await convertImport(name, bytes, { sf2, rpb, trimPatches, stereoSamples });
+    bytes = await convertImport(name, bytes,
+      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns });
     if (bytes === null) return;
     name = name.replace(/\.[^.]+$/, "") + ".taud";
     converted = true;
@@ -452,6 +456,14 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       // mixed to mono by default — stereo doubles their pool cost, and pool
       // overflow resamples the WHOLE bank down.
       name: "stereo", label: t("midi.stereoSamples"), type: "checkbox", value: false,
+    }, {
+      // The converter pools byte-identical patterns, so a repeated bar (and
+      // every silent column) is ONE pattern the cue sheet points at several
+      // times — edit it in one cue and every other cue changes with it. Ticking
+      // this gives each cue×voice cell its own pattern, which is what you want
+      // when the import is a starting point for editing rather than a finished
+      // song. Costs pattern slots (32767 cap), barely any file size.
+      name: "nodedup", label: t("midi.keepDupPatterns"), type: "checkbox", value: false,
     }],
     okLabel: t("common.import"),
   });
@@ -463,6 +475,7 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       sf2, saveToOpfs: toOpfs, rpb: choice.rpb,
       trimPatches: choice.trim === true,
       stereoSamples: choice.stereo === true,
+      keepDuplicatePatterns: choice.nodedup === true,
     });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());

@@ -289,6 +289,10 @@ export class AudioSystem {
     const buf = bytes.slice().buffer;
     this._post({ t: CMD.UPLOAD_PATTERN, slot, bytes: buf }, [buf]);
   }
+  /** Highest cue index+1 the engine's persistent cueSheet has ever been given.
+   *  A resync after the cue list SHRANK (a row delete, item 136.2) has to run
+   *  out to here to blank what it left behind. */
+  get cueHighWater() { return this._cueHighWater; }
   uploadCue(idx, bytes) {
     if (idx + 1 > this._cueHighWater) this._cueHighWater = idx + 1;
     const buf = bytes.slice().buffer;

@@ -107,11 +107,19 @@ export class DocSync {
     }
   }
 
-  /** Re-push every pattern (lazily) + cue after a structural remap (item 60). */
+  /**
+   * Re-push every pattern (lazily) + cue after a structural remap (item 60).
+   *
+   * A row delete (item 136.2) can make the cue list SHORTER, and the engine
+   * keeps one persistent cueSheet — so this runs past the end of the new list,
+   * up to the highest cue the engine has ever been given. cueBytes() serves the
+   * all-empty image for those, which is what blanks them.
+   */
   resyncSong() {
     const s = this.doc.songs[this.songIndex];
     for (let p = 0; p < s.patterns.length; p++) this.dirtyPatterns.add(p);
-    for (let c = 0; c < s.cues.length; c++) {
+    const end = Math.max(s.cues.length, this.audio.cueHighWater ?? 0);
+    for (let c = 0; c < end; c++) {
       this.audio.uploadCue(c, this.doc.cueBytes(this.songIndex, c));
     }
   }

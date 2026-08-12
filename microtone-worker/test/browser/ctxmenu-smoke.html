@@ -172,13 +172,19 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   check(ids(dlg).includes("dupPat"), "…but it can be duplicated", ids(dlg).join());
   await dismiss(dlg);
 
-  // ── 8. the gutter is not a channel ──────────────────────────────────────
+  // ── 8. the gutter is not a channel — it is the ROW menu (item 136) ───────
   const r = rect();
   canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
     clientX: r.left + 20, clientY: r.top + gridY, bubbles: true, cancelable: true, button: 2,
   }));
   await sleep(80);
-  check(!doc.querySelector("dialog.ctxmenu"), "no menu over the row gutter");
+  dlg = doc.querySelector("dialog.ctxmenu");
+  check(!!dlg && !ids(dlg).some((id) => id.startsWith("ins") || id === "newPat"),
+    "the row gutter offers no channel actions", dlg ? ids(dlg).join() : "no menu");
+  check(!!dlg && ids(dlg).includes("rowsDelete"),
+    "…it has the row commands instead (their own smoke: trough-smoke.html)",
+    dlg ? ids(dlg).join() : "no menu");
+  await dismiss(dlg);
 
   // ── 9. clipboard cells: copy/cut with a selection, paste on a real pattern ─
   store.clipboard = null;

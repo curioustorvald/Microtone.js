@@ -13,6 +13,8 @@
        header (the two channel inserts over the mute row), ?where=full for the
        widest case (a block selected and something on the clipboard); the
        default is an empty cue slot (Channel left/right + New pattern).
+       ?where=trough opens the ROW menu in the numbered gutter (item 136), with
+       a four-row band selected so the labels have a count to quote.
        ?col=note|inst|vol|pan|fx picks which column the pointer lands on, i.e.
        which SECOND row is drawn over the grid; ?muted=1 mutes a channel first,
        which is what adds "Unmute all" to a header's mute row. -->
@@ -44,6 +46,7 @@
       }
       const header = params.get("where") === "header";
       const full = params.get("where") === "full";
+      const trough = params.get("where") === "trough";
       const ch = 1;
       if (params.get("muted")) { store.toggleMute(ch === 0 ? 1 : 0); await sleep(60); }
       if (full) {
@@ -59,6 +62,9 @@
           ? { aRow: 2, aCh: 1, aSub: 0, row: 5, ch: 2, sub: 5 }
           : { aRow: 2, aCh: 1, aSub: sub, row: 5, ch: 1, sub };
         tl.copySelection();
+      } else if (trough) {
+        timeline.selectRowBand(4, 7); // a band, so the row labels quote a count
+        timeline.invalidate();
       } else if (!header) {
         // Blank one channel of cue 0 so the menu picks up its "New pattern" cell.
         const { setCuesOp } = await win.eval('import("/src/doc/ops.js")');
@@ -73,9 +79,10 @@
       // Character offsets into a narrow cell (edit.js COL_CHAR_RANGE).
       const COL_X = { note: 1, inst: 6, vol: 9, pan: 13, fx: 17 };
       const col = COL_X[params.get("col")];
-      const x = col === undefined
-        ? r.left + 76 + ch * colW + colW / 2
-        : r.left + 76 + ch * colW + 2 + col * 7.9 + 1;
+      const x = trough ? r.left + 20
+        : col === undefined
+          ? r.left + 76 + ch * colW + colW / 2
+          : r.left + 76 + ch * colW + 2 + col * 7.9 + 1;
       const y = r.top + (header ? 10 : timeline.headerH() + 6 * 16);
       canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
         clientX: x, clientY: y, bubbles: true, cancelable: true, button: 2,

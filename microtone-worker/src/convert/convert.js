@@ -42,16 +42,20 @@ function ensureWorker() {
  * @param opts.rpb  MIDI rows-per-beat (2/4/8/16/32/64, or null/"auto")
  * @param opts.trimPatches  MIDI: drop the Ixmp patches the song never triggers
  *                          (item 75; off = keep each preset's full zone map)
+ * @param opts.keepDuplicatePatterns  MIDI: give every cue×voice cell its own
+ *                          pattern instead of pooling identical ones
  * @param opts.onStatus  (line) => void progress stream
  */
 export function convertToTaud(fileName, bytes,
                               { sf2 = null, rpb = null, trimPatches = false,
-                                stereoSamples = false, onStatus = null } = {}) {
+                                stereoSamples = false, keepDuplicatePatterns = false,
+                                onStatus = null } = {}) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject, onStatus });
     const buf = bytes.slice().buffer;
-    const msg = { t: "convert", id, fileName, bytes: buf, rpb, trimPatches, stereoSamples };
+    const msg = { t: "convert", id, fileName, bytes: buf, rpb, trimPatches,
+                  stereoSamples, keepDuplicatePatterns };
     const transfer = [buf];
     if (sf2) {
       const sfBuf = sf2.bytes.slice().buffer;
