@@ -33,7 +33,7 @@ Background voices are not addressable from the pattern. They receive no row even
 
 ### 1.3 Output
 
-The engine renders **8-bit unsigned, stereo, interleaved** at **32 000 Hz**, which is the TSVM Audio Adapter's hardware rate and the **reference rate this document is written against**: every sample count quoted below (samples per tick, the 256-sample ramp-out, the 64-sample volume ramp) and every filter coefficient follows from it. The 8-bit dithered character is intentional and part of the format's sound; always stereo is not negotiable.
+The engine renders **8-bit unsigned, stereo, interleaved** at **32 000 Hz**, which is the TSVM Audio Adapter's hardware rate and the **reference rate this document is written against**: every sample count quoted below (samples per tick, the 256-sample ramp-out, the 64-sample volume ramp, the 21-sample attack ramp) and every filter coefficient follows from it. The 8-bit dithered character is intentional and part of the format's sound; always stereo is not negotiable.
 
 A host whose output is at another rate **MAY** run the engine at that rate instead of resampling after the output stage — the browser implementation renders 48 kHz for exactly this reason, since resampling a 32 kHz render up to the audio device's rate is a quality loss taken on every song. An implementation that does so **MUST** derive all of the following from its own rate rather than carrying the 32 kHz numbers over:
 
@@ -43,6 +43,7 @@ A host whose output is at another rate **MAY** run the engine at that rate inste
 | Playback rate ([§3.2](#3-2-playback-rate)) | `sampling_rate ÷ rate` |
 | Ramp-out on sample end/cut ([§12](#12-output-stage)) | 8 ms — 256 samples at 32 kHz |
 | Volume-change ramp ([§12](#12-output-stage)) | 2 ms — 64 samples at 32 kHz |
+| Attack ramp-in on fresh trigger ([§8.6](#8-6-the-attack-ramp)) | ~⅔ ms — 21 samples at 32 kHz |
 | Voice filter coefficients ([§9](#9-filters)) | `rate` in §9's formulae is the running rate, so the cutoff clamp rises with it |
 | Amiga LPF / LED coefficients ([§10.4](#10-4-the-post-mix-amiga-chain)) | Recomputed at the running rate, so both corners stay at their analogue frequencies (4420.971 Hz, 3090.533 Hz) |
 
@@ -265,7 +266,7 @@ Triggering a note **MUST**:
 - Set the sample position to the active play start and the direction to forward.
 - Reset the volume and pan envelope playheads to node 0 and snap the per-sample smoothed envelope value, so an attack lands on node 0 immediately rather than gliding into it.
 - Seed the pitch and filter envelope playheads past any leading zero-duration nodes ([§7.3](#7-3-the-pitch-and-filter-walker)).
-- Reset the fadeout multiplier to 1, cancel any sample-end ramp, reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
+- Reset the fadeout multiplier to 1, cancel any sample-end ramp, arm the attack ramp ([§8.6](#8-6-the-attack-ramp)), reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
 - Draw fresh volume- and pan-swing biases.
 - Apply the instrument's default position and pitch-pan separation, if the row carried an instrument byte ([§5.3.1](#5-3-1-the-default-position)).
 - Reset the filter to the active defaults and clear its delay lines.
@@ -547,6 +548,18 @@ The mask is instrument-scope runtime state and **MUST** be cleared on a transpor
 
 When a voice reaches the end of a non-looping sample, or the volume envelope's cut rule fires, the engine engages an **8 ms linear ramp-out** (256 samples at the reference rate) rather than stopping instantly. During the ramp the sample position is held and the emitted value decays to zero, and the voice deactivates when the ramp completes. Re-engaging a ramp already in progress is a no-op, and a fresh trigger cancels any pending ramp so an attack is never muted by a stale one.
 
+### 8.6 The attack ramp
+
+A fresh trigger arms a countdown that feeds the same per-voice `ramp_gain` the sample-end ramp uses ([§10.2](#10-2-the-gain-chain)); the two multiply together when both are active, which only happens when a note is cut again inside its own attack. Where the sample-end ramp decays **linearly**, the attack ramp rises on a **half-cosine** curve:
+
+```
+ramp_gain = 0.5 − 0.5 × cos(π × i ÷ n)
+```
+
+`n` is the ramp's length — **~⅔ ms**, 21 samples at the 32 kHz reference rate — and `i` counts the output samples emitted since the trigger, `0` on the very first. The curve is exactly 0 at `i = 0`; every sample once `i` reaches `n` reads a flat `ramp_gain = 1.0`. A hard jump straight to full gain reproduces, on a loud or DC-offset sample, exactly the click the sample-end ramp exists to remove — the half-cosine shape is what the ear reads as smooth rather than merely fast, at a length short enough that a genuine percussive transient still lands inside the ramp's first sample or two.
+
+A fresh trigger always re-arms the ramp at length `n`, even when the previous note's own attack ramp on that voice was still counting down — a trigger is a hard restart, so there is no "already ramping" case to no-op against, unlike the sample-end ramp. An NNA ghost spawned while its source voice's attack ramp is still running **MUST** inherit the remaining count rather than restart it or skip straight to unity gain: either alternative reproduces, at the hand-off, the exact click this ramp exists to prevent.
+
 ## 9. Filters
 
 Two topologies, both mandatory. Which one a voice uses is decided by its instrument's (or patch's) filter mode.
@@ -633,7 +646,7 @@ global    = (song_global_volume ÷ 255) × (mixing_volume ÷ 255) × master_volu
 sample_out = sample × per_voice × global × pan_gain × ramp_gain
 ```
 
-`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **2 ms linear ramp** (64 samples at the reference rate), which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so attacks are not softened.
+`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **2 ms linear ramp** (64 samples at the reference rate), which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so a note's own target volume is reached immediately — the separate `ramp_gain` factor ([§8.6](#8-6-the-attack-ramp)) is what shapes the very start of the attack instead.
 
 The envelope volume is likewise smoothed per sample: at each tick the engine computes a slope `(new_envelope_value − current) ÷ samples_per_tick` and adds it once per frame. Without this, a 50 Hz envelope staircase is audible on sustained material.
 
@@ -843,6 +856,7 @@ An implementation conforms when all of the following hold.
 - NNA ghosts carry the complete voice state, including both filter topologies' delay lines.
 - Duplicate Check runs before the NNA spawn and consults the *existing* voice's instrument.
 - A note delay's trigger re-binds the instrument for the remainder of that tick.
-- Sample ends and envelope cuts ramp out over 8 ms; volume changes ramp over 2 ms, and a trigger snaps rather than ramps.
+- Sample ends and envelope cuts ramp out over 8 ms; volume changes ramp over 2 ms, and `current_mix_volume` snaps rather than ramps on a trigger.
+- A fresh trigger separately fades `ramp_gain` in from silence over a ~⅔ ms half-cosine attack ramp, inherited by an NNA ghost spawned mid-ramp.
 - A planar or spatial song that uses only ordinary pan renders bit-identically to the stereo model.
 - The output stage narrows to binary32 before clamping, and runs the dither loop entirely in binary32 against a seeded generator.

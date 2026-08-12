@@ -5,7 +5,7 @@
 // (2693), maybeSpawnBackgroundForNNA (2748), ghostVoice (2768),
 // applyPastNoteAction (2887), applyVolColumn (2905), applyPanColumn (2927).
 
-import { MAX_BG_VOICES } from "./constants.js";
+import { MAX_BG_VOICES, ATTACK_RAMP_SAMPLES } from "./constants.js";
 import { Voice } from "./voice.js";
 import { patchIsStereo } from "./inst.js";
 import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
@@ -361,6 +361,8 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   // Cancel any leftover sample-end ramp — a fresh attack must not be muted.
   voice.rampOutSamples = 0;
   voice.rampOutGain = 0.0;
+  // Arm the Attack fade-in (item 139); see constants.js ATTACK_RAMP_SAMPLES.
+  voice.attackRampSamples = ATTACK_RAMP_SAMPLES;
   voice.autoVibPhase = 0;
   voice.autoVibTicksSinceTrigger = 0;
   voice.nesDpcmCounter = 63;
@@ -567,6 +569,10 @@ export function ghostVoice(src, channel) {
   v.spatialTargetAz = src.spatialTargetAz;
   v.spatialTargetEl = src.spatialTargetEl;
   v.currentMixVolume = src.currentMixVolume;
+  // A very fast retrigger can ghost a voice while its own Attack fade-in (item 139)
+  // is still running — copy it so the ghost keeps fading up from where the
+  // foreground voice left off, instead of jumping straight to unity.
+  v.attackRampSamples = src.attackRampSamples;
   v.keyOff = src.keyOff;
   v.envIndex = src.envIndex;
   v.envTimeSec = src.envTimeSec;

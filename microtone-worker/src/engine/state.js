@@ -501,6 +501,7 @@ export class Playhead {
       it.hasPitchEnv = false; it.hasFilterEnv = false;
       it.fadeoutVolume = 1.0;
       it.rampOutSamples = 0; it.rampOutGain = 0.0; it.rampOutStep = 0.0;
+      it.attackRampSamples = 0;
       it.noteVal = 0x0000; it.basePitch = 0x4000;
       it.amigaPeriod = -1.0; it.linearFreq = -1.0;
       it.tonePortaTarget = -1; it.tonePortaSpeed = 0;

@@ -82,6 +82,14 @@ const FAST_FADE_SEC = 0.3;
 let VOL_RAMP_SAMPLES = 96;
 const VOL_RAMP_SEC = 0.002;
 
+// Volume ramp for Attack (item 139): every fresh note trigger fades IN over this
+// many samples on a half-cosine curve, 0 -> unity, instead of stepping straight to
+// full gain. 32 samples at 48 kHz (~0.67 ms) is the reference figure the constant
+// is named for; ATTACK_RAMP_SEC carries it to other rates the same way RAMP_OUT_SEC
+// and VOL_RAMP_SEC do.
+let ATTACK_RAMP_SAMPLES = 32;
+const ATTACK_RAMP_SEC = 32 / 48000;
+
 // Modules whose load-time tables are rate-derived (tables.js's Amiga filter
 // coefficients) register here so setSamplingRate can rebuild them. Coefficients
 // computed per call — the IT/SF2 voice filters — need no registration.
@@ -103,6 +111,7 @@ function setSamplingRate(rate) {
   SAMPLING_RATE = rate;
   RAMP_OUT_SAMPLES = Math.round(RAMP_OUT_SEC * rate);
   VOL_RAMP_SAMPLES = Math.round(VOL_RAMP_SEC * rate);
+  ATTACK_RAMP_SAMPLES = Math.round(ATTACK_RAMP_SEC * rate);
   for (const fn of rateListeners) fn(rate);
 }
 
@@ -2931,6 +2940,11 @@ class Voice {
     this.rampOutGain = 0.0;
     this.rampOutStep = 0.0;
 
+    // Volume ramp for Attack (item 139). Counts down from ATTACK_RAMP_SAMPLES to 0
+    // on every fresh triggerNote(); the mixer reads it as a half-cosine fade-in gain
+    // and folds it into the same per-sample rampGain the sample-end ramp-out uses.
+    this.attackRampSamples = 0;
+
     // Auto-vibrato.
     this.autoVibPhase = 0;
     this.autoVibTicksSinceTrigger = 0;
@@ -3634,6 +3648,7 @@ class Playhead {
       it.hasPitchEnv = false; it.hasFilterEnv = false;
       it.fadeoutVolume = 1.0;
       it.rampOutSamples = 0; it.rampOutGain = 0.0; it.rampOutStep = 0.0;
+      it.attackRampSamples = 0;
       it.noteVal = 0x0000; it.basePitch = 0x4000;
       it.amigaPeriod = -1.0; it.linearFreq = -1.0;
       it.tonePortaTarget = -1; it.tonePortaSpeed = 0;
@@ -4676,6 +4691,8 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   // Cancel any leftover sample-end ramp — a fresh attack must not be muted.
   voice.rampOutSamples = 0;
   voice.rampOutGain = 0.0;
+  // Arm the Attack fade-in (item 139); see constants.js ATTACK_RAMP_SAMPLES.
+  voice.attackRampSamples = ATTACK_RAMP_SAMPLES;
   voice.autoVibPhase = 0;
   voice.autoVibTicksSinceTrigger = 0;
   voice.nesDpcmCounter = 63;
@@ -4882,6 +4899,10 @@ function ghostVoice(src, channel) {
   v.spatialTargetAz = src.spatialTargetAz;
   v.spatialTargetEl = src.spatialTargetEl;
   v.currentMixVolume = src.currentMixVolume;
+  // A very fast retrigger can ghost a voice while its own Attack fade-in (item 139)
+  // is still running — copy it so the ghost keeps fading up from where the
+  // foreground voice left off, instead of jumping straight to unity.
+  v.attackRampSamples = src.attackRampSamples;
   v.keyOff = src.keyOff;
   v.envIndex = src.envIndex;
   v.envTimeSec = src.envTimeSec;
@@ -6716,6 +6737,13 @@ function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
+      // Volume ramp for Attack (item 139): half-cosine fade-in folded into the same
+      // rampGain, so every downstream use (scope, stems, mix, spatial) picks it up for free.
+      if (voice.attackRampSamples > 0) {
+        const elapsed = ATTACK_RAMP_SAMPLES - voice.attackRampSamples;
+        rampGain *= 0.5 - 0.5 * Math.cos((Math.PI * elapsed) / ATTACK_RAMP_SAMPLES);
+        voice.attackRampSamples--;
+      }
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
       if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
@@ -6784,6 +6812,11 @@ function generateTrackerAudio(eng, playhead, out) {
         if (bg.rampOutSamples === 0) bg.active = false;
       } else {
         rampGain = 1.0;
+      }
+      if (bg.attackRampSamples > 0) {
+        const elapsed = ATTACK_RAMP_SAMPLES - bg.attackRampSamples;
+        rampGain *= 0.5 - 0.5 * Math.cos((Math.PI * elapsed) / ATTACK_RAMP_SAMPLES);
+        bg.attackRampSamples--;
       }
       // Ghosts and layer children belong to the stem of the channel that spawned them.
       if (stems !== null) {

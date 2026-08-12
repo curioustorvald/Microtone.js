@@ -8,7 +8,7 @@
 
 import {
   SAMPLING_RATE, TRACKER_CHUNK, SCOPE_BUFFER_SIZE,
-  INTERP_A500, INTERP_A1200,
+  INTERP_A500, INTERP_A1200, ATTACK_RAMP_SAMPLES,
 } from "./constants.js";
 import {
   AMIGA_A500_A0, AMIGA_A500_B1,
@@ -229,6 +229,13 @@ export function generateTrackerAudio(eng, playhead, out) {
       } else {
         rampGain = 1.0;
       }
+      // Volume ramp for Attack (item 139): half-cosine fade-in folded into the same
+      // rampGain, so every downstream use (scope, stems, mix, spatial) picks it up for free.
+      if (voice.attackRampSamples > 0) {
+        const elapsed = ATTACK_RAMP_SAMPLES - voice.attackRampSamples;
+        rampGain *= 0.5 - 0.5 * Math.cos((Math.PI * elapsed) / ATTACK_RAMP_SAMPLES);
+        voice.attackRampSamples--;
+      }
       voice.scopeBuffer[voice.scopeWritePos] = sScope * perVoiceGain * rampGain;
       voice.scopeWritePos = (voice.scopeWritePos + 1) & (SCOPE_BUFFER_SIZE - 1);
       if (stems !== null) stems.add(voice, vi, n, sScope * vol * rampGain);
@@ -297,6 +304,11 @@ export function generateTrackerAudio(eng, playhead, out) {
         if (bg.rampOutSamples === 0) bg.active = false;
       } else {
         rampGain = 1.0;
+      }
+      if (bg.attackRampSamples > 0) {
+        const elapsed = ATTACK_RAMP_SAMPLES - bg.attackRampSamples;
+        rampGain *= 0.5 - 0.5 * Math.cos((Math.PI * elapsed) / ATTACK_RAMP_SAMPLES);
+        bg.attackRampSamples--;
       }
       // Ghosts and layer children belong to the stem of the channel that spawned them.
       if (stems !== null) {

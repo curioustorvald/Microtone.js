@@ -193,6 +193,11 @@ export class Voice {
     this.rampOutGain = 0.0;
     this.rampOutStep = 0.0;
 
+    // Volume ramp for Attack (item 139). Counts down from ATTACK_RAMP_SAMPLES to 0
+    // on every fresh triggerNote(); the mixer reads it as a half-cosine fade-in gain
+    // and folds it into the same per-sample rampGain the sample-end ramp-out uses.
+    this.attackRampSamples = 0;
+
     // Auto-vibrato.
     this.autoVibPhase = 0;
     this.autoVibTicksSinceTrigger = 0;

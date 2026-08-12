@@ -77,6 +77,14 @@ export const FAST_FADE_SEC = 0.3;
 export let VOL_RAMP_SAMPLES = 96;
 const VOL_RAMP_SEC = 0.002;
 
+// Volume ramp for Attack (item 139): every fresh note trigger fades IN over this
+// many samples on a half-cosine curve, 0 -> unity, instead of stepping straight to
+// full gain. 32 samples at 48 kHz (~0.67 ms) is the reference figure the constant
+// is named for; ATTACK_RAMP_SEC carries it to other rates the same way RAMP_OUT_SEC
+// and VOL_RAMP_SEC do.
+export let ATTACK_RAMP_SAMPLES = 32;
+const ATTACK_RAMP_SEC = 32 / 48000;
+
 // Modules whose load-time tables are rate-derived (tables.js's Amiga filter
 // coefficients) register here so setSamplingRate can rebuild them. Coefficients
 // computed per call — the IT/SF2 voice filters — need no registration.
@@ -98,6 +106,7 @@ export function setSamplingRate(rate) {
   SAMPLING_RATE = rate;
   RAMP_OUT_SAMPLES = Math.round(RAMP_OUT_SEC * rate);
   VOL_RAMP_SAMPLES = Math.round(VOL_RAMP_SEC * rate);
+  ATTACK_RAMP_SAMPLES = Math.round(ATTACK_RAMP_SEC * rate);
   for (const fn of rateListeners) fn(rate);
 }
 
