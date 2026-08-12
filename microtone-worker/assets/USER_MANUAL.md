@@ -403,7 +403,17 @@ in two places — which is what you hear.
 **Size and opacity are both the level.** A splat's size is its level in
 decibels, and its opacity follows the same decibels over the same range, so the
 loud parts of the image are big and solid and the quiet ones small and faint.
-The two never disagree, which keeps a busy cloud readable.
+The two never disagree, which keeps a busy cloud readable. The scale they are
+measured against drifts with the music rather than being reset every instant —
+it rises quickly enough that a transient cannot wash the picture out, and falls
+slowly, so the gaps between notes do not pump the brightness back up.
+
+**What points away from you recedes.** The three views are flat projections, so
+a direction behind the camera would otherwise land on top of one in front of it
+and look identical. Instead the far side is drawn dimmer and slightly out of
+focus, the way distance works on the eye — the hue stays the band's own and the
+distance from the centre still means what it meant, so nothing is spent to buy
+the depth.
 
 The cloud **accumulates**: each analysis is laid over what is already there and
 the whole thing fades, so a moving image draws a trail and what you see is the

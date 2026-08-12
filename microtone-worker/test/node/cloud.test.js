@@ -21,7 +21,7 @@ import {
   CloudField, CloudView, CLOUD_FILL, CLOUD_HOP, CLOUD_SIG_MIN, CLOUD_SIG_MAX,
   CLOUD_ALPHA_MIN,
   cloudRadius, cloudPairRadius, cloudHalfAngle, cloudSigma, cloudLevelAlpha,
-  cloudDecay, cloudAlpha,
+  cloudDecay, cloudAlpha, cloudDepthDim, cloudDepthBlur,
 } from "../../src/ui/cloud.js";
 
 const RATE = 48000;
@@ -232,6 +232,54 @@ test("a loud bin is bigger AND more opaque than a quiet one", () => {
   const small = Math.max(...quiet.map((x) => x.sig));
   assert.ok(big > small, `sizes ${big} vs ${small}`);
   assert.ok(Math.max(...loud.map((x) => x.alpha)) > Math.max(...quiet.map((x) => x.alpha)));
+});
+
+test("the auto-gain slews rather than re-referencing every window", () => {
+  const f = new CloudField();
+  const loud = ringOf([{ at: [0], hz: 700, amp: 1 }]);
+  const quiet = ringOf([{ at: [0], hz: 700, amp: 0.1 }]);   // 20 dB down
+  for (let i = 0; i < 200; i++) f.analyse(loud, 0, RATE, CLOUD_HOP);
+  const settled = f.ref;
+  assert.ok(settled > 0, "the reference settled on the loud material");
+
+  // One window of the quiet take must NOT drag the reference down with it —
+  // that instant re-reference is what made the whole display flicker.
+  f.analyse(quiet, 0, RATE, CLOUD_HOP);
+  assert.ok(f.ref > settled * 0.9, `one window moved the gain to ${f.ref / settled}`);
+  for (let i = 0; i < 60; i++) f.analyse(quiet, 0, RATE, CLOUD_HOP);
+  assert.ok(f.ref < settled, "…but it does follow, given time");
+  assert.ok(f.ref > settled * 0.5, "…slowly (a 20 dB drop is not a 20 dB jump)");
+
+  // Rising is quicker than falling: a transient must not blow the display out.
+  const a = new CloudField();
+  for (let i = 0; i < 40; i++) a.analyse(quiet, 0, RATE, CLOUD_HOP);
+  const low = a.ref;
+  for (let i = 0; i < 20; i++) a.analyse(loud, 0, RATE, CLOUD_HOP);
+  const up = a.ref / low;
+  const b = new CloudField();
+  for (let i = 0; i < 40; i++) b.analyse(loud, 0, RATE, CLOUD_HOP);
+  const high = b.ref;
+  for (let i = 0; i < 20; i++) b.analyse(quiet, 0, RATE, CLOUD_HOP);
+  assert.ok(up > high / b.ref, "attack should outrun release");
+});
+
+test("depth: what points away from the camera recedes", () => {
+  assert.ok(Math.abs(cloudDepthDim(1) - 1) < 1e-12, "toward you is undimmed");
+  assert.ok(cloudDepthDim(-1) < cloudDepthDim(0) && cloudDepthDim(0) < cloudDepthDim(1));
+  assert.ok(cloudDepthBlur(-1) > cloudDepthBlur(1), "…and softer");
+  assert.ok(Math.abs(cloudDepthBlur(1) - 1) < 1e-12, "toward you is in focus");
+
+  // The same source, seen by a camera facing it and by one behind it.
+  const f = new CloudField();
+  f.analyse(ringOf([{ at: [0], hz: 700 }]), 0, RATE, 0);
+  const bandLin = RAD_BANDS.map(() => [1, 1, 1]);
+  const lay = (dz) => {
+    const v = new CloudView(64);
+    v.splat(f, { h: [0, -1, 0], v: [0, 0, 1], d: [dz, 0, 0] }, bandLin, 1);
+    return v.totalEnergy();
+  };
+  const near = lay(1), far = lay(-1);
+  assert.ok(near > far * 1.5, `near ${near.toFixed(2)} vs far ${far.toFixed(2)}`);
 });
 
 // ── the accumulator ───────────────────────────────────────────────────────

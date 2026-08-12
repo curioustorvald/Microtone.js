@@ -125,7 +125,31 @@ export const CLOUD_FLOOR = 1e-4;
  *  the spectrum thins out rather than vanishing outright. */
 export const CLOUD_ALPHA_MIN = 0.06;
 
-/** Energy that develops to ~63% ink, as a fraction of the frame's peak. */
+/**
+ * DEPTH. The projection is orthographic, so without a cue a splat behind you
+ * and one in front of you land in the same place looking identical. Aerial
+ * perspective is the one channel still free: what is far off is DIMMER and
+ * slightly out of FOCUS, while hue stays the band's own and the radius stays
+ * the phantom distance. Size still reads level — the defocus is small next to
+ * the four-to-one range level covers, and it always arrives together with the
+ * dimming, so the pair read as distance rather than as a quieter sound.
+ */
+export const CLOUD_DEPTH_DIM = 0.4;   // what the farthest splat keeps
+export const CLOUD_DEPTH_BLUR = 1.5;  // …and how much wider it spreads
+
+/**
+ * AUTO-GAIN. Both the analysis and the develop are normalised, and both were
+ * doing it INSTANTANEOUSLY — every window re-referenced to its own loudest bin
+ * and every frame re-scanned the accumulator's peak — so on busy material the
+ * whole display's brightness wobbled at the analysis rate instead of following
+ * the music. Both references are now slewed, and asymmetrically: quick to rise
+ * so a transient cannot blow the display out, slow to fall so the gaps between
+ * notes do not pump the gain back up.
+ */
+export const CLOUD_GAIN_ATTACK_MS = 150;
+export const CLOUD_GAIN_RELEASE_MS = 1400;
+
+/** Energy that develops to ~63% ink, as a fraction of the (slewed) peak. */
 export const CLOUD_REF = 0.42;
 export const CLOUD_GAMMA = 2.2;
 export const CLOUD_BLOOM = 9;
@@ -168,6 +192,18 @@ export function cloudSigma(db) {
   const t = 1 + db / CLOUD_SIZE_DB; // 1 at the peak, 0 at the bottom of the range
   const u = t < 0 ? 0 : t > 1 ? 1 : t;
   return CLOUD_SIG_MIN + (CLOUD_SIG_MAX - CLOUD_SIG_MIN) * u;
+}
+
+/** Depth (−1 behind … +1 toward you) → the dim and the defocus that go with it. */
+export function cloudDepthDim(depth) {
+  const t = depth * 0.5 + 0.5;
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  return CLOUD_DEPTH_DIM + (1 - CLOUD_DEPTH_DIM) * u;
+}
+export function cloudDepthBlur(depth) {
+  const t = depth * 0.5 + 0.5;
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  return CLOUD_DEPTH_BLUR + (1 - CLOUD_DEPTH_BLUR) * u;
 }
 
 /** Fraction of a splat's energy left after `dtMs` of decay. */
@@ -222,13 +258,16 @@ export class CloudField {
     this.count = 0;
     this.pending = 0;
     this.ready = false;
+    this.ref = 0; // slewed loudest-bin reference — see CLOUD_GAIN_ATTACK_MS
 
   }
 
   reset() {
     this.count = 0;
+    this.ref = 0;
     this.pending = 0;
     this.ready = false;
+    this.ref = 0; // slewed loudest-bin reference — see CLOUD_GAIN_ATTACK_MS
   }
 
   setSampleRate(rate) {
@@ -343,9 +382,18 @@ export class CloudField {
       if (t > peak) peak = t;
     }
 
-    if (peak > 0) {
-      const floor = peak * Math.pow(10, CLOUD_FLOOR_DB / 10);
-      const invPeakDb = 1 / peak;
+    // The dB every splat's size and opacity are measured against is a SLEWED
+    // peak, not this window's own — otherwise a window that happens to be quiet
+    // re-references its handful of bins to 0 dB and the display flares.
+    // One hop of audio per step, so the slew is in audio time.
+    const hopMs = (CLOUD_HOP / rate) * 1000;
+    const tau = peak > this.ref ? CLOUD_GAIN_ATTACK_MS : CLOUD_GAIN_RELEASE_MS;
+    this.ref += (peak - this.ref) * (1 - Math.exp(-hopMs / tau));
+    const ref = this.ref > 1e-30 ? this.ref : peak;
+
+    if (peak > 0 && ref > 0) {
+      const floor = ref * Math.pow(10, CLOUD_FLOOR_DB / 10);
+      const invPeakDb = 1 / ref;
       for (let k = 1; k < half; k++) {
         const t = raw[k];
         if (!(t > floor)) continue;
@@ -450,6 +498,7 @@ export class CloudView {
   constructor(size) {
     this.size = 0;
     this.acc = null; // linear-light RGB energy
+    this.ref = 0;    // slewed develop reference — see CLOUD_GAIN_ATTACK_MS
     this.resize(size);
   }
 
@@ -460,7 +509,7 @@ export class CloudView {
     this.acc = new Float64Array(s * s * 3);
   }
 
-  clear() { this.acc.fill(0); }
+  clear() { this.acc.fill(0); this.ref = 0; }
 
   /** Advance the accumulator by `dtMs` of wall time. */
   decay(dtMs) {
@@ -485,7 +534,7 @@ export class CloudView {
     const acc = this.acc;
     const mid = size / 2;
     const rad = size / 2 - 1;
-    const h = basis.h, v = basis.v;
+    const h = basis.h, v = basis.v, d = basis.d;
     const s = field.splats;
     for (let i = 0; i < field.count; i++) {
       const o = i * S_STRIDE;
@@ -493,8 +542,12 @@ export class CloudView {
       const px = s[o + S_DX] * r, py = s[o + S_DY] * r, pz = s[o + S_DZ] * r;
       const sx = mid + (px * h[0] + py * h[1] + pz * h[2]) * rad;
       const sy = mid - (px * v[0] + py * v[1] + pz * v[2]) * rad;
-      const sig = s[o + S_SIG] * rad;
-      const alpha = s[o + S_A];
+      // Aerial perspective: what is pointing away from you is dimmer and a
+      // little out of focus. `pz`-style depth is the splat's own bearing along
+      // the camera axis, so it is the DIRECTION that recedes, not the radius.
+      const depth = s[o + S_DX] * d[0] + s[o + S_DY] * d[1] + s[o + S_DZ] * d[2];
+      const sig = s[o + S_SIG] * rad * cloudDepthBlur(depth);
+      const alpha = s[o + S_A] * cloudDepthDim(depth);
       if (!(alpha > 0.002)) continue;
       // Charge conservation: a splat carries the same total energy however
       // wide it is, so SIZE reads as level without also reading as brightness.
@@ -526,15 +579,20 @@ export class CloudView {
 
   /** Develop into RGBA bytes: density → opacity, ratio → hue, overdrive →
    *  toward `core` (white on a dark ground, black on a light one). */
-  develop(out, core) {
+  develop(out, core, dtMs = 16) {
     const acc = this.acc;
     let peak = 0;
     for (let i = 0; i < acc.length; i += 3) {
       const l = acc[i] * 0.2126 + acc[i + 1] * 0.7152 + acc[i + 2] * 0.0722;
       if (l > peak) peak = l;
     }
-    if (!(peak > 0)) { out.fill(0); return; }
-    const ref = peak * CLOUD_REF;
+    // Slewed, for the same reason the analysis reference is: a per-frame
+    // rescale makes the whole picture breathe at the frame rate.
+    const want = peak * CLOUD_REF;
+    const tau = want > this.ref ? CLOUD_GAIN_ATTACK_MS : CLOUD_GAIN_RELEASE_MS;
+    this.ref += (want - this.ref) * (dtMs > 0 ? 1 - Math.exp(-dtMs / tau) : 1);
+    const ref = this.ref;
+    if (!(peak > 0) || !(ref > 0)) { out.fill(0); return; }
     for (let p = 0, i = 0; i < acc.length; p += 4, i += 3) {
       const r = acc[i], g = acc[i + 1], b = acc[i + 2];
       const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;

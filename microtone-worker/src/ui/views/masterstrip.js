@@ -1234,7 +1234,7 @@ export class MasterStrip {
     const cell = this.cloudCell(slot, size, C.cvBg, view);
     cell.view.decay(this.dtMs ?? 16);
     if (this.cloudFresh) cell.view.splat(f, RAD_VIEWS[view], this.radBandLin(C), 1);
-    cell.view.develop(cell.image.data, cell.core);
+    cell.view.develop(cell.image.data, cell.core, this.dtMs ?? 16);
     cell.ctx.putImageData(cell.image, 0, 0);
     ctx.drawImage(cell.canvas, cx - size / 2, cy - size / 2);
     this.drawSpectrumKey(ctx, C, cx - r, cy + r + 8, r);
