@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import {
   interpretEditKey, interpretBracketKey, lookahead, rawNoteView, semiToNote, semiToNoteInTable,
   subIsEmpty, subCharPos, charToSub, subToCol, SUB_POSITIONS, SUB_NIBBLES,
-  volPanOp, volPanArg, volPanStep, fineSigned, fineValue,
+  volPanOp, volPanArg, volPanStep, fineSigned, fineValue, JAM_SEMIS,
   SUB_NOTE, SUB_INST, SUB_VOL, SUB_PAN, SUB_FX_OP, SUB_FX_ARG,
 } from "../../src/ui/edit.js";
-import { volToStr, panToStr, rangeToStr } from "../../src/ui/notenames.js";
+import { volToStr, panToStr, rangeToStr, noteCentsOff } from "../../src/ui/notenames.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 import { pitchTablePresets } from "../../src/ui/pitchtables.js";
@@ -58,6 +58,100 @@ test("semiToNoteInTable: absolute (ProTracker, interval 0) snaps without looping
   const c4 = semiToNoteInTable(4, 0, pt);
   const dist = Math.min(...pt.table.map((off) => Math.abs(base + off - MIDDLE_C)));
   assert.equal(Math.abs(c4 - MIDDLE_C), dist, "C4 key picks the nearest degree");
+});
+
+// ── item 133: the extended jam region (Q..; , with the three half-sharp keys) ──
+
+test("JAM_SEMIS: two full physical rows, ordered and gapless", () => {
+  // The layout drawn in edit.js: (q) w e (r) t y u (i) o p / a s d f g h j k l ;
+  assert.deepEqual(Object.entries(JAM_SEMIS).sort((a, b) => a[1] - b[1]), [
+    ["KeyQ", -0.5], ["KeyA", 0], ["KeyW", 1], ["KeyS", 2], ["KeyE", 3], ["KeyD", 4],
+    ["KeyR", 4.5], ["KeyF", 5], ["KeyT", 6], ["KeyG", 7], ["KeyY", 8], ["KeyH", 9],
+    ["KeyU", 10], ["KeyJ", 11], ["KeyI", 11.5], ["KeyK", 12], ["KeyO", 13],
+    ["KeyL", 14], ["KeyP", 15], ["Semicolon", 16],
+  ]);
+  // The note sentinels keep their keys — a piano row must never eat z/x/c/v.
+  for (const code of ["KeyZ", "KeyX", "KeyC", "KeyV", "Backquote"]) {
+    assert.ok(!(code in JAM_SEMIS), `${code} stays a sentinel`);
+  }
+});
+
+test("semiToNote: the half-sharp keys land midway between their neighbours", () => {
+  const q = semiToNote(4, JAM_SEMIS.KeyQ);   // B half-sharp, octave below
+  const r = semiToNote(4, JAM_SEMIS.KeyR);   // E half-sharp
+  const i = semiToNote(4, JAM_SEMIS.KeyI);   // B half-sharp
+  assert.equal(r, MIDDLE_C + Math.round((4.5 * 4096) / 12));
+  assert.equal(i, MIDDLE_C + Math.round((11.5 * 4096) / 12));
+  // Strictly between the white keys they sit between, a quarter-tone from each.
+  const quarter = 4096 / 24;
+  for (const [mid, lo, hi] of [[q, semiToNote(3, 11), semiToNote(4, 0)],
+                               [r, semiToNote(4, 4), semiToNote(4, 5)],
+                               [i, semiToNote(4, 11), semiToNote(4, 12)]]) {
+    assert.ok(lo < mid && mid < hi, `${lo} < ${mid} < ${hi}`);
+    assert.ok(Math.abs(mid - lo - quarter) <= 1 && Math.abs(hi - mid - quarter) <= 1);
+  }
+});
+
+test("semiToNoteInTable: every jam key rises, and Q borrows the period below", () => {
+  const codes = Object.entries(JAM_SEMIS).sort((a, b) => a[1] - b[1]).map((e) => e[0]);
+  // 12-TET/Raw fall through to semiToNote; the rest go through the lattice snap.
+  // [preset, Q is STRICTLY below C] — a table too coarse to hold a quarter-tone
+  // (5-TET) snaps Q onto C itself, which is the nearest degree it HAS; keys may
+  // tie there, but they must never invert.
+  const cases = [[undefined, true], [pitchTablePresets[120], true], [pitchTablePresets[240], true],
+                 [pitchTablePresets[310], true], [pitchTablePresets[35130], true],
+                 [pitchTablePresets[50], false]];
+  for (const [preset, strictQ] of cases) {
+    const name = preset?.name ?? "raw";
+    let prev = -Infinity;
+    for (const code of codes) {
+      const note = semiToNoteInTable(4, JAM_SEMIS[code], preset);
+      assert.ok(note >= prev, `${name} ${code}: ${note} >= ${prev}`);
+      prev = note;
+    }
+    // Q is BELOW the octave root: the lattice walk has to borrow a period
+    // rather than leave pos negative (which used to make Q sound as plain C).
+    const q = semiToNoteInTable(4, JAM_SEMIS.KeyQ, preset);
+    const c = semiToNoteInTable(4, 0, preset);
+    assert.ok(strictQ ? q < c : q <= c, `${name}: Q (${q}) is not above C (${c})`);
+  }
+});
+
+test("semiToNoteInTable: half-sharp keys reach the quarter-tone degrees", () => {
+  const p24 = pitchTablePresets[240]; // 24-TET: the degrees ARE quarter-tones
+  for (const semi of [JAM_SEMIS.KeyQ, JAM_SEMIS.KeyR, JAM_SEMIS.KeyI]) {
+    const note = semiToNoteInTable(4, semi, p24);
+    const off = ((note - MIDDLE_C) % p24.interval + p24.interval) % p24.interval;
+    assert.ok(p24.table.includes(off), `offset ${off.toString(16)} is a 24-TET degree`);
+    // …and it is an ODD degree — one no white/black key can reach.
+    assert.equal(p24.table.indexOf(off) % 2, 1, "a genuine quarter-tone degree");
+  }
+  // In 12-TET the key still sounds the quarter-tone; the cell shows it as a
+  // cents deviation off the nearest named degree (E+50 = F-50, same pitch).
+  assert.equal(
+    Math.abs(noteCentsOff(semiToNoteInTable(4, JAM_SEMIS.KeyR, pitchTablePresets[120]))), 50);
+});
+
+test("semiToNoteInTable: absolute (ProTracker) survives the extended region", () => {
+  const pt = pitchTablePresets[1];
+  for (let oct = 0; oct <= 9; oct++) {
+    for (const semi of Object.values(JAM_SEMIS)) {
+      const note = semiToNoteInTable(oct, semi, pt);
+      assert.ok(pt.table.some((off) => pt.base + off === note),
+        `oct ${oct} semi ${semi} → ${note.toString(16)} is a ProTracker degree`);
+    }
+  }
+});
+
+test("note column: the new keys enter notes, ` z x c v still don't", () => {
+  const cell = new TaudPlayData();
+  for (const code of ["KeyQ", "KeyR", "KeyI", "KeyO", "KeyP", "KeyL", "Semicolon"]) {
+    const a = interpretEditKey({ code, key: code.slice(-1).toLowerCase() }, SUB_NOTE, 0, cell, ctx);
+    assert.equal(a.fields.note, semiToNote(4, JAM_SEMIS[code]), code);
+    assert.equal(a.jamNote, a.fields.note, `${code} auditions what it writes`);
+  }
+  const z = interpretEditKey({ code: "KeyZ", key: "z" }, SUB_NOTE, 0, cell, ctx);
+  assert.equal(z.fields.note, 0x0001, "z is still key-off");
 });
 
 test("note column: entry follows the active notation preset", () => {
@@ -213,7 +307,8 @@ test("raw-hex note entry shifts in + overrides jam/sentinels", () => {
 test("non-edit keys pass through", () => {
   const cell = new TaudPlayData();
   assert.equal(interpretEditKey({ code: "KeyG", key: "g" }, SUB_INST, 0, cell, ctx), null);
-  assert.equal(interpretEditKey({ code: "Semicolon", key: ";" }, SUB_NOTE, 0, cell, ctx), null);
+  // KeyN is off both jam rows (item 133 took ; and the rest of the top row).
+  assert.equal(interpretEditKey({ code: "KeyN", key: "n" }, SUB_NOTE, 0, cell, ctx), null);
 });
 
 // ── item 47.2/47.6: contextual bracket keys ──

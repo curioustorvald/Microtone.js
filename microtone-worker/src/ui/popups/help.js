@@ -24,8 +24,9 @@ export function showHelp() {
     ["Esc · Delete", t("help.selClear")],
   ];
   const col2 = [
-    ["W E · T Y U", t("help.blackKeys")],
-    ["A S D F G H J K", t("help.whiteKeys")],
+    ["A S D F G H J K L ;", t("help.whiteKeys")],
+    ["W E · T Y U · O P", t("help.blackKeys")],
+    ["Q · R · I", t("help.microKeys")],
     ["z x c v · `", t("help.sentinels")],
     ["0-9 A-F", t("help.hexEntry")],
     ["0-Z", t("help.fxOpcode")],

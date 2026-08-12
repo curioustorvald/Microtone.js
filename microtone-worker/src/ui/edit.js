@@ -420,11 +420,24 @@ export function volPanSymbolKey(isPan, code, key) {
   return null;
 }
 
-// Physical piano rows (KeyboardEvent.code → semitone offset from C).
-// White: a s d f g h j k → C D E F G A B +C; black: w e t y u.
+// Physical piano rows (KeyboardEvent.code → semitone offset from C), item 133:
+//
+//   (q) w e (r) t y u (i) o p
+//      a s d   f g h j | k l ;
+//
+// White: a s d f g h j k l ; → C D E F G A B +C +D +E; black: w e t y u o p.
+// The three keys the piano has no room for — q, r and i, sitting where a black
+// key would be if B–C and E–F had one — are the MICROTONAL keys: the half-sharp
+// (demisharp) of the white key to their left, so a quarter-tone-bearing table
+// is reachable from the keyboard instead of only by wheel-stepping a neighbour.
+// Fractional offsets are fine: semiToNote/semiToNoteInTable both round into the
+// 4096-per-octave note grid, so on a 12-TET song these sound (and display, with
+// a cents marker) as true quarter-tones.
 export const JAM_SEMIS = Object.freeze({
-  KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6,
-  KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12,
+  KeyQ: -0.5,
+  KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyR: 4.5, KeyF: 5, KeyT: 6,
+  KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyI: 11.5, KeyK: 12,
+  KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16,
 });
 
 /** Whether the note column is showing raw hex words (the Raw toggle is on, or
@@ -441,9 +454,9 @@ export function semiToNote(octave, semi) {
 }
 
 /**
- * Notation-aware jam note: map a 12-EDO semitone (0..12 white/black keys) to a
- * note word in the active pitch table by snapping the semitone's fractional
- * period position to the NEAREST table degree — the port of taut.js
+ * Notation-aware jam note: map a 12-EDO semitone (-0.5..16 across the two jam
+ * rows) to a note word in the active pitch table by snapping the semitone's
+ * fractional period position to the NEAREST table degree — the port of taut.js
  * semitoneToNote. So a non-12-TET song's keyboard plays that tuning's degrees
  * (CDEFGAB… mapped into its grid) instead of fixed 12-EDO. The Raw preset
  * (empty table) and 12-TET fall back to the exact 12-EDO note.
@@ -463,6 +476,7 @@ export function semiToNoteInTable(octave, semi, preset) {
   let pos = Math.round((semi / 12) * interval);
   let carry = 0;
   while (pos >= interval) { pos -= interval; carry++; } // semitone 12 wraps to next period root
+  while (pos < 0) { pos += interval; carry--; }         // q (semitone -0.5) borrows from the period below
   let bestIdx = 0, bestDist = Infinity;
   for (let i = 0; i < table.length; i++) {
     const d = Math.abs(table[i] - pos);

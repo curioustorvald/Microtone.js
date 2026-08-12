@@ -122,3 +122,24 @@ test("jam: non-piano keys are not consumed", () => {
   assert.equal(jam.up("ArrowDown"), false);
   assert.equal(log.length, 0);
 });
+
+test("jam: the whole extended region plays, half-sharps included (item 133)", () => {
+  const { jam, log } = mkJam();
+  // Both physical rows, in pitch order — every key sounds, and the three
+  // half-sharp keys fall between the white keys they sit between.
+  const codes = Object.entries(JAM_SEMIS).sort((a, b) => a[1] - b[1]).map((e) => e[0]);
+  assert.equal(codes.length, 20, "10 + 10 physical keys");
+  for (const code of codes) {
+    assert.ok(jam.down(code, false), `${code} is a piano key`);
+    assert.equal(log.at(-1).note, semiToNoteInTable(4, JAM_SEMIS[code], undefined), code);
+  }
+  const notes = log.filter((e) => e.t === "on").map((e) => e.note);
+  assert.equal(notes.length, 20);
+  for (let i = 1; i < notes.length; i++) assert.ok(notes[i] > notes[i - 1], "rising");
+  // Twenty keys down, ONE voice: only the last release stops it.
+  jam.releaseGraceMs = 0; // the grace window is covered above; keep this quick
+  for (const code of codes.slice(0, -1)) jam.up(code);
+  assert.ok(!log.some((e) => e.t === "off"), "still sounding while any key is held");
+  jam.up(codes.at(-1));
+  assert.equal(log.at(-1).t, "off");
+});

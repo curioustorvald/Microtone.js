@@ -480,19 +480,29 @@ The note column uses two physical piano rows (layout-independent — they follow
 key position, not labels):
 
 ```
- black:   W E   T Y U
- white:  A S D F G H J K
-         C D E F G A B C
+ micro:  Q         R             I
+ black:     W   E     T   Y   U     O   P
+ white:   A   S   D F   G   H   J K   L   ;
+  note:   C   D   E F   G   A   B C   D   E
 ```
+
+The white row runs from **A** = C of the jam octave to **;** = E of the one
+above, with the black keys where a piano puts them. **Q**, **R** and **I** sit
+where a piano has *no* black key — the two places a scale step is only a
+semitone wide — and play the **half-sharp** (demisharp) of the white key to
+their left: B half-sharp of the octave below, E half-sharp, and B half-sharp.
+They are quarter-tone keys, so in a 12-TET song they enter a note that lands
+between two piano keys and the cell shows it with a cents marker.
 
 **[** and **]** shift the octave. Entering a note also stamps the current
 instrument into the cell (unless the cell already has one).
 
-Entry is **notation-aware**: in a non-12-TET song, the keyboard's twelve
-positions map to the nearest degrees of the song's pitch table, so you play
-that tuning's scale rather than fixed 12-EDO. To reach every degree of a
-larger table, enter a nearby note and step it with the mouse wheel (one wheel
-click = one table degree).
+Entry is **notation-aware**: in a non-12-TET song, the keyboard's positions map
+to the nearest degrees of the song's pitch table, so you play that tuning's
+scale rather than fixed 12-EDO — and in a table that has quarter-tones (24-TET,
+31-TET, 41-TET…) the three half-sharp keys land on real degrees. To reach every
+degree of a larger table, enter a nearby note and step it with the mouse wheel
+(one wheel click = one table degree).
 
 ### Note sentinels
 
@@ -1360,8 +1370,9 @@ hear, exactly as if you had played through the arming row.
 
 | Keys | Action |
 |---|---|
-| A S D F G H J K | Piano white keys (C D E F G A B C) |
-| W E · T Y U | Piano black keys |
+| A S D F G H J K L ; | Piano white keys (C D E F G A B C D E) |
+| W E · T Y U · O P | Piano black keys |
+| Q · R · I | Half-sharps where a piano has no black key |
 | z x c v | Key-off `===` · cut `^^^` · fade `~~~` · fast-fade `~^~` |
 | 0–9 A–F | Hex entry (instrument / volume / pan / fx argument) |
 | 1–Z | Effect opcode (base-36) |
