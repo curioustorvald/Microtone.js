@@ -4,6 +4,14 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-13
+
+- **The chord maker knows twenty-eight chords now, grouped by family.** The **Chord** menu used to offer eight and a couple of spreads; it now opens on *Triads* (major, minor, sus2, sus4, diminished, augmented), *Sevenths* (the three you had, plus minor-major, half-diminished, diminished 7th and 7sus4), *Sixths & added notes* (6, m6, add9, m(add9), add11 and 6/9), *Extended* (major, dominant and minor 9ths, an 11th and a 13th) and *Spreads* (power, quartal, octaves and the detune chorus). Every one of them is in just intonation, as before, so a major third means 5:4 whatever the song is tuned to.
+  - **Notes above the octave are the interval an octave up**, which is what those degrees mean: the ninth is the major second, the eleventh the fourth, the thirteenth the sixth. Six voices is still the ceiling, so the tall chords drop what a keyboard player drops — the eleventh has no third, the thirteenth no eleventh.
+- **Inversion, on its own menu beside the chord.** It lifts the lowest voices an octave each, so the chord keeps its notes and sits on a different one — the 1st inversion of a major triad is the same triad built up from its third. Only the inversions a chord actually has are offered: two for a triad, three for a seventh, five for a six-voice chord. A chord that already contains its own octave lifts past it rather than stacking a second copy of the same pitch, so power and octaves spread upwards instead of doubling a voice.
+- **The metainstrument Chord… stack offers all of it too.** Same chords, same groups, same inversions — and because the layer you start from is the voice nearest unison and never moves, the inversion is how you say *which note of the chord that layer plays*: root position builds the chord above it, the 1st inversion makes it the third, the 2nd the fifth.
+- **Fixed: a channel's header in the Timeline sat two pixels right of the channel it names.** The rule that divides two channels ran just inside the left one's header block rather than in the gap between the two, and the channel number was a shade out of line with the notes under it. The header now shares its column's rectangle exactly, so the dividing line runs unbroken from the top of the header to the bottom of the grid.
+
 ## 2026-08-12
 
 - **The Timeline's row numbers now select and edit whole song rows.** Drag the numbered trough down the left to select a band of rows across every channel (**Shift+click** extends one), and right-click it for **Rows above**, **Rows below** and **Delete rows**: blank rows go in anywhere in the song, or rows come out of it, with everything below shifting to follow — one **Ctrl+Z** for the lot. It is the spreadsheet gesture, on a tracker, and what it edits is the *song's* rows rather than one pattern's.

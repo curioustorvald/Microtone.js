@@ -13,7 +13,9 @@
 // already had and the others are placed relative to it, which is why "octaves"
 // adds one above and one below instead of transposing the whole stack down.
 
-import { CHORD_PRESETS, applyChordPreset, voiceUnits, UNITS_PER_OCTAVE } from "../../doc/chord.js";
+import {
+  CHORD_GROUPS, CHORD_PRESETS, applyChordPreset, maxInversion, voiceUnits, UNITS_PER_OCTAVE,
+} from "../../doc/chord.js";
 import { metaLayers, metaRecordOf, stackLayer, clampDetune, META_MAX_LAYERS } from "../../doc/metaedit.js";
 import { setMetaRecordOp } from "../../doc/ops.js";
 import { ANCHOR_NOTE } from "../pitchtables.js";
@@ -35,9 +37,13 @@ function el(tag, cls, text) {
 /**
  * Detune offsets a preset adds to the layer it is built on, relative to the
  * voice nearest unison (which IS that layer — it is not added again).
+ *
+ * An inversion moves which voice that is: the 1st inversion of a major triad
+ * is built UP from its third, so the layer you already have becomes the third
+ * and the stack sits above it.
  */
-export function chordOffsets(presetId, pitchPreset) {
-  const voices = applyChordPreset(presetId).filter((v) => v.on);
+export function chordOffsets(presetId, pitchPreset, inversion = 0) {
+  const voices = applyChordPreset(presetId, inversion).filter((v) => v.on);
   if (voices.length === 0) return [];
   const units = voices.map((v) => voiceUnits(v, pitchPreset));
   let ref = 0;
@@ -65,6 +71,7 @@ export function showChordStack(store, metaSlot, layerIdx) {
   const base = layers[layerIdx];
   const pitchPreset = store.pitchPreset;
   let presetId = CHORD_PRESETS[0].id;
+  let inversion = 0;
 
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
@@ -78,13 +85,23 @@ export function showChordStack(store, metaSlot, layerIdx) {
 
     const bar = el("div", "import-bar");
     const sel = document.createElement("select");
-    for (const p of CHORD_PRESETS) {
-      const o = document.createElement("option");
-      o.value = p.id;
-      o.textContent = t(p.key);
-      sel.appendChild(o);
+    for (const g of CHORD_GROUPS) {
+      const items = CHORD_PRESETS.filter((p) => p.group === g);
+      if (!items.length) continue;
+      const grp = document.createElement("optgroup");
+      grp.label = t(`chord.group.${g}`);
+      for (const p of items) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = t(p.key);
+        grp.appendChild(o);
+      }
+      sel.appendChild(grp);
     }
-    bar.append(el("span", "", t("meta.chordPreset")), sel);
+    const invSel = document.createElement("select");
+    invSel.title = t("chord.inversionTitle");
+    bar.append(el("span", "", t("meta.chordPreset")), sel,
+      el("span", "", t("chord.inversion")), invSel);
 
     const preview = el("div", "meta-chord-preview");
     const tally = el("p", "dim", "");
@@ -96,10 +113,25 @@ export function showChordStack(store, metaSlot, layerIdx) {
     const cancelBtn = el("button", "", t("common.cancel"));
     btnRow.append(okBtn, cancelBtn);
 
+    /** Only the inversions this chord has, same as the Sample Lab's menu. */
+    const renderInversions = () => {
+      const top = maxInversion(presetId);
+      inversion = Math.min(inversion, top);
+      invSel.replaceChildren();
+      for (let i = 0; i <= top; i++) {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = t(`chord.inv${i}`);
+        invSel.appendChild(o);
+      }
+      invSel.value = String(inversion);
+      invSel.disabled = top === 0;
+    };
+
     // The preview lists every voice the stack will have — the base layer's own
     // pitch first — as the note it sounds when the pattern plays C4.
     const refresh = () => {
-      const offsets = chordOffsets(presetId, pitchPreset);
+      const offsets = chordOffsets(presetId, pitchPreset, inversion);
       const room = META_MAX_LAYERS - layers.length;
       const use = offsets.slice(0, Math.max(0, room));
       preview.replaceChildren();
@@ -120,10 +152,15 @@ export function showChordStack(store, metaSlot, layerIdx) {
       if (!errEl.hidden) errEl.textContent = t("meta.chordTruncated", { max: META_MAX_LAYERS });
     };
 
-    sel.addEventListener("change", () => { presetId = sel.value; refresh(); });
+    sel.addEventListener("change", () => { presetId = sel.value; renderInversions(); refresh(); });
+    invSel.addEventListener("change", () => {
+      inversion = parseInt(invSel.value, 10) || 0;
+      refresh();
+    });
 
     dlg.append(head, hint, bar, preview, tally, errEl, btnRow);
     document.body.appendChild(dlg);
+    renderInversions();
     refresh();
 
     const finish = (result) => { dlg.close(); dlg.remove(); resolve(result); };
@@ -132,7 +169,8 @@ export function showChordStack(store, metaSlot, layerIdx) {
     dlg.addEventListener("keydown", (e) => e.stopPropagation());
     okBtn.addEventListener("click", (e) => {
       e.preventDefault();
-      const offsets = chordOffsets(presetId, pitchPreset).map((o) => clampDetune(base.detune + o));
+      const offsets = chordOffsets(presetId, pitchPreset, inversion)
+        .map((o) => clampDetune(base.detune + o));
       const next = stackLayer(layers, layerIdx, offsets);
       const added = next.length - layers.length;
       if (added <= 0) { finish(null); return; }

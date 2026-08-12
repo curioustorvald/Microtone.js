@@ -5,10 +5,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  JI_INTERVALS, CHORD_PRESETS, MAX_UNITS, MAX_VOICES, UNITS_PER_OCTAVE,
+  JI_INTERVALS, CHORD_GROUPS, CHORD_PRESETS, MAX_UNITS, MAX_VOICES, UNITS_PER_OCTAVE,
   applyChordPreset, buildChord, chordLength, defaultVoice, defaultVoices,
-  degreeUnits, jiById, voiceNote, voiceRatio, voiceUnits,
+  degreeUnits, invertVoiceSpecs, jiById, maxInversion, presetVoiceCount,
+  voiceNote, voiceRatio, voiceUnits,
 } from "../../src/doc/chord.js";
+import en from "../../src/ui/lang/en.js";
+import ko from "../../src/ui/lang/ko.js";
 import { pitchTablePresets, gridDelta } from "../../src/ui/pitchtables.js";
 import { MIDDLE_C } from "../../src/engine/constants.js";
 
@@ -140,6 +143,95 @@ test("chord presets fill six slots, extras stay silent", () => {
   assert.ok(Math.abs(r - 1) < 1e-12 && Math.abs(third - 1.25) < 1e-12 && Math.abs(fifth - 1.5) < 1e-12);
   // detune is the manual-ratio demo: three near-unison copies
   assert.ok(applyChordPreset("detune").filter((v) => v.on).every((v) => v.mode === "ratio"));
+});
+
+test("the vocabulary is grouped, named in both languages, and fits the slots", () => {
+  const cents = (u) => Math.round((u * 1200) / UNITS_PER_OCTAVE);
+  for (const p of CHORD_PRESETS) {
+    assert.ok(CHORD_GROUPS.includes(p.group), `${p.id} is in a known group`);
+    assert.ok(p.voices.length >= 2 && p.voices.length <= MAX_VOICES, `${p.id} fits six slots`);
+    assert.ok(en[p.key], `${p.id} is named in en`);
+    assert.ok(ko[p.key], `${p.id} is named in ko`);
+    // …and reads bottom to top, which is what makes a preset checkable by eye
+    const units = p.voices.map((v) => voiceUnits({ ...defaultVoice(), ...v }, P12));
+    for (let i = 1; i < units.length; i++) {
+      assert.ok(units[i] > units[i - 1], `${p.id} voice ${i} is above voice ${i - 1}`);
+    }
+  }
+  for (const g of CHORD_GROUPS) {
+    assert.ok(CHORD_PRESETS.some((p) => p.group === g), `group ${g} has entries`);
+    assert.ok(en[`chord.group.${g}`] && ko[`chord.group.${g}`], `group ${g} is named`);
+  }
+  for (let i = 0; i <= MAX_VOICES - 1; i++) {
+    assert.ok(en[`chord.inv${i}`] && ko[`chord.inv${i}`], `inversion ${i} is named`);
+  }
+
+  // the added/extended chords put their upper degrees where the degree names
+  // say they are: the 9th IS the major second an octave up, and so on
+  const of = (id) => applyChordPreset(id).filter((v) => v.on).map((v) => cents(voiceUnits(v, P12)));
+  assert.deepEqual(of("add9"), [0, 386, 702, 1404], "add9 = major triad + a ninth");
+  assert.deepEqual(of("madd9"), [0, 316, 702, 1404]);
+  assert.deepEqual(of("add11"), [0, 386, 702, 1698], "the eleventh is the fourth, up an octave");
+  assert.deepEqual(of("six9"), [0, 386, 702, 884, 1404]);
+  assert.deepEqual(of("dom13").slice(-1), [2084], "the thirteenth is the sixth, up an octave");
+  assert.equal(of("dom13").length, 6, "…and it drops the eleventh to fit");
+  assert.equal(of("dom11").length, 5);
+  assert.ok(!of("dom11").includes(386), "the eleventh chord drops the third");
+  // sus2/sus4 are the same fifth with the third moved either way
+  assert.deepEqual(of("sus2"), [0, 204, 702]);
+  assert.deepEqual(of("sus4"), [0, 498, 702]);
+  // quartal is fourths all the way up: 4/3 then 4/3 of that (16/9)
+  assert.deepEqual(of("quartal"), [0, 498, 996]);
+});
+
+test("inversions lift the lowest voices an octave and re-sort", () => {
+  const cents = (id, inv) => applyChordPreset(id, inv).filter((v) => v.on)
+    .map((v) => Math.round((voiceUnits(v, P12) * 1200) / UNITS_PER_OCTAVE));
+
+  // the textbook case: a major triad's root goes on top, then its third
+  assert.deepEqual(cents("major", 0), [0, 386, 702]);
+  assert.deepEqual(cents("major", 1), [386, 702, 1200]);
+  assert.deepEqual(cents("major", 2), [702, 1200, 1586]);
+  // a seventh chord has three, and the highest one is the chord over its 7th
+  assert.deepEqual(cents("dom7", 3), [969, 1200, 1586, 1902]);
+
+  // every inversion keeps the same PITCH CLASSES — nothing is added or dropped
+  for (const p of CHORD_PRESETS) {
+    const base = cents(p.id, 0);
+    for (let inv = 1; inv <= maxInversion(p.id); inv++) {
+      const got = cents(p.id, inv);
+      assert.equal(got.length, base.length, `${p.id} inv ${inv} keeps its voice count`);
+      const mod = (xs) => xs.map((c) => ((c % 1200) + 1200) % 1200).sort((a, b) => a - b);
+      assert.deepEqual(mod(got), mod(base), `${p.id} inv ${inv} keeps its notes`);
+      for (let i = 1; i < got.length; i++) {
+        assert.ok(got[i] > got[i - 1], `${p.id} inv ${inv} still reads bottom to top`);
+      }
+    }
+  }
+
+  // a chord that already owns its octave lifts PAST it rather than doubling a
+  // voice onto one it already has (which would only be a level change)
+  assert.deepEqual(cents("power", 0), [0, 702, 1200]);
+  assert.deepEqual(cents("power", 1), [702, 1200, 2400]);
+  assert.deepEqual(cents("octaves", 1), [0, 1200, 2400]);
+
+  // out of range clamps rather than wrapping: inverting EVERY voice would just
+  // be the chord an octave up, so the last real inversion is voices−1
+  assert.equal(maxInversion("major"), 2);
+  assert.equal(maxInversion("dom13"), 5);
+  assert.equal(maxInversion("nonesuch"), 0);
+  assert.equal(presetVoiceCount("dom13"), MAX_VOICES);
+  assert.deepEqual(cents("major", 9), cents("major", 2));
+  assert.deepEqual(cents("major", -3), cents("major", 0));
+
+  // the specs themselves are untouched (the preset table is shared state)
+  const before = JSON.stringify(CHORD_PRESETS.find((p) => p.id === "major").voices);
+  invertVoiceSpecs(CHORD_PRESETS.find((p) => p.id === "major").voices, 2);
+  assert.equal(JSON.stringify(CHORD_PRESETS.find((p) => p.id === "major").voices), before);
+
+  // an inversion is a plain octave on the voice, so it survives every mode
+  const det = invertVoiceSpecs([{ mode: "ratio", ratio: 0.994 }, { mode: "ratio", ratio: 1 }], 1);
+  assert.deepEqual(det, [{ mode: "ratio", ratio: 1 }, { mode: "ratio", ratio: 0.994, oct: 1 }]);
 });
 
 // ── the mix ────────────────────────────────────────────────────────────────

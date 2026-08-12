@@ -71,32 +71,124 @@ export function defaultVoices(presetId = "major") {
 }
 
 /**
+ * The order the preset menus group their entries in — one optgroup each, so a
+ * vocabulary this size stays readable in a `<select>`.
+ */
+export const CHORD_GROUPS = ["triad", "seventh", "added", "extended", "spread"];
+
+/**
  * Ready-made voicings, all in `ji` mode except `detune` — which demonstrates
  * the manual ratio input, and is the other classic use of this tool (three
  * near-unison copies = a chorus/supersaw in one sample).
+ *
+ * Notes ABOVE the octave are the plain interval plus `oct: 1`: a ninth is the
+ * major second an octave up, an eleventh the fourth, a thirteenth the sixth —
+ * which is what those degrees mean, and it keeps JI_INTERVALS one octave long.
+ * Voices are listed ASCENDING; nothing depends on it (inversions sort), but a
+ * preset that reads bottom-to-top is a preset you can check by eye.
+ *
+ * Six slots is the ceiling, so the tall chords omit what a keyboard player
+ * omits: the eleventh drops the third, the thirteenth drops the eleventh.
  */
 export const CHORD_PRESETS = [
-  { id: "major",   key: "chord.preset.major",   voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }] },
-  { id: "minor",   key: "chord.preset.minor",   voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }] },
-  { id: "sus4",    key: "chord.preset.sus4",    voices: [{ ji: "1/1" }, { ji: "4/3" }, { ji: "3/2" }] },
-  { id: "dim",     key: "chord.preset.dim",     voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "7/5" }] },
-  { id: "aug",     key: "chord.preset.aug",     voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "8/5" }] },
-  { id: "maj7",    key: "chord.preset.maj7",    voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "15/8" }] },
-  { id: "min7",    key: "chord.preset.min7",    voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "9/5" }] },
-  { id: "dom7",    key: "chord.preset.dom7",    voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "7/4" }] },
-  { id: "power",   key: "chord.preset.power",   voices: [{ ji: "1/1" }, { ji: "3/2" }, { ji: "1/1", oct: 1 }] },
-  { id: "octaves", key: "chord.preset.octaves", voices: [{ ji: "1/1", oct: -1 }, { ji: "1/1" }, { ji: "1/1", oct: 1 }] },
-  { id: "detune",  key: "chord.preset.detune",  voices: [
+  // ── triads ──
+  { id: "major",   group: "triad", key: "chord.preset.major",   voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }] },
+  { id: "minor",   group: "triad", key: "chord.preset.minor",   voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }] },
+  { id: "sus2",    group: "triad", key: "chord.preset.sus2",    voices: [{ ji: "1/1" }, { ji: "9/8" }, { ji: "3/2" }] },
+  { id: "sus4",    group: "triad", key: "chord.preset.sus4",    voices: [{ ji: "1/1" }, { ji: "4/3" }, { ji: "3/2" }] },
+  { id: "dim",     group: "triad", key: "chord.preset.dim",     voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "7/5" }] },
+  { id: "aug",     group: "triad", key: "chord.preset.aug",     voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "8/5" }] },
+  // ── sevenths ──
+  { id: "maj7",    group: "seventh", key: "chord.preset.maj7",    voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "15/8" }] },
+  { id: "dom7",    group: "seventh", key: "chord.preset.dom7",    voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "7/4" }] },
+  { id: "min7",    group: "seventh", key: "chord.preset.min7",    voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "9/5" }] },
+  { id: "minmaj7", group: "seventh", key: "chord.preset.minmaj7", voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "15/8" }] },
+  { id: "halfdim", group: "seventh", key: "chord.preset.halfdim", voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "7/5" }, { ji: "9/5" }] },
+  { id: "dim7",    group: "seventh", key: "chord.preset.dim7",    voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "7/5" }, { ji: "5/3" }] },
+  { id: "sus7",    group: "seventh", key: "chord.preset.sus7",    voices: [{ ji: "1/1" }, { ji: "4/3" }, { ji: "3/2" }, { ji: "7/4" }] },
+  // ── sixths and added notes ──
+  { id: "maj6",    group: "added", key: "chord.preset.maj6",   voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "5/3" }] },
+  { id: "min6",    group: "added", key: "chord.preset.min6",   voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "5/3" }] },
+  { id: "add9",    group: "added", key: "chord.preset.add9",   voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "9/8", oct: 1 }] },
+  { id: "madd9",   group: "added", key: "chord.preset.madd9",  voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "9/8", oct: 1 }] },
+  { id: "add11",   group: "added", key: "chord.preset.add11",  voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "4/3", oct: 1 }] },
+  { id: "six9",    group: "added", key: "chord.preset.six9",   voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "5/3" }, { ji: "9/8", oct: 1 }] },
+  // ── extended ──
+  { id: "maj9",    group: "extended", key: "chord.preset.maj9",  voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "15/8" }, { ji: "9/8", oct: 1 }] },
+  { id: "dom9",    group: "extended", key: "chord.preset.dom9",  voices: [{ ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "7/4" }, { ji: "9/8", oct: 1 }] },
+  { id: "min9",    group: "extended", key: "chord.preset.min9",  voices: [{ ji: "1/1" }, { ji: "6/5" }, { ji: "3/2" }, { ji: "9/5" }, { ji: "9/8", oct: 1 }] },
+  { id: "dom11",   group: "extended", key: "chord.preset.dom11", voices: [{ ji: "1/1" }, { ji: "3/2" }, { ji: "7/4" }, { ji: "9/8", oct: 1 }, { ji: "4/3", oct: 1 }] },
+  { id: "dom13",   group: "extended", key: "chord.preset.dom13", voices: [
+    { ji: "1/1" }, { ji: "5/4" }, { ji: "3/2" }, { ji: "7/4" }, { ji: "9/8", oct: 1 }, { ji: "5/3", oct: 1 },
+  ] },
+  // ── spreads: no third to speak of, so no quality either ──
+  { id: "power",   group: "spread", key: "chord.preset.power",   voices: [{ ji: "1/1" }, { ji: "3/2" }, { ji: "1/1", oct: 1 }] },
+  { id: "quartal", group: "spread", key: "chord.preset.quartal", voices: [{ ji: "1/1" }, { ji: "4/3" }, { ji: "16/9" }] },
+  { id: "octaves", group: "spread", key: "chord.preset.octaves", voices: [{ ji: "1/1", oct: -1 }, { ji: "1/1" }, { ji: "1/1", oct: 1 }] },
+  { id: "detune",  group: "spread", key: "chord.preset.detune",  voices: [
     { mode: "ratio", ratio: 0.994 }, { mode: "ratio", ratio: 1 }, { mode: "ratio", ratio: 1.006 },
   ] },
 ];
 
-/** Six voice slots for a chord-preset id; unused slots stay off. */
-export function applyChordPreset(presetId) {
-  const preset = CHORD_PRESETS.find((p) => p.id === presetId);
+/** The preset entry for an id, or null — an unknown id is silence, not a throw. */
+export function chordPresetById(presetId) {
+  return CHORD_PRESETS.find((p) => p.id === presetId) ?? null;
+}
+
+/** How many voices a preset sounds — the inversion selector's ceiling. */
+export function presetVoiceCount(presetId) {
+  return chordPresetById(presetId)?.voices.length ?? 0;
+}
+
+/** Highest inversion a preset has: the Nth lifts N voices, and lifting them
+ *  all is just the same chord an octave up. */
+export function maxInversion(presetId) {
+  return Math.max(0, presetVoiceCount(presetId) - 1);
+}
+
+/**
+ * A voice list inverted, in the textbook sense: the Nth inversion lifts the N
+ * lowest voices an octave each, over the top of the chord, so it keeps its
+ * notes and changes which one is in the bass. Out-of-range values are clamped
+ * rather than wrapped (a "6th inversion" of a triad is not a thing).
+ *
+ * Ordering is by sounding pitch with NO pitch table in hand: every preset is
+ * written in `ji`/`ratio` mode, whose offsets are notation-independent, so the
+ * bass voice is the same one in every tuning. The result is re-sorted, which is
+ * what keeps the voice rows reading bottom-to-top after the lift.
+ *
+ * A chord that already contains its own octave (power, octaves) would land the
+ * lifted voice exactly on one it already has — a second copy of the same sample
+ * at the same pitch, which is a level change and nothing else — so the lift
+ * carries on up until the voice is its own note again.
+ */
+export function invertVoiceSpecs(specs, inversion = 0) {
+  const n = Math.min(Math.max(Math.round(inversion) || 0, 0), Math.max(0, specs.length - 1));
+  if (n === 0) return specs.slice();
+  const ranked = specs
+    .map((spec) => ({ spec, u: voiceUnits({ ...defaultVoice(), ...spec }, null) }))
+    .sort((a, b) => a.u - b.u);
+  const taken = (u, self) => ranked.some((e, j) => j !== self && Math.abs(e.u - u) < 1);
+  for (let i = 0; i < n; i++) {
+    let octs = 1;
+    while (octs < 4 && taken(ranked[i].u + octs * UNITS_PER_OCTAVE, i)) octs++;
+    ranked[i] = {
+      spec: { ...ranked[i].spec, oct: (ranked[i].spec.oct ?? 0) + octs },
+      u: ranked[i].u + octs * UNITS_PER_OCTAVE,
+    };
+  }
+  ranked.sort((a, b) => a.u - b.u);
+  return ranked.map((e) => e.spec);
+}
+
+/** Six voice slots for a chord-preset id, in its `inversion`th inversion;
+ *  unused slots stay off. */
+export function applyChordPreset(presetId, inversion = 0) {
+  const preset = chordPresetById(presetId);
+  const specs = preset ? invertVoiceSpecs(preset.voices, inversion) : [];
   const out = [];
   for (let i = 0; i < MAX_VOICES; i++) {
-    const spec = preset?.voices[i];
+    const spec = specs[i];
     out.push(spec ? { ...defaultVoice(), on: true, ...spec } : defaultVoice());
   }
   return out;

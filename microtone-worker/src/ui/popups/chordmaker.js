@@ -17,8 +17,9 @@
 // Apply replaces the Lab's working buffer with the mix.
 
 import {
-  JI_INTERVALS, CHORD_PRESETS, MAX_VOICES, UNITS_PER_OCTAVE,
-  applyChordPreset, buildChord, chordLength, voiceNote, voiceRatio, voiceUnits,
+  JI_INTERVALS, CHORD_GROUPS, CHORD_PRESETS, MAX_VOICES, UNITS_PER_OCTAVE,
+  applyChordPreset, buildChord, chordLength, maxInversion,
+  voiceNote, voiceRatio, voiceUnits,
 } from "../../doc/chord.js";
 import { presetForNotation, gridDelta } from "../pitchtables.js";
 import { paintNoteCell } from "../glyphs.js";
@@ -52,7 +53,9 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
   return new Promise((resolve) => {
     const preset = store?.pitchPreset ?? presetForNotation(120);
     const srcRate = Math.max(1, Math.round(rate));
-    let voices = applyChordPreset("major");
+    let presetId = "major";
+    let inversion = 0;
+    let voices = applyChordPreset(presetId, inversion);
     let lengthMode = "longest";
     let normalise = true;
     let mix = null;        // {data, peak, voices} — null when dirty
@@ -70,15 +73,23 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     }).join("");
     const modeOptions = ["ji", "key", "ratio", "units"]
       .map((m) => `<option value="${m}">${esc(t(`chord.mode.${m}`))}</option>`).join("");
+    // Grouped, because the vocabulary is long enough to hunt through otherwise.
+    const presetOptions = CHORD_GROUPS.map((g) => {
+      const items = CHORD_PRESETS.filter((p) => p.group === g);
+      if (!items.length) return "";
+      return `<optgroup label="${esc(t(`chord.group.${g}`))}">` +
+        items.map((p) => `<option value="${esc(p.id)}">${esc(t(p.key))}</option>`).join("") +
+        "</optgroup>";
+    }).join("");
 
     dlg.innerHTML = `
       <h3>${esc(t("chord.title", { name: name || t("lab.untitled") }))}</h3>
       <p class="dim chord-lead">${esc(t("chord.lead"))}</p>
       <div class="chord-head">
         <label>${esc(t("chord.preset"))}
-          <select class="chord-preset">
-            ${CHORD_PRESETS.map((p) => `<option value="${esc(p.id)}">${esc(t(p.key))}</option>`).join("")}
-          </select></label>
+          <select class="chord-preset">${presetOptions}</select></label>
+        <label>${esc(t("chord.inversion"))}
+          <select class="chord-inv" title="${esc(t("chord.inversionTitle"))}"></select></label>
         <label>${esc(t("chord.length"))}
           <select class="chord-len">
             <option value="longest">${esc(t("chord.lenLongest"))}</option>
@@ -327,9 +338,36 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     }
 
     // ── head controls ──────────────────────────────────────────────────────
-    $(".chord-preset").addEventListener("change", (e) => {
-      voices = applyChordPreset(e.target.value);
+    /** The inversion menu only offers the inversions this chord HAS — a triad
+     *  has two, and a preset with one voice has none at all. */
+    function renderInversions() {
+      const sel = $(".chord-inv");
+      const top = maxInversion(presetId);
+      inversion = Math.min(inversion, top);
+      sel.replaceChildren();
+      for (let i = 0; i <= top; i++) {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = t(`chord.inv${i}`);
+        sel.appendChild(o);
+      }
+      sel.value = String(inversion);
+      sel.disabled = top === 0;
+    }
+    /** Preset and inversion are ONE choice — the six slots are re-seeded from
+     *  both, so an inversion never compounds onto an already-inverted set. */
+    function seedFromPreset() {
+      voices = applyChordPreset(presetId, inversion);
       touch();
+    }
+    $(".chord-preset").addEventListener("change", (e) => {
+      presetId = e.target.value;
+      renderInversions(); // …keeping the inversion, clamped to the new chord
+      seedFromPreset();
+    });
+    $(".chord-inv").addEventListener("change", (e) => {
+      inversion = parseInt(e.target.value, 10) || 0;
+      seedFromPreset();
     });
     $(".chord-len").addEventListener("change", (e) => { lengthMode = e.target.value; touch(); });
     $(".chord-norm").addEventListener("change", (e) => { normalise = e.target.checked; touch(); });
@@ -411,7 +449,14 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     dlg.__chord = {
       voices: () => voices.map((v) => ({ ...v })),
       setVoice: (i, patch) => { Object.assign(voices[i], patch); touch(); },
-      setChordPreset: (id) => { $(".chord-preset").value = id; voices = applyChordPreset(id); touch(); },
+      setChordPreset: (id, inv = 0) => {
+        presetId = id; inversion = inv;
+        $(".chord-preset").value = id;
+        renderInversions();
+        seedFromPreset();
+      },
+      setInversion: (n) => { inversion = n; $(".chord-inv").value = String(n); seedFromPreset(); },
+      preset: () => ({ id: presetId, inversion, options: $(".chord-inv").options.length }),
       setLength: (m) => { lengthMode = m; $(".chord-len").value = m; touch(); },
       setNormalise: (on) => { normalise = on; $(".chord-norm").checked = on; touch(); },
       units: (i) => voiceUnits(voices[i], preset),
@@ -423,6 +468,7 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       cancel: () => finish(null),
     };
 
+    renderInversions();
     renderVoices();
     ensureMix();
     refreshInfo();

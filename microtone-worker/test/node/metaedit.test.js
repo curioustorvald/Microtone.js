@@ -312,6 +312,32 @@ test("chordOffsets: normalises around the voice nearest unison", async () => {
   assert.ok(det[0] < 0 && det[1] > 0 && Math.abs(det[1]) < 60, "a few cents, not an interval");
 });
 
+test("chordOffsets: an inversion moves which voice the layer plays", async () => {
+  const { chordOffsets } = await import("../../src/ui/popups/metachord.js");
+  const { presetForNotation } = await import("../../src/ui/pitchtables.js");
+  const p12 = presetForNotation(120);
+  const third = Math.round(4096 * Math.log2(5 / 4));   // 386¢
+  const fifth = Math.round(4096 * Math.log2(3 / 2));   // 702¢
+
+  // 1st inversion: the reference (nearest unison) is the THIRD, so the layer
+  // you have becomes the third and the stack sits above it — a minor third to
+  // the fifth, a major sixth to the root an octave up.
+  const inv1 = chordOffsets("major", p12, 1).sort((a, b) => a - b);
+  assert.equal(inv1.length, 2);
+  assert.ok(Math.abs(inv1[0] - (fifth - third)) <= 1, `${inv1[0]} = 5th over the 3rd`);
+  assert.ok(Math.abs(inv1[1] - (4096 - third)) <= 1, `${inv1[1]} = the root above`);
+
+  // 2nd inversion is built on the fifth, and every voice is still above it
+  const inv2 = chordOffsets("major", p12, 2).sort((a, b) => a - b);
+  assert.ok(inv2.every((o) => o > 0), "the layer is the bass of a 2nd inversion");
+  assert.ok(Math.abs(inv2[0] - (4096 - fifth)) <= 1);
+  assert.ok(Math.abs(inv2[1] - (4096 + third - fifth)) <= 1);
+
+  // out of range is the same as the last real inversion, never a throw
+  assert.deepEqual(chordOffsets("major", p12, 9), chordOffsets("major", p12, 2));
+  assert.deepEqual(chordOffsets("major", p12), chordOffsets("major", p12, 0));
+});
+
 test("stackLayer: linked copies at the given detunes, capped", () => {
   const inst = new TaudInst(0);
   inst.loadRecord(metaRecord([

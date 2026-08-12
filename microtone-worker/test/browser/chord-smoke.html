@@ -57,6 +57,16 @@
         ok(dlg.querySelectorAll(".chord-voice").length === 6, "a1 six voice slots");
         ok(ch.voices().filter((v) => v.on).length === 3, "a2 opens on a major triad");
 
+        // a2b (item 138): the whole vocabulary is on the menu, in its groups
+        const { CHORD_GROUPS, CHORD_PRESETS } = await win.eval('import("/src/doc/chord.js")');
+        const presetSel = dlg.querySelector(".chord-preset");
+        ok(presetSel.querySelectorAll("optgroup").length === CHORD_GROUPS.length &&
+          presetSel.querySelectorAll("option").length === CHORD_PRESETS.length,
+          `a2b preset menu is grouped (${presetSel.querySelectorAll("optgroup").length} groups, ` +
+          `${presetSel.querySelectorAll("option").length} chords)`);
+        ok([...presetSel.querySelectorAll("option")].every((o) => o.textContent && !/^chord\./.test(o.textContent)),
+          "a2c every chord is named (no raw i18n keys)");
+
         // a3: the readouts the whole UI exists for — ratio, cents, glyph, and
         // how far the just third sits from 12-TET's own E
         const read1 = ch.read(1);
@@ -106,6 +116,32 @@
         for (let i = 0; i < mix.data.length; i++) peak = Math.max(peak, Math.abs(mix.data[i]));
         ok(mix.voices === 3 && mix.data.length === data.length, "a7 major triad, source length");
         ok(Math.abs(peak - 1) < 1e-4, `a7b normalised to full scale (${peak.toFixed(4)})`);
+
+        // a7c (item 138): inversions re-seed the slots — the root goes on top,
+        // and the menu only offers the inversions the chord actually has
+        const invSel = dlg.querySelector(".chord-inv");
+        ok(invSel.options.length === 3 && invSel.value === "0",
+          `a7c a triad offers root + two inversions (${invSel.options.length})`);
+        invSel.value = "1";
+        invSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+        await sleep(300);
+        const inv1 = [0, 1, 2].map((i) => Math.round((ch.units(i) * 1200) / 4096));
+        ok(JSON.stringify(inv1) === JSON.stringify([386, 702, 1200]),
+          `a7d 1st inversion sits on the third (${inv1.join(", ")})`);
+        ok(ch.mix().voices === 3, "a7e …and it is still a three-voice mix");
+        // a taller chord grows the menu; the inversion is kept and clamped back
+        ch.setChordPreset("dom13", 5);
+        await sleep(300);
+        ok(dlg.querySelector(".chord-inv").options.length === 6 && ch.preset().inversion === 5,
+          `a7f a six-voice chord has five inversions (${ch.preset().options})`);
+        ok(ch.voices().filter((v) => v.on).length === 6, "a7g …and fills all six slots");
+        presetSel.value = "major";
+        presetSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+        await sleep(300);
+        ok(ch.preset().inversion === 2 && ch.voices().filter((v) => v.on).length === 3,
+          `a7h back to a triad clamps the inversion (${ch.preset().inversion})`);
+        ch.setChordPreset("major", 0);
+        await sleep(300);
 
         // a8: a voice below unison stretches the result; "source length" caps it
         ch.setVoice(3, { on: true, mode: "ji", ji: "1/1", oct: -1 });

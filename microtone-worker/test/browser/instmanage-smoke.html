@@ -128,8 +128,22 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   chordBtn.click();
   for (let i = 0; i < 100 && !dialogs().some((d) => /Chord stack/.test(d.textContent)); i++) await sleep(20);
   const chordDlg = lastDialog();
-  const sel2 = chordDlg.querySelector("select");
+  const [sel2, invSel] = chordDlg.querySelectorAll("select");
   sel2.value = "major"; fire(sel2, "change");
+
+  // item 138: the same vocabulary as the Sample Lab, inversions included. A
+  // 1st-inversion major triad is built UP from its third, so the layer you
+  // already have becomes the third — a just minor third (6/5, +315.6¢) to the
+  // fifth above it and a minor sixth (8/5, +813.7¢) to the root.
+  const invOk = !!invSel && invSel.options.length === 3;
+  invSel.value = "1"; fire(invSel, "change");
+  const invPreview = [...chordDlg.querySelectorAll(".meta-chord-voice")]
+    .map((r) => r.textContent).join(" | ");
+  const s3b = invOk && /\+315/.test(invPreview) && /\+813/.test(invPreview) &&
+    chordDlg.querySelectorAll(".meta-chord-voice").length === 3;
+  log(`chord stack offers inversions ("${invPreview}"): ${s3b ? "ok" : "FAIL"}`);
+  invSel.value = "0"; fire(invSel, "change");
+
   const voiceCount = chordDlg.querySelectorAll(".meta-chord-voice").length;
   btnIn(chordDlg, "Add voices").click();
   await sleep(60);

@@ -1180,7 +1180,13 @@ export class TimelineView {
     const surroundModel = store.doc?.songs[store.songIndex]?.surroundModel ?? 0;
     const surroundSong = surroundModel !== 0;
     const spatialSong = surroundModel === SURROUND_SPATIAL;
-    for (const { ch, x, w: colW } of strips) {
+    for (const { ch, x: stripX, w: colW } of strips) {
+      // A header panel is the CELL's rectangle, not the strip's: every grid
+      // cell is painted from `x - 2` and the channel boundary rule sits on its
+      // right edge, so a header drawn from `x` overhangs that rule by 2 px and
+      // its text sits 2 px right of the notes underneath it (item 137). The
+      // whole header block therefore shares the cell origin.
+      const x = stripX - 2;
       ctx.fillStyle = ch % 2 ? C.panel : C.panel2;
       ctx.fillRect(x, 0, colW - 2, headerH - 2);
       const patNum = this.currentPatternFor(ch);

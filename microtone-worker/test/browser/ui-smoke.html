@@ -96,6 +96,35 @@
         store.clearMutes();
         log(`header click mute / ctrl+click solo: ${clickMute && clickSolo ? "ok" : "FAIL"}`);
 
+        // ── item 137: the header panel is the CELL's rectangle ──
+        // Read straight off the canvas: the painted edge of a channel's header
+        // must land on the boundary rule the grid draws under it, or the strip
+        // reads two pixels wide of the column it belongs to.
+        {
+          store.cursor.ch = 0;
+          timeline.invalidate();
+          timeline.frame();
+          const cv = timeline.canvas;
+          const g2d = cv.getContext("2d");
+          const dpr = timeline.dpr;
+          const px = (x, y) => {
+            const d = g2d.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data;
+            return `${d[0]},${d[1]},${d[2]}`;
+          };
+          const s = timeline.chanLayout()[0];
+          const ruleX = Math.round(s.x + s.w - 4); // where the boundary rule is drawn
+          const gridY = timeline.headerH() + 4;
+          // y = 1 is above the header's first text row, so the panel is flat there
+          const panel = px(s.x + 20, 1);
+          let right = s.x + 20, left = s.x + 20;
+          while (right < s.x + s.w && px(right, 1) === panel) right++;
+          while (left > 0 && px(left - 1, 1) === panel) left--;
+          const ruleDrawn = px(ruleX, gridY) !== px(ruleX + 3, gridY);
+          const ok = right === ruleX && left === Math.round(s.x) - 2 && ruleDrawn;
+          log(`header panel aligns with the channel rule: ` +
+            `${ok ? "ok" : `FAIL left=${left} right=${right} rule=${ruleX} drawn=${ruleDrawn}`}`);
+        }
+
         // ── project rename (PNam) escapes + display decode ──
         pv.changeProjectString("PNam", "Neue Œuvre");
         const pn = store.doc.meta.projectName;
