@@ -265,7 +265,7 @@ app in a window too short for the panels you had, the ones that no longer fit
 are closed rather than left half-drawn, so what you see is always what the strip
 thinks it has.
 
-**The vectorscopes** come in three families, and all of them draw the same three
+**The vectorscopes** come in four families, and all of them draw the same three
 views of the same space, on the same axes — **top** (left–right against
 front–back), **front** (left–right against height) and **side** (front–back
 against height). Each labels its own edges, so there is never a question of
@@ -373,6 +373,48 @@ no front–back and no height the surface becomes a figure of revolution about
 the left–right axis, which is a sphere for a mono mix, a cardioid leaning to
 one side for a hard pan, and a figure of eight with a null straight through the
 middle for anything out of phase.
+
+*Cloud* is the fourth family, and the one that draws the **spatial image**
+rather than the field. It splits the sound into frequencies and asks, of each
+one, where it is arriving from — then draws it as a splat there. Because a mix's
+parts mostly occupy different frequencies, the cloud separates things the
+radiation surface blurs together: two instruments panned wide are one broad lobe
+on the surface and two distinct clusters here.
+
+**How far out from the centre a splat sits is how far outside your head that
+part of the image is**, and the rule is simply the cosine of the angle the
+sources sit at. A single source is on the rim, fully localised and outside you.
+A pair at ±30° — an ordinary stereo setup — images at cos 30°, most of the way
+out; at ±60° it is exactly half way in; and a pair placed equidistant either
+side of you, ±90°, collapses to the dead centre, because that is where such a
+pair is heard: inside the head, with no direction at all. Reverb and anything
+else without a direction arrives at the middle by the same route, with nothing
+special written to put it there.
+
+**Out-of-phase material is not treated as a phantom.** Invert one side of a
+stereo pair and you no longer hear a centre image at all — you hear two separate
+sources, wide apart — so the display must not drop it in the middle beside the
+in-phase case. It does not: when two sources cancel in pressure they are still
+moving the air, and that leftover motion is drawn as a **pair of splats on the
+rim**, at both ends of the axis the sound is oscillating along. So an in-phase
+pair collapses inward as it widens, and an out-of-phase one flies apart. (First
+order cannot recover the two original bearings in that case — the axis is the
+honest answer.)
+
+**Size is level; fading is release.** A splat's size is its level in decibels,
+so the loud parts of the image are the big ones. Its opacity is a different
+question — how much of that direction is still being *held*. A quiet note with
+its key still down is fully solid; a loud one you have just released starts to
+disperse as it rings out, and is gone by the time you stop hearing it. That is
+not something the sound itself can tell you, since a release tail and a quiet
+note are the same signal, so this one reading comes from the engine's own voices
+rather than from the field.
+
+The cloud **accumulates**: each analysis is laid over what is already there and
+the whole thing fades, so a moving image draws a trail and what you see is the
+last fraction of a second rather than one window of it. A still, sustained chord
+settles into a sharp shape; a busy passage boils. When the music stops it fades
+out.
 
 Under each scope is the **correlation meter**, a thin bar growing out of the
 centre: nothing at all when the mix folds to mono cleanly, wider as the two

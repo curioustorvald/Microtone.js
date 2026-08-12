@@ -54,6 +54,7 @@ import { CrtBeam, beamCoreInk } from "../crtbeam.js";
 import {
   RAD_BANDS, RAD_VIEWS, RadiationField, RadiationView, srgbToLinear,
 } from "../radiation.js";
+import { CloudField, CloudView } from "../cloud.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 
@@ -88,6 +89,9 @@ export const SCOPE_SIDE = "side";
 export const SCOPE_RAD = "rad";
 export const SCOPE_RAD_FRONT = "radfront";
 export const SCOPE_RAD_SIDE = "radside";
+export const SCOPE_CLOUD = "cloud";
+export const SCOPE_CLOUD_FRONT = "cloudfront";
+export const SCOPE_CLOUD_SIDE = "cloudside";
 export const SCOPE_HIDE = "hide";
 
 /** Meter scale, in dBFS. Above 0 exists because an object bus is not clamped. */
@@ -231,8 +235,9 @@ export function integrateCorrelation(sums, ll, rr, lr, frames, tauMs = CORR_INTE
  * strip hands you on its own.
  */
 export const SCOPE_KINDS = [
-  SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_FRONT, SCOPE_SIDE,
-  SCOPE_RAD_FRONT, SCOPE_RAD_SIDE, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
+  SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD, SCOPE_FRONT, SCOPE_SIDE,
+  SCOPE_RAD_FRONT, SCOPE_RAD_SIDE, SCOPE_CLOUD_FRONT, SCOPE_CLOUD_SIDE,
+  SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
 ];
 
 /**
@@ -258,8 +263,9 @@ export const MAX_SCOPE_PANELS = SCOPE_KINDS.length;
 export function availableScopes(model) {
   return model === SURROUND_SPATIAL
     ? [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
-      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE]
-    : [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD];
+      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE,
+      SCOPE_CLOUD, SCOPE_CLOUD_FRONT, SCOPE_CLOUD_SIDE]
+    : [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD];
 }
 
 /** Which plane a blobs kind is drawn in, or null if it is not a blobs kind. */
@@ -268,6 +274,16 @@ export function blobView(kind) {
     case SCOPE_BLOBS: return "top";
     case SCOPE_BLOBS_FRONT: return "front";
     case SCOPE_BLOBS_SIDE: return "side";
+    default: return null;
+  }
+}
+
+/** Which camera a cloud kind is drawn through, or null if it is not one. */
+export function cloudView(kind) {
+  switch (kind) {
+    case SCOPE_CLOUD: return "top";
+    case SCOPE_CLOUD_FRONT: return "front";
+    case SCOPE_CLOUD_SIDE: return "side";
     default: return null;
   }
 }
@@ -291,7 +307,7 @@ export function radView(kind) {
 export function scopeLabels(kind, stereoSong) {
   const axes = scopeAxes(kind, stereoSong);
   if (axes) return axes;
-  switch (blobView(kind) ?? radView(kind)) {
+  switch (blobView(kind) ?? radView(kind) ?? cloudView(kind)) {
     case "front": return { left: "L", right: "R", top: "U", bottom: "D" };
     case "side": return { left: "F", right: "B", top: "U", bottom: "D" };
     default: return { left: "L", right: "R", top: "F", bottom: "B" };
@@ -441,6 +457,9 @@ export class MasterStrip {
     // looking at it, and none at all until a panel asks for one.
     this.radField = null;
     this.radCells = new Array(MAX_SCOPE_PANELS).fill(null);
+    // The cloud family (item 133): likewise one image, many cameras.
+    this.cloudField = null;
+    this.cloudCells = new Array(MAX_SCOPE_PANELS).fill(null);
     this._radInkSig = null;
     this._radBandLin = null;
     // The scopes draw the samples that arrived SINCE THE LAST FRAME and let the
@@ -637,8 +656,10 @@ export class MasterStrip {
       // The radiation panel's colour key is five unlabelled swatches — small
       // enough to live in the dial's corner, which means the band edges
       // themselves have to be readily accessible rather than always visible.
-      this.scopeCanvas[p].title = radView(kind) === null ? ""
-        : `${t("master.scope.radKey")}: ${RAD_BANDS.map((b) => b.label).join(" · ")}`;
+      const key = radView(kind) !== null ? "master.scope.radKey"
+        : cloudView(kind) !== null ? "master.scope.cloudKey" : null;
+      this.scopeCanvas[p].title = key === null ? ""
+        : `${t(key)}: ${RAD_BANDS.map((b) => b.label).join(" · ")}`;
     }
   }
 
@@ -706,7 +727,9 @@ export class MasterStrip {
   /** Blank every scope's phosphor and forget where in the ring the beam was. */
   resetBeams() {
     for (const cell of this.beams) cell?.beam.clear();
+    for (const cell of this.cloudCells) cell?.view.clear();
     this.radField?.reset();
+    this.cloudField?.reset();
     this._lastWrite = -1;
     this.freshFrames = 0;
     this.traceGap = true;
@@ -1016,6 +1039,7 @@ export class MasterStrip {
 
     const C = themeColors();
     this.updateRadiation(C, dt);
+    this.updateCloud(C, dt);
     const n = this.panelCount();
     for (let i = 0; i < n; i++) this.drawScope(i, C);
     this.drawMeters(C);
@@ -1044,6 +1068,25 @@ export class MasterStrip {
     }
     f.smooth(dt);
     f.build(dt, this.radBandLin(C));
+  }
+
+  /**
+   * The one spatial image the cloud panels share (item 133). Unlike the other
+   * families this one also reads the ENGINE's voices — a release tail and a
+   * quiet note are the same signal, so held-ness cannot come out of the ring.
+   */
+  updateCloud(C, dt) {
+    if (!this.slots.some((wish) => cloudView(this.effective[wish]) !== null)) return;
+    const audio = this.store.audio;
+    if (!audio) return;
+    if (this.cloudField === null) this.cloudField = new CloudField();
+    // Stopped, nothing new is laid down and each panel's accumulator simply
+    // fades — the cloud dies away rather than freezing on the ring's last
+    // window. `cloudFresh` tells the panels whether there is anything new to
+    // lay down; the decay itself is theirs, and happens in drawCloud.
+    this.cloudFresh = audio.isPlaying()
+      && this.cloudField.analyse(audio.scopeRing(), this.readout.ringWrite | 0,
+        SAMPLING_RATE, this.freshFrames, audio);
   }
 
   /** The five band inks in linear light, re-derived only on a theme change. */
@@ -1093,8 +1136,10 @@ export class MasterStrip {
     const axes = scopeAxes(kind, stereoSong);
     const blobs = blobView(kind);
     const rad = radView(kind);
+    const cloud = cloudView(kind);
     if (blobs !== null) this.drawBlobs(ctx, C, cx, cy, r, blobs);
     else if (rad !== null) this.drawRadiation(ctx, C, cx, cy, r, i, rad);
+    else if (cloud !== null) this.drawCloud(ctx, C, cx, cy, r, i, cloud);
     else if (axes) this.drawTrace(ctx, C, cx, cy, r, axes, i, kind);
 
     // Edge labels — which way is which (item 98: "all four label the direction").
@@ -1176,6 +1221,53 @@ export class MasterStrip {
     cell.ctx.putImageData(cell.image, 0, 0);
     ctx.drawImage(cell.canvas, cx - size / 2, cy - size / 2);
     this.drawSpectrumKey(ctx, C, cx - r, cy + r + 8, r);
+  }
+
+  /**
+   * The cloud (item 133): the spatial IMAGE, splatted frequency by frequency.
+   * Unlike the radiation surface this panel ACCUMULATES — a single window is a
+   * handful of dots, and what makes it a cloud is the trail the image leaves
+   * behind it — so the decay and the deposit both live here, once per panel per
+   * frame, and the analysis they share happened in updateCloud.
+   */
+  drawCloud(ctx, C, cx, cy, r, slot, view) {
+    const f = this.cloudField;
+    if (f === null) return;
+    const size = Math.ceil(2 * r) + 2;
+    const cell = this.cloudCell(slot, size, C.cvBg, view);
+    cell.view.decay(this.dtMs ?? 16);
+    if (this.cloudFresh) cell.view.splat(f, RAD_VIEWS[view], this.radBandLin(C), 1);
+    cell.view.develop(cell.image.data, cell.core);
+    cell.ctx.putImageData(cell.image, 0, 0);
+    ctx.drawImage(cell.canvas, cx - size / 2, cy - size / 2);
+    this.drawSpectrumKey(ctx, C, cx - r, cy + r + 8, r);
+  }
+
+  /** One cloud panel's accumulator and blit canvas. The accumulator IS the
+   *  display's memory, so a change of camera wipes it — the trail belongs to
+   *  the projection it was laid down in. */
+  cloudCell(slot, size, ground, view) {
+    let c = this.cloudCells[slot];
+    if (c === null || c.size !== size) {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const cctx = canvas.getContext("2d");
+      c = this.cloudCells[slot] = {
+        size, groundCss: null, core: [255, 255, 255], view3: view,
+        canvas, ctx: cctx,
+        image: cctx.createImageData(size, size), view: new CloudView(size),
+      };
+    }
+    if (c.groundCss !== ground) {
+      c.groundCss = ground;
+      c.core = beamCoreInk(parseInk(ground));
+    }
+    if (c.view3 !== view) {
+      c.view3 = view;
+      c.view.clear();
+    }
+    return c;
   }
 
   /** One panel's camera, its blit canvas and its ImageData. Nothing in here

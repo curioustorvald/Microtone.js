@@ -29,6 +29,7 @@ import {
   METER_MIN_DB, SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE,
   SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
   SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE,
+  SCOPE_CLOUD, SCOPE_CLOUD_FRONT, SCOPE_CLOUD_SIDE,
   SCOPE_SELECT_H, SCOPE_CORR_H, SPLIT_H, MAX_SCOPE_PANELS,
 } from "../../src/ui/views/masterstrip.js";
 
@@ -346,12 +347,15 @@ test("scopes on offer, and their axes", () => {
   // A stereo or planar song has no height, so only the top of each family
   // survives — the radiation monitor's included: with no Z it is a figure of
   // revolution about the left-right axis, which is still a reading.
-  assert.deepEqual(availableScopes(SURROUND_STEREO), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
-  assert.deepEqual(availableScopes(SURROUND_PLANAR), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
-  // Spatial: all three families, three planes each, each family whole.
+  assert.deepEqual(availableScopes(SURROUND_STEREO),
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]);
+  assert.deepEqual(availableScopes(SURROUND_PLANAR),
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]);
+  // Spatial: all four families, three planes each, each family whole.
   assert.deepEqual(availableScopes(SURROUND_SPATIAL),
     [SCOPE_BLOBS, SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE,
-      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE]);
+      SCOPE_RAD, SCOPE_RAD_FRONT, SCOPE_RAD_SIDE,
+      SCOPE_CLOUD, SCOPE_CLOUD_FRONT, SCOPE_CLOUD_SIDE]);
 
   // A stereo song's top view is the mid/side goniometer; a surround song's is
   // left-right against front-back.
@@ -377,12 +381,12 @@ test("all three families draw the same three planes", () => {
   // Panels of the same plane must be oriented the same way whatever family they
   // belong to, or a pair of them side by side would contradict each other.
   for (const [plane, kinds] of [
-    ["front", [SCOPE_BLOBS_FRONT, SCOPE_FRONT, SCOPE_RAD_FRONT]],
-    ["side", [SCOPE_BLOBS_SIDE, SCOPE_SIDE, SCOPE_RAD_SIDE]],
+    ["front", [SCOPE_BLOBS_FRONT, SCOPE_FRONT, SCOPE_RAD_FRONT, SCOPE_CLOUD_FRONT]],
+    ["side", [SCOPE_BLOBS_SIDE, SCOPE_SIDE, SCOPE_RAD_SIDE, SCOPE_CLOUD_SIDE]],
     // The top trio agrees too — for a surround song, where all three have a
     // front-back axis. (A stereo song's Goniometer top plots the mono sum
     // instead, and says so on its own edges.)
-    ["top", [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]],
+    ["top", [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]],
   ]) {
     const want = scopeLabels(kinds[0], false);
     for (const kind of kinds.slice(1)) {
@@ -401,7 +405,8 @@ test("all three families draw the same three planes", () => {
   // is the strip at its most useful — then the rest of the planes, and the two
   // extra blobs views last of all: those are a CHOICE, not something the strip
   // hands you on its own.
-  assert.deepEqual(SCOPE_KINDS.slice(0, 3), [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD]);
+  assert.deepEqual(SCOPE_KINDS.slice(0, 4),
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]);
   assert.deepEqual(SCOPE_KINDS.slice(-2), [SCOPE_BLOBS_FRONT, SCOPE_BLOBS_SIDE]);
 });
 
@@ -413,9 +418,9 @@ test("a panel's choice survives a song that cannot show it", () => {
   // rather than repeating a view — and the WISHES are untouched, which is what
   // makes them come back when the song goes spatial again.
   assert.deepEqual(effectiveScopes(wishes, SURROUND_STEREO),
-    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, null]);
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]);
   assert.deepEqual(effectiveScopes(wishes, SURROUND_PLANAR),
-    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, null]);
+    [SCOPE_BLOBS, SCOPE_TOP, SCOPE_RAD, SCOPE_CLOUD]);
   assert.deepEqual(wishes, [SCOPE_BLOBS, SCOPE_TOP, SCOPE_FRONT, SCOPE_SIDE], "wishes mutated");
 
   // An unshowable wish borrows a view nothing else is showing…
@@ -433,11 +438,14 @@ test("a panel's choice survives a song that cannot show it", () => {
       SCOPE_KINDS,
     ]) {
       const drawn = effectiveScopes(wish, model).filter((k) => k !== null);
-      assert.equal(drawn.length, availableScopes(model).length,
-        `model ${model}, wishes ${wish}: drew ${drawn}`);
+      // Every panel that CAN be filled is, with no repeats — so the count is
+      // the smaller of "how many panels were asked for" and "how many views
+      // this song has". Duplicated wishes are spent on the unused views.
+      const want = Math.min(wish.length, availableScopes(model).length);
+      assert.equal(drawn.length, want, `model ${model}, wishes ${wish}: drew ${drawn}`);
     }
   }
-  // A spatial song has nine views, so nine panels is its ceiling.
+  // A spatial song has twelve views, so twelve panels is its ceiling.
   assert.equal(
     effectiveScopes([...SCOPE_KINDS, SCOPE_TOP], SURROUND_SPATIAL).filter((k) => k !== null).length,
     availableScopes(SURROUND_SPATIAL).length);

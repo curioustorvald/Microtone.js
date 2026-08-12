@@ -6,7 +6,7 @@
      row is what lets the "+" checks below tell "no room" apart from "no view
      left". A scope panel is a fixed size, so how many fit is a property of the
      viewport (item 98 note 2). -->
-<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1240px"></iframe>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:1500px"></iframe>
 <script type="module">
 // Drives the REAL app: the master strip's layout, its choosers per surround
 // model, the engine-side analysis tap it installs, live meters/scopes while the
@@ -79,18 +79,18 @@ function painted(cv) {
   const scopes = () => [...masterStrip.scopeSel[0].options].map((o) => o.value);
   check(targets().join() === "stereo", "a stereo song offers only the stereo meter", targets().join());
   check(masterStrip.targetSel.disabled, "…and there is nothing to choose");
-  check(scopes().join() === "blobs,top,rad,hide", "a stereo song offers the three flat scopes", scopes().join());
+  check(scopes().join() === "blobs,top,rad,cloud,hide", "a stereo song offers the four flat scopes", scopes().join());
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 1));
   await sleep(80);
   check(targets().join() === "stereo,quad,5.1,7.1,ambisonic", "a planar song offers every target", targets().join());
-  check(scopes().join() === "blobs,top,rad,hide", "…but still no vertical-plane scopes", scopes().join());
+  check(scopes().join() === "blobs,top,rad,cloud,hide", "…but still no vertical-plane scopes", scopes().join());
   check(masterStrip.target === "5.1", "planar defaults to metering 5.1", masterStrip.target);
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(80);
-  check(scopes().join() === "blobs,blobsfront,blobsside,top,front,side,rad,radfront,radside,hide",
-    "a spatial song offers all three families in all three planes", scopes().join());
+  check(scopes().join() === "blobs,blobsfront,blobsside,top,front,side,rad,radfront,radside,cloud,cloudfront,cloudside,hide",
+    "a spatial song offers all four families in all three planes", scopes().join());
   check(masterStrip.target === "ambisonic", "spatial defaults to the ambisonic field", masterStrip.target);
 
   // ── 3. the tap reaches the engine, and the strip draws live ──────────────
@@ -258,7 +258,7 @@ function painted(cv) {
   await sleep(120);
   check(masterStrip.scopes.join() === wishes, "a stereo song does not rewrite them",
     masterStrip.scopes.join());
-  check(sorted(masterStrip.effective) === "blobs,rad,top" &&
+  check(sorted(masterStrip.effective) === "blobs,cloud,rad,top" &&
     masterStrip.effective.length === masterStrip.scopes.length,
     "…it just stops drawing the ones it cannot show", String(masterStrip.effective));
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
@@ -281,15 +281,15 @@ function painted(cv) {
   // re-picked which panels are drawable but never re-laid the stack out, so the
   // button kept the answer it gave for the previous model.)
   const addBtn = strip.querySelector(".ms-head .icon-btn");
-  masterStrip.setPanelCount(3);
+  masterStrip.setPanelCount(4);
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 0));
   await sleep(150);
   check(masterStrip.geometry().capacity > masterStrip.drawn, "…room to spare",
     `${masterStrip.geometry().capacity} vs ${masterStrip.drawn}`);
-  check(addBtn.hidden, "a stereo song has all three of its views up, so + steps aside");
+  check(addBtn.hidden, "a stereo song has all four of its views up, so + steps aside");
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(150);
-  check(!addBtn.hidden, "…and a spatial song has six more, so + comes back");
+  check(!addBtn.hidden, "…and a spatial song has eight more, so + comes back");
 
   // ── the ONE state: what the strip believes is always what is on screen ────
   // (Regression: a geometric "fit" and the panel list were two states that only

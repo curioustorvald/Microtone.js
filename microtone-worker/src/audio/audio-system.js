@@ -15,7 +15,7 @@ import {
   SNAP_V_SAMPLE_POS, SNAP_V_SAMPLE_PTR, SNAP_V_SAMPLE_LEN,
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
-  SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES, SNAP_GLOBAL_VOLUME,
+  SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES, SNAP_GLOBAL_VOLUME, SNAP_V_SUSTAIN,
   SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
   SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
   SNAP_METER_BASE, SNAP_METER_STRIDE,
@@ -360,6 +360,10 @@ export class AudioSystem {
   /** #998: where the voice actually sits — 512-unit azimuth (0 left, 128 front,
    *  clockwise) and signed elevation (128 units = 90°). A stereo song reports
    *  its pan byte on the front arc and zero elevation. */
+  /** How much of the voice is still HELD, 0..1 — 1 with the key down however
+   *  quiet it is, the release tail alone once it is up. See SNAP_V_SUSTAIN. */
+  getVoiceSustain(vi) { return this._v(vi, SNAP_V_SUSTAIN); }
+
   getVoiceAzimuth(vi) { return this._v(vi, SNAP_V_AZIMUTH); }
   getVoiceElevation(vi) { return this._v(vi, SNAP_V_ELEVATION); }
 

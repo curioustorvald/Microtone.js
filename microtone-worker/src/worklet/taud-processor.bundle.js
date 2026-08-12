@@ -7539,7 +7539,19 @@ const SNAP_V_ENV_FILTER_IDX = 14;
 const SNAP_V_ENV_FILTER_TIME = 15;
 const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
 const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
-const SNAP_VOICE_STRIDE = 18;
+/**
+ * SUSTAIN (item 133) — how much of this voice is still being HELD, 0..1, as
+ * distinct from how loud it is. 1 while the key is down, however quiet the note
+ * is; after the key-off it is the release tail itself (the fadeout times the
+ * volume envelope), falling to 0 as the voice rings out.
+ *
+ * The soundfield cloud draws it as opacity, so a quiet held note stays solid
+ * and a loud one that has just been released begins to disperse. Nothing in the
+ * B-format ring can carry this — a release tail and a quiet note are the same
+ * signal — so it has to come across the wire from the engine's own voices.
+ */
+const SNAP_V_SUSTAIN = 18;
+const SNAP_VOICE_STRIDE = 19;
 
 const SNAP_MAX_VOICES = 64;
 
@@ -7939,6 +7951,12 @@ function fillSnapshotInto(eng, playhead, f) {
       const faderGain = (255 - v.fader) / 255.0;
       let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
       f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
+      // Held-ness, not loudness (SNAP_V_SUSTAIN): 1 with the key down whatever
+      // the envelope is doing, and the release tail alone once it is up. The
+      // fadeout starts at 1 on the key-off, so after it this is exactly the
+      // part of `ev` that the RELEASE is responsible for.
+      const sus = v.keyOff ? v.fadeoutVolume * (v.volEnvOn ? v.envVolMix : 1.0) : 1.0;
+      f[o + SNAP_V_SUSTAIN] = sus < 0 ? 0 : sus > 1 ? 1 : sus;
       let pan;
       if (v.hasPanEnv && v.panEnvOn) {
         let envPanRaw = Math.trunc(v.envPan * 255.0);
