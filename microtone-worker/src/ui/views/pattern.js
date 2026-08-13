@@ -37,7 +37,7 @@ import { showContextMenu } from "../widgets/contextmenu.js";
 import { clipboardItems } from "../gridmenu.js";
 import {
   blockToolItems, runBlockTool, isBlockTool,
-  volumeDialog, panDialog, transposeDialog, instrumentDialog,
+  volumeDialog, panDialog, transposeDialog, instrumentDialog, transposePresetFor,
 } from "../blocktools.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
@@ -560,13 +560,14 @@ class PatternPane {
   /** Notation-aware transpose of this pattern. The fine unit follows the
    *  song's tuning — semitones in 12-TET, steps in other TETs, raw note
    *  units in Raw — and the coarse unit is octaves (or periods when the
-   *  tuning isn't octave-based, e.g. Bohlen-Pierce tritaves). */
+   *  tuning isn't octave-based, e.g. Bohlen-Pierce tritaves). The dialog's
+   *  raw checkbox overrides notation for a straight 4096-TET-unit shift. */
   async transpose() {
     const store = this.store;
     if (!store.doc || !this.pattern()) return;
-    const preset = store.pitchPreset;
     const v = await transposeDialog(store, this._opScope().scope, this._titlePat());
     if (!v) return;
+    const preset = transposePresetFor(store, v);
     const { fine, coarse } = v;
     // Percussion slots skip the shift (retune semantics — a kit piece's pitch
     // selects the drum, it isn't melodic).

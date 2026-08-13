@@ -457,19 +457,21 @@ export class ProjectView {
   }
 
   /** Transpose EVERY pattern of the current song — the Patterns-tab Transpose
-   *  (same notation-aware units, same percussion/sentinel skips) applied song-
-   *  wide in one undo step. Other songs in the project are never touched. */
+   *  (same notation-aware units, same percussion/sentinel skips, same raw
+   *  4096-TET-unit checkbox) applied song-wide in one undo step. Other songs
+   *  in the project are never touched. */
   async transposeGlobal() {
     const store = this.store;
     if (!store.doc || !store.song) return;
-    const preset = store.pitchPreset;
-    const units = transposeUnitKeys(preset);
+    const notationPreset = store.pitchPreset;
+    const units = transposeUnitKeys(notationPreset);
     const result = await showModal({
       title: t("glob.transposeTitle"),
       body: t("glob.transposeBody", { song: store.songIndex }),
       fields: [
         { name: "fine", label: t(units.fine), type: "number", value: 0, min: -4096, max: 4096 },
         { name: "coarse", label: t(units.coarse), type: "number", value: 0, min: -10, max: 10 },
+        { name: "raw", label: t("pat.unitRaw4096"), type: "checkbox", value: false },
       ],
       okLabel: t("common.apply"),
     });
@@ -477,6 +479,7 @@ export class ProjectView {
     const fine = parseInt(result.fine || "0", 10) | 0;
     const coarse = parseInt(result.coarse || "0", 10) | 0;
     if (fine === 0 && coarse === 0) return;
+    const preset = result.raw ? pitchTablePresets[0] : notationPreset;
     const percSlots = this._percSlots();
     store.undo.apply(bulkNotesOp(store.songIndex,
       (song) => transposeAllPatterns(song, preset, percSlots, fine, coarse)));

@@ -92,7 +92,7 @@ import { Fft, RAD_BANDS, RAD_NBANDS, radTilt } from "./radiation.js";
 
 /** Analysis window and hop — the radiation monitor's, so both families see the
  *  same 43 ms of audio and a panel of each agrees about the moment. */
-export const CLOUD_FFT = 2048;
+export const CLOUD_FFT = 1024;
 export const CLOUD_HOP = 512;
 
 /** Bins quieter than this below the loudest one are dropped: between the
@@ -151,8 +151,9 @@ export const CLOUD_GAIN_RELEASE_MS = 1400;
 
 /** Energy that develops to ~63% ink, as a fraction of the (slewed) peak. */
 export const CLOUD_REF = 0.42;
-export const CLOUD_GAMMA = 2.2;
+export const CLOUD_GAMMA = 0.7071;
 export const CLOUD_BLOOM = 9;
+export const CLOUD_DEVELOP_GAIN = 1.4142;
 
 // ── pure helpers (unit-tested in test/node/cloud.test.js) ──────────────────
 
@@ -603,7 +604,7 @@ export class CloudView {
       out[p] = 255 * lerpTo(r * inv, core[0] / 255, bloom);
       out[p + 1] = 255 * lerpTo(g * inv, core[1] / 255, bloom);
       out[p + 2] = 255 * lerpTo(b * inv, core[2] / 255, bloom);
-      out[p + 3] = Math.round(255 * cloudAlpha(lum, ref));
+      out[p + 3] = Math.round(255 * CLOUD_DEVELOP_GAIN * cloudAlpha(lum, ref));
     }
   }
 

@@ -21,7 +21,7 @@ import { COL_NOTE, COL_INST, COL_VOL, COL_PAN, COL_FX, COL_FX2, SUB_PAN } from "
 import { scaleVolumeAt, transformPanAt, changeInstrumentAt } from "../doc/patterntools.js";
 import { setCellsBytesOp, setCellsFieldsOp, bulkNotesOp } from "../doc/ops.js";
 import { cellToBytes } from "../doc/clipboard.js";
-import { transposePatternNotes, transposeUnitKeys } from "./pitchtables.js";
+import { transposePatternNotes, transposeUnitKeys, pitchTablePresets } from "./pitchtables.js";
 import { FX_INFO, fxName, fxArg } from "./palette.js";
 
 /**
@@ -233,8 +233,11 @@ export async function panDialog(store, scope, titleArg) {
   return mult === 1 && add === 0 ? null : { mult, add };
 }
 
-/** The transpose dialog — its unit labels follow the song's tuning. Resolves
- *  {fine, coarse} or null. */
+/** The transpose dialog — its unit labels follow the song's tuning, and the
+ *  raw checkbox bypasses notation entirely for a straight 4096-TET-unit shift
+ *  (fine = note units, coarse = octaves), the same arithmetic the "Raw
+ *  format" preset already does, on demand rather than by switching notation.
+ *  Resolves {fine, coarse, raw} or null. */
 export async function transposeDialog(store, scope, titleArg) {
   const units = transposeUnitKeys(store.pitchPreset);
   const result = await showModal({
@@ -243,13 +246,23 @@ export async function transposeDialog(store, scope, titleArg) {
     fields: [
       { name: "fine", label: t(units.fine), type: "number", value: 0, min: -4096, max: 4096 },
       { name: "coarse", label: t(units.coarse), type: "number", value: 0, min: -10, max: 10 },
+      { name: "raw", label: t("pat.unitRaw4096"), type: "checkbox", value: false },
     ],
     okLabel: t("common.apply"),
   });
   if (!result) return null;
   const fine = parseInt(result.fine || "0", 10) | 0;
   const coarse = parseInt(result.coarse || "0", 10) | 0;
-  return fine === 0 && coarse === 0 ? null : { fine, coarse };
+  const raw = !!result.raw;
+  return fine === 0 && coarse === 0 ? null : { fine, coarse, raw };
+}
+
+/** The preset a transpose should actually compute against: the raw checkbox
+ *  swaps in the "Raw format" preset (an empty table), which makes
+ *  transposePatternNotes take its no-table branch — a straight 4096-TET-unit
+ *  shift regardless of the song's real notation. */
+export function transposePresetFor(store, v) {
+  return v.raw ? pitchTablePresets[0] : store.pitchPreset;
 }
 
 /** The change-instrument dialog. `withSongScope` adds the Patterns toolbar's
@@ -311,6 +324,7 @@ async function transposeTool(ctx) {
   const { store, cells } = ctx;
   const v = await transposeDialog(store, ctx.scope, ctx.scope);
   if (!v) return false;
+  const preset = transposePresetFor(store, v);
   const perc = percussionSlots(store.doc);
   const byPattern = new Map();
   for (const { pat, row } of cells) {
@@ -321,7 +335,7 @@ async function transposeTool(ctx) {
   store.undo.apply(bulkNotesOp(store.songIndex, (song) => {
     const changes = [];
     for (const [pat, rows] of byPattern) {
-      changes.push(...transposePatternNotes(song, pat, store.pitchPreset, perc,
+      changes.push(...transposePatternNotes(song, pat, preset, perc,
         v.fine, v.coarse, 0, Infinity, (row) => rows.has(row)));
     }
     return changes;

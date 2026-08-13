@@ -863,6 +863,7 @@ export default {
   "pat.unitNoteUnits": "노트 단위",
   "pat.unitOctaves": "옥타브",
   "pat.unitPeriods": "주기",
+  "pat.unitRaw4096": "4096평균율 원시 단위 사용(기보법 무시)",
   "pat.volume": "음량…",
   "pat.volumeTitle": "패턴(또는 선택 영역)의 모든 설정된 음량을 조절합니다",
   "pat.pan": "팬…",

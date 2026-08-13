@@ -872,6 +872,7 @@ export default {
   "pat.unitNoteUnits": "Note units",
   "pat.unitOctaves": "Octaves",
   "pat.unitPeriods": "Periods",
+  "pat.unitRaw4096": "Raw 4096-TET units (ignore notation)",
   "pat.volume": "Volume…",
   "pat.volumeTitle": "Scale every set volume in the pattern (or selection)",
   "pat.pan": "Pan…",
