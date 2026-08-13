@@ -10,7 +10,7 @@ import {
   narrowVolAxis,
 } from "./trigger.js";
 import { applyKeyLift, envPresent, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
-import { startFastFade } from "./sampler.js";
+import { startFastFade, startCutRamp } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
 
 /** S $Dxny (item 94, extended item 97): schedule the $n follow-up action at
@@ -176,7 +176,7 @@ export function applyTrackerRow(eng, ts, playhead) {
         voice.noteDelayTick = sDelayTick; voice.delayedNote = 0x0002;
         voice.delayedInst = 0; voice.delayedVol = -1;
       } else {
-        voice.active = false;
+        startCutRamp(voice);
         cutLayerChildren(ts, vi);
       }
       scheduleDxnyAction(voice, row, sDelayTick);
@@ -273,9 +273,13 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   voice.envIndex = 0;
   voice.envTimeSec = 0.0;
   voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
-  // Snap the per-sample-smoothed envelope so the re-attack lands on node 0.
-  voice.envVolMix = voice.envVolume;
-  voice.envVolStep = 0.0;
+  // envVolMix is deliberately NOT snapped here (item 142). This re-attack does
+  // not restart the sample and arms no attack ramp, so snapping the smoothed
+  // envelope steps the gain mid-waveform — a tone portamento onto a note whose
+  // envelope starts below where the last one had got to clicks, every time. The
+  // per-sample glide (envVolStep, re-armed each tick) walks it to node 0
+  // instead. A FRESH trigger still snaps, in triggerNote, because there the
+  // sample restarts from zero and the attack ramp covers the discontinuity.
   voice.envPanIndex = 0;
   voice.envPanTimeSec = 0.0;
   voice.envPan = voice.activePanEnv[0].value / 255.0;

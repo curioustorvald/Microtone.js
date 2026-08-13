@@ -128,6 +128,160 @@ test("S$Dxny schedules the $n action at tick $x+$y (note cut 2 ticks after a del
   assert.equal(v.noteActionTick, -1, "consumed, not re-armed");
 });
 
+test("a note cut RAMPS to silence instead of stepping to it (item 140)", () => {
+  // A cut used to drop `active` on the spot: mid-cycle that is a step straight
+  // to zero, which clicks. It now fades over the ATTACK ramp's samples.
+  //
+  // Worth knowing WHY this needs its own test: across the whole corpus the cut
+  // ramp engages nine times and the voice is already inactive every one of
+  // them, so conformance cannot see this behaviour at all.
+  // A DC sample, not makeTestEngine's sawtooth: that one steps by ~0.78 every
+  // 100 samples all by itself, which would drown the very edge being measured.
+  // With a constant sample every step in the output belongs to the cut.
+  const eng = new TaudEngine();
+  eng.sampleBin.fill(178, 0, 1000);
+  const rec = new Uint8Array(256);
+  const w16 = (o, val) => { rec[o] = val & 0xff; rec[o + 1] = (val >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec[14] = 1;        // forward loop
+  rec[21] = 0x3f;     // vol env node 0 = full
+  rec[171] = 255; rec[196] = 255;
+  eng.uploadInstrument(1, rec);
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; } // vol/pan no-op
+  pat[0] = 0x00; pat[1] = 0x50;   // row 0: note 0x5000, inst 1 — a loud sustained note
+  pat[2] = 1;
+  pat[8 * 4] = 0x02; pat[8 * 4 + 1] = 0x00; // row 4: NOTE CUT (0x0002)
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125);
+  eng.setTickRate(0, 6);
+  eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0);
+  eng.play(0);
+
+  const ts = eng.playheads[0].trackerState;
+  const v = ts.voices[0];
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const trace = [];
+  let ampAtCut = 0;
+  // Row 4 lands at 4 rows x 6 ticks x 640 samples = 15360, so render past it.
+  let rampAt = -1;
+  for (let i = 0; i < 200; i++) {
+    eng.renderChunk(0, out);
+    if (rampAt < 0 && v.rampOutSamples > 0) rampAt = trace.length;
+    for (let k = 0; k < TRACKER_CHUNK; k++) trace.push(ts.mixLeft[k]);
+    if (rampAt >= 0 && trace.length > rampAt + 4 * TRACKER_CHUNK) break;
+  }
+  assert.ok(rampAt > 0, "the cut engaged a ramp at all");
+
+  // Measure the DESCENT ITSELF rather than the whole trace: the fixture loops,
+  // and a looping sample has edges of its own that would drown the one edge
+  // this test is about.
+  let last = trace.length - 1;
+  while (last > 0 && Math.abs(trace[last]) < 1e-9) last--;
+  ampAtCut = Math.abs(trace[rampAt > 0 ? rampAt - 1 : 0]);
+  assert.ok(ampAtCut > 1e-3, `the note must be sounding at the cut (was ${ampAtCut})`);
+
+  // Walk back from silence to the last sample still at full level: that span is
+  // the ramp, and a bare cut would have made it one sample long.
+  let full = last;
+  while (full > 0 && Math.abs(trace[full]) < ampAtCut * 0.9) full--;
+  const span = last - full;
+  assert.ok(span >= 8, `the cut took ${span} samples to reach silence, not a step`);
+  let worst = 0;
+  for (let i = full + 1; i <= last + 1 && i < trace.length; i++) {
+    const d = Math.abs(trace[i] - trace[i - 1]);
+    if (d > worst) worst = d;
+  }
+  assert.ok(worst < ampAtCut * 0.25,
+    `biggest step in the descent ${worst.toFixed(6)} vs level ${ampAtCut.toFixed(6)}`);
+  assert.equal(v.active, false, "the voice stopped once the ramp finished");
+  const tail = trace.slice(-TRACKER_CHUNK);
+  assert.ok(Math.max(...tail.map(Math.abs)) < 1e-6, "…and is silent afterwards");
+});
+
+test("pan moves per SAMPLE, not per tick (item 141)", () => {
+  // The pan law is evaluated every sample but every input to it moved once a
+  // tick, so the gain used to step at each tick boundary — a zipper at the tick
+  // rate. Measured as: is the biggest sample-to-sample jump AT a tick boundary
+  // bigger than the waveform's own slope elsewhere?
+  const eng = new TaudEngine();
+  for (let i = 0; i < 1000; i++) {
+    eng.sampleBin[i] = Math.round(128 + 100 * Math.sin((2 * Math.PI * i) / 1000));
+  }
+  const rec = new Uint8Array(256);
+  const w16 = (o, val) => { rec[o] = val & 0xff; rec[o + 1] = (val >> 8) & 0xff; };
+  w16(4, 1000); w16(6, 32000); w16(12, 1000);
+  rec[14] = 1; rec[21] = 0x3f; rec[171] = 255; rec[196] = 255;
+  eng.uploadInstrument(1, rec);
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;
+  for (let r = 1; r < 64; r++) {            // P $0f00 — pan slide, every row
+    pat[r * 8 + 5] = 0x19; pat[r * 8 + 6] = 0x00; pat[r * 8 + 7] = 0x0f;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.play(0);
+
+  const ts = eng.playheads[0].trackerState;
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const L = [], R = [];
+  for (let i = 0; i < 300; i++) {
+    eng.renderChunk(0, out);
+    for (let k = 0; k < TRACKER_CHUNK; k++) { L.push(ts.mixLeft[k]); R.push(ts.mixRight[k]); }
+  }
+  const TICK = 640; // SAMPLING_RATE * 2.5 / bpm at 32 kHz, BPM 125
+  let onTick = 0, offTick = 0;
+  for (let i = 4001; i < L.length; i++) {
+    const d = Math.max(Math.abs(L[i] - L[i - 1]), Math.abs(R[i] - R[i - 1]));
+    if (i % TICK <= 1 || i % TICK >= TICK - 1) { if (d > onTick) onTick = d; }
+    else if (d > offTick) offTick = d;
+  }
+  assert.ok(offTick > 0, "the voice was sounding");
+  assert.ok(onTick < offTick * 1.5,
+    `tick boundaries step ${(onTick / offTick).toFixed(1)}x the waveform's own slope`);
+});
+
+test("pitch is interpolated per sample, not held for a tick (item 141)", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;
+  for (let r = 1; r < 64; r++) {            // H $0f0f — fast, deep vibrato
+    pat[r * 8 + 5] = 0x11; pat[r * 8 + 6] = 0x0f; pat[r * 8 + 7] = 0x0f;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const rate = [];
+  for (let i = 0; i < 80; i++) { eng.renderChunk(0, out); rate.push(v.currentPlaybackRate); }
+
+  const span = Math.max(...rate) - Math.min(...rate);
+  assert.ok(span > 0, "the vibrato moved the pitch at all");
+  // A staircase visits one value per tick and holds it: ~16 distinct values over
+  // these 80 probes, with jumps a large fraction of the whole excursion.
+  const distinct = new Set(rate.map((x) => x.toFixed(6))).size;
+  assert.ok(distinct > 25, `only ${distinct} distinct rates — still a staircase`);
+  let jump = 0;
+  for (let i = 1; i < rate.length; i++) jump = Math.max(jump, Math.abs(rate[i] - rate[i - 1]));
+  assert.ok(jump < span * 0.25, `biggest jump is ${((100 * jump) / span).toFixed(0)}% of the excursion`);
+});
+
 test("S$Dxny: a zero $y schedules no action at all", () => {
   const eng = makeTestEngine();
   const pat = new Uint8Array(512);

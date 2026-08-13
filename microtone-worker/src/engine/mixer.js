@@ -14,10 +14,13 @@ import {
   AMIGA_A500_A0, AMIGA_A500_B1,
   AMIGA_LED_A1, AMIGA_LED_A2, AMIGA_LED_B1, AMIGA_LED_B2,
 } from "./tables.js";
-import { fetchTrackerSample, fetchTrackerSampleStereo, advanceVolumeRamp } from "./sampler.js";
+import {
+  fetchTrackerSample, fetchTrackerSampleStereo, advanceVolumeRamp,
+  advancePitchRamp, advancePanRamp,
+} from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
 import { CHAN_MODE_MATRIX } from "./inst.js";
-import { spatialVoiceGains, analysisVoiceGains } from "./spatial.js";
+import { spatialVoiceGains, analysisVoiceGains, voiceAzimuth } from "./spatial.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
 import { applyTrackerTick } from "./tick.js";
 
@@ -197,11 +200,17 @@ export function generateTrackerAudio(eng, playhead, out) {
       voice.envVolMix += voice.envVolStep;
       const effEnvVol = voice.volEnvOn ? voice.envVolMix : 1.0;
       advanceVolumeRamp(voice, ts.volDiv);
+      advancePitchRamp(voice, spt);
       const faderGain = (255 - voice.fader) / 255.0;
       const perVoiceGain = effEnvVol * voice.fadeoutVolume * voice.currentMixVolume *
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
       const globalGain = (gvol * mvol * playhead.masterVolume) / 255.0;
       const vol = perVoiceGain * globalGain;
+      // ONE pan ramp, above the branch, because both paths smooth the same
+      // composed number: every input to it moves once a TICK while the pan law
+      // (and the ambisonic encode) is evaluated every sample, so without this
+      // the gain stepped 50 times a second (item 141). Sharing it is also what
+      // keeps a planar song rendering identically to its stereo twin.
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
@@ -215,9 +224,12 @@ export function generateTrackerAudio(eng, playhead, out) {
           pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        pan = advancePanRamp(voice, pan);
         // equal-energy pan law
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
+      } else {
+        advancePanRamp(voice, voiceAzimuth(voice), true);
       }
       // Sample-end ramp-out.
       let rampGain;
@@ -276,6 +288,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       bg.envVolMix += bg.envVolStep;
       const effEnvVol = bg.volEnvOn ? bg.envVolMix : 1.0;
       advanceVolumeRamp(bg, ts.volDiv);
+      advancePitchRamp(bg, spt);
       const faderGain = (255 - bgFader) / 255.0;
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
@@ -293,8 +306,11 @@ export function generateTrackerAudio(eng, playhead, out) {
           pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        pan = advancePanRamp(bg, pan);
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
+      } else {
+        advancePanRamp(bg, voiceAzimuth(bg), true);
       }
       let rampGain;
       if (bg.rampOutSamples > 0) {

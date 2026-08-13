@@ -86,6 +86,14 @@ export class Voice {
     this.fader = 0;
     this.samplePos = 0.0;
     this.playbackRate = 1.0;
+    // Per-sample interpolation of the pitch (item 141). playbackRate is the
+    // TARGET the tick just set; currentPlaybackRate is what the sampler steps
+    // by, glided toward it across the tick so a slide or a vibrato is a
+    // continuous bend rather than a staircase of 50 steps a second.
+    this.currentPlaybackRate = 1.0;
+    this.pitchRampSamples = 0;
+    this.pitchRampStep = 0.0;
+    this.snapPlaybackRate = true;
     this.forward = true;
     this.instrumentId = 0;
     // Display-only: the pattern-level instrument that triggered this voice (a
@@ -162,6 +170,13 @@ export class Voice {
     this.currentMixVolume = 1.0;
     this.volRampSamples = 0;
     this.volRampStep = 0.0;
+    // …and of the pan (item 141), for the same reason: the pan law is evaluated
+    // per sample but every input to it moves once a tick, so a slide, a
+    // panbrello or a pan envelope stepped the gain 50 times a second.
+    this.currentPan = 128.0;
+    this.panRampSamples = 0;
+    this.panRampStep = 0.0;
+    this.snapPan = true;
     this.snapMixVolume = false;
 
     this.keyOff = false;

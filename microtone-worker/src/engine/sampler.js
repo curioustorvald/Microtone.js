@@ -9,7 +9,7 @@
 import {
   SAMPLING_RATE, MIDDLE_C, SAMPLE_BIN_TOTAL,
   INTERP_DEFAULT, INTERP_NONE, INTERP_A500, INTERP_A1200, INTERP_SNES, INTERP_NES_DPCM,
-  SINC_WIDTH, RAMP_OUT_SAMPLES, FAST_FADE_SEC, VOL_RAMP_SAMPLES,
+  SINC_WIDTH, RAMP_OUT_SAMPLES, ATTACK_RAMP_SAMPLES, FAST_FADE_SEC, VOL_RAMP_SAMPLES,
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
 
@@ -154,7 +154,7 @@ function advanceSamplePos(voice, sampleLen) {
   const loopStart = voice.activeSampleLoopStart;
   const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
   if (voice.forward) {
-    voice.samplePos += voice.playbackRate;
+    voice.samplePos += voice.currentPlaybackRate;
     // Sustain bit set + key-off ⇒ escape the loop (loopMode 0 semantics).
     const effectiveLoopMode =
       voice.activeSampleLoopSustain && voice.keyOff ? 0 : voice.activeLoopMode & 3;
@@ -179,17 +179,42 @@ function advanceSamplePos(voice, sampleLen) {
         break;
     }
   } else {
-    voice.samplePos -= voice.playbackRate;
+    voice.samplePos -= voice.currentPlaybackRate;
     if (voice.samplePos < loopStart) { voice.samplePos = loopStart; voice.forward = true; }
   }
 }
 
+/** Engage a linear ramp to silence over `samples`, and stop there. No-op if one
+ *  is already running — a voice that is already fading does not restart. */
+function beginRampOut(voice, samples) {
+  if (voice.rampOutSamples > 0) return;
+  voice.rampOutSamples = samples;
+  voice.rampOutGain = 1.0;
+  voice.rampOutStep = 1.0 / samples;
+}
+
 /** Engage the MilkyTracker-style sample-end ramp (no-op if already ramping). */
 export function startRampOut(voice) {
-  if (voice.rampOutSamples > 0) return;
-  voice.rampOutSamples = RAMP_OUT_SAMPLES;
-  voice.rampOutGain = 1.0;
-  voice.rampOutStep = 1.0 / RAMP_OUT_SAMPLES;
+  beginRampOut(voice, RAMP_OUT_SAMPLES);
+}
+
+/**
+ * Note-cut ramp (note word 0x0002, and S $Dxny's $n=1). A cut used to drop
+ * `active` on the spot, so a cut landing mid-cycle stepped straight to zero and
+ * clicked — audible on anything with body to it.
+ *
+ * The ramp is the ATTACK one's 32 samples (~0.67 ms at 48 kHz), not the 8 ms
+ * sample-end ramp: a cut is a rhythmic event, often on a fast row, and 8 ms
+ * would round off the very transient the cut is being used to place. Short
+ * enough to still read as a cut, long enough to have no edge in it.
+ *
+ * Note the sample position FREEZES while ramping (see the caller of
+ * advanceSamplePos), so this is the last sample held and faded rather than
+ * playback continuing under a fade — which is what the sample-end ramp does
+ * too, and over 32 samples the difference is inaudible.
+ */
+export function startCutRamp(voice) {
+  beginRampOut(voice, ATTACK_RAMP_SAMPLES);
 }
 
 /** Fast note-fade (note word 0x0004 — SF2 exclusiveClass choke, ≈0.3 s). */
@@ -198,6 +223,73 @@ export function startFastFade(voice, playhead) {
   voice.noteFading = true;
   const ticks = Math.max(FAST_FADE_SEC * playhead.bpm * 0.4, 1.0);
   voice.activeFadeoutStep = Math.min(Math.max(Math.round(1024.0 / ticks), 1), 0xfff);
+}
+
+/**
+ * Per-sample pitch glide toward the tick's playbackRate, spread over one tick
+ * (`spt` samples) so the control signal is INTERPOLATED rather than stepped.
+ * A fresh trigger snaps: a new note starts at its own pitch, it does not bend
+ * up from whatever the channel was last playing.
+ */
+export function advancePitchRamp(voice, spt) {
+  const target = voice.playbackRate;
+  if (voice.snapPlaybackRate) {
+    voice.currentPlaybackRate = target;
+    voice.pitchRampSamples = 0;
+    voice.pitchRampStep = 0.0;
+    voice.snapPlaybackRate = false;
+    return;
+  }
+  if (voice.pitchRampSamples > 0) {
+    voice.currentPlaybackRate += voice.pitchRampStep;
+    voice.pitchRampSamples--;
+    if (voice.pitchRampSamples === 0) voice.currentPlaybackRate = target;
+  } else if (voice.currentPlaybackRate !== target) {
+    const n = spt >= 1 ? Math.round(spt) : 1;
+    voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
+    voice.pitchRampSamples = n - 1;
+    voice.currentPlaybackRate += voice.pitchRampStep;
+  }
+}
+
+/**
+ * Per-sample pan ramp toward `target` (0..255), the sibling of the volume ramp
+ * and over the same 2 ms. Ramping the PAN rather than the two gains means one
+ * ramp covers everything that moves it — the slide, the panbrello, the pan
+ * envelope, the pan column and S $80xx all feed this one number.
+ *
+ * Returns the value to use this sample.
+ */
+export function advancePanRamp(voice, target, wrap = false) {
+  // A surround azimuth WRAPS at AZIMUTH_TURN (512 units, the 9-bit S $8xxx
+  // circle — NOT the stereo pan's 256): ramping 500 -> 12 the arithmetic way
+  // would sweep the long way round the whole circle. Take the short way.
+  if (wrap && !voice.snapPan) {
+    const d = target - voice.currentPan;
+    if (d > 256) voice.currentPan += 512;
+    else if (d < -256) voice.currentPan -= 512;
+  }
+  if (voice.snapPan) {
+    voice.currentPan = target;
+    voice.panRampSamples = 0;
+    voice.panRampStep = 0.0;
+    voice.snapPan = false;
+    return target;
+  }
+  if (voice.panRampSamples > 0) {
+    voice.currentPan += voice.panRampStep;
+    voice.panRampSamples--;
+    if (voice.panRampSamples === 0) voice.currentPan = target;
+  } else if (voice.currentPan !== target) {
+    voice.panRampStep = (target - voice.currentPan) / VOL_RAMP_SAMPLES;
+    voice.panRampSamples = VOL_RAMP_SAMPLES - 1;
+    voice.currentPan += voice.panRampStep;
+  }
+  if (wrap) {
+    if (voice.currentPan < 0) voice.currentPan += 512;
+    else if (voice.currentPan >= 512) voice.currentPan -= 512;
+  }
+  return voice.currentPan;
 }
 
 /** Per-sample volume-ramp tick toward (rowVolume/max)·(channelVolume/max).

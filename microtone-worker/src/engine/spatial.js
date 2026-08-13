@@ -475,7 +475,10 @@ function voiceGainsCache(bus, voice, sc) {
   const nc = bus.numChannels;
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
-  const az = voiceAzimuth(voice);
+  // The RAMPED azimuth (item 141) — the mixer advanced it once for this sample,
+  // and the stereo path is smoothing the very same number, which is what keeps a
+  // planar song rendering identically to its stereo twin.
+  const az = voice.currentPan;
   const el = voiceElevation(voice);
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
     sc = {

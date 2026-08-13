@@ -10,7 +10,7 @@ import { Voice } from "./voice.js";
 import { patchIsStereo } from "./inst.js";
 import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
-import { computePlaybackRate } from "./sampler.js";
+import { computePlaybackRate, startCutRamp } from "./sampler.js";
 import { random } from "./rng.js";
 import {
   applyPanSet, applyPanSlide, applyElevation, SURROUND_STEREO, SURROUND_SPATIAL,
@@ -199,10 +199,12 @@ export function releaseLayerChildren(eng, ts, vi) {
   }
 }
 
-/** Hard-cut channel vi's layer children (pattern note-cut 0x0002). */
+/** Cut channel vi's layer children (pattern note-cut 0x0002). Ramped like the
+ *  parent — they are one note, and a clean parent over clicking children would
+ *  be worse than either on its own. */
 export function cutLayerChildren(ts, vi) {
   for (const bg of ts.backgroundVoices) {
-    if (bg.isLayerChild && bg.sourceChannel === vi) bg.active = false;
+    if (bg.isLayerChild && bg.sourceChannel === vi) startCutRamp(bg);
   }
 }
 
@@ -459,6 +461,10 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.snapMixVolume = true;
   voice.volRampSamples = 0;
   voice.volRampStep = 0.0;
+  // A fresh note starts AT its pitch and AT its pan — it does not bend or slide
+  // in from whatever the channel was last playing (item 141).
+  voice.snapPlaybackRate = true;
+  voice.snapPan = true;
   voice.noteWasCut = false;
   voice.noteFading = false;
   // S $73..$7E per-note overrides reset on each fresh trigger.
@@ -529,7 +535,23 @@ export function maybeSpawnBackgroundForNNA(eng, ts, voice, channel) {
   const nna = voice.nnaOverride >= 0
     ? voice.nnaOverride
     : eng.instruments[voice.instrumentId].newNoteAction;
-  if (nna === 1) return; // Note Cut — no background needed.
+  if (nna === 1) {
+    // Note Cut. The voice is about to be REUSED for the new note, so "cut" used
+    // to mean dropping the old one wherever its waveform happened to be — a step
+    // from that value to whatever the new note starts at. That is the retrigger
+    // click, and it is loudest exactly where it is least wanted: a fast run of
+    // notes on one channel, or a tone portamento re-attacking (item 142).
+    //
+    // So the outgoing note is ghosted just long enough to ramp out. It fades
+    // over the same span the incoming note's attack ramp fades IN, which makes
+    // the pair a crossfade rather than a splice. The ghost costs one background
+    // voice for ~0.7 ms and deactivates itself.
+    const cut = ghostVoice(voice, channel);
+    startCutRamp(cut);
+    ts.backgroundVoices.push(cut);
+    capBackgroundVoices(ts);
+    return;
+  }
 
   const bg = ghostVoice(voice, channel);
   if (nna === 0) { // Note Off
@@ -554,6 +576,8 @@ export function ghostVoice(src, channel) {
   v.displayInst = src.displayInst;       // export/display tap: the ghost is still "that" instrument
   v.samplePos = src.samplePos;
   v.playbackRate = src.playbackRate;
+  v.currentPlaybackRate = src.currentPlaybackRate;
+  v.currentPan = src.currentPan;
   v.forward = src.forward;
   v.noteVolume = src.noteVolume;
   v.channelVolume = src.channelVolume;

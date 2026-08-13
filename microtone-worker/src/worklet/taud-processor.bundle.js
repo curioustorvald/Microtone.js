@@ -1028,7 +1028,10 @@ function voiceGainsCache(bus, voice, sc) {
   const nc = bus.numChannels;
   const layout = SAMPLE_CHANNEL_LAYOUT[voice.activeChanCount] ?? SAMPLE_CHANNEL_LAYOUT[1];
   const chans = layout.length;
-  const az = voiceAzimuth(voice);
+  // The RAMPED azimuth (item 141) — the mixer advanced it once for this sample,
+  // and the stereo path is smoothing the very same number, which is what keeps a
+  // planar song rendering identically to its stereo twin.
+  const az = voice.currentPan;
   const el = voiceElevation(voice);
   if (sc === null || sc.gains.length < nc * MAX_SAMPLE_CHANNELS) {
     sc = {
@@ -2833,6 +2836,14 @@ class Voice {
     this.fader = 0;
     this.samplePos = 0.0;
     this.playbackRate = 1.0;
+    // Per-sample interpolation of the pitch (item 141). playbackRate is the
+    // TARGET the tick just set; currentPlaybackRate is what the sampler steps
+    // by, glided toward it across the tick so a slide or a vibrato is a
+    // continuous bend rather than a staircase of 50 steps a second.
+    this.currentPlaybackRate = 1.0;
+    this.pitchRampSamples = 0;
+    this.pitchRampStep = 0.0;
+    this.snapPlaybackRate = true;
     this.forward = true;
     this.instrumentId = 0;
     // Display-only: the pattern-level instrument that triggered this voice (a
@@ -2909,6 +2920,13 @@ class Voice {
     this.currentMixVolume = 1.0;
     this.volRampSamples = 0;
     this.volRampStep = 0.0;
+    // …and of the pan (item 141), for the same reason: the pan law is evaluated
+    // per sample but every input to it moves once a tick, so a slide, a
+    // panbrello or a pan envelope stepped the gain 50 times a second.
+    this.currentPan = 128.0;
+    this.panRampSamples = 0;
+    this.panRampStep = 0.0;
+    this.snapPan = true;
     this.snapMixVolume = false;
 
     this.keyOff = false;
@@ -3600,6 +3618,7 @@ class Playhead {
       it.currentMixVolume = 1.0;
       it.volRampSamples = 0;
       it.volRampStep = 0.0;
+      it.currentPan = 128.0; it.panRampSamples = 0; it.panRampStep = 0.0; it.snapPan = true;
       it.snapMixVolume = false;
       it.envVolMix = 1.0;
       it.envVolStep = 0.0;
@@ -3638,6 +3657,8 @@ class Playhead {
       it.activePatchIndex = -1; // stem tap, cleared with the rest of "what's playing"
       it.samplePos = 0.0;
       it.playbackRate = 1.0;
+      it.currentPlaybackRate = 1.0;
+      it.pitchRampSamples = 0; it.pitchRampStep = 0.0; it.snapPlaybackRate = true;
       it.forward = true;
       it.keyOff = false;
       it.envIndex = 0; it.envTimeSec = 0.0; it.envVolume = 1.0;
@@ -3835,7 +3856,7 @@ function advanceSamplePos(voice, sampleLen) {
   const loopStart = voice.activeSampleLoopStart;
   const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
   if (voice.forward) {
-    voice.samplePos += voice.playbackRate;
+    voice.samplePos += voice.currentPlaybackRate;
     // Sustain bit set + key-off ⇒ escape the loop (loopMode 0 semantics).
     const effectiveLoopMode =
       voice.activeSampleLoopSustain && voice.keyOff ? 0 : voice.activeLoopMode & 3;
@@ -3860,17 +3881,42 @@ function advanceSamplePos(voice, sampleLen) {
         break;
     }
   } else {
-    voice.samplePos -= voice.playbackRate;
+    voice.samplePos -= voice.currentPlaybackRate;
     if (voice.samplePos < loopStart) { voice.samplePos = loopStart; voice.forward = true; }
   }
 }
 
+/** Engage a linear ramp to silence over `samples`, and stop there. No-op if one
+ *  is already running — a voice that is already fading does not restart. */
+function beginRampOut(voice, samples) {
+  if (voice.rampOutSamples > 0) return;
+  voice.rampOutSamples = samples;
+  voice.rampOutGain = 1.0;
+  voice.rampOutStep = 1.0 / samples;
+}
+
 /** Engage the MilkyTracker-style sample-end ramp (no-op if already ramping). */
 function startRampOut(voice) {
-  if (voice.rampOutSamples > 0) return;
-  voice.rampOutSamples = RAMP_OUT_SAMPLES;
-  voice.rampOutGain = 1.0;
-  voice.rampOutStep = 1.0 / RAMP_OUT_SAMPLES;
+  beginRampOut(voice, RAMP_OUT_SAMPLES);
+}
+
+/**
+ * Note-cut ramp (note word 0x0002, and S $Dxny's $n=1). A cut used to drop
+ * `active` on the spot, so a cut landing mid-cycle stepped straight to zero and
+ * clicked — audible on anything with body to it.
+ *
+ * The ramp is the ATTACK one's 32 samples (~0.67 ms at 48 kHz), not the 8 ms
+ * sample-end ramp: a cut is a rhythmic event, often on a fast row, and 8 ms
+ * would round off the very transient the cut is being used to place. Short
+ * enough to still read as a cut, long enough to have no edge in it.
+ *
+ * Note the sample position FREEZES while ramping (see the caller of
+ * advanceSamplePos), so this is the last sample held and faded rather than
+ * playback continuing under a fade — which is what the sample-end ramp does
+ * too, and over 32 samples the difference is inaudible.
+ */
+function startCutRamp(voice) {
+  beginRampOut(voice, ATTACK_RAMP_SAMPLES);
 }
 
 /** Fast note-fade (note word 0x0004 — SF2 exclusiveClass choke, ≈0.3 s). */
@@ -3879,6 +3925,73 @@ function startFastFade(voice, playhead) {
   voice.noteFading = true;
   const ticks = Math.max(FAST_FADE_SEC * playhead.bpm * 0.4, 1.0);
   voice.activeFadeoutStep = Math.min(Math.max(Math.round(1024.0 / ticks), 1), 0xfff);
+}
+
+/**
+ * Per-sample pitch glide toward the tick's playbackRate, spread over one tick
+ * (`spt` samples) so the control signal is INTERPOLATED rather than stepped.
+ * A fresh trigger snaps: a new note starts at its own pitch, it does not bend
+ * up from whatever the channel was last playing.
+ */
+function advancePitchRamp(voice, spt) {
+  const target = voice.playbackRate;
+  if (voice.snapPlaybackRate) {
+    voice.currentPlaybackRate = target;
+    voice.pitchRampSamples = 0;
+    voice.pitchRampStep = 0.0;
+    voice.snapPlaybackRate = false;
+    return;
+  }
+  if (voice.pitchRampSamples > 0) {
+    voice.currentPlaybackRate += voice.pitchRampStep;
+    voice.pitchRampSamples--;
+    if (voice.pitchRampSamples === 0) voice.currentPlaybackRate = target;
+  } else if (voice.currentPlaybackRate !== target) {
+    const n = spt >= 1 ? Math.round(spt) : 1;
+    voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
+    voice.pitchRampSamples = n - 1;
+    voice.currentPlaybackRate += voice.pitchRampStep;
+  }
+}
+
+/**
+ * Per-sample pan ramp toward `target` (0..255), the sibling of the volume ramp
+ * and over the same 2 ms. Ramping the PAN rather than the two gains means one
+ * ramp covers everything that moves it — the slide, the panbrello, the pan
+ * envelope, the pan column and S $80xx all feed this one number.
+ *
+ * Returns the value to use this sample.
+ */
+function advancePanRamp(voice, target, wrap = false) {
+  // A surround azimuth WRAPS at AZIMUTH_TURN (512 units, the 9-bit S $8xxx
+  // circle — NOT the stereo pan's 256): ramping 500 -> 12 the arithmetic way
+  // would sweep the long way round the whole circle. Take the short way.
+  if (wrap && !voice.snapPan) {
+    const d = target - voice.currentPan;
+    if (d > 256) voice.currentPan += 512;
+    else if (d < -256) voice.currentPan -= 512;
+  }
+  if (voice.snapPan) {
+    voice.currentPan = target;
+    voice.panRampSamples = 0;
+    voice.panRampStep = 0.0;
+    voice.snapPan = false;
+    return target;
+  }
+  if (voice.panRampSamples > 0) {
+    voice.currentPan += voice.panRampStep;
+    voice.panRampSamples--;
+    if (voice.panRampSamples === 0) voice.currentPan = target;
+  } else if (voice.currentPan !== target) {
+    voice.panRampStep = (target - voice.currentPan) / VOL_RAMP_SAMPLES;
+    voice.panRampSamples = VOL_RAMP_SAMPLES - 1;
+    voice.currentPan += voice.panRampStep;
+  }
+  if (wrap) {
+    if (voice.currentPan < 0) voice.currentPan += 512;
+    else if (voice.currentPan >= 512) voice.currentPan -= 512;
+  }
+  return voice.currentPan;
 }
 
 /** Per-sample volume-ramp tick toward (rowVolume/max)·(channelVolume/max).
@@ -4529,10 +4642,12 @@ function releaseLayerChildren(eng, ts, vi) {
   }
 }
 
-/** Hard-cut channel vi's layer children (pattern note-cut 0x0002). */
+/** Cut channel vi's layer children (pattern note-cut 0x0002). Ramped like the
+ *  parent — they are one note, and a clean parent over clicking children would
+ *  be worse than either on its own. */
 function cutLayerChildren(ts, vi) {
   for (const bg of ts.backgroundVoices) {
-    if (bg.isLayerChild && bg.sourceChannel === vi) bg.active = false;
+    if (bg.isLayerChild && bg.sourceChannel === vi) startCutRamp(bg);
   }
 }
 
@@ -4789,6 +4904,10 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.snapMixVolume = true;
   voice.volRampSamples = 0;
   voice.volRampStep = 0.0;
+  // A fresh note starts AT its pitch and AT its pan — it does not bend or slide
+  // in from whatever the channel was last playing (item 141).
+  voice.snapPlaybackRate = true;
+  voice.snapPan = true;
   voice.noteWasCut = false;
   voice.noteFading = false;
   // S $73..$7E per-note overrides reset on each fresh trigger.
@@ -4859,7 +4978,23 @@ function maybeSpawnBackgroundForNNA(eng, ts, voice, channel) {
   const nna = voice.nnaOverride >= 0
     ? voice.nnaOverride
     : eng.instruments[voice.instrumentId].newNoteAction;
-  if (nna === 1) return; // Note Cut — no background needed.
+  if (nna === 1) {
+    // Note Cut. The voice is about to be REUSED for the new note, so "cut" used
+    // to mean dropping the old one wherever its waveform happened to be — a step
+    // from that value to whatever the new note starts at. That is the retrigger
+    // click, and it is loudest exactly where it is least wanted: a fast run of
+    // notes on one channel, or a tone portamento re-attacking (item 142).
+    //
+    // So the outgoing note is ghosted just long enough to ramp out. It fades
+    // over the same span the incoming note's attack ramp fades IN, which makes
+    // the pair a crossfade rather than a splice. The ghost costs one background
+    // voice for ~0.7 ms and deactivates itself.
+    const cut = ghostVoice(voice, channel);
+    startCutRamp(cut);
+    ts.backgroundVoices.push(cut);
+    capBackgroundVoices(ts);
+    return;
+  }
 
   const bg = ghostVoice(voice, channel);
   if (nna === 0) { // Note Off
@@ -4884,6 +5019,8 @@ function ghostVoice(src, channel) {
   v.displayInst = src.displayInst;       // export/display tap: the ghost is still "that" instrument
   v.samplePos = src.samplePos;
   v.playbackRate = src.playbackRate;
+  v.currentPlaybackRate = src.currentPlaybackRate;
+  v.currentPan = src.currentPan;
   v.forward = src.forward;
   v.noteVolume = src.noteVolume;
   v.channelVolume = src.channelVolume;
@@ -5832,7 +5969,7 @@ function applyTrackerRow(eng, ts, playhead) {
         voice.noteDelayTick = sDelayTick; voice.delayedNote = 0x0002;
         voice.delayedInst = 0; voice.delayedVol = -1;
       } else {
-        voice.active = false;
+        startCutRamp(voice);
         cutLayerChildren(ts, vi);
       }
       scheduleDxnyAction(voice, row, sDelayTick);
@@ -5929,9 +6066,13 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   voice.envIndex = 0;
   voice.envTimeSec = 0.0;
   voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
-  // Snap the per-sample-smoothed envelope so the re-attack lands on node 0.
-  voice.envVolMix = voice.envVolume;
-  voice.envVolStep = 0.0;
+  // envVolMix is deliberately NOT snapped here (item 142). This re-attack does
+  // not restart the sample and arms no attack ramp, so snapping the smoothed
+  // envelope steps the gain mid-waveform — a tone portamento onto a note whose
+  // envelope starts below where the last one had got to clicks, every time. The
+  // per-sample glide (envVolStep, re-armed each tick) walks it to node 0
+  // instead. A FRESH trigger still snaps, in triggerNote, because there the
+  // sample restarts from zero and the attack ramp covers the discontinuity.
   voice.envPanIndex = 0;
   voice.envPanTimeSec = 0.0;
   voice.envPan = voice.activePanEnv[0].value / 255.0;
@@ -6115,7 +6256,7 @@ function applyTrackerTick(eng, ts, playhead) {
           applyKeyLift(voice, eng.instruments[voice.instrumentId]);
           break;
         case 0x0002: // delayed note cut
-          voice.active = false;
+          startCutRamp(voice);
           cutLayerChildren(ts, vi);
           break;
         case 0x0003: // delayed note fade
@@ -6144,7 +6285,7 @@ function applyTrackerTick(eng, ts, playhead) {
           applyKeyLift(voice, eng.instruments[voice.instrumentId]);
           break;
         case 1: // Note cut
-          voice.active = false;
+          startCutRamp(voice);
           cutLayerChildren(ts, vi);
           break;
         case 2: // Note continue — no-op.
@@ -6705,11 +6846,17 @@ function generateTrackerAudio(eng, playhead, out) {
       voice.envVolMix += voice.envVolStep;
       const effEnvVol = voice.volEnvOn ? voice.envVolMix : 1.0;
       advanceVolumeRamp(voice, ts.volDiv);
+      advancePitchRamp(voice, spt);
       const faderGain = (255 - voice.fader) / 255.0;
       const perVoiceGain = effEnvVol * voice.fadeoutVolume * voice.currentMixVolume *
         swingScale * instGv * faderGain * voice.layerMixGain * voice.activeAttenGain;
       const globalGain = (gvol * mvol * playhead.masterVolume) / 255.0;
       const vol = perVoiceGain * globalGain;
+      // ONE pan ramp, above the branch, because both paths smooth the same
+      // composed number: every input to it moves once a TICK while the pan law
+      // (and the ambisonic encode) is evaluated every sample, so without this
+      // the gain stepped 50 times a second (item 141). Sharing it is also what
+      // keeps a planar song rendering identically to its stereo twin.
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
@@ -6723,9 +6870,12 @@ function generateTrackerAudio(eng, playhead, out) {
           pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        pan = advancePanRamp(voice, pan);
         // equal-energy pan law
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
+      } else {
+        advancePanRamp(voice, voiceAzimuth(voice), true);
       }
       // Sample-end ramp-out.
       let rampGain;
@@ -6784,6 +6934,7 @@ function generateTrackerAudio(eng, playhead, out) {
       bg.envVolMix += bg.envVolStep;
       const effEnvVol = bg.volEnvOn ? bg.envVolMix : 1.0;
       advanceVolumeRamp(bg, ts.volDiv);
+      advancePitchRamp(bg, spt);
       const faderGain = (255 - bgFader) / 255.0;
       const vol = (effEnvVol * bg.fadeoutVolume * bg.currentMixVolume *
         swingScale * gvol * mvol * instGv * faderGain * bg.layerMixGain * bg.activeAttenGain *
@@ -6801,8 +6952,11 @@ function generateTrackerAudio(eng, playhead, out) {
           pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
         }
         pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+        pan = advancePanRamp(bg, pan);
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
+      } else {
+        advancePanRamp(bg, voiceAzimuth(bg), true);
       }
       let rampGain;
       if (bg.rampOutSamples > 0) {

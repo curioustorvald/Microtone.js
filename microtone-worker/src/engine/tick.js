@@ -11,7 +11,7 @@ import {
   noteValToFreqHz, freqHzToNoteVal,
   clamp,
 } from "./tables.js";
-import { computePlaybackRate, startFastFade } from "./sampler.js";
+import { computePlaybackRate, startFastFade, startCutRamp } from "./sampler.js";
 import { refreshVoiceFilter } from "./filter.js";
 import {
   advanceEnvelope, advancePitchEnvelope, advanceFilterEnvelope,
@@ -53,7 +53,7 @@ export function applyTrackerTick(eng, ts, playhead) {
           applyKeyLift(voice, eng.instruments[voice.instrumentId]);
           break;
         case 0x0002: // delayed note cut
-          voice.active = false;
+          startCutRamp(voice);
           cutLayerChildren(ts, vi);
           break;
         case 0x0003: // delayed note fade
@@ -82,7 +82,7 @@ export function applyTrackerTick(eng, ts, playhead) {
           applyKeyLift(voice, eng.instruments[voice.instrumentId]);
           break;
         case 1: // Note cut
-          voice.active = false;
+          startCutRamp(voice);
           cutLayerChildren(ts, vi);
           break;
         case 2: // Note continue — no-op.

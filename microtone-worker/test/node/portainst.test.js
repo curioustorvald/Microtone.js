@@ -157,6 +157,12 @@ test("the re-attack is audible: the porta row comes back to full level", () => {
   const sustained = rms(eng, 2);
   const afterPorta = rms(eng, 8);
   assert.ok(sustained > 0.01, `premise: the note sounds at all (got ${sustained})`);
-  assert.ok(afterPorta > sustained * 0.9,
+  // 0.8, not 0.9: the re-attack GLIDES to envelope node 0 over one tick rather
+  // than snapping to it (item 142 — snapping stepped the gain mid-waveform on a
+  // porta row, which is a click, and unlike a fresh trigger there is no sample
+  // restart or attack ramp to hide it). That costs a tick of ramp inside the
+  // row's RMS. What this test exists to catch is a porta row arriving SILENT,
+  // which is an order of magnitude away from either figure.
+  assert.ok(afterPorta > sustained * 0.8,
     `porta row is back at full level (${afterPorta} vs ${sustained})`);
 });

@@ -453,6 +453,7 @@ export class Playhead {
       it.currentMixVolume = 1.0;
       it.volRampSamples = 0;
       it.volRampStep = 0.0;
+      it.currentPan = 128.0; it.panRampSamples = 0; it.panRampStep = 0.0; it.snapPan = true;
       it.snapMixVolume = false;
       it.envVolMix = 1.0;
       it.envVolStep = 0.0;
@@ -491,6 +492,8 @@ export class Playhead {
       it.activePatchIndex = -1; // stem tap, cleared with the rest of "what's playing"
       it.samplePos = 0.0;
       it.playbackRate = 1.0;
+      it.currentPlaybackRate = 1.0;
+      it.pitchRampSamples = 0; it.pitchRampStep = 0.0; it.snapPlaybackRate = true;
       it.forward = true;
       it.keyOff = false;
       it.envIndex = 0; it.envTimeSec = 0.0; it.envVolume = 1.0;

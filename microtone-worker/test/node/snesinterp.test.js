@@ -43,6 +43,10 @@ function makeVoice(rate, pos = 0) {
   v.rampOutSamples = 0;
   v.samplePos = pos;
   v.playbackRate = rate;
+  // This harness drives fetchTrackerSample directly, so the mixer's per-sample
+  // pitch glide (advancePitchRamp) never runs: set the value the sampler steps
+  // by as well as the target it would be gliding toward.
+  v.currentPlaybackRate = rate;
   return v;
 }
 
