@@ -1119,7 +1119,7 @@ export default {
   "help.clipboard": "copy / cut / paste the selected block",
   "help.selClear": "clear selection · blank the selected block",
   "help.blackKeys": "piano black keys",
-  "help.whiteKeys": "piano white keys (C D E F G A B C D E)",
+  "help.whiteKeys": "piano white keys (C D E F G A B C D E) — hold several to chord when record is off",
   "help.microKeys": "half-sharps where a piano has no black key (Bt Et Bt)",
   "help.sentinels": "note column: key-off ===, cut ^^^, fade ~~~, fast-fade ~^~",
   "help.hexEntry": "hex entry (inst / vol / pan / fx arg)",

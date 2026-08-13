@@ -22,7 +22,10 @@ import {
   SNAP_M_PEAK, SNAP_M_TRUE_PEAK, SNAP_M_MEAN_SQUARE, SNAP_M_CLIP,
   SNAP_SCOPE_BASE,
 } from "../worklet/protocol.js";
-import { MAX_VOICES, NUM_VOICES, PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
+import {
+  NUM_VOICES, TOTAL_VOICES, JAM_VOICES, JAM_VOICE_BASE,
+  PATTERN_BYTES, PATTERN_BYTES_WIDE,
+} from "../engine/constants.js";
 import { AR_SAB_BYTES } from "./audio-ring.js";
 import { ANALYSIS_OFF, SCOPE_FRAMES, SCOPE_CHANNELS } from "../engine/analysis.js";
 
@@ -283,6 +286,13 @@ export class AudioSystem {
   /** Preview the exact pooled sample `spec` (ptr/len/rate/loop), no zone lookup (bug #65). */
   jamSample(ph, voice, note, spec) { this._post({ t: CMD.JAM_SAMPLE, ph, voice, note, spec }); }
   jamStop(ph = 0) { this._post({ t: CMD.JAM_STOP, ph }); }
+  /** Stop one audition voice + what it spawned (item 140). `voice < 0` clears
+   *  the whole jam bank; neither form touches a song voice, so a released key
+   *  never cuts the playing song the way jamStop does. */
+  jamStopVoice(ph = 0, voice = -1) { this._post({ t: CMD.JAM_STOP_VOICE, ph, voice }); }
+  /** Voice index of jam-bank slot `i` — the audition voices, above every song
+   *  channel: no fader, no mute, and never written to by playback. */
+  jamVoice(i) { return JAM_VOICE_BASE + (((i | 0) % JAM_VOICES) + JAM_VOICES) % JAM_VOICES; }
   setVoiceMute(ph, voice, muted) { this._post({ t: CMD.SET_VOICE_MUTE, ph, voice, muted }); }
   setVoiceFader(ph, voice, fader) { this._post({ t: CMD.SET_VOICE_FADER, ph, voice, fader }); }
   uploadPattern(slot, bytes) {
@@ -341,7 +351,7 @@ export class AudioSystem {
   }
 
   _v(vi, field) {
-    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    const v = Math.min(Math.max(vi, 0), TOTAL_VOICES - 1);
     return this.snapshot[SNAP_HEADER_SIZE + v * SNAP_VOICE_STRIDE + field];
   }
 

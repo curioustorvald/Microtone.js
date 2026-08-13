@@ -2,7 +2,7 @@
 // port of AudioAdapter.kt:4412-4494, 4880-5208, 5210-5244.
 
 import {
-  MAX_VOICES, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK, INTERP_DEFAULT,
+  MAX_VOICES, TOTAL_VOICES, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK, INTERP_DEFAULT,
   VOLUME_MAX, VOLUME_MAX_WIDE, VOLUME_STEP_WIDE,
 } from "./constants.js";
 import { Voice } from "./voice.js";
@@ -206,9 +206,11 @@ export class TrackerState {
     this.tickInRow = 0;
     this.samplesIntoTick = 0.0;
     this.firstRow = true;
-    // Always MAX_VOICES so 64-channel mode has slots for every channel.
-    this.voices = new Array(MAX_VOICES);
-    for (let i = 0; i < MAX_VOICES; i++) this.voices[i] = new Voice();
+    // Always MAX_VOICES so 64-channel mode has slots for every channel, plus
+    // the dedicated jam bank above them (JAM_VOICE_BASE…, item 140) — the tick
+    // and mix loops run the whole array, the row loop only the channels.
+    this.voices = new Array(TOTAL_VOICES);
+    for (let i = 0; i < TOTAL_VOICES; i++) this.voices[i] = new Voice();
 
     // Tone-slide mode: 0=linear 4096-TET, 1=Amiga period, 2=linear-frequency (Hz).
     this.toneMode = 0;

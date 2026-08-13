@@ -125,6 +125,18 @@ const SAMPLE_BIN_TOTAL = SAMPLE_BANK_SIZE * SAMPLE_BANK_COUNT;
 // 32-channel playback leaves the upper half inactive.
 const NUM_VOICES = 32;
 const MAX_VOICES = 64;
+
+// Dedicated audition ("jam") voices, above every addressable song channel.
+// JS-only — the Kotlin device jams on a song channel, which is exactly what
+// item 140 is about: an audition on a channel is silenced by that channel's
+// mute, it hijacks whatever the song is playing there, and one channel can only
+// hold one note, so a held chord collapses to its last key. These slots belong
+// to no channel, so the desk never mutes them and the song never writes to
+// them; the row loop stops at channelCount() while the tick and mix loops walk
+// the whole array, so they play but are never played TO.
+const JAM_VOICES = 16;
+const JAM_VOICE_BASE = MAX_VOICES;
+const TOTAL_VOICES = MAX_VOICES + JAM_VOICES;
 const NUM_CUES = 8192;
 const CUE_BYTES = NUM_VOICES * 2;    // 64 bytes / cue (32-ch)
 const CUE_BYTES_64 = MAX_VOICES * 2; // 128 bytes / cue (64-ch)
@@ -3371,9 +3383,11 @@ class TrackerState {
     this.tickInRow = 0;
     this.samplesIntoTick = 0.0;
     this.firstRow = true;
-    // Always MAX_VOICES so 64-channel mode has slots for every channel.
-    this.voices = new Array(MAX_VOICES);
-    for (let i = 0; i < MAX_VOICES; i++) this.voices[i] = new Voice();
+    // Always MAX_VOICES so 64-channel mode has slots for every channel, plus
+    // the dedicated jam bank above them (JAM_VOICE_BASE…, item 140) — the tick
+    // and mix loops run the whole array, the row loop only the channels.
+    this.voices = new Array(TOTAL_VOICES);
+    for (let i = 0; i < TOTAL_VOICES; i++) this.voices[i] = new Voice();
 
     // Tone-slide mode: 0=linear 4096-TET, 1=Amiga period, 2=linear-frequency (Hz).
     this.toneMode = 0;
@@ -7079,6 +7093,7 @@ function generateTrackerAudio(eng, playhead, out) {
 
 
 
+
 // Scratch instrument slot for the raw-sample preview (jamSample). It sits just
 // past the 1024 addressable bank slots so an audition never borrows a real one;
 // every `instruments[voice.instrumentId]` lookup indexes it directly (no & mask).
@@ -7421,10 +7436,14 @@ class TaudEngine {
 
   // ── jam / audition (AudioAdapter.kt:4322-4337) ──
 
+  /** Voice index of jam-bank slot `i` (item 140). Hosts address the bank
+   *  through this rather than by arithmetic, so the base can move. */
+  jamVoice(i) { return JAM_VOICE_BASE + (((i | 0) % JAM_VOICES) + JAM_VOICES) % JAM_VOICES; }
+
   jamNote(ph, vi, note, inst, audition = false) {
     const p = this.playheads[ph];
     const ts = p.trackerState;
-    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    const v = Math.min(Math.max(vi, 0), TOTAL_VOICES - 1);
     note &= 0xffff;
     inst &= 0x3ff;
     triggerMetaOrNote(this, ts, ts.voices[v], v, note, inst, -1);
@@ -7457,7 +7476,7 @@ class TaudEngine {
   jamSample(ph, vi, note, spec) {
     const p = this.playheads[ph];
     const ts = p.trackerState;
-    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    const v = Math.min(Math.max(vi, 0), TOTAL_VOICES - 1);
     note &= 0xffff;
     const inst = this.instruments[AUDITION_SLOT];
     inst.samplePtr = spec.ptr >>> 0;
@@ -7526,6 +7545,27 @@ class TaudEngine {
     for (const v of ts.voices) v.active = false;
     for (const v of ts.backgroundVoices) v.active = false;
     p.jamActive = false;
+  }
+
+  /**
+   * Stop ONE audition voice and everything it spawned (metainstrument layer
+   * children, NNA ghosts) — what a released key of a held chord ends, where
+   * jamStop's "deactivate the world" would take the song's own voices with it.
+   * `vi < 0` stops the whole jam bank, which is the focus-loss panic: still not
+   * a single song voice. JS-only (item 140), no Kotlin counterpart.
+   *
+   * Ramped through the pattern note-cut's own path (note word 0x0002) rather
+   * than dropped on the spot: a key release lands wherever the waveform happens
+   * to be, and that ramp exists because stepping to zero there clicks.
+   */
+  jamStopVoice(ph, vi) {
+    const ts = this.playheads[ph].trackerState;
+    const lo = vi < 0 ? JAM_VOICE_BASE : Math.min(vi, TOTAL_VOICES - 1);
+    const hi = vi < 0 ? TOTAL_VOICES - 1 : lo;
+    for (let v = lo; v <= hi; v++) startCutRamp(ts.voices[v]);
+    for (const bg of ts.backgroundVoices) {
+      if (bg.sourceChannel >= lo && bg.sourceChannel <= hi) startCutRamp(bg);
+    }
   }
 
   // ── per-voice readbacks (delegate 144-325; clamps mirror the delegate) ──
@@ -7659,6 +7699,7 @@ class TaudEngine {
 // Float32Array buffers with the fixed layout below.
 
 
+
 const CMD = Object.freeze({
   INIT: "init",
   UPLOAD_SAMPLE_INST_BLOB: "uploadSampleInstBlob", // {image: ArrayBuffer} (decompressed)
@@ -7689,7 +7730,8 @@ const CMD = Object.freeze({
   RESET_FUNK_STATE: "resetFunkState",              // {ph}
   JAM_NOTE: "jamNote",                             // {ph, voice, note, inst}
   JAM_SAMPLE: "jamSample",                         // {ph, voice, note, spec} — raw pooled-sample preview
-  JAM_STOP: "jamStop",                             // {ph}
+  JAM_STOP: "jamStop",                             // {ph} — every voice (panic)
+  JAM_STOP_VOICE: "jamStopVoice",                  // {ph, voice} — one audition voice; voice < 0 = the whole jam bank
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
   QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
@@ -7730,7 +7772,7 @@ const SNAP_AN_CORR_LR = 14;
 const SNAP_AN_RING_WRITE = 15; // next frame index in the scope ring
 const SNAP_HEADER_SIZE = 16;
 
-// Per-voice block, stride SNAP_VOICE_STRIDE, MAX_VOICES blocks.
+// Per-voice block, stride SNAP_VOICE_STRIDE, SNAP_MAX_VOICES blocks.
 const SNAP_V_ACTIVE = 0;
 const SNAP_V_EFF_VOL = 1;      // 0..1 (getVoiceEffectiveVolume)
 const SNAP_V_EFF_PAN = 2;      // 0..255 (getVoiceEffectivePan)
@@ -7751,7 +7793,11 @@ const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCK
 const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
 const SNAP_VOICE_STRIDE = 18;
 
-const SNAP_MAX_VOICES = 64;
+// Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
+// follow a sounding audition — the Instruments/Samples editors scan the block
+// looking for the voice their preview landed on, and it no longer lands on a
+// song channel.
+const SNAP_MAX_VOICES = TOTAL_VOICES;
 
 // ── Master-strip blocks (item 98), after the voice array ──
 // Per metered channel: peak, true peak (4× oversampled), mean square over the
@@ -7769,7 +7815,7 @@ const SNAP_METER_STRIDE = 4;
 // B-format whatever the metering target is.
 const SNAP_SCOPE_BASE = SNAP_METER_BASE + ANALYSIS_MAX_METERS * SNAP_METER_STRIDE;
 
-const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS; // 17584
+const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS;
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the
@@ -8108,6 +8154,7 @@ function applyAudioCommand(eng, m) {
     case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst, m.audition); return true;
     case CMD.JAM_SAMPLE: eng.jamSample(m.ph, m.voice, m.note, m.spec); return true;
     case CMD.JAM_STOP: eng.jamStop(m.ph); return true;
+    case CMD.JAM_STOP_VOICE: eng.jamStopVoice(m.ph, m.voice); return true;
     case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); return true;
     case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); return true;
     default: return false;
@@ -8139,7 +8186,7 @@ function fillSnapshotInto(eng, playhead, f) {
   f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
   f[SNAP_CHANNEL_COUNT] = eng.channelCount();
   f[SNAP_GLOBAL_VOLUME] = ph.globalVolume;
-  for (let vi = 0; vi < MAX_VOICES; vi++) {
+  for (let vi = 0; vi < SNAP_MAX_VOICES; vi++) {
     const v = ts.voices[vi];
     const o = SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE;
     const active = v.active;

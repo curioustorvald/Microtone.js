@@ -10,6 +10,7 @@ import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
+import { TOTAL_VOICES } from "../../engine/constants.js";
 import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
@@ -163,7 +164,7 @@ export class SamplesView {
     const audio = this.store.audio;
     if (!audio || !this.rowEls) return;
     const livePtrs = new Set();
-    for (let vi = 0; vi < 64; vi++) {
+    for (let vi = 0; vi < TOTAL_VOICES; vi++) {
       if (audio.getVoiceActive(vi)) livePtrs.add(audio.getVoiceSamplePtr(vi));
     }
     for (const r of this.rowEls) r.el.classList.toggle("live", livePtrs.has(r.ptr));
@@ -308,7 +309,7 @@ export class SamplesView {
     // graph's playback cursor style
     if (audio) {
       ctx.fillStyle = C.playCursor;
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi)) continue;
         if (audio.getVoiceSamplePtr(vi) !== s.ptr) continue;
         const pos = audio.getVoiceSamplePos(vi);

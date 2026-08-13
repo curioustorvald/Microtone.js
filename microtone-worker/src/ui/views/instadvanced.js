@@ -14,6 +14,7 @@
 
 import { setInstPatchesOp } from "../../doc/ops.js";
 import { writePatchesBlob, makeInstPatch } from "../../engine/inst.js";
+import { TOTAL_VOICES } from "../../engine/constants.js";
 import { encodeNameTable } from "../../doc/cleanup.js";
 import { envPresent } from "../../engine/envelope.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
@@ -321,7 +322,7 @@ export class AdvancedZoneEditor {
     const liveKeys = new Set();
     const blobs = [];
     if (audio) {
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.slot) {
           this._voicePeak[vi] = null;
           continue;
@@ -951,7 +952,7 @@ export class AdvancedZoneEditor {
     const audio = this.store.audio;
     if (audio && p) {
       ctx.fillStyle = C.live;
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.slot) continue;
         if (audio.getVoiceSamplePtr(vi) !== p.samplePtr ||
             audio.getVoiceSampleLength(vi) !== p.sampleLength) continue;
@@ -1089,7 +1090,7 @@ export class AdvancedZoneEditor {
     const audio = this.store.audio;
     if (audio) {
       ctx.fillStyle = C.playCursor;
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.slot) continue;
         if (audio.getVoiceSamplePtr(vi) !== smp.ptr ||
             audio.getVoiceSampleLength(vi) !== smp.len) continue;
@@ -1166,7 +1167,7 @@ export class AdvancedZoneEditor {
     // frame after, to erase the last hairline)
     let sig = "";
     let any = false;
-    for (let vi = 0; vi < 64; vi++) {
+    for (let vi = 0; vi < TOTAL_VOICES; vi++) {
       if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.slot) continue;
       any = true;
       sig += `${vi}:${audio.getVoiceNote(vi)}:${(audio.getVoiceEffectiveVolume(vi) || 0).toFixed(2)};`;

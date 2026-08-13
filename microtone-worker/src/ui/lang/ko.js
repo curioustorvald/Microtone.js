@@ -1110,7 +1110,7 @@ export default {
   "help.clipboard": "선택 블록 복사 / 잘라내기 / 붙여넣기",
   "help.selClear": "선택 해제 · 선택 블록 비우기",
   "help.blackKeys": "피아노 검은건반",
-  "help.whiteKeys": "피아노 흰건반 (C D E F G A B C D E)",
+  "help.whiteKeys": "피아노 흰건반 (C D E F G A B C D E) — 레코드 모드가 꺼져 있으면 여러 건반을 눌러 화음 연주",
   "help.microKeys": "피아노에 검은건반이 없는 자리의 반올림음 (Bt Et Bt)",
   "help.sentinels": "노트 열: 건반떼기 ===, 음자르기 ^^^, 페이드 ~~~, 빠른페이드 ~^~",
   "help.hexEntry": "16진 입력 (악기 / 음량 / 팬 / 이펙트 인자)",

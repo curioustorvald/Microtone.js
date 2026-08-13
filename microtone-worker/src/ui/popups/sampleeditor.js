@@ -14,8 +14,15 @@ import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
+import { JAM_VOICES, JAM_VOICE_BASE } from "../../engine/constants.js";
 
 const W = 720, H = 200;
+
+// Marker preview goes on the jam bank's top slot (item 140): it is not a song
+// channel, so the preview is neither muted by the desk nor able to cut what the
+// song is playing — and the piano keyboard hands out the bank from slot 0 up,
+// so a held chord has to run all the way round before it reaches this one.
+const AUDITION_VOICE = JAM_VOICE_BASE + JAM_VOICES - 1;
 
 const MARKERS = [
   { key: "playStart", labelKey: "smp.play", lo: 8, colorKey: "accent2" },
@@ -194,7 +201,7 @@ function buildShell(store, { title, info, className, resolve }) {
   const depth0 = store.undo?.undoStack.length ?? 0;
   let auditioning = false;
   const finish = (rollback) => {
-    if (auditioning) store.audio?.jamStop(0);
+    if (auditioning) store.audio?.jamStopVoice(0, AUDITION_VOICE);
     if (rollback && store.undo) {
       while (store.undo.undoStack.length > depth0) store.undo.undo();
     }
@@ -207,7 +214,7 @@ function buildShell(store, { title, info, className, resolve }) {
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(true); });
   dlg.addEventListener("keydown", (e) => e.stopPropagation());
 
-  /** Engine audition on the top channel; toggles play/stop. `getSpec` returns
+  /** Engine audition on the jam bank; toggles play/stop. `getSpec` returns
    *  the EXACT pooled sample to play ({ptr,len,rate,loop...}) at click time, so
    *  the preview follows live marker edits and plays the wave on screen rather
    *  than whatever a metainstrument would map C4 to (bug #65). */
@@ -220,13 +227,13 @@ function buildShell(store, { title, info, className, resolve }) {
       const audio = store.audio;
       if (!audio) return;
       if (auditioning) {
-        audio.jamStop(0);
+        audio.jamStopVoice(0, AUDITION_VOICE);
         setIconLabel(playBtn, "play", t("smp.audition"));
         auditioning = false;
       } else {
         const spec = getSpec?.();
         if (!spec || !(spec.len > 0)) return;
-        audio.jamSample(0, store.doc.channelCount - 1, 0x5000, spec);
+        audio.jamSample(0, AUDITION_VOICE, 0x5000, spec);
         setIconLabel(playBtn, "stop", t("smp.auditionStop"));
         auditioning = true;
       }

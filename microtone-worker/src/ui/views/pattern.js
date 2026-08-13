@@ -708,7 +708,7 @@ class PatternPane {
       this.store.undo.apply(setCellOp(this.store.songIndex, this.patIdx, c.row, action.fields));
     }
     if (action.jamNote !== undefined) {
-      this.jam.hold(e.code, action.jamNote, 0);
+      this.jam.hold(e.code, action.jamNote);
     }
     if (action.advanceNib) this.moveSubCursor(1);
     else if (action.advanceRow) { c.nib = 0; this.moveCursor(this.store.editStep); }

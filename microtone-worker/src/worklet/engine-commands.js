@@ -4,7 +4,7 @@
 // path in one place (no drift between the two hosts). Bundle-safe (plain export
 // forms, unique names) — included in tools/make-worklet-bundle.js.
 
-import { MAX_VOICES, PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
+import { PATTERN_BYTES, PATTERN_BYTES_WIDE } from "../engine/constants.js";
 import {
   CMD,
   SNAP_CUE_POS, SNAP_ROW_INDEX, SNAP_TICK_IN_ROW, SNAP_BPM, SNAP_TICK_RATE,
@@ -14,7 +14,7 @@ import {
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_V_AZIMUTH, SNAP_V_ELEVATION,
-  SNAP_VOICE_STRIDE, SNAP_GLOBAL_VOLUME,
+  SNAP_VOICE_STRIDE, SNAP_MAX_VOICES, SNAP_GLOBAL_VOLUME,
   SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
   SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
   SNAP_METER_BASE, SNAP_METER_STRIDE,
@@ -74,6 +74,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst, m.audition); return true;
     case CMD.JAM_SAMPLE: eng.jamSample(m.ph, m.voice, m.note, m.spec); return true;
     case CMD.JAM_STOP: eng.jamStop(m.ph); return true;
+    case CMD.JAM_STOP_VOICE: eng.jamStopVoice(m.ph, m.voice); return true;
     case CMD.SET_VOICE_MUTE: eng.setVoiceMute(m.ph, m.voice, m.muted); return true;
     case CMD.SET_VOICE_FADER: eng.setVoiceFader(m.ph, m.voice, m.fader); return true;
     default: return false;
@@ -105,7 +106,7 @@ export function fillSnapshotInto(eng, playhead, f) {
   f[SNAP_FLAGS] = (ph.isPlaying ? 1 : 0) | (ph.jamActive ? 2 : 0);
   f[SNAP_CHANNEL_COUNT] = eng.channelCount();
   f[SNAP_GLOBAL_VOLUME] = ph.globalVolume;
-  for (let vi = 0; vi < MAX_VOICES; vi++) {
+  for (let vi = 0; vi < SNAP_MAX_VOICES; vi++) {
     const v = ts.voices[vi];
     const o = SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE;
     const active = v.active;

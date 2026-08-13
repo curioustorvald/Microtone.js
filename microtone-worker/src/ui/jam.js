@@ -1,8 +1,9 @@
-// Jam (audition) keyboard: held piano keys → worklet jamNote on the cursor
-// channel; releasing the last held key stops the audition. Single-voice,
-// last-key-wins (taut's cursor-channel jam model).
+// Jam (audition) keyboard: held piano keys → worklet jamNote on the dedicated
+// jam bank, releasing a key stops the voice it took. Chording where the piano
+// auditions, last-key-wins on one voice where it ENTERS notes (item 140.1).
 
 import { JAM_SEMIS, semiToNoteInTable } from "./edit.js";
+import { JAM_VOICES, JAM_VOICE_BASE } from "../engine/constants.js";
 
 // Hosts that deliver hardware autorepeat as a keyup+keydown PAIR (X11 without
 // detectable autorepeat) give no way to tell the phantom release from a real
@@ -16,13 +17,54 @@ const RELEASE_GRACE_MS = 30;
 export class JamKeyboard {
   constructor(store) {
     this.store = store;
-    this.held = new Set();
+    /** code → jam-bank voice index currently sounding it. */
+    this.held = new Map();
     this.octave = 4;
     this.currentInst = 1;
     /** code → timer id for releases still waiting out the grace window. */
     this.releasing = new Map();
     /** 0 releases synchronously (tests, and hosts known to set `repeat`). */
     this.releaseGraceMs = RELEASE_GRACE_MS;
+    /** Round-robin cursor into the bank, so a re-struck key takes a fresh
+     *  voice instead of the one still ramping out under it. */
+    this._nextSlot = 0;
+  }
+
+  /**
+   * Do held keys CHORD, or does the last one win? They chord wherever the piano
+   * is an audition (item 140.1): the Instruments/Samples editors always, the
+   * grids whenever record is off. Record mode is note ENTRY — one key writes
+   * one cell and steps the cursor — so it stays monophonic on a single voice,
+   * exactly as it was.
+   */
+  get chording() {
+    const view = this.store.view;
+    if (view === "samples" || view === "instruments") return true;
+    return !this.store.record;
+  }
+
+  /**
+   * The bank voice a fresh keypress sounds on. Monophonic mode always answers
+   * the same slot, so a new key retriggers the voice the last one is on (NNA
+   * and all — taut's jam model). Chording hands out the next FREE slot and,
+   * once all 16 are held, steals the oldest.
+   */
+  _takeVoice() {
+    if (!this.chording) return JAM_VOICE_BASE;
+    for (let i = 0; i < JAM_VOICES; i++) {
+      const voice = JAM_VOICE_BASE + this._nextSlot;
+      this._nextSlot = (this._nextSlot + 1) % JAM_VOICES;
+      if (!this._sounding(voice)) return voice;
+    }
+    const voice = JAM_VOICE_BASE + this._nextSlot;
+    this._nextSlot = (this._nextSlot + 1) % JAM_VOICES;
+    return voice;
+  }
+
+  /** Is any still-held key sounding `voice`? (Monophonic mode shares one.) */
+  _sounding(voice) {
+    for (const v of this.held.values()) if (v === voice) return true;
+    return false;
   }
 
   /** keydown → true when consumed (a piano key). */
@@ -34,7 +76,8 @@ export class JamKeyboard {
     // A held key is one note: autorepeat must not retrigger it. `held` is the
     // backstop for hosts that leave `repeat` unset on the synthesised events.
     if (repeat || this.held.has(code)) return true;
-    this.held.add(code);
+    const voice = this._takeVoice();
+    this.held.set(code, voice);
     const audio = this.store.audio;
     if (audio) {
       const note = semiToNoteInTable(this.octave, JAM_SEMIS[code], this.store.pitchPreset);
@@ -42,7 +85,7 @@ export class JamKeyboard {
       // metainstrument to a note it can actually sound (item 51); note-entry
       // views keep the exact pitch.
       const audition = this.store.view === "instruments" || this.store.view === "samples";
-      audio.jamNote(0, this.store.cursor.ch, note, this.currentInst, audition);
+      audio.jamNote(0, voice, note, this.currentInst, audition);
     }
     return true;
   }
@@ -50,22 +93,28 @@ export class JamKeyboard {
   /**
    * Audition a note the grid editor just entered, tracked under its key `code`
    * so record-mode entry obeys the same piano rules as a plain jam: last key
-   * wins, and only the release of the LAST held key stops the voice.
+   * wins, and only the release of the LAST held key stops the voice. It sounds
+   * on the jam bank rather than the edited channel (item 140), so entering into
+   * a muted channel is still audible and never cuts what the song is playing
+   * there.
    */
-  hold(code, note, ch) {
-    if (code in JAM_SEMIS) {
-      this._cancelRelease(code);
-      this.held.add(code);
+  hold(code, note) {
+    let voice = this.held.get(code);
+    if (voice === undefined) {
+      voice = this._takeVoice();
+      if (code in JAM_SEMIS) this.held.set(code, voice);
     }
-    this.store.audio?.jamNote(0, ch, note, this.currentInst);
+    if (code in JAM_SEMIS) this._cancelRelease(code);
+    this.store.audio?.jamNote(0, voice, note, this.currentInst);
   }
 
   up(code) {
     if (!(code in JAM_SEMIS)) return false;
     if (!this.held.has(code)) {
       // Not ours to release (a jam issued by some other path): keep the old
-      // safety net so its voice can never be left sounding.
-      if (this.held.size === 0) this.store.audio?.jamStop(0);
+      // safety net so its voice can never be left sounding. Only the BANK is
+      // cleared — the song's own voices are none of this keyboard's business.
+      if (this.held.size === 0) this.store.audio?.jamStopVoice(0, -1);
       return true;
     }
     this._cancelRelease(code);
@@ -86,12 +135,17 @@ export class JamKeyboard {
     this.releasing.clear();
     const sounding = this.held.size > 0;
     this.held.clear();
-    if (sounding) this.store.audio?.jamStop(0);
+    if (sounding) this.store.audio?.jamStopVoice(0, -1);
   }
 
   _release(code) {
+    const voice = this.held.get(code);
     this.held.delete(code);
-    if (this.held.size === 0) this.store.audio?.jamStop(0);
+    // Monophonic mode has every held key on one voice, so the release only
+    // lands when the last of them goes.
+    if (voice !== undefined && !this._sounding(voice)) {
+      this.store.audio?.jamStopVoice(0, voice);
+    }
   }
 
   _cancelRelease(code) {

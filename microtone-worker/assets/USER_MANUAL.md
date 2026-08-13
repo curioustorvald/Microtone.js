@@ -524,6 +524,12 @@ resets it to the default, and the mouse wheel nudges it.
 turns amber. With record **off** the piano keys only audition ("jam") notes;
 with record **on** they write into the pattern and step down one row.
 
+Auditions play on their own voices, apart from the song's channels. That means
+they are heard even when the channel you are working on is **muted** or soloed
+away, they never cut a note the song is playing, and holding several keys at
+once sounds a **chord** — up to sixteen notes. With record **on** the keyboard
+goes back to one note at a time, because there each key writes a cell.
+
 ### Entering notes
 
 The note column uses two physical piano rows (layout-independent — they follow

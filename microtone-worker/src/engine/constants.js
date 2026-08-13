@@ -120,6 +120,18 @@ export const SAMPLE_BIN_TOTAL = SAMPLE_BANK_SIZE * SAMPLE_BANK_COUNT;
 // 32-channel playback leaves the upper half inactive.
 export const NUM_VOICES = 32;
 export const MAX_VOICES = 64;
+
+// Dedicated audition ("jam") voices, above every addressable song channel.
+// JS-only — the Kotlin device jams on a song channel, which is exactly what
+// item 140 is about: an audition on a channel is silenced by that channel's
+// mute, it hijacks whatever the song is playing there, and one channel can only
+// hold one note, so a held chord collapses to its last key. These slots belong
+// to no channel, so the desk never mutes them and the song never writes to
+// them; the row loop stops at channelCount() while the tick and mix loops walk
+// the whole array, so they play but are never played TO.
+export const JAM_VOICES = 16;
+export const JAM_VOICE_BASE = MAX_VOICES;
+export const TOTAL_VOICES = MAX_VOICES + JAM_VOICES;
 export const NUM_CUES = 8192;
 export const CUE_BYTES = NUM_VOICES * 2;    // 64 bytes / cue (32-ch)
 export const CUE_BYTES_64 = MAX_VOICES * 2; // 128 bytes / cue (64-ch)

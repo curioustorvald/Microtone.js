@@ -677,6 +677,72 @@ test("jamSample previews the exact pooled sample, bypassing metainstrument zones
   assert.equal(v.active, false, "jamStop ends the audition");
 });
 
+// item 140: the jam bank sits above every addressable channel, so the desk
+// cannot mute an audition and one released key of a chord cannot take the
+// others (or the song) with it.
+test("item 140: the jam bank plays through a muted desk and releases per voice", () => {
+  const eng = makeTestEngine();
+  eng.setMasterVolume(0, 255);
+  for (let ch = 0; ch < 64; ch++) eng.setVoiceMute(0, ch, true);
+
+  const v0 = eng.jamVoice(0), v1 = eng.jamVoice(1);
+  assert.ok(v0 >= 64 && v1 >= 64 && v0 !== v1, "bank voices are not channels");
+  eng.jamNote(0, v0, 0x5000, 1);
+  eng.jamNote(0, v1, 0x5100, 1);
+  const ts = eng.playheads[0].trackerState;
+  assert.ok(ts.voices[v0].active && ts.voices[v1].active, "both chord notes sound");
+  assert.equal(ts.voices[v0].fader, 0, "a bank voice carries no desk fader");
+
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  eng.renderChunk(0, out);
+  let peak = 0;
+  for (const b of out) peak = Math.max(peak, Math.abs(b - 128));
+  assert.ok(peak > 8, `audible with every channel muted (peak ${peak})`);
+
+  // One key up: its voice ramps out (a cut ramp, not a step), the other holds.
+  eng.jamStopVoice(0, v0);
+  renderSamples(eng, TRACKER_CHUNK);
+  assert.equal(ts.voices[v0].active, false, "the released key stopped");
+  assert.ok(ts.voices[v1].active, "the held key is still sounding");
+
+  // Focus loss clears the whole bank in one call.
+  eng.jamStopVoice(0, -1);
+  renderSamples(eng, TRACKER_CHUNK);
+  assert.equal(ts.voices[v1].active, false, "the bank is empty");
+});
+
+test("item 140: playback never writes to the jam bank", () => {
+  const eng = makeTestEngine();
+  // Every channel plays a note every row; the bank must stay untouched.
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) {
+    pat[r * 8] = 0x00; pat[r * 8 + 1] = 0x50; pat[r * 8 + 2] = 1;
+    pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0; cue[ch * 2 + 1] = 0; }
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 125); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.play(0);
+  renderSamples(eng, 8192);
+  const ts = eng.playheads[0].trackerState;
+  assert.ok(ts.voices[0].active, "the song is playing");
+  for (let v = 64; v < ts.voices.length; v++) {
+    assert.equal(ts.voices[v].active, false, `bank voice ${v} untouched by playback`);
+  }
+
+  // …and jamming ALONG with the song neither steals a channel nor — on the
+  // release — cuts it, which is what the old whole-playhead jamStop did.
+  const jv = eng.jamVoice(0);
+  eng.jamNote(0, jv, 0x5000, 1);
+  eng.jamStopVoice(0, jv);
+  renderSamples(eng, TRACKER_CHUNK);
+  for (let ch = 0; ch < 32; ch++) {
+    assert.ok(ts.voices[ch].active, `channel ${ch} still sounding after a jam release`);
+  }
+});
+
 test("item 72: a buildMetaRecord metainstrument sounds both layers", () => {
   const eng = makeTestEngine();
   // A second sounding instrument in slot 2 (same shape as slot 1's ramp).

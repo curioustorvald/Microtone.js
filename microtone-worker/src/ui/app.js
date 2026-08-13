@@ -1181,10 +1181,10 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   // Mirror the keydown guards (chords, focused inputs/dialogs) so a keyup
   // whose keydown never reached jam.down/hold can't hit jam.up's safety net —
-  // that net calls audio.jamStop when nothing is held, which silences EVERY
-  // active voice on the playhead. Without this, releasing the letter of any
-  // Ctrl/Meta chord that doubles as a piano key (S = Save, A = Select All,
-  // G = Goto, Y = Redo) cut all currently playing notes.
+  // that net clears the whole jam bank when nothing is held, which would cut
+  // an audition the Instruments/Samples view started. Releasing the letter of
+  // any Ctrl/Meta chord that doubles as a piano key (S = Save, A = Select All,
+  // G = Goto, Y = Redo) must not count as a piano release.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (isTypingTarget(e.target) || e.target.closest?.("dialog")) return;
   jam.up(e.code);

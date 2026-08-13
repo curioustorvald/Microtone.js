@@ -8,6 +8,7 @@
 // Float32Array buffers with the fixed layout below.
 
 import { ANALYSIS_MAX_METERS, SCOPE_FRAMES, SCOPE_CHANNELS } from "../engine/analysis.js";
+import { TOTAL_VOICES } from "../engine/constants.js";
 
 export const CMD = Object.freeze({
   INIT: "init",
@@ -39,7 +40,8 @@ export const CMD = Object.freeze({
   RESET_FUNK_STATE: "resetFunkState",              // {ph}
   JAM_NOTE: "jamNote",                             // {ph, voice, note, inst}
   JAM_SAMPLE: "jamSample",                         // {ph, voice, note, spec} — raw pooled-sample preview
-  JAM_STOP: "jamStop",                             // {ph}
+  JAM_STOP: "jamStop",                             // {ph} — every voice (panic)
+  JAM_STOP_VOICE: "jamStopVoice",                  // {ph, voice} — one audition voice; voice < 0 = the whole jam bank
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
   QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
@@ -80,7 +82,7 @@ export const SNAP_AN_CORR_LR = 14;
 export const SNAP_AN_RING_WRITE = 15; // next frame index in the scope ring
 export const SNAP_HEADER_SIZE = 16;
 
-// Per-voice block, stride SNAP_VOICE_STRIDE, MAX_VOICES blocks.
+// Per-voice block, stride SNAP_VOICE_STRIDE, SNAP_MAX_VOICES blocks.
 export const SNAP_V_ACTIVE = 0;
 export const SNAP_V_EFF_VOL = 1;      // 0..1 (getVoiceEffectiveVolume)
 export const SNAP_V_EFF_PAN = 2;      // 0..255 (getVoiceEffectivePan)
@@ -101,7 +103,11 @@ export const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front
 export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
 export const SNAP_VOICE_STRIDE = 18;
 
-export const SNAP_MAX_VOICES = 64;
+// Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
+// follow a sounding audition — the Instruments/Samples editors scan the block
+// looking for the voice their preview landed on, and it no longer lands on a
+// song channel.
+export const SNAP_MAX_VOICES = TOTAL_VOICES;
 
 // ── Master-strip blocks (item 98), after the voice array ──
 // Per metered channel: peak, true peak (4× oversampled), mean square over the
@@ -119,7 +125,7 @@ export const SNAP_METER_STRIDE = 4;
 // B-format whatever the metering target is.
 export const SNAP_SCOPE_BASE = SNAP_METER_BASE + ANALYSIS_MAX_METERS * SNAP_METER_STRIDE;
 
-export const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS; // 17584
+export const SNAP_FLOATS = SNAP_SCOPE_BASE + SCOPE_FRAMES * SCOPE_CHANNELS;
 
 // SAB fast path (crossOriginIsolated deploys): one shared buffer holding the
 // float snapshot region plus a trailing Int32 interrupt-latch cell that the

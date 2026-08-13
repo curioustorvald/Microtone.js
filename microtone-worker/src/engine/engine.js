@@ -12,6 +12,7 @@
 
 import {
   SAMPLE_BIN_TOTAL, NUM_PATTERNS, NUM_CUES, NUM_VOICES, MAX_VOICES,
+  JAM_VOICES, JAM_VOICE_BASE, TOTAL_VOICES,
   CUE_BYTES, CUE_BYTES_64, TRACKER_CHUNK,
   CELL_BYTES, CELL_BYTES_WIDE, PATTERN_BYTES, PATTERN_BYTES_WIDE,
 } from "./constants.js";
@@ -22,6 +23,7 @@ import { makeXorshift32 } from "./rng.js";
 import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth, voiceElevation } from "./spatial.js";
 import { generateTrackerAudio } from "./mixer.js";
 import { triggerMetaOrNote, triggerNote } from "./trigger.js";
+import { startCutRamp } from "./sampler.js";
 import { reconstructDittoState } from "./row.js";
 
 // Scratch instrument slot for the raw-sample preview (jamSample). It sits just
@@ -366,10 +368,14 @@ export class TaudEngine {
 
   // ── jam / audition (AudioAdapter.kt:4322-4337) ──
 
+  /** Voice index of jam-bank slot `i` (item 140). Hosts address the bank
+   *  through this rather than by arithmetic, so the base can move. */
+  jamVoice(i) { return JAM_VOICE_BASE + (((i | 0) % JAM_VOICES) + JAM_VOICES) % JAM_VOICES; }
+
   jamNote(ph, vi, note, inst, audition = false) {
     const p = this.playheads[ph];
     const ts = p.trackerState;
-    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    const v = Math.min(Math.max(vi, 0), TOTAL_VOICES - 1);
     note &= 0xffff;
     inst &= 0x3ff;
     triggerMetaOrNote(this, ts, ts.voices[v], v, note, inst, -1);
@@ -402,7 +408,7 @@ export class TaudEngine {
   jamSample(ph, vi, note, spec) {
     const p = this.playheads[ph];
     const ts = p.trackerState;
-    const v = Math.min(Math.max(vi, 0), MAX_VOICES - 1);
+    const v = Math.min(Math.max(vi, 0), TOTAL_VOICES - 1);
     note &= 0xffff;
     const inst = this.instruments[AUDITION_SLOT];
     inst.samplePtr = spec.ptr >>> 0;
@@ -471,6 +477,27 @@ export class TaudEngine {
     for (const v of ts.voices) v.active = false;
     for (const v of ts.backgroundVoices) v.active = false;
     p.jamActive = false;
+  }
+
+  /**
+   * Stop ONE audition voice and everything it spawned (metainstrument layer
+   * children, NNA ghosts) — what a released key of a held chord ends, where
+   * jamStop's "deactivate the world" would take the song's own voices with it.
+   * `vi < 0` stops the whole jam bank, which is the focus-loss panic: still not
+   * a single song voice. JS-only (item 140), no Kotlin counterpart.
+   *
+   * Ramped through the pattern note-cut's own path (note word 0x0002) rather
+   * than dropped on the spot: a key release lands wherever the waveform happens
+   * to be, and that ramp exists because stepping to zero there clicks.
+   */
+  jamStopVoice(ph, vi) {
+    const ts = this.playheads[ph].trackerState;
+    const lo = vi < 0 ? JAM_VOICE_BASE : Math.min(vi, TOTAL_VOICES - 1);
+    const hi = vi < 0 ? TOTAL_VOICES - 1 : lo;
+    for (let v = lo; v <= hi; v++) startCutRamp(ts.voices[v]);
+    for (const bg of ts.backgroundVoices) {
+      if (bg.sourceChannel >= lo && bg.sourceChannel <= hi) startCutRamp(bg);
+    }
   }
 
   // ── per-voice readbacks (delegate 144-325; clamps mirror the delegate) ──

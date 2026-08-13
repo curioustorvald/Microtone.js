@@ -22,6 +22,7 @@ import { planDuplicateInstruments } from "../../doc/bankmerge.js";
 import { showModal } from "../widgets/modal.js";
 import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
+import { TOTAL_VOICES } from "../../engine/constants.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
@@ -232,7 +233,7 @@ export class InstrumentsView {
     const audio = this.store.audio;
     if (!audio || !this.rowEls) return;
     const liveSlots = new Set();
-    for (let vi = 0; vi < 64; vi++) {
+    for (let vi = 0; vi < TOTAL_VOICES; vi++) {
       if (audio.getVoiceActive(vi)) liveSlots.add(audio.getVoiceInstrument(vi));
     }
     for (const r of this.rowEls) r.el.classList.toggle("live", liveSlots.has(r.slot));
@@ -1168,7 +1169,7 @@ export class InstrumentsView {
     const audio = this.store.audio;
     if (audio && tabDef.liveIdx) {
       ctx.fillStyle = C.live;
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi) || audio.getVoiceInstrument(vi) !== this.selected) continue;
         const idx = audio[tabDef.liveIdx](vi);
         const t = audio[tabDef.liveTime](vi);
@@ -1285,7 +1286,7 @@ export class InstrumentsView {
     const audio = this.store.audio;
     const liveKeys = new Set();
     if (audio) {
-      for (let vi = 0; vi < 64; vi++) {
+      for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (audio.getVoiceActive(vi) && audio.getVoiceInstrument(vi) === this.selected) {
           liveKeys.add(`${audio.getVoiceSamplePtr(vi)}:${audio.getVoiceSampleLength(vi)}`);
         }

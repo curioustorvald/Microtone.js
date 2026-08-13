@@ -1070,7 +1070,7 @@ export class TimelineView {
       store.undo.apply(setCellOp(store.songIndex, target.pat, target.rowInCue, action.fields));
     }
     if (action.jamNote !== undefined) {
-      jam.hold(e.code, action.jamNote, c.ch);
+      jam.hold(e.code, action.jamNote);
     }
     if (action.advanceNib) {
       this.moveSubCursor(1);

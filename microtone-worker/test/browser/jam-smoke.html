@@ -13,9 +13,25 @@
   <script type="module">
     // Item 26: the engine is warmed up on load; after a gesture resume, note
     // jamming must sound WITHOUT the song ever being played.
+    // Item 140: it sounds on the dedicated jam bank, so a MUTED cursor channel
+    // still auditions, and held keys chord with per-key releases.
+    import { JAM_VOICES, JAM_VOICE_BASE } from "../../src/engine/constants.js";
     const out = [];
     const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    /** Bank voices sounding right now, as seen by the snapshot. */
+    const bankVoices = (audio) => {
+      const live = [];
+      for (let i = 0; i < JAM_VOICES; i++) {
+        if (audio.getVoiceActive(JAM_VOICE_BASE + i)) live.push(JAM_VOICE_BASE + i);
+      }
+      return live;
+    };
+    /** Poll until `fn()` is truthy (snapshots land every ~16 ms). */
+    const until = async (fn, tries = 40) => {
+      for (let i = 0; i < tries; i++) { const v = fn(); if (v && v.length !== 0) return v; await sleep(25); }
+      return fn();
+    };
     (async () => {
       try {
         const frame = document.getElementById("app");
@@ -31,22 +47,55 @@
         // Resume the eagerly-warmed engine (autoplay flag lets this run headless).
         await win.__microtoneEnsureAudio();
         for (let i = 0; i < 50 && !store.audio?.running; i++) await sleep(50);
-        log(`audio running (pre-Play): ${store.audio?.running}`);
-        const notPlaying = !store.audio.isPlaying();
+        const audio = store.audio;
+        log(`audio running (pre-Play): ${audio?.running}`);
+        const notPlaying = !audio.isPlaying();
 
-        // Jam a note on channel 0 WITHOUT pressing Play.
         store.record = false;
+        store.view = "timeline";
         store.cursor = { row: 0, ch: 0, sub: 0, nib: 0 };
         jam.currentInst = store.doc.usedInstrumentSlots()[0] ?? 1;
-        jam.down("KeyA", false); // C on the cursor channel
-        // let a few snapshots arrive
-        let active = false;
-        for (let i = 0; i < 40; i++) { await sleep(25); if (store.audio.getVoiceActive(0)) { active = true; break; } }
-        const stillNotPlaying = !store.audio.isPlaying();
-        jam.up("KeyA");
-        log(`voice active from jam (no Play): ${active} · transport idle: ${notPlaying && stillNotPlaying}`);
 
-        const pass = store.audio.running && notPlaying && active && stillNotPlaying;
+        // 1 — jam WITHOUT pressing Play, on a MUTED cursor channel (item 140).
+        store.setVoiceMute(0, true);
+        jam.down("KeyA", false);
+        const live1 = await until(() => bankVoices(audio));
+        const stillNotPlaying = !audio.isPlaying();
+        const chan0Idle = !audio.getVoiceActive(0);
+        log(`muted-channel jam sounds on the bank: ${live1.length === 1} (${live1}) · channel 0 untouched: ${chan0Idle}`);
+        log(`transport idle throughout: ${notPlaying && stillNotPlaying}`);
+
+        // 2 — chord: three held keys, three bank voices (item 140.1).
+        jam.down("KeyS", false);
+        jam.down("KeyD", false);
+        const live3 = await until(() => { const v = bankVoices(audio); return v.length >= 3 ? v : null; });
+        log(`three held keys → ${live3?.length ?? 0} sounding bank voices`);
+
+        // 3 — releasing ONE key leaves the others sounding.
+        jam.releaseGraceMs = 0;
+        jam.up("KeyS");
+        await sleep(120);
+        const live2 = bankVoices(audio);
+        log(`after one release: ${live2.length} still sounding`);
+
+        // 4 — record mode is monophonic: two keys, one voice.
+        jam.up("KeyA"); jam.up("KeyD");
+        await sleep(150);
+        store.record = true;
+        jam.down("KeyA", false);
+        jam.down("KeyS", false);
+        const mono = await until(() => bankVoices(audio));
+        log(`record mode → ${mono.length} sounding voice (mono entry)`);
+        jam.allUp();
+        store.record = false;
+        store.setVoiceMute(0, false);
+        await sleep(150);
+        const quiet = bankVoices(audio).length === 0;
+        log(`bank silent after allUp: ${quiet}`);
+
+        const pass = audio.running && notPlaying && stillNotPlaying &&
+          live1.length === 1 && chan0Idle && live3?.length === 3 && live2.length === 2 &&
+          mono.length === 1 && quiet;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
