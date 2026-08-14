@@ -90,6 +90,25 @@ const VOL_RAMP_SEC = 0.002;
 let ATTACK_RAMP_SAMPLES = 32;
 const ATTACK_RAMP_SEC = 32 / 48000;
 
+// Pitch-glide budget (item 144). The per-sample pitch glide spreads a tick's
+// pitch change across the tick, which is what a CONTROL move wants — a vibrato
+// or an ordinary slide moves a cent or two per tick and the spreading is what
+// removes the staircase. An EVENT does not: an arpeggio step or a fast tone
+// portamento arriving is meant to be at its new pitch NOW, and a tick-long bend
+// across it is heard as a bend. So the glide's budget is (interval × time), not
+// time: a move this wide is given the whole tick, and anything wider gets
+// proportionally less of one (sampler.js pitchGlideSamples), never below the
+// attack ramp's ~⅔ ms. The figure is 25 cents — an eighth of a 12-TET semitone,
+// wider than any vibrato or slide moves between ticks, narrower than the
+// smallest interval a listener would call a note change.
+//
+// It is stated as the frequency RATIO's excess over unity, 2^(25/1200) − 1,
+// written out rather than computed: the glide's length has to agree bit-for-bit
+// across implementations, and the spec's rule against logarithm round trips
+// (TAUD_ENGINE_SPEC.md §3.3) applies here too. Comparing ratios keeps the whole
+// decision on IEEE divides, which do agree everywhere.
+const PITCH_GLIDE_FULL_RATIO = 0.014545334937523746;
+
 // Modules whose load-time tables are rate-derived (tables.js's Amiga filter
 // coefficients) register here so setSamplingRate can rebuild them. Coefficients
 // computed per call — the IT/SF2 voice filters — need no registration.
@@ -4252,10 +4271,46 @@ function startFastFade(voice, playhead) {
 }
 
 /**
- * Per-sample pitch glide toward the tick's playbackRate, spread over one tick
- * (`spt` samples) so the control signal is INTERPOLATED rather than stepped.
- * A fresh trigger snaps: a new note starts at its own pitch, it does not bend
- * up from whatever the channel was last playing.
+ * How many samples the glide to a new pitch may take, out of a tick's `spt`
+ * (item 144).
+ *
+ * A whole tick is right for a CONTROL move and wrong for an EVENT. A vibrato or
+ * an ordinary slide walks the pitch by a cent or two per tick, and spreading
+ * that across the tick is the entire point of the glide; an arpeggio step, a
+ * fast tone portamento arriving, a big pitch slide are somewhere else NOW, and
+ * bending 2 semitones over a tick's 20 ms is heard as a bend — three of those
+ * and a row of quick portamento notes has become one continuous swoop.
+ *
+ * The two are told apart by how far the pitch has to move, on a budget of
+ * (interval × time): PITCH_GLIDE_FULL_RATIO (25 cents) gets the whole tick,
+ * twice that gets half of one, and so on down to the attack ramp's ~⅔ ms — long
+ * enough to round off the corner, far too short to hear as pitch movement.
+ * Being a curve rather than a threshold, a slide that speeds up shortens its
+ * glide smoothly instead of snapping between two behaviours mid-slide.
+ *
+ * The interval is the frequency ratio's excess over unity, taken the way up
+ * whichever way it goes, so that a fall and the rise back cost the same.
+ */
+function pitchGlideSamples(cur, target, spt) {
+  const tick = spt >= 1 ? Math.round(spt) : 1;
+  // Both rates are positive by construction (computePlaybackRate is a product of
+  // positive terms); a zero would only come from a malformed sample header, and
+  // there is no ratio to glide along then.
+  if (!(cur > 0.0) || !(target > 0.0)) return 1;
+  const up = target / cur;
+  const down = cur / target;
+  const interval = (up > down ? up : down) - 1.0;
+  if (interval <= PITCH_GLIDE_FULL_RATIO) return tick;
+  const n = Math.round((tick * PITCH_GLIDE_FULL_RATIO) / interval);
+  const floor = ATTACK_RAMP_SAMPLES < tick ? ATTACK_RAMP_SAMPLES : tick;
+  return n < floor ? floor : n;
+}
+
+/**
+ * Per-sample pitch glide toward the tick's playbackRate, so the control signal
+ * is INTERPOLATED rather than stepped. A fresh trigger snaps: a new note starts
+ * at its own pitch, it does not bend up from whatever the channel was last
+ * playing.
  */
 function advancePitchRamp(voice, spt) {
   const target = voice.playbackRate;
@@ -4271,10 +4326,16 @@ function advancePitchRamp(voice, spt) {
     voice.pitchRampSamples--;
     if (voice.pitchRampSamples === 0) voice.currentPlaybackRate = target;
   } else if (voice.currentPlaybackRate !== target) {
-    const n = spt >= 1 ? Math.round(spt) : 1;
-    voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
-    voice.pitchRampSamples = n - 1;
-    voice.currentPlaybackRate += voice.pitchRampStep;
+    const n = pitchGlideSamples(voice.currentPlaybackRate, target, spt);
+    if (n <= 1) {
+      voice.currentPlaybackRate = target;
+      voice.pitchRampSamples = 0;
+      voice.pitchRampStep = 0.0;
+    } else {
+      voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
+      voice.pitchRampSamples = n - 1;
+      voice.currentPlaybackRate += voice.pitchRampStep;
+    }
   }
 }
 

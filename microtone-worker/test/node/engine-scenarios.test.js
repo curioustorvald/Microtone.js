@@ -14,6 +14,7 @@ import {
   envPoint, buildMetaRecord, makeMetaLayer, makeInstPatch, writePatchesBlob,
 } from "../../src/engine/inst.js";
 import { ghostVoice } from "../../src/engine/trigger.js";
+import { advancePitchRamp } from "../../src/engine/sampler.js";
 import { applyFilterParamEffect } from "../../src/engine/effects.js";
 import {
   advancePfRole, seedPfRole, advanceEnvelope, pfIdxBox, pfTimeBox, applyKeyLift, forceKeyLift,
@@ -280,6 +281,103 @@ test("pitch is interpolated per sample, not held for a tick (item 141)", () => {
   let jump = 0;
   for (let i = 1; i < rate.length; i++) jump = Math.max(jump, Math.abs(rate[i] - rate[i - 1]));
   assert.ok(jump < span * 0.25, `biggest jump is ${((100 * jump) / span).toFixed(0)}% of the excursion`);
+});
+
+test("the pitch glide spends (interval × time), not time (item 144)", () => {
+  // How many calls it takes the glide to arrive, driving the ramp directly.
+  const glideSamples = (cents, spt = 640) => {
+    const v = new Voice();
+    v.snapPlaybackRate = false;
+    v.currentPlaybackRate = 1.0;
+    v.playbackRate = 2 ** (cents / 1200);
+    let n = 0;
+    while (v.currentPlaybackRate !== v.playbackRate && n < spt * 4) { advancePitchRamp(v, spt); n++; }
+    return n;
+  };
+  // A control-sized move — vibrato, an ordinary slide — still gets the whole tick.
+  assert.equal(glideSamples(1), 640);
+  assert.equal(glideSamples(25), 640);
+  // Past the budget the glide shortens in proportion, so an EVENT lands at once:
+  // a 2-semitone portamento arrival in 2.4 ms, an arpeggio's third in 1.1 ms.
+  assert.equal(glideSamples(200), 76);
+  assert.equal(glideSamples(400), 36);
+  // …down to the attack ramp's floor (21 samples at this 32 kHz), never to zero:
+  // the corner still gets rounded off however wide the jump.
+  assert.equal(glideSamples(4800), 21);
+  assert.equal(glideSamples(-4800), 21);
+  // A fall costs what the rise back up costs — the interval is read the way up
+  // whichever way it goes.
+  assert.equal(glideSamples(-200), glideSamples(200));
+  // Rate-independent in TIME: half the tick, half the samples, same milliseconds.
+  assert.equal(glideSamples(200, 320), 38);
+});
+
+test("a fast tone portamento ARRIVES; it does not bend across the tick (item 144)", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;
+  for (let r = 1; r < 64; r++) {            // whole tones up, each on G $1400
+    const note = 0x5000 + r * 683;
+    pat[r * 8] = note & 0xff; pat[r * 8 + 1] = (note >> 8) & 0xff;
+    pat[r * 8 + 5] = 0x10; pat[r * 8 + 6] = 0x00; pat[r * 8 + 7] = 0x14;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  // 137 BPM makes a tick 583.94 samples — NOT a whole number of 128-sample
+  // chunks, so the probes below walk through the tick instead of landing on the
+  // same phase of it every time, and count time in transit fairly.
+  eng.setBPM(0, 137); eng.setTickRate(0, 3); eng.setMasterVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  let inTransit = 0, moved = 0;
+  const probes = 300;
+  for (let i = 0; i < probes; i++) {
+    eng.renderChunk(0, out);
+    if (Math.abs(1200 * Math.log2(v.currentPlaybackRate / v.playbackRate)) > 5) inTransit++;
+    moved = Math.max(moved, 1200 * Math.log2(v.playbackRate));
+  }
+  assert.ok(moved > 1000, "the portamento climbed at all");
+  // The arrival is one whole tone, so it may glide for 25/200 of a tick out of
+  // the three a row lasts — 4% of the time. A tick-long glide is 33%.
+  const share = (100 * inTransit) / probes;
+  assert.ok(share < 15, `pitch is in transit ${share.toFixed(0)}% of the row — that is a bend`);
+});
+
+test("arpeggio steps between pitches instead of wobbling between them (item 144)", () => {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+  pat[0] = 0x00; pat[1] = 0x50; pat[2] = 1;
+  for (let r = 0; r < 64; r++) {            // J $0509 — the major-chord arpeggio
+    pat[r * 8 + 5] = 0x13; pat[r * 8 + 6] = 0x09; pat[r * 8 + 7] = 0x05;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  cue[0] = 0x00; cue[1] = 0x00;
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 137); eng.setTickRate(0, 6); eng.setMasterVolume(0, 255); // see above
+  eng.setCuePosition(0, 0); eng.play(0);
+  const v = eng.playheads[0].trackerState.voices[0];
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const seen = new Set();
+  let inTransit = 0;
+  const probes = 300;
+  for (let i = 0; i < probes; i++) {
+    eng.renderChunk(0, out);
+    if (Math.abs(1200 * Math.log2(v.currentPlaybackRate / v.playbackRate)) > 5) inTransit++;
+    seen.add((1200 * Math.log2(v.playbackRate)).toFixed(0));
+  }
+  assert.equal(seen.size, 3, "the arpeggio visited its three pitches");
+  // A new pitch EVERY tick, so a tick-long glide never settles: 100% in transit,
+  // which is the wobble. 25 cents' worth of a ~400-cent step is 6%.
+  const share = (100 * inTransit) / probes;
+  assert.ok(share < 15, `pitch is in transit ${share.toFixed(0)}% of the time — that is a wobble`);
 });
 
 test("S$Dxny: a zero $y schedules no action at all", () => {

@@ -10,6 +10,7 @@ import {
   SAMPLING_RATE, MIDDLE_C, SAMPLE_BIN_TOTAL,
   INTERP_DEFAULT, INTERP_NONE, INTERP_A500, INTERP_A1200, INTERP_SNES, INTERP_NES_DPCM,
   SINC_WIDTH, RAMP_OUT_SAMPLES, ATTACK_RAMP_SAMPLES, FAST_FADE_SEC, VOL_RAMP_SAMPLES,
+  PITCH_GLIDE_FULL_RATIO,
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
 import { modTouches } from "./samplemod.js";
@@ -258,10 +259,46 @@ export function startFastFade(voice, playhead) {
 }
 
 /**
- * Per-sample pitch glide toward the tick's playbackRate, spread over one tick
- * (`spt` samples) so the control signal is INTERPOLATED rather than stepped.
- * A fresh trigger snaps: a new note starts at its own pitch, it does not bend
- * up from whatever the channel was last playing.
+ * How many samples the glide to a new pitch may take, out of a tick's `spt`
+ * (item 144).
+ *
+ * A whole tick is right for a CONTROL move and wrong for an EVENT. A vibrato or
+ * an ordinary slide walks the pitch by a cent or two per tick, and spreading
+ * that across the tick is the entire point of the glide; an arpeggio step, a
+ * fast tone portamento arriving, a big pitch slide are somewhere else NOW, and
+ * bending 2 semitones over a tick's 20 ms is heard as a bend — three of those
+ * and a row of quick portamento notes has become one continuous swoop.
+ *
+ * The two are told apart by how far the pitch has to move, on a budget of
+ * (interval × time): PITCH_GLIDE_FULL_RATIO (25 cents) gets the whole tick,
+ * twice that gets half of one, and so on down to the attack ramp's ~⅔ ms — long
+ * enough to round off the corner, far too short to hear as pitch movement.
+ * Being a curve rather than a threshold, a slide that speeds up shortens its
+ * glide smoothly instead of snapping between two behaviours mid-slide.
+ *
+ * The interval is the frequency ratio's excess over unity, taken the way up
+ * whichever way it goes, so that a fall and the rise back cost the same.
+ */
+function pitchGlideSamples(cur, target, spt) {
+  const tick = spt >= 1 ? Math.round(spt) : 1;
+  // Both rates are positive by construction (computePlaybackRate is a product of
+  // positive terms); a zero would only come from a malformed sample header, and
+  // there is no ratio to glide along then.
+  if (!(cur > 0.0) || !(target > 0.0)) return 1;
+  const up = target / cur;
+  const down = cur / target;
+  const interval = (up > down ? up : down) - 1.0;
+  if (interval <= PITCH_GLIDE_FULL_RATIO) return tick;
+  const n = Math.round((tick * PITCH_GLIDE_FULL_RATIO) / interval);
+  const floor = ATTACK_RAMP_SAMPLES < tick ? ATTACK_RAMP_SAMPLES : tick;
+  return n < floor ? floor : n;
+}
+
+/**
+ * Per-sample pitch glide toward the tick's playbackRate, so the control signal
+ * is INTERPOLATED rather than stepped. A fresh trigger snaps: a new note starts
+ * at its own pitch, it does not bend up from whatever the channel was last
+ * playing.
  */
 export function advancePitchRamp(voice, spt) {
   const target = voice.playbackRate;
@@ -277,10 +314,16 @@ export function advancePitchRamp(voice, spt) {
     voice.pitchRampSamples--;
     if (voice.pitchRampSamples === 0) voice.currentPlaybackRate = target;
   } else if (voice.currentPlaybackRate !== target) {
-    const n = spt >= 1 ? Math.round(spt) : 1;
-    voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
-    voice.pitchRampSamples = n - 1;
-    voice.currentPlaybackRate += voice.pitchRampStep;
+    const n = pitchGlideSamples(voice.currentPlaybackRate, target, spt);
+    if (n <= 1) {
+      voice.currentPlaybackRate = target;
+      voice.pitchRampSamples = 0;
+      voice.pitchRampStep = 0.0;
+    } else {
+      voice.pitchRampStep = (target - voice.currentPlaybackRate) / n;
+      voice.pitchRampSamples = n - 1;
+      voice.currentPlaybackRate += voice.pitchRampStep;
+    }
   }
 }
 

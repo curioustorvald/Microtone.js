@@ -44,6 +44,7 @@ A host whose output is at another rate **MAY** run the engine at that rate inste
 | Ramp-out on sample end/cut ([§12](#12-output-stage)) | 8 ms — 256 samples at 32 kHz |
 | Volume-change ramp ([§12](#12-output-stage)) | 2 ms — 64 samples at 32 kHz |
 | Attack ramp-in on fresh trigger ([§8.6](#8-6-the-attack-ramp)) | ~⅔ ms — 21 samples at 32 kHz |
+| Pitch glide ([§8.7](#8-7-the-pitch-glide)) | One tick, shortened by the interval; floor is the attack ramp |
 | Voice filter coefficients ([§9](#9-filters)) | `rate` in §9's formulae is the running rate, so the cutoff clamp rises with it |
 | Amiga LPF / LED coefficients ([§10.4](#10-4-the-post-mix-amiga-chain)) | Recomputed at the running rate, so both corners stay at their analogue frequencies (4420.971 Hz, 3090.533 Hz) |
 
@@ -119,6 +120,8 @@ playback_rate = (sampling_rate ÷ rate)
 ```
 
 where `sampling_rate` and `detune` come from the voice's **active sample** — the base instrument record, or the Ixmp patch this trigger resolved to ([§5.4](#5-4-patch-resolution)). `note` is the final per-tick pitch after slides, arpeggio, vibrato and the pitch envelope.
+
+Because that pitch is a per-*tick* quantity and the sample position advances per *sample*, the rate computed here is a **target**: what the sampler actually steps by glides toward it ([§8.7](#8-7-the-pitch-glide)).
 
 ### 3.3 Song tuning
 
@@ -560,6 +563,25 @@ ramp_gain = 0.5 − 0.5 × cos(π × i ÷ n)
 
 A fresh trigger always re-arms the ramp at length `n`, even when the previous note's own attack ramp on that voice was still counting down — a trigger is a hard restart, so there is no "already ramping" case to no-op against, unlike the sample-end ramp. An NNA ghost spawned while its source voice's attack ramp is still running **MUST** inherit the remaining count rather than restart it or skip straight to unity gain: either alternative reproduces, at the hand-off, the exact click this ramp exists to prevent.
 
+### 8.7 The pitch glide
+
+Everything that moves a voice's pitch — slides, tone portamento, arpeggio, both vibratos, the pitch envelope — is evaluated **once per tick**, while the sample position advances **every sample**. Stepping `playback_rate` at the tick boundary therefore turns a smooth modulation into a staircase of 50 steps a second, which is audible on a sustained note as a rasp riding the vibrato. The engine keeps two rates instead: the tick writes a **target**, and the sampler steps by a **current** rate that glides toward it.
+
+The glide is linear in playback rate and lasts `n` output samples, where
+
+```
+interval = max(target ÷ current, current ÷ target) − 1
+n        = samples_per_tick                                if interval ≤ 2^(25/1200) − 1
+           clamp(samples_per_tick × (2^(25/1200) − 1) ÷ interval, attack_ramp, samples_per_tick)   otherwise
+```
+
+The budget is **(interval × time)**, not time. A control move — a vibrato, an ordinary slide — travels a cent or two between ticks and is given the whole tick, which is the entire point of the glide. An **event** is not: an arpeggio step, a fast tone portamento arriving, a wide pitch slide are meant to be at the new pitch *now*, and bending two semitones across a tick's 20 ms is heard as a bend rather than a note change — a row of quick portamento notes becomes one continuous swoop. So a wider move gets a proportionally shorter glide, floored at the attack ramp's ~⅔ ms: enough to round the corner off, far too short to hear as pitch movement. Because it is a curve and not a threshold, a slide that speeds up shortens its glide smoothly rather than snapping between two behaviours mid-slide.
+
+Two requirements:
+
+- A **fresh trigger snaps** the current rate to the target: a new note starts at its own pitch and never bends up from whatever the channel last played. An NNA ghost inherits the source voice's rates but likewise begins at its target — an unfinished glide is not continued across the hand-off, and the gap it lands over is at most the budget above.
+- The interval **MUST** be compared as a ratio, as written above, and not by converting to cents. The comparison decides a sample count, so a last-ulp disagreement in a logarithm is a rendering difference; §3.3's rule against logarithm round trips applies here for the same reason.
+
 ## 9. Filters
 
 Two topologies, both mandatory. Which one a voice uses is decided by its instrument's (or patch's) filter mode.
@@ -858,5 +880,6 @@ An implementation conforms when all of the following hold.
 - A note delay's trigger re-binds the instrument for the remainder of that tick.
 - Sample ends and envelope cuts ramp out over 8 ms; volume changes ramp over 2 ms, and `current_mix_volume` snaps rather than ramps on a trigger.
 - A fresh trigger separately fades `ramp_gain` in from silence over a ~⅔ ms half-cosine attack ramp, inherited by an NNA ghost spawned mid-ramp.
+- Pitch glides toward the tick's target on an (interval × time) budget, so a vibrato is smoothed across the tick while an arpeggio step or a fast portamento arrival still lands at once.
 - A planar or spatial song that uses only ordinary pan renders bit-identically to the stereo model.
 - The output stage narrows to binary32 before clamping, and runs the dither loop entirely in binary32 against a seeded generator.
