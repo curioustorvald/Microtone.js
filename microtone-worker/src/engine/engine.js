@@ -198,7 +198,21 @@ export class TaudEngine {
 
   setTrackerMode(ph) { /* PCM mode does not exist here; tracker is the only mode */ }
   play(ph) { this.playheads[ph].isPlaying = true; }
-  stop(ph) { this.playheads[ph].isPlaying = false; }
+
+  /**
+   * Stop the transport, and end the song's voices with it. Clearing isPlaying
+   * is all it takes to go SILENT (the mixer runs only while isPlaying or
+   * jamActive), but on its own it leaves every voice FROZEN mid-note for
+   * whatever turns the mix back on — see Playhead.silenceSongVoices. Ramped
+   * while an audition is still sounding, because that mix keeps running;
+   * dropped outright otherwise, where nothing renders and nothing is heard.
+   */
+  stop(ph) {
+    const p = this.playheads[ph];
+    p.isPlaying = false;
+    p.silenceSongVoices(p.jamActive);
+  }
+
   isPlaying(ph) { return this.playheads[ph].isPlaying; }
 
   setMasterVolume(ph, volume) { this.playheads[ph].masterVolume = volume & 255; }

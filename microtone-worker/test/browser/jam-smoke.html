@@ -93,9 +93,34 @@
         const quiet = bankVoices(audio).length === 0;
         log(`bank silent after allUp: ${quiet}`);
 
+        // 5 — item 143: jamming after Stop must revive nothing the stop cut.
+        // Play for a moment, stop, then hold a key: the song's channels stay
+        // silent while the bank sounds. (Stop used to leave every voice frozen
+        // and `active`, and the jam's render brought them all back.)
+        audio.play(0);
+        const played = await until(() => {
+          const live = [];
+          for (let ch = 0; ch < 32; ch++) if (audio.getVoiceActive(ch)) live.push(ch);
+          return live.length >= 2 ? live : null;
+        });
+        log(`playing: ${played?.length ?? 0} channels sounding`);
+        audio.stop(0);
+        await sleep(150);
+        const stoppedQuiet = !Array.from({ length: 32 }, (_, ch) => ch)
+          .some((ch) => audio.getVoiceActive(ch));
+        log(`after Stop: every channel silent: ${stoppedQuiet}`);
+        jam.down("KeyA", false);
+        const live5 = await until(() => bankVoices(audio));
+        const noRevival = !Array.from({ length: 32 }, (_, ch) => ch)
+          .some((ch) => audio.getVoiceActive(ch));
+        log(`jam after Stop: bank ${live5.length} · song channels still silent: ${noRevival}`);
+        jam.allUp();
+        await sleep(150);
+
         const pass = audio.running && notPlaying && stillNotPlaying &&
           live1.length === 1 && chan0Idle && live3?.length === 3 && live2.length === 2 &&
-          mono.length === 1 && quiet;
+          mono.length === 1 && quiet &&
+          (played?.length ?? 0) >= 2 && stoppedQuiet && live5.length === 1 && noRevival;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

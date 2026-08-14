@@ -4,6 +4,12 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-15
+
+- **Fixed: playing the piano keys after stopping the song brought the stopped notes back.** Stopping switched the sound off but left every note where it stood, mid-note and still holding its place in the sample — so the next key you jammed started the mix up again and dragged the whole cut-off chord back in with it, ringing on under the note you actually pressed. Stopping now ends the song's notes as well as its playback. The keys themselves are untouched: a key held down across the Stop keeps sounding, and it fades over a note cut's handful of samples rather than being dropped on the spot.
+- **Fixed: Stop did not stop the song if you had used the piano keys while it played.** Jamming a key during playback left the audition's mix running, and because the song's notes never went silent it never switched itself off again — so Stop silenced the transport while the notes carried on, envelopes and slides and all, with nothing on screen moving. Stop stops it now.
+- **Fixed: a song that ran into its own end-of-song cue left the same notes hanging.** The ending stopped the music but not the notes it stopped mid-flight, so the next key you jammed brought those back as well. The last chunk of sound still rings out as it always did — only what would have been left frozen behind it is cleared.
+
 ## 2026-08-14
 
 - **Two new sample-modification effects, `2` and `3`.** One command with two spellings: `3 $sexy` names the region to modify, `2 $sexy` names the region to leave alone and works on everything else. Both work the way funk repeat always has — nothing is written to the sample, the change happens as the bytes are read, and stopping the song puts it all back.

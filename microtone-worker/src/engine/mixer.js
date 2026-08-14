@@ -402,6 +402,13 @@ export function generateTrackerAudio(eng, playhead, out) {
 
   pcm32fToPcm8(eng, ts.mixLeft, ts.mixRight, TRACKER_CHUNK, out);
 
+  // A halt cue (row.js) clears isPlaying mid-chunk — the transport's OTHER
+  // stop, bypassing TaudEngine.stop and its silencing. The rest of THIS chunk
+  // still rings out (that is how the song ends, and the chunk is written just
+  // above), but what it leaves behind is the same frozen leftover a Stop would
+  // have left, waiting for the next jam to resume it. End it here instead.
+  if (advancing && !playhead.isPlaying) playhead.silenceSongVoices(playhead.jamActive);
+
   // Stop the jam-render spin once the audition has gone fully silent.
   if (playhead.jamActive && !playhead.isPlaying &&
       !ts.voices.some((v) => v.active) && !ts.backgroundVoices.some((v) => v.active)) {

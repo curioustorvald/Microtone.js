@@ -743,6 +743,114 @@ test("item 140: playback never writes to the jam bank", () => {
   }
 });
 
+// ── a stopped transport owns no sounding voice ─────────────────────────────
+// Stopping only cleared isPlaying, and the mixer runs while isPlaying OR
+// jamActive — so the song's voices sat frozen mid-note, and the next thing to
+// turn the mix back on inherited them: jamming a key after Stop revived the
+// whole chord the stop had cut, and a Stop pressed while an audition rang kept
+// the song playing for ever (nothing goes silent, so jamActive never clears).
+
+/** Engine + a 4-channel song on cue 0 (`haltAfter` rows ⇒ the cue halts). */
+function makeSongEngine(haltAfter = 0) {
+  const eng = makeTestEngine();
+  const pat = new Uint8Array(512);
+  for (let r = 0; r < 64; r++) {
+    pat[r * 8] = 0x00; pat[r * 8 + 1] = 0x50; pat[r * 8 + 2] = 1;
+    pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0;
+  }
+  eng.uploadPattern(0, pat);
+  const cue = new Uint8Array(64);
+  for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+  for (let ch = 0; ch < 4; ch++) { cue[ch * 2] = 0; cue[ch * 2 + 1] = 0; }
+  if (haltAfter > 0) {
+    // Instruction word 0 = "halt at row x" ($01, $40|x), carried in bit 15 of
+    // the first 16 channel words — bit k of the word lives on channel k.
+    const w = 0x0100 | 0x40 | (haltAfter & 0x3f);
+    for (let k = 0; k < 16; k++) {
+      if ((w >>> k) & 1) { cue[k * 2] |= 0xff; cue[k * 2 + 1] |= 0x80; }
+    }
+  }
+  eng.uploadCue(0, cue);
+  eng.setBPM(0, 535); eng.setTickRate(0, 1); eng.setMasterVolume(0, 255);
+  eng.setSongGlobalVolume(0, 255); eng.setSongMixingVolume(0, 255);
+  eng.setCuePosition(0, 0); eng.setTrackerRow(0, 0);
+  return eng;
+}
+
+/** Peak deviation from silence over one rendered chunk. */
+function renderPeak(eng) {
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  eng.renderChunk(0, out);
+  let peak = 0;
+  for (const b of out) peak = Math.max(peak, Math.abs(b - 128));
+  return peak;
+}
+
+test("Stop ends the song's voices, so a later jam revives nothing", () => {
+  const eng = makeSongEngine();
+  const ts = eng.playheads[0].trackerState;
+  eng.play(0);
+  renderSamples(eng, 4096);
+  assert.ok(ts.voices[0].active, "premise: the song is sounding");
+
+  eng.stop(0);
+  for (let ch = 0; ch < 4; ch++) {
+    assert.equal(ts.voices[ch].active, false, `channel ${ch} ended with the stop`);
+  }
+  assert.equal(ts.backgroundVoices.some((b) => b.active), false, "…NNA ghosts too");
+
+  // Jam a key with the bank voice muted: what is left in the mix is whatever
+  // the stop failed to end, and there must be none of it.
+  const jv = eng.jamVoice(0);
+  eng.jamNote(0, jv, 0x5000, 1);
+  ts.voices[jv].fader = 255;
+  const peak = renderPeak(eng);
+  assert.ok(peak <= 1, `nothing but the dither floor comes back (peak ${peak})`);
+  for (let ch = 0; ch < 4; ch++) assert.equal(ts.voices[ch].active, false);
+
+  // The silencing does not outlive the stop: the delegate's own jam-on-a-song-
+  // channel (what the Kotlin device does — see JAM_VOICES) still sounds.
+  eng.jamNote(0, 1, 0x5000, 1);
+  assert.ok(renderPeak(eng) > 8, "a channel jam after the stop is audible");
+  renderSamples(eng, TRACKER_CHUNK);
+  assert.ok(ts.voices[1].active, "…and sustains — it is a note, not a leftover to cut");
+});
+
+test("Stop stops the song even while an audition is sounding", () => {
+  const eng = makeSongEngine();
+  const ph = eng.playheads[0];
+  const ts = ph.trackerState;
+  eng.play(0);
+  renderSamples(eng, 4096);
+  const jv = eng.jamVoice(0);
+  eng.jamNote(0, jv, 0x5000, 1); // a key held down while the song plays
+  renderSamples(eng, TRACKER_CHUNK);
+
+  eng.stop(0);
+  renderSamples(eng, TRACKER_CHUNK); // the audition's mix is still running
+  for (let ch = 0; ch < 4; ch++) {
+    assert.equal(ts.voices[ch].active, false, `channel ${ch} ramped out on the stop`);
+  }
+  assert.ok(ts.voices[jv].active, "the held key is untouched — the bank is not the song's");
+  assert.ok(ph.jamActive, "…so the jam render is still on");
+
+  eng.jamStopVoice(0, -1); // key up
+  renderSamples(eng, TRACKER_CHUNK * 2);
+  assert.equal(ph.jamActive, false, "and now the render spin ends");
+});
+
+test("a halt cue leaves nothing frozen behind either", () => {
+  const eng = makeSongEngine(2); // cue 0 halts after 2 rows
+  const ts = eng.playheads[0].trackerState;
+  eng.play(0);
+  for (let i = 0; i < 64 && eng.isPlaying(0); i++) renderSamples(eng, TRACKER_CHUNK);
+  assert.equal(eng.isPlaying(0), false, "premise: the cue halted playback");
+  for (let ch = 0; ch < 4; ch++) {
+    assert.equal(ts.voices[ch].active, false, `channel ${ch} ended with the halt`);
+  }
+  assert.equal(ts.backgroundVoices.some((b) => b.active), false, "…NNA ghosts too");
+});
+
 test("item 72: a buildMetaRecord metainstrument sounds both layers", () => {
   const eng = makeTestEngine();
   // A second sounding instrument in slot 2 (same shape as slot 1's ramp).

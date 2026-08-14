@@ -3421,6 +3421,7 @@ class Voice {
 
 
 
+
 // ── PlayInstruction (4484-4494) — tagged objects ──
 const INST_NOP = 0;
 const INST_GOBACK = 1;
@@ -3806,6 +3807,37 @@ class Playhead {
     if (ts !== null) {
       ts.toneMode = flags & 3;
       ts.interpolationMode = (flags >>> 2) & 7;
+    }
+  }
+
+  /**
+   * Silence every voice the SONG owns — the channels plus the NNA / layer
+   * ghosts hanging off them — leaving the jam bank alone, so an audition held
+   * across a stop keeps sounding (JS-only, item 140: the Kotlin device has no
+   * jam bank and stops the lot).
+   *
+   * Stopping the transport only clears isPlaying: the mixer runs while
+   * isPlaying or jamActive, so it switches off, but every voice stays FROZEN
+   * mid-note. Whatever turns the mix back on — a jammed key — would otherwise
+   * resume the whole cut-off chord along with the note actually struck, and a
+   * Stop pressed while an audition rang would not stop the song at all (nothing
+   * ever goes silent, so jamActive never auto-clears either). Called from both
+   * ends of the transport: TaudEngine.stop and the mixer's halt-cue tail.
+   *
+   * `ramp` cuts through the note-cut ramp, for a mix that is still running: a
+   * hard drop mid-waveform clicks. With nothing rendering, drop them outright —
+   * a ramp nobody renders is just the revival deferred to the next jam.
+   */
+  silenceSongVoices(ramp) {
+    const ts = this.trackerState;
+    if (ts === null) return;
+    const cut = (v) => {
+      if (!v.active) return;
+      if (ramp) startCutRamp(v); else v.active = false;
+    };
+    for (let vi = 0; vi < JAM_VOICE_BASE; vi++) cut(ts.voices[vi]);
+    for (const bg of ts.backgroundVoices) {
+      if (bg.sourceChannel < JAM_VOICE_BASE) cut(bg);
     }
   }
 
@@ -7424,6 +7456,13 @@ function generateTrackerAudio(eng, playhead, out) {
 
   pcm32fToPcm8(eng, ts.mixLeft, ts.mixRight, TRACKER_CHUNK, out);
 
+  // A halt cue (row.js) clears isPlaying mid-chunk — the transport's OTHER
+  // stop, bypassing TaudEngine.stop and its silencing. The rest of THIS chunk
+  // still rings out (that is how the song ends, and the chunk is written just
+  // above), but what it leaves behind is the same frozen leftover a Stop would
+  // have left, waiting for the next jam to resume it. End it here instead.
+  if (advancing && !playhead.isPlaying) playhead.silenceSongVoices(playhead.jamActive);
+
   // Stop the jam-render spin once the audition has gone fully silent.
   if (playhead.jamActive && !playhead.isPlaying &&
       !ts.voices.some((v) => v.active) && !ts.backgroundVoices.some((v) => v.active)) {
@@ -7628,7 +7667,21 @@ class TaudEngine {
 
   setTrackerMode(ph) { /* PCM mode does not exist here; tracker is the only mode */ }
   play(ph) { this.playheads[ph].isPlaying = true; }
-  stop(ph) { this.playheads[ph].isPlaying = false; }
+
+  /**
+   * Stop the transport, and end the song's voices with it. Clearing isPlaying
+   * is all it takes to go SILENT (the mixer runs only while isPlaying or
+   * jamActive), but on its own it leaves every voice FROZEN mid-note for
+   * whatever turns the mix back on — see Playhead.silenceSongVoices. Ramped
+   * while an audition is still sounding, because that mix keeps running;
+   * dropped outright otherwise, where nothing renders and nothing is heard.
+   */
+  stop(ph) {
+    const p = this.playheads[ph];
+    p.isPlaying = false;
+    p.silenceSongVoices(p.jamActive);
+  }
+
   isPlaying(ph) { return this.playheads[ph].isPlaying; }
 
   setMasterVolume(ph, volume) { this.playheads[ph].masterVolume = volume & 255; }

@@ -2,10 +2,11 @@
 // port of AudioAdapter.kt:4412-4494, 4880-5208, 5210-5244.
 
 import {
-  MAX_VOICES, TOTAL_VOICES, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK, INTERP_DEFAULT,
-  VOLUME_MAX, VOLUME_MAX_WIDE, VOLUME_STEP_WIDE,
+  MAX_VOICES, TOTAL_VOICES, JAM_VOICE_BASE, PATTERN_EMPTY, NUM_CUES, TRACKER_CHUNK,
+  INTERP_DEFAULT, VOLUME_MAX, VOLUME_MAX_WIDE, VOLUME_STEP_WIDE,
 } from "./constants.js";
 import { Voice } from "./voice.js";
+import { startCutRamp } from "./sampler.js";
 import { SURROUND_STEREO, SURROUND_SPATIAL, SpatialBus, StereoRenderer } from "./spatial.js";
 import { MONITOR_FOLD, MONITOR_BINAURAL, BinauralRenderer } from "./binaural.js";
 import { ANALYSIS_OFF, AnalysisTap } from "./analysis.js";
@@ -395,6 +396,37 @@ export class Playhead {
     if (ts !== null) {
       ts.toneMode = flags & 3;
       ts.interpolationMode = (flags >>> 2) & 7;
+    }
+  }
+
+  /**
+   * Silence every voice the SONG owns — the channels plus the NNA / layer
+   * ghosts hanging off them — leaving the jam bank alone, so an audition held
+   * across a stop keeps sounding (JS-only, item 140: the Kotlin device has no
+   * jam bank and stops the lot).
+   *
+   * Stopping the transport only clears isPlaying: the mixer runs while
+   * isPlaying or jamActive, so it switches off, but every voice stays FROZEN
+   * mid-note. Whatever turns the mix back on — a jammed key — would otherwise
+   * resume the whole cut-off chord along with the note actually struck, and a
+   * Stop pressed while an audition rang would not stop the song at all (nothing
+   * ever goes silent, so jamActive never auto-clears either). Called from both
+   * ends of the transport: TaudEngine.stop and the mixer's halt-cue tail.
+   *
+   * `ramp` cuts through the note-cut ramp, for a mix that is still running: a
+   * hard drop mid-waveform clicks. With nothing rendering, drop them outright —
+   * a ramp nobody renders is just the revival deferred to the next jam.
+   */
+  silenceSongVoices(ramp) {
+    const ts = this.trackerState;
+    if (ts === null) return;
+    const cut = (v) => {
+      if (!v.active) return;
+      if (ramp) startCutRamp(v); else v.active = false;
+    };
+    for (let vi = 0; vi < JAM_VOICE_BASE; vi++) cut(ts.voices[vi]);
+    for (const bg of ts.backgroundVoices) {
+      if (bg.sourceChannel < JAM_VOICE_BASE) cut(bg);
     }
   }
 
