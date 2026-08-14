@@ -1081,12 +1081,16 @@ export function renumberInstrumentOp(plan, gestureId = null) {
 /**
  * Delete one instrument (this feature): swap in the image with its record zeroed
  * (its parent metainstruments already rewired + any uniquely-owned samples freed
- * by the planner), the INam entry blanked, and the Ixmp slot id dropped, then
- * rewrite the pattern cells the plan lists (the reassign writes; empty when the
- * user left the notes dangling). `plan` is planDeleteInstrument()'s result; the
- * inverse has the same shape (previous image/INam/Ixmp + the cells' previous
- * instrument bytes), so this op is its own undo/redo — structurally identical to
- * renumberInstrumentOp. Dirty: the bank plus every touched pattern.
+ * by the planner), the INam entry blanked, the SNam table realigned to the
+ * surviving sample census (a removed slot's samples drop out of the census
+ * whether or not their pool bytes were also freed), and the Ixmp slot id
+ * dropped, then rewrite the pattern cells the plan lists (the reassign writes;
+ * empty when the user left the notes dangling). `plan` is
+ * planDeleteInstrument()'s result; the inverse has the same shape (previous
+ * image/INam/SNam/Ixmp + the cells' previous instrument bytes), so this op is
+ * its own undo/redo — structurally identical to renumberInstrumentOp (which
+ * doesn't touch SNam, since a renumber never changes the sample census). Dirty:
+ * the bank plus every touched pattern.
  */
 export function deleteInstrumentOp(plan, gestureId = null) {
   return {
@@ -1100,12 +1104,14 @@ export function deleteInstrumentOp(plan, gestureId = null) {
       const old = {
         image: doc.sampleInstImage,
         inam: secOf("INam"),
+        snam: secOf("SNam"),
         ixmp: doc.ixmp,
         ixmpSection: secOf("Ixmp"),
         cells: [],
       };
       doc.sampleInstImage = plan.image;
       doc.setSection("INam", plan.inam);
+      doc.setSection("SNam", plan.snam);
       doc.ixmp = plan.ixmp;
       // toBytes()/reload read the SECTION, not doc.ixmp — rebuild it so the
       // dropped patches don't come back on reload (buildIxmpSection is the

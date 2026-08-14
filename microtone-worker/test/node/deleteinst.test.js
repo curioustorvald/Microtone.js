@@ -172,6 +172,33 @@ test("uniqueSampleSpans + freeSamples: unique bytes freed, shared bytes kept", (
   assert.ok(cleared, "the private sample bytes are freed");
 });
 
+test("planDeleteInstrument realigns SNam: a later sample keeps its own name, not the deleted one's slot", () => {
+  // Regression: deleting an instrument dropped its sample out of the live
+  // census (usedInstrumentSlots() no longer includes it) but never rebuilt
+  // SNam, so every later sample's name silently shifted onto the wrong entry.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots().find((s) => uniqueSampleSpans(doc, s).length > 0);
+  assert.ok(slot !== undefined, "WHEN has an instrument with a private sample");
+
+  const before = doc.sampleList();
+  const deletedPtr = uniqueSampleSpans(doc, slot)[0].ptr;
+  const deletedIndex = before.findIndex((e) => e.ptr === deletedPtr);
+  assert.ok(deletedIndex >= 0 && deletedIndex < before.length - 1,
+    "pick a fixture where a named sample follows the deleted one");
+  const nextEntry = before[deletedIndex + 1];
+
+  const plan = planDeleteInstrument(doc, slot, { freeSamples: true });
+  const undo = new UndoStack(doc);
+  undo.apply(deleteInstrumentOp(plan));
+
+  const survivor = doc.sampleList().find((e) => e.ptr === nextEntry.ptr && e.len === nextEntry.len);
+  assert.ok(survivor, "the following sample's span still exists");
+  assert.equal(survivor.name, nextEntry.name, "its name didn't shift onto the deleted slot's old position");
+
+  undo.undo();
+  assert.deepEqual(doc.sampleList().map((e) => e.name), before.map((e) => e.name), "undo restores SNam");
+});
+
 // ── delete: sub-instrument rewires its parent metainstruments (case 2) ──
 
 test("planDeleteInstrument: deleting a meta layer child rewires the parents", () => {

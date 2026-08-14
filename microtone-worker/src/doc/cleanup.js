@@ -396,9 +396,14 @@ function patchIsShadowed(p, earlier) {
  *   * degenerate— empty pitch/velocity range, or a zero-length sample
  *   * shadowed  — fully covered by higher-priority (earlier) patches
  * A slot whose patches all drop loses its Ixmp entry. Removing patches can change
- * the sample census, so SNam is realigned by (ptr:len) identity like planBankCleanup.
+ * the sample census, so SNam is realigned by (ptr:len) identity like planBankCleanup,
+ * and any pool span that drops out of the census as a result (no surviving patch or
+ * base sample anywhere in the document still uses it) is freed the same way a
+ * deleted instrument's unique samples are — comparing the whole-document census
+ * before vs. after, not just the touched slots, so a span shared with an
+ * untouched instrument is correctly kept.
  * Returns {noop:true, …} when nothing is unreachable, else a cleanupBankOp plan
- * (image + INam pass through unchanged) with a per-slot report.
+ * (INam passes through unchanged) with a per-slot report.
  */
 export function planIxmpCleanup(doc) {
   if (!doc.sampleInstImage) return { noop: true, removedPatches: 0, removedBlobs: 0 };
@@ -436,22 +441,41 @@ export function planIxmpCleanup(doc) {
     return { noop: true, removedPatches: 0, removedBlobs: 0, report: [] };
   }
 
-  // SNam realigns to the post-cleanup census: preview it with each touched
-  // slot's SURVIVING patches, then key the names by (ptr:len) identity.
+  // Preview the post-cleanup census: each touched slot re-evaluated with its
+  // SURVIVING patches only. SNam realigns by (ptr:len) identity; any span present
+  // before but absent after had every one of its users among the dropped patches,
+  // so its pool bytes are freed too (a span still used by an untouched instrument,
+  // or by another touched slot's surviving patch, stays in both censuses and is
+  // therefore kept).
   const overrides = new Map(report.map((r) => [r.slot, r.keep]));
+  const oldCensus = doc.sampleList();
   const oldNameByKey = new Map();
-  for (const s of doc.sampleList()) oldNameByKey.set(s.ptr + ":" + s.len, s.name);
-  const snamArr = doc.sampleList(overrides).map((s) => oldNameByKey.get(s.ptr + ":" + s.len) ?? "");
+  for (const e of oldCensus) oldNameByKey.set(e.ptr + ":" + e.len, e.name);
+  const newCensus = doc.sampleList(overrides);
+  const newKeys = new Set(newCensus.map((e) => e.ptr + ":" + e.len));
+
+  const image = doc.sampleInstImage.slice();
+  const pool = image.subarray(0, SAMPLEBIN_SIZE);
+  let freedSampleBytes = 0;
+  for (const e of oldCensus) {
+    if (newKeys.has(e.ptr + ":" + e.len)) continue;
+    for (const sp of sampleSpans(e)) {
+      for (let i = sp.ptr; i < sp.ptr + sp.len; i++) if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
+    }
+  }
+
+  const snamArr = newCensus.map((s) => oldNameByKey.get(s.ptr + ":" + s.len) ?? "");
   while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
 
   return {
-    image: doc.sampleInstImage,
+    image,
     inam: doc.projSections.find((s) => s.fourcc === "INam")?.payload ?? null,
     snam: encodeNameTable(snamArr),
     ixmp,
     report,
     removedPatches,
     removedBlobs,
+    freedSampleBytes,
   };
 }
 
@@ -542,9 +566,13 @@ export function classifyMetaChildren(doc, metaSlot) {
  * op, folded into the same undo step); any deleted $01–$FF sub-instrument's notes
  * are left to dangle. $100+ slots can't be note-referenced.
  *
- * Returns {error} or a deleteInstrumentOp plan {image, inam, ixmp, cells, …} plus
- * a report the confirm dialog can show. The op rebuilds the Ixmp SECTION from
- * `ixmp` (like the renumber/cleanup ops), so the delete survives a save.
+ * Returns {error} or a deleteInstrumentOp plan {image, inam, snam, ixmp, cells,
+ * …} plus a report the confirm dialog can show. SNam is realigned to the
+ * surviving census (ptr:len identity), same as planBankCleanup — a removed
+ * slot's samples drop out of the census whether or not `freeSamples` also
+ * zeroed their pool bytes, and every later census entry shifts position. The op
+ * rebuilds the Ixmp SECTION from `ixmp` (like the renumber/cleanup ops), so the
+ * delete survives a save.
  */
 export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignTo = null, deleteLowChildren = false } = {}) {
   if (!doc.sampleInstImage) return { error: "This project has no sample+instrument image." };
@@ -584,6 +612,18 @@ export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignT
 
   const removedSet = new Set([...deleteSet, ...emptiedMetas]);
 
+  // SNam: realign to the surviving census (names keyed by ptr:len identity), same
+  // as planBankCleanup. A removed slot's census entries drop out regardless of
+  // `freeSamples` — that flag only controls whether the pool bytes are ALSO
+  // zeroed, not whether the sample stops being counted.
+  const instAt = (x) => doc.instruments[x];
+  const survivors = doc.usedInstrumentSlots().filter((x) => !removedSet.has(x));
+  const keep = censusForSlots(instAt, survivors);
+  const oldNameByKey = new Map();
+  for (const e of doc.sampleList()) oldNameByKey.set(e.ptr + ":" + e.len, e.name);
+  const snamArr = keep.filter((sp) => sp.chan === 0).map((sp) => oldNameByKey.get(sp.key) ?? "");
+  while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
+
   // Free sample bytes only the removed instruments used.
   let freedSampleBytes = 0, freedSamples = 0;
   if (freeSamples) {
@@ -609,7 +649,7 @@ export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignT
   const cells = doReassign ? refs.map((r) => ({ ...r, inst: reassignTo & 0xff })) : [];
 
   return {
-    image, inam: encodeNameTable(inamArr), ixmp, cells, from: s,
+    image, inam: encodeNameTable(inamArr), snam: encodeNameTable(snamArr), ixmp, cells, from: s,
     freedSamples, freedSampleBytes, rewiredMetas, emptiedMetas,
     autoChildren, deletedLowChildren: deleteLowChildren ? lowChildren.map((c) => c.slot) : [],
     danglingRefs: doReassign ? 0 : refs.length,

@@ -358,6 +358,44 @@ test("planIxmpCleanup drops degenerate, shadowed and orphan patches", () => {
   assert.equal(doc.instruments[orphan].extraPatches, null);
 });
 
+test("planIxmpCleanup frees the sample bytes only a dropped patch used; a kept patch's sample survives", () => {
+  // Regression: the planner dropped patch entries but passed `image` straight
+  // through unmodified, so a shadowed/degenerate patch's uniquely-owned sample
+  // bytes never got zeroed even though the patch (and its SNam entry) was gone.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots()[0];
+
+  const uniquePtr = 900000, uniqueLen = 500;   // only the DROPPED patch uses this
+  const keptPtr = 910000, keptLen = 500;       // the COVERING patch's own sample
+  const img = doc.sampleInstImage;
+  img.fill(0x42, uniquePtr, uniquePtr + uniqueLen);
+  img.fill(0x43, keptPtr, keptPtr + keptLen);
+
+  const patches = [
+    mkPatch(0x0000, 0xffff, 0, 63, { samplePtr: keptPtr, sampleLength: keptLen }),      // keep, covers all
+    mkPatch(0x1000, 0x2000, 10, 40, { samplePtr: uniquePtr, sampleLength: uniqueLen }), // DROP — shadowed
+  ];
+  doc.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const plan = planIxmpCleanup(doc);
+  assert.ok(!plan.noop);
+  assert.equal(plan.removedPatches, 1);
+  assert.ok(plan.freedSampleBytes >= uniqueLen, "reports the freed bytes");
+  assert.ok([...plan.image.subarray(uniquePtr, uniquePtr + uniqueLen)].every((b) => b === 0),
+    "the dropped patch's unique sample is zeroed");
+  assert.ok([...plan.image.subarray(keptPtr, keptPtr + keptLen)].every((b) => b === 0x43),
+    "the kept patch's sample is untouched");
+
+  const baseline = doc.toBytes();
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(plan));
+  assert.ok([...doc.sampleBin.subarray(uniquePtr, uniquePtr + uniqueLen)].every((b) => b === 0));
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo byte-exact");
+});
+
 test("planIxmpCleanup: a union of earlier patches shadows, one that misses a corner doesn't", () => {
   const doc = loadWhen();
   const slot = doc.selectableInstrumentSlots()[0];
