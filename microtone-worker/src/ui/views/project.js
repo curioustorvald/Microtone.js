@@ -563,13 +563,16 @@ export class ProjectView {
   }
 
   /** Remove instrument patches that can never be triggered (item 74): orphan
-   *  blobs, degenerate rectangles, and patches shadowed by higher-priority ones. */
+   *  blobs, degenerate rectangles, patches shadowed by higher-priority ones, and
+   *  (for a slot with no ambiguous trigger row) patches no pattern cell actually
+   *  plays — see cleanup.reachablePatchesByUsage. */
   cleanupIxmp() {
     const store = this.store;
     const plan = planIxmpCleanup(store.doc);
     if (plan.noop) { alert(t("clean.nothing")); return; }
     if (!confirm(t("clean.ixmpConfirm", {
       patches: plan.removedPatches, insts: plan.report.length, blobs: plan.removedBlobs,
+      bytes: plan.freedSampleBytes,
     }))) return;
     store.undo.apply(cleanupBankOp(plan));
     store.emit("edit", [{ kind: "bank" }]);

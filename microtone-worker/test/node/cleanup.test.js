@@ -12,6 +12,7 @@ import {
   planRenumberInstrument, instrumentCellRefs, planIxmpCleanup,
 } from "../../src/doc/cleanup.js";
 import { TaudPlayData } from "../../src/engine/state.js";
+import { EffectOp } from "../../src/engine/tables.js";
 import { remapPatternsOp, cleanupBankOp, renumberInstrumentOp, importBankOp } from "../../src/doc/ops.js";
 import { writePatchesBlob } from "../../src/engine/inst.js";
 import { buildIxmpSection, planCreateMeta } from "../../src/doc/bankmerge.js";
@@ -394,6 +395,103 @@ test("planIxmpCleanup frees the sample bytes only a dropped patch used; a kept p
   assert.ok([...doc.sampleBin.subarray(uniquePtr, uniquePtr + uniqueLen)].every((b) => b === 0));
   undo.undo();
   assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo byte-exact");
+});
+
+test("planIxmpCleanup prunes patches no pattern cell actually plays (usage-based, item 74 extension)", () => {
+  // The reported scenario: an imported drum kit carries one Ixmp patch per
+  // drum piece, each on its OWN disjoint pitch — geometrically none of them
+  // shadow each other, so the pre-existing rectangle-coverage pass alone finds
+  // nothing to remove even when the song only ever plays one of them.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots().find((s) => !doc.instruments[s].isMeta);
+  assert.ok(slot !== undefined, "WHEN has a plain (non-meta) instrument");
+
+  // Scrub every existing reference to `slot` so the ONLY trigger left is the
+  // one this test controls.
+  for (const song of doc.songs) for (const p of song.patterns) if (p) {
+    for (const cell of p) if ((cell.instrment & 0xff) === slot) cell.instrment = 0;
+  }
+
+  const usedPtr = 900000, usedLen = 500;     // "kick" — actually played
+  const unusedPtr = 901000, unusedLen = 500; // "snare" — never played
+  const img = doc.sampleInstImage;
+  img.fill(0x11, usedPtr, usedPtr + usedLen);
+  img.fill(0x22, unusedPtr, unusedPtr + unusedLen);
+
+  const patches = [
+    mkPatch(0x1000, 0x1000, 0, 63, { samplePtr: usedPtr, sampleLength: usedLen }),
+    mkPatch(0x2000, 0x2000, 0, 63, { samplePtr: unusedPtr, sampleLength: unusedLen }),
+  ];
+  doc.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  // One trigger cell: the kick's exact pitch, an explicit volume-column SET.
+  const pat = doc.songs[0].patterns.find((p) => p);
+  assert.ok(pat, "WHEN has at least one pattern");
+  pat[0].note = 0x1000;
+  pat[0].instrment = slot;
+  pat[0].volumeEff = 0;
+  pat[0].volume = doc.wideCells ? 0xff : 0x3f; // full-scale SET, narrows to 63 either way
+
+  const plan = planIxmpCleanup(doc);
+  assert.ok(!plan.noop);
+  assert.equal(plan.removedPatches, 1, "only the never-played patch drops");
+  assert.ok(plan.freedSampleBytes >= unusedLen, "its private sample is freed too");
+  assert.ok([...plan.image.subarray(unusedPtr, unusedPtr + unusedLen)].every((b) => b === 0));
+  assert.ok([...plan.image.subarray(usedPtr, usedPtr + usedLen)].every((b) => b === 0x11),
+    "the played patch's sample survives");
+
+  const baseline = doc.toBytes();
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(plan));
+  assert.equal(doc.instruments[slot].extraPatches.length, 1);
+  assert.equal(doc.instruments[slot].extraPatches[0].pitchStart, 0x1000);
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(Buffer.from(baseline)), "undo byte-exact");
+});
+
+test("planIxmpCleanup leaves a slot's patches untouched by usage-pruning when a trigger row is ambiguous", () => {
+  // An instrument-byte-only row (no note) resolves its pitch from whatever the
+  // channel was already holding — not statically knowable from the cell alone
+  // — so a static scan must NOT guess it can never reach the second patch.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots().find((s) => !doc.instruments[s].isMeta);
+  for (const song of doc.songs) for (const p of song.patterns) if (p) {
+    for (const cell of p) if ((cell.instrment & 0xff) === slot) cell.instrment = 0;
+  }
+
+  const patches = [mkPatch(0x1000, 0x1000, 0, 63), mkPatch(0x2000, 0x2000, 0, 63)];
+  doc.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const pat = doc.songs[0].patterns.find((p) => p);
+  pat[0].note = 0x1000; pat[0].instrment = slot; pat[0].volumeEff = 0; pat[0].volume = 0x3f;
+  pat[1].note = 0x0000; pat[1].instrment = slot; // instrument-byte-only: ambiguous
+
+  assert.ok(planIxmpCleanup(doc).noop, "an ambiguous trigger row blocks usage-pruning for this slot");
+});
+
+test("planIxmpCleanup leaves a slot's patches untouched by usage-pruning across a tone-portamento row", () => {
+  // A G/L row that continues an already-sounding note resolves pitch from the
+  // channel's CURRENT position, not the row's own note column.
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots().find((s) => !doc.instruments[s].isMeta);
+  for (const song of doc.songs) for (const p of song.patterns) if (p) {
+    for (const cell of p) if ((cell.instrment & 0xff) === slot) cell.instrment = 0;
+  }
+
+  const patches = [mkPatch(0x1000, 0x1000, 0, 63), mkPatch(0x2000, 0x2000, 0, 63)];
+  doc.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const pat = doc.songs[0].patterns.find((p) => p);
+  pat[0].note = 0x1000; pat[0].instrment = slot; pat[0].volumeEff = 0; pat[0].volume = 0x3f;
+  pat[1].note = 0x3000; pat[1].instrment = slot; pat[1].effect = EffectOp.OP_G; // tone porta
+
+  assert.ok(planIxmpCleanup(doc).noop, "a tone-portamento row blocks usage-pruning for this slot");
 });
 
 test("planIxmpCleanup: a union of earlier patches shadows, one that misses a corner doesn't", () => {

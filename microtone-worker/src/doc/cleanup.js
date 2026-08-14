@@ -12,6 +12,8 @@
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { writePatchesBlob, buildMetaRecord } from "../engine/inst.js";
+import { EffectOp } from "../engine/tables.js";
+import { rowVolumeFromDefault, narrowVolAxis } from "../engine/trigger.js";
 import { sampleSpans } from "./document.js";
 import { emptyPatternBytes } from "./patterntools.js";
 
@@ -391,10 +393,61 @@ function patchIsShadowed(p, earlier) {
 }
 
 /**
+ * Every Ixmp patch of `slot` that some pattern cell in the document actually
+ * reaches via resolvePatch() (engine truth: trigger.js triggerNote/
+ * triggerMetaOrNote, inst.js TaudInst.resolvePatch — see TAUD_ENGINE_SPEC.md),
+ * or null when `slot` cannot be safely analysed this way — the caller must
+ * then leave its patches exactly as the geometric pass found them, never
+ * treating an empty result as "nothing is reachable".
+ *
+ * A slot is UNANALYSABLE (returns null) when it's a metainstrument or one of
+ * its layer children (a layer's own detune shifts pitch and its gating volume
+ * defaults differently than the leaf's own DNV fallback — see trigger.js
+ * triggerMetaOrNote's `seedVol` vs. the leaf's own resolvePatch call inside
+ * triggerNote — not modelled here), or when ANY of its trigger rows is
+ * AMBIGUOUS: an instrument-byte-only row (note 0x0000, row.js's
+ * "no note + instrument byte" branch) or a tone-portamento continuation
+ * (effect G/L retargeting an already-sounding note). Both resolve pitch
+ * and/or volume from the CHANNEL'S PRIOR STATE (voice.noteVal /
+ * voice.noteVolume) rather than from the row itself, so a static per-cell
+ * scan can't know what they'd hit — one ambiguous row anywhere for this slot
+ * means the whole slot is left untouched by usage-pruning.
+ *
+ * A CERTAIN row (a plain note+instrument trigger, note >= 0x0020, not a G/L
+ * continuation) resolves exactly like triggerNote: volume = the vol-column
+ * SET (volumeEff === 0) narrowed by narrowVolAxis, else
+ * rowVolumeFromDefault(inst, null) — the instrument's own defaultNoteVolume;
+ * pitch = the cell's note verbatim (no per-instrument transpose exists for a
+ * plain, non-meta instrument).
+ */
+function reachablePatchesByUsage(doc, slot) {
+  const inst = doc.instruments[slot];
+  if (inst.isMeta || doc.metaChildSlots().has(slot)) return null;
+  const ts = { wideCells: doc.wideCells };
+  const reachable = new Set();
+  for (const ref of instrumentCellRefs(doc, slot)) {
+    const cell = doc.songs[ref.song].patterns[ref.pat][ref.row];
+    const note = cell.note;
+    if (note === 0x0000) return null; // instrument-byte-only row: ambiguous
+    if (note < 0x0020) continue; // key-off/cut/fade/reserved/interrupt: no patch lookup
+    if (cell.effect === EffectOp.OP_G || cell.effect === EffectOp.OP_L) return null; // tone porta: ambiguous
+    const seedVol = cell.volumeEff === 0
+      ? narrowVolAxis(ts, cell.volume)
+      : rowVolumeFromDefault(inst, null);
+    const patch = inst.resolvePatch(note, seedVol);
+    if (patch) reachable.add(patch);
+  }
+  return reachable;
+}
+
+/**
  * Plan an Ixmp cleanup (item 74): drop patch entries that can never be triggered.
  *   * orphan    — the blob's instrument slot holds no record at all
  *   * degenerate— empty pitch/velocity range, or a zero-length sample
  *   * shadowed  — fully covered by higher-priority (earlier) patches
+ *   * unused    — geometrically reachable, but no pattern cell in the document
+ *                 actually triggers it (reachablePatchesByUsage) — skipped for
+ *                 a slot this can't safely determine (see that function)
  * A slot whose patches all drop loses its Ixmp entry. Removing patches can change
  * the sample census, so SNam is realigned by (ptr:len) identity like planBankCleanup,
  * and any pool span that drops out of the census as a result (no surviving patch or
@@ -425,12 +478,17 @@ export function planIxmpCleanup(doc) {
       report.push({ slot, reason: "orphan", dropped: patches.length, kept: 0, keep: [] });
       continue;
     }
-    const keep = [];
-    let dropped = 0;
+    const geomKeep = [];
+    let geomDropped = 0;
     for (const p of patches) {
-      if (patchIsDegenerate(p) || patchIsShadowed(p, keep)) { dropped++; continue; }
-      keep.push(p);
+      if (patchIsDegenerate(p) || patchIsShadowed(p, geomKeep)) { geomDropped++; continue; }
+      geomKeep.push(p);
     }
+    // Usage pass: among the geometrically-reachable survivors, drop any patch
+    // no pattern cell actually triggers (skipped when the slot is unanalysable).
+    const reachable = reachablePatchesByUsage(doc, slot);
+    const keep = reachable ? geomKeep.filter((p) => reachable.has(p)) : geomKeep;
+    const dropped = geomDropped + (geomKeep.length - keep.length);
     if (dropped === 0) { ixmp.push(e); continue; }
     removedPatches += dropped;
     report.push({ slot, reason: "unreachable", dropped, kept: keep.length, keep });

@@ -1212,11 +1212,11 @@ export default {
   "clean.bank": "Cleanup instruments & samples",
   "clean.bankTitle": "Remove instruments no pattern uses and free the sample data only they referenced",
   "clean.ixmp": "Cleanup instrument patches",
-  "clean.ixmpTitle": "Remove patches that can never be triggered: patches belonging to no instrument, empty ones, and patches fully covered by a higher-priority patch",
+  "clean.ixmpTitle": "Remove patches that can never be triggered: patches belonging to no instrument, empty ones, patches fully covered by a higher-priority patch, and patches no pattern actually plays — and free the sample data only they referenced",
   "clean.nothing": "Nothing to clean up.",
   "clean.patternsConfirm": "Remove {removed} unused pattern(s) and merge {merged} duplicate(s), then renumber the rest? Cues are rewritten. This can be undone.",
   "clean.bankConfirm": "Remove {insts} unused instrument(s) and free {bytes} sample bytes? This can be undone.",
-  "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely? This can be undone.",
+  "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely and freeing {bytes} sample bytes? This can be undone.",
 
   // ── global operations (project view) ──
   "glob.title": "Global Operations",
