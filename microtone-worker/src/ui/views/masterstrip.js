@@ -711,9 +711,12 @@ export class MasterStrip {
 
   toggle() { this.setVisible(!this.visible); return this.visible; }
 
-  /** The strip is a Timeline fixture; anywhere else it is neither shown nor paid for. */
+  /** The strip is a Timeline fixture; anywhere else it is neither shown nor
+   *  paid for. With the view split (item 148) it is enough for EITHER pane to
+   *  be showing the Timeline — the strip sits beside the whole split, not
+   *  inside a pane, so it keeps the right-hand edge either way. */
   applyVisibility() {
-    const show = this.visible && this.store.view === "timeline" && !!this.store.doc;
+    const show = this.visible && this.store.viewOpen("timeline") && !!this.store.doc;
     this.el.hidden = !show;
     this.shown = show;
     if (show) this.resize();

@@ -181,16 +181,6 @@
     </div>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button data-view="timeline" class="active" data-i18n="tab.timeline">Timeline</button>
-    <button data-view="cues" data-i18n="tab.cues">Cues</button>
-    <button data-view="pattern" data-i18n="tab.pattern">Patterns</button>
-    <button data-view="samples" data-i18n="tab.samples">Samples</button>
-    <button data-view="instruments" data-i18n="tab.instruments">Instruments</button>
-    <button data-view="project" data-i18n="tab.project">Project</button>
-    <button data-view="files" data-i18n="tab.files">File</button>
-  </nav>
-
   <div id="toolbox" class="toolbox" hidden>
     <button id="tbRetune" data-i18n="toolbox.retune">Retune…</button>
     <button id="tbRaw" data-i18n-title="toolbox.rawTitle">Raw: off</button>
@@ -202,18 +192,38 @@
     <button id="tbMaster" data-i18n-title="toolbox.masterTitle">Master: on</button>
   </div>
 
+  <!-- The view area splits in two (item 148). Each pane carries its own tab
+       strip and the button that splits it / closes it again; splitview.js
+       clones this pane's head for the second one. The master strip is a
+       sibling of the WHOLE split, so it keeps the right-hand edge either way. -->
   <main id="viewHost" class="view-host">
-    <div id="viewStage" class="view-stage">
-      <div id="welcomeHost" class="view-dom"></div>
-      <canvas id="timeline" class="view-canvas" hidden></canvas>
-      <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
-      <div id="patternHost" class="view-dom" hidden></div>
-      <div id="samplesHost" class="view-dom" hidden></div>
-      <div id="instrumentsHost" class="view-dom" hidden></div>
-      <div id="projectHost" class="view-dom" hidden></div>
-      <div id="filesHost" class="files-host" hidden></div>
-      <div id="placeholder" class="empty-state" hidden></div>
-      <aside id="instLookup" class="inst-lookup" hidden></aside>
+    <div id="splitHost" class="split-host">
+      <section class="pane focused" data-pane="0">
+        <div class="pane-head">
+          <nav class="tabs" id="tabs">
+            <button data-view="timeline" class="active" data-i18n="tab.timeline">Timeline</button>
+            <button data-view="cues" data-i18n="tab.cues">Cues</button>
+            <button data-view="pattern" data-i18n="tab.pattern">Patterns</button>
+            <button data-view="samples" data-i18n="tab.samples">Samples</button>
+            <button data-view="instruments" data-i18n="tab.instruments">Instruments</button>
+            <button data-view="project" data-i18n="tab.project">Project</button>
+            <button data-view="files" data-i18n="tab.files">File</button>
+          </nav>
+          <button class="icon-btn pane-btn"></button>
+        </div>
+        <div id="viewStage" class="view-stage">
+          <div id="welcomeHost" class="view-dom"></div>
+          <canvas id="timeline" class="view-canvas" hidden></canvas>
+          <canvas id="cuesCanvas" class="view-canvas" hidden></canvas>
+          <div id="patternHost" class="view-dom" hidden></div>
+          <div id="samplesHost" class="view-dom" hidden></div>
+          <div id="instrumentsHost" class="view-dom" hidden></div>
+          <div id="projectHost" class="view-dom" hidden></div>
+          <div id="filesHost" class="files-host" hidden></div>
+          <div id="placeholder" class="empty-state" hidden></div>
+          <aside id="instLookup" class="inst-lookup" hidden></aside>
+        </div>
+      </section>
     </div>
     <aside id="masterStrip" class="master-strip" hidden></aside>
   </main>

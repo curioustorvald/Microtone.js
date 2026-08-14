@@ -11,13 +11,14 @@ import { createProfileOverlay } from "./profileoverlay.js";
 import { Store } from "./store.js";
 import { TimelineView } from "./views/timeline.js";
 import { CuesView } from "./views/cues.js";
-import { PatternView } from "./views/pattern.js";
+import { PatternView, FX2_BASE_STEP } from "./views/pattern.js";
 import { FilesView } from "./views/files.js";
 import { SamplesView } from "./views/samples.js";
 import { InstrumentsView } from "./views/instruments.js";
 import { ProjectView } from "./views/project.js";
 import { WelcomeView } from "./views/welcome.js";
 import { MasterStrip } from "./views/masterstrip.js";
+import { SplitView, VIEWS } from "./splitview.js";
 import { JamKeyboard } from "./jam.js";
 import { InstLookup } from "./instlookup.js";
 import { SUB_NOTE } from "./edit.js";
@@ -237,7 +238,8 @@ async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = nu
   }
 
   rebuildSongList();
-  welcomeView.noteOpened(name); // the welcome screen's Recent list sorts on this
+  // the welcome screen's Recent list sorts on this (every copy of it)
+  eachView("timeline", (_obj, entry) => entry.welcome.noteOpened(name));
 
   // Invalidate the views' cached song state (Timeline songMap crop, etc.) for
   // the NEW document BEFORE showView draws — otherwise the first frame paints
@@ -542,7 +544,7 @@ async function editSongInteractive(index) {
     okLabel: t("common.apply"),
   });
   if (result === null) return;
-  projectView.changeSongMeta({
+  viewNamed("project").changeSongMeta({
     name: result.name, composer: result.composer, copyright: result.copyright,
   }, index);
   rebuildSongList();
@@ -561,64 +563,107 @@ store.on("doc", refreshToolbox);
 store.on("edit", refreshToolbox);
 
 // ── views ──
+// EVERY view can be open twice (item 148.1) — one copy per split pane, each
+// with its own host element, scroll position and selection, so two Timelines
+// can sit at different bars of the same song. That is why nothing here is a
+// singleton any more: the shell builds a view through VIEW_SPEC, once per
+// pane that asks for it, and reaches copies through viewNamed/eachView.
 const jam = new JamKeyboard(store);
-const timeline = new TimelineView(store, $("timeline"));
-const cuesView = new CuesView(store, $("cuesCanvas"));
-const patternView = new PatternView(store, $("patternHost"), jam);
 window.__microtoneEnsureAudio = ensureAudio; // pattern preview needs lazy audio
-const samplesView = new SamplesView(store, $("samplesHost"), {
-  // New instrument from a pooled sample (item 40): adopt it + jump to it.
-  onNewInstrument: (slot) => {
-    jam.currentInst = slot;
-    instrumentsView.selected = slot;
-    store.emit("instsel");
-    showView("instruments");
-    updateStatus();
-  },
-});
-const instrumentsView = new InstrumentsView(store, $("instrumentsHost"), jam);
-const projectView = new ProjectView(store, $("projectHost"), {
-  editSong: (i) => editSongInteractive(i),
-  /**
-   * Save the upgraded project under a NEW name and continue working on that
-   * one (format v3, §5.5). The original file is left alone deliberately: the
-   * upgrade has no defined way back, so the version-2 copy stays readable by
-   * anything that reads version 2 — including the TSVM device.
-   */
-  saveCopyAs: async (name) => {
-    if (!(await opfs.available())) return; // nothing persists here; keep the edit in memory
-    let target = name;
-    for (let n = 2; (await opfs.list()).some((f) => f.name === target); n++) {
-      target = name.replace(/\.taud$/, `-${n}.taud`);
-    }
-    await opfs.write(target, store.doc.toBytes());
-    store.doc.dirty = false;
-    store.fileName = target;
-    store.emit("saved", target);
-    updateStatus();
-  },
-});
-const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
-const masterStrip = new MasterStrip(store, $("masterStrip"));
-masterStrip.onToggle = () => refreshToolbox();
-const filesView = new FilesView(store, $("filesHost"), {
-  openBytes: (name, bytes) => loadBytes(name, bytes),
-  currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
-  songIndex: () => store.songIndex,
-  importMidi: () => importMidiInteractive({ toOpfs: true }),
-  editSong: (i) => editSongInteractive(i),
-});
-// Welcome screen (item 104) — the Timeline tab's content before a project is
-// loaded. Everything it offers is an existing entry point, wired here rather
-// than re-implemented.
-const welcomeView = new WelcomeView(store, $("welcomeHost"), {
+
+/** New instrument from a pooled sample (item 40): adopt it + jump to it. */
+function adoptNewInstrument(slot) {
+  jam.currentInst = slot;
+  eachView("instruments", (v) => { v.selected = slot; });
+  store.emit("instsel");
+  showView("instruments");
+  updateStatus();
+}
+
+/**
+ * Save the upgraded project under a NEW name and continue working on that
+ * one (format v3, §5.5). The original file is left alone deliberately: the
+ * upgrade has no defined way back, so the version-2 copy stays readable by
+ * anything that reads version 2 — including the TSVM device.
+ */
+async function saveProjectCopyAs(name) {
+  if (!(await opfs.available())) return; // nothing persists here; keep the edit in memory
+  let target = name;
+  for (let n = 2; (await opfs.list()).some((f) => f.name === target); n++) {
+    target = name.replace(/\.taud$/, `-${n}.taud`);
+  }
+  await opfs.write(target, store.doc.toBytes());
+  store.doc.dirty = false;
+  store.fileName = target;
+  store.emit("saved", target);
+  updateStatus();
+}
+
+/** Welcome screen (item 104) — the Timeline tab's content before a project is
+ *  loaded. Everything it offers is an existing entry point, wired here rather
+ *  than re-implemented. */
+const WELCOME_HOOKS = {
   newProject: () => newProject(),
   open: () => $("fileInput").click(),
   importMidi: () => importMidiInteractive(),
   openRecent: async (name) => loadBytes(name, await opfs.read(name)),
   browseFiles: () => showView("files"),
   help: () => showHelp(),
-});
+};
+
+/**
+ * How each view is built: the host element it draws into — `id` names the one
+ * index.html already declares, which the FIRST copy reuses (those ids are what
+ * the smoke tests address) — and how to construct it. `copy` is 0 for the
+ * first, 1 for the one in the other pane; only the Patterns view cares, since
+ * its per-column second-effect flags live in the store, keyed by pane index.
+ */
+const VIEW_SPEC = {
+  timeline: {
+    host: { id: "timeline", tag: "canvas", cls: "view-canvas" },
+    make: (el) => new TimelineView(store, el),
+  },
+  cues: {
+    host: { id: "cuesCanvas", tag: "canvas", cls: "view-canvas" },
+    make: (el) => new CuesView(store, el),
+  },
+  pattern: {
+    host: { id: "patternHost" },
+    make: (el, copy) => new PatternView(store, el, jam, { fx2Base: copy * FX2_BASE_STEP }),
+  },
+  samples: {
+    host: { id: "samplesHost" },
+    make: (el) => new SamplesView(store, el, { onNewInstrument: adoptNewInstrument }),
+  },
+  instruments: {
+    host: { id: "instrumentsHost" },
+    make: (el) => new InstrumentsView(store, el, jam),
+  },
+  project: {
+    host: { id: "projectHost" },
+    make: (el) => new ProjectView(store, el, {
+      editSong: (i) => editSongInteractive(i),
+      saveCopyAs: saveProjectCopyAs,
+    }),
+  },
+  files: {
+    host: { id: "filesHost", cls: "files-host" },
+    make: (el) => new FilesView(store, el, {
+      openBytes: (name, bytes) => loadBytes(name, bytes),
+      currentDoc: () => ({ doc: store.doc, fileName: store.fileName }),
+      songIndex: () => store.songIndex,
+      importMidi: () => importMidiInteractive({ toOpfs: true }),
+      editSong: (i) => editSongInteractive(i),
+    }),
+  },
+};
+
+// Fixtures that stay single whatever the split does: the instrument lookup is
+// one floating panel (the shell parks it over a pane holding a grid) and the
+// master strip sits beside the whole split.
+const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
+const masterStrip = new MasterStrip(store, $("masterStrip"));
+masterStrip.onToggle = () => refreshToolbox();
 
 /** Toolbox buttons that depend on the document, not on the view. */
 function refreshToolbox() {
@@ -634,8 +679,8 @@ function refreshToolbox() {
   // header's right-click menu (Timeline) and each column's E2 button (Patterns).
   refreshFx2Btn();
   // Master strip (item 98) — a Timeline fixture, so the button only means
-  // anything there.
-  $("tbMaster").hidden = store.view !== "timeline";
+  // anything while a pane is showing one (item 148).
+  $("tbMaster").hidden = !store.viewOpen("timeline");
   $("tbMaster").textContent = t(masterStrip.visible ? "toolbox.masterOn" : "toolbox.masterOff");
   $("tbMaster").classList.toggle("active", masterStrip.visible);
 }
@@ -646,40 +691,163 @@ function refreshToolbox() {
 // was a one-way trip, because the Timeline tab was as inert as the rest.
 const NO_DOC_VIEWS = ["timeline", "files"];
 
-function showView(name) {
-  store.view = name;
-  const noDoc = !store.doc;
-  for (const btn of $("tabs").children) {
-    btn.classList.toggle("active", btn.dataset.view === name);
-    // The dead-end tabs say so rather than silently swallowing the click.
-    btn.disabled = noDoc && !NO_DOC_VIEWS.includes(btn.dataset.view);
+/** Is this view reachable at all right now? (The dead-end tabs say so rather
+ *  than silently swallowing the click — item 104.1.) */
+function viewEnabled(name) { return !!store.doc || NO_DOC_VIEWS.includes(name); }
+
+/** paneViews[i] holds pane i's copy of each view it has ever shown, as
+ *  {el, els, obj} (+ the welcome screen on a Timeline entry). */
+const paneViews = [new Map(), new Map()];
+/** …and how many copies of each view exist, so a second one knows it is one. */
+const viewCopies = new Map();
+
+// The view area: one pane or two, each with its own tabs (item 148).
+const split = new SplitView($("splitHost"), {
+  onChange: () => applyViews(),
+  enabled: viewEnabled,
+  onAdopt: (from, to, name) => adoptPaneView(from, to, name),
+});
+
+/** The element a view draws into. The first copy takes the one index.html
+ *  declares; a second gets an id-less twin in its own pane's stage. */
+function hostFor(stage, spec, first) {
+  if (first) return $(spec.id);
+  const el = document.createElement(spec.tag ?? "div");
+  el.className = spec.cls ?? "view-dom";
+  el.hidden = true;
+  stage.appendChild(el);
+  return el;
+}
+
+function makeView(name, stage, copy) {
+  const spec = VIEW_SPEC[name];
+  const el = hostFor(stage, spec.host, copy === 0);
+  const entry = { el, els: [el], obj: spec.make(el, copy) };
+  if (name === "timeline") {
+    // The welcome screen is what the Timeline shows before a project is loaded
+    // (item 104), so it belongs to the Timeline's pane and travels with it.
+    entry.welcomeEl = hostFor(stage, { id: "welcomeHost" }, copy === 0);
+    entry.welcome = new WelcomeView(store, entry.welcomeEl, WELCOME_HOOKS);
+    entry.els.push(entry.welcomeEl);
   }
-  const welcome = noDoc && name === "timeline";
-  $("welcomeHost").hidden = !welcome;
-  welcome ? welcomeView.show() : welcomeView.hide();
-  $("toolbox").hidden = !(name === "timeline" || name === "pattern") || noDoc;
+  return entry;
+}
+
+/** Pane `pane`'s copy of `name`, built on first use. */
+function ensureView(pane, name) {
+  const existing = paneViews[pane].get(name);
+  if (existing) return existing;
+  const copy = viewCopies.get(name) ?? 0;
+  viewCopies.set(name, copy + 1);
+  const entry = makeView(name, split.stage(pane), copy);
+  paneViews[pane].set(name, entry);
+  return entry;
+}
+
+/** Move a view's copy (and its host elements) between panes — what closing
+ *  pane 0 does, so the survivor you keep is the one you were looking at. */
+function adoptPaneView(from, to, name) {
+  const entry = paneViews[from].get(name);
+  if (!entry) return;
+  const displaced = paneViews[to].get(name) ?? null;
+  paneViews[to].set(name, entry);
+  if (displaced) paneViews[from].set(name, displaced);
+  else paneViews[from].delete(name);
+  for (const el of entry.els) split.stage(to).appendChild(el);
+  if (displaced) for (const el of displaced.els) split.stage(from).appendChild(el);
+  entry.obj.rehost?.();       // a canvas measures whichever stage it is in now
+  displaced?.obj.rehost?.();
+}
+
+/** The copy of `name` the keyboard is talking to: the focused pane's when that
+ *  pane is showing it, else the other pane's, else the first copy (which
+ *  always exists — pane 0 builds all seven at boot, so the smoke tests can
+ *  drive a view that is not on screen). */
+function viewNamed(name) {
+  for (const i of [split.focus, 1 - split.focus]) {
+    if (split.paneView(i) === name) return paneViews[i].get(name).obj;
+  }
+  return paneViews[0].get(name)?.obj ?? paneViews[1].get(name)?.obj ?? null;
+}
+/** Every copy of `name` that exists, shown or not — invalidations, rebuilds. */
+function eachView(name, fn) {
+  for (const map of paneViews) { const e = map.get(name); if (e) fn(e.obj, e); }
+}
+/** …and only the copies a pane is actually showing — re-renders. */
+function eachOpenView(name, fn) {
+  for (let i = 0; i < paneViews.length; i++) {
+    const e = split.paneView(i) === name ? paneViews[i].get(name) : null;
+    if (e) fn(e.obj, e);
+  }
+}
+/** Repaint every grid copy: record mode, theme, canvas font, the raw-note and
+ *  panner toggles — all of them change what a grid draws, in any pane. */
+function invalidateGrids() {
+  for (const name of ["timeline", "cues", "pattern"]) eachView(name, (v) => v.invalidate());
+}
+
+// Pane 0 gets all seven up front, the way the shell always built them: the
+// hosts are in index.html already, several views are driven before they are
+// first shown (the smoke tests, the language switch), and it keeps "the first
+// copy" a fixed, predictable thing.
+for (const name of VIEWS) ensureView(0, name);
+
+/** Go to a view: the pane already showing it takes the keyboard, otherwise the
+ *  focused pane switches to it. (A tab CLICK goes through SplitView, which
+ *  will happily give both panes the same view.) */
+function showView(name) { split.reveal(name); }
+
+/** One view's show/hide, per pane copy. `on` = its pane is showing it. */
+function applyEntry(name, entry, on) {
+  const noDoc = !store.doc;
+  if (name === "timeline") {
+    const welcome = on && noDoc;
+    entry.welcomeEl.hidden = !welcome;
+    welcome ? entry.welcome.show() : entry.welcome.hide();
+    entry.el.hidden = !on || noDoc;
+    if (on && !noDoc) entry.obj.resize();
+    return;
+  }
+  entry.el.hidden = !on;
+  switch (name) {
+    case "cues": if (on) entry.obj.resize(); break;
+    case "files": if (on) entry.obj.refresh(); break;
+    default: on ? entry.obj.show() : entry.obj.hide(); break;
+  }
+}
+
+/**
+ * Reflect the pane layout onto the views: build what a pane now needs, then
+ * show/hide every copy that exists. Driven by "is THIS pane showing it", so
+ * the same view being open in both panes is just two copies both on. Runs
+ * after every split change; everything in it is idempotent.
+ */
+function applyViews() {
+  const noDoc = !store.doc;
+  const open = split.views; // one or two view names, in pane order
+  store.views = open;
+  store.view = split.view;
+  const has = (v) => open.includes(v);
+
+  for (let i = 0; i < paneViews.length; i++) {
+    const shown = split.paneView(i);
+    if (shown) ensureView(i, shown);
+    for (const [name, entry] of paneViews[i]) applyEntry(name, entry, name === shown);
+  }
+  // The instrument lookup floats over a GRID — hand it to the focused pane
+  // when that is one, else to whichever pane holds a grid at all.
+  const gridPane = store.view === "timeline" || store.view === "pattern"
+    ? split.focus
+    : Math.max(split.paneOf("timeline"), split.paneOf("pattern"));
+  if (gridPane >= 0 && $("instLookup").parentElement !== split.stage(gridPane)) {
+    split.stage(gridPane).appendChild($("instLookup"));
+  }
+
+  $("toolbox").hidden = !(has("timeline") || has("pattern")) || noDoc;
   refreshToolbox();
-  $("timeline").hidden = name !== "timeline" || noDoc;
-  $("cuesCanvas").hidden = name !== "cues";
-  $("patternHost").hidden = name !== "pattern";
-  $("samplesHost").hidden = name !== "samples";
-  $("instrumentsHost").hidden = name !== "instruments";
-  $("projectHost").hidden = name !== "project";
-  $("filesHost").hidden = name !== "files";
   $("placeholder").hidden = true;
-  if (name === "timeline" && !noDoc) timeline.resize();
-  if (name === "cues") cuesView.resize();
-  name === "pattern" ? patternView.show() : patternView.hide();
-  name === "samples" ? samplesView.show() : samplesView.hide();
-  name === "instruments" ? instrumentsView.show() : instrumentsView.hide();
-  name === "project" ? projectView.show() : projectView.hide();
-  if (name === "files") filesView.refresh();
   store.emit("view");
 }
-$("tabs").addEventListener("click", (e) => {
-  const btn = e.target.closest("button");
-  if (btn && (store.doc || NO_DOC_VIEWS.includes(btn.dataset.view))) showView(btn.dataset.view);
-});
 
 // ── transport ──
 async function playFrom(cue, row) {
@@ -700,10 +868,10 @@ async function playFrom(cue, row) {
 function playCursor() {
   if (store.view === "cues") {
     const nCues = store.song?.cues.length ?? 0;
-    const cue = Math.min(Math.max(cuesView.cursor.cue, 0), Math.max(nCues - 1, 0));
+    const cue = Math.min(Math.max(viewNamed("cues").cursor.cue, 0), Math.max(nCues - 1, 0));
     return { cue, row: 0 };
   }
-  const loc = timeline.locate(store.cursor.row);
+  const loc = viewNamed("timeline").locate(store.cursor.row);
   return { cue: loc ? loc.entry.cue : 0, row: loc ? loc.rowInCue : 0 };
 }
 
@@ -715,9 +883,7 @@ $("follow").addEventListener("change", (e) => { store.follow = e.target.checked;
 function setRecord(on) {
   store.record = on;
   $("recBtn").classList.toggle("on", on);
-  timeline.invalidate();
-  cuesView.invalidate();
-  patternView.invalidate();
+  invalidateGrids();
   updateHint(); // record mode changes the grid-view hint (item 78)
 }
 $("recBtn").addEventListener("click", () => setRecord(!store.record));
@@ -755,15 +921,15 @@ $("langBtn").addEventListener("click", async () => {
 onLangChange(() => {
   $("langBtn").textContent = currentLang().toUpperCase();
   $("tbRaw").textContent = t(store.rawNoteView ? "toolbox.rawOn" : "toolbox.rawOff");
+  split.refresh();  // the panes' split/close button titles (item 148)
   refreshToolbox(); // the other imperatively-labelled toolbox buttons
-  patternView.buildBar();
+  eachView("pattern", (v) => v.buildBar());
   palette.refresh();
   instLookup.render();
   if (store.doc) rebuildSongList();
-  if (store.view === "samples") samplesView.refresh();
-  if (store.view === "instruments") instrumentsView.refresh();
-  if (store.view === "project") projectView.refresh();
-  if (store.view === "files") filesView.refresh();
+  for (const name of ["samples", "instruments", "project", "files"]) {
+    eachOpenView(name, (v) => v.refresh());
+  }
   updateStatus();
 });
 
@@ -772,33 +938,26 @@ $("themeBtn").addEventListener("click", () => toggleTheme());
 onThemeChange(() => {
   // repaint every canvas + refresh DOM views that cache colours implicitly
   refreshCanvasFont(); // --cv-font could be themed too
-  timeline.invalidate();
-  cuesView.invalidate();
-  patternView.invalidate();
-  if (store.view === "samples") samplesView.refresh();
-  if (store.view === "instruments") instrumentsView.renderPanel();
+  invalidateGrids();
+  eachOpenView("samples", (v) => v.refresh());
+  eachOpenView("instruments", (v) => v.renderPanel());
 });
 
 // ── canvas grid webfont (--cv-font) ──
 // Canvas text never triggers a webfont download on its own; force-load the
 // faces at the sizes the grids draw (12px timeline/cues, 13px patterns) and
 // repaint once the real font is in (early paints show the fallback stack).
-loadCanvasFonts([13, 14], () => {
-  timeline.invalidate();
-  cuesView.invalidate();
-  patternView.invalidate();
-});
+loadCanvasFonts([13, 14], () => invalidateGrids());
 
 // ── toolbox (Timeline / Patterns) ──
-$("tbRetune").addEventListener("click", () => projectView.openRetune());
+$("tbRetune").addEventListener("click", () => viewNamed("project").openRetune());
 store.rawNoteView = false;
 $("tbRaw").textContent = t("toolbox.rawOff");
 $("tbRaw").addEventListener("click", () => {
   store.rawNoteView = !store.rawNoteView;
   $("tbRaw").textContent = t(store.rawNoteView ? "toolbox.rawOn" : "toolbox.rawOff");
   $("tbRaw").classList.toggle("active", store.rawNoteView);
-  timeline.invalidate();
-  patternView.invalidate();
+  invalidateGrids();
 });
 // Second effect column (§5.5) — hidden by default, because most songs never
 // write one and it costs six characters of the widest column on screen. This
@@ -822,8 +981,8 @@ $("tbRadar").addEventListener("click", () => {
   store.surroundMeters = !store.surroundMeters;
   $("tbRadar").textContent = t(store.surroundMeters ? "toolbox.radarOn" : "toolbox.radarOff");
   $("tbRadar").classList.toggle("active", store.surroundMeters);
-  timeline.resize(); // the header got taller/shorter — row layout follows
-  timeline.invalidate();
+  // the header got taller/shorter — every Timeline's row layout follows
+  eachView("timeline", (v) => { v.resize(); v.invalidate(); });
 });
 // Binaural monitoring (#998.3): the stereo fold cannot render height, and it
 // mirrors the rear arc onto the front, so a surround song is monitored through
@@ -840,8 +999,7 @@ $("tbBinaural").addEventListener("click", () => {
 $("tbPanner").addEventListener("click", async () => {
   const { showPanner } = await import("./popups/panner.js");
   await showPanner(store, cursorCellTarget());
-  timeline.invalidate();
-  patternView.invalidate();
+  invalidateGrids();
 });
 // Master strip (item 98): the mastering panel down the right-hand edge —
 // vectorscopes, RMS/peak metering and the song's global-volume fader. Visible
@@ -888,8 +1046,7 @@ onWheelCtl("instCtl", (dir) => stepCurrentInst(dir));
  *  they are the global octave ([ ]) / instrument ({ }) steppers. */
 function handleBracket(dir, shift) {
   if (store.record && (store.view === "timeline" || store.view === "pattern")) {
-    const view = store.view === "timeline" ? timeline : patternView;
-    if (view.bracketEdit(dir, shift)) { updateStatus(); return; }
+    if (viewNamed(store.view).bracketEdit(dir, shift)) { updateStatus(); return; }
   }
   if (shift) stepCurrentInst(dir);                       // { } = instrument down/up
   else { jam.octaveDelta(dir); updateStatus(); }         // [ ] = octave down/up
@@ -910,7 +1067,7 @@ onWheelCtl("spdCtl", (dir) => {
 function cursorCellTarget() {
   if (!store.doc) return null;
   if (store.view === "timeline") {
-    const target = timeline.cursorCell();
+    const target = viewNamed("timeline").cursorCell();
     if (!target) return null;
     return {
       sub: store.cursor.sub,
@@ -923,17 +1080,18 @@ function cursorCellTarget() {
     };
   }
   if (store.view === "pattern") {
-    const pattern = patternView.pattern();
+    const pat = viewNamed("pattern");
+    const pattern = pat.pattern();
     if (!pattern) return null;
-    const row = patternView.cursor.row;
+    const row = pat.cursor.row;
     return {
-      sub: patternView.cursor.sub,
-      channel: patternView.cursor.ch ?? 0,
+      sub: pat.cursor.sub,
+      channel: pat.cursor.ch ?? 0,
       rowLabel: String(row),
       wide: store.doc.wideCells === true,
       cell: pattern[row],
       apply: (fields) => store.undo.apply(
-        setCellOp(store.songIndex, patternView.patIdx, row, fields)),
+        setCellOp(store.songIndex, pat.patIdx, row, fields)),
     };
   }
   return null;
@@ -950,9 +1108,7 @@ for (const topic of ["cursor", "edit", "view", "doc"]) {
 // The grid views that support block selection + clipboard (item 17; Cues added
 // later — it keeps its own cue-word clipboard, store.cueClipboard).
 function selView() {
-  return store.view === "timeline" ? timeline
-    : store.view === "pattern" ? patternView
-    : store.view === "cues" ? cuesView : null;
+  return ["timeline", "pattern", "cues"].includes(store.view) ? viewNamed(store.view) : null;
 }
 
 // A button keeps DOM focus after it is clicked, and a focused button treats
@@ -987,7 +1143,7 @@ window.addEventListener("keydown", (e) => {
   // no-doc guards below, so a focused field or open modal can't swallow it.
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
-    if (store.doc) filesView.save();
+    if (store.doc) viewNamed("files").save();
     return;
   }
   if (!store.doc) {
@@ -1081,11 +1237,11 @@ window.addEventListener("keydown", (e) => {
     case "Space": {
       if (store.audio?.isPlaying())
         store.audio.stop(0);
-      else if (store.view === "cues" && cuesView.cursor.col <= 1) {
+      else if (store.view === "cues" && viewNamed("cues").cursor.col <= 1) {
         // Space on a Cmd column opens the command popup, like Enter — the
         // record toggle is meaningless on the command words.
         e.preventDefault();
-        cuesView.openCmdEditor();
+        viewNamed("cues").openCmdEditor();
       } else
         setRecord(!store.record);
       return;
@@ -1094,21 +1250,30 @@ window.addEventListener("keydown", (e) => {
     case "BracketRight": e.preventDefault(); handleBracket(1, e.shiftKey); return;
     case "F1": case "F2": case "F3": case "F4": case "F5": case "F6": case "F7": {
       e.preventDefault();
-      const views = ["timeline", "cues", "pattern", "samples", "instruments", "project", "files"];
-      showView(views[parseInt(e.code.slice(1), 10) - 1]);
+      showView(VIEWS[parseInt(e.code.slice(1), 10) - 1]);
+      return;
+    }
+    // F8 — split the view area in two / close the pane the keyboard is in
+    // (item 148). Shift+F8 walks the keyboard between the two panes.
+    case "F8": {
+      e.preventDefault();
+      if (e.shiftKey) split.setFocus(1 - split.focus);
+      else if (split.isSplit) split.close(split.focus);
+      else split.split();
       return;
     }
   }
 
   if (store.view === "cues") {
-    if (cuesView.processKey(e)) { e.preventDefault(); return; }
+    if (viewNamed("cues").processKey(e)) { e.preventDefault(); return; }
     return;
   }
 
   if (store.view === "pattern") {
-    if (patternView.processKey(e)) { e.preventDefault(); updateStatus(); return; }
+    const pat = viewNamed("pattern");
+    if (pat.processKey(e)) { e.preventDefault(); updateStatus(); return; }
     // jam-only fallback on the note column / when record is off
-    if (!store.record || patternView.cursor.sub === SUB_NOTE) {
+    if (!store.record || pat.cursor.sub === SUB_NOTE) {
       if (jam.down(e.code, e.repeat)) { e.preventDefault(); return; }
     }
     return;
@@ -1124,6 +1289,7 @@ window.addEventListener("keydown", (e) => {
   if (store.view === "project" || store.view === "files") return;
 
   if (store.view === "timeline") {
+    const timeline = viewNamed("timeline"); // the focused pane's copy
     switch (e.code) {
       case "ArrowUp": e.preventDefault();
         e.shiftKey ? timeline.extendSelection(-1, 0) : timeline.moveCursor(-store.editStep || -1, 0); return;
@@ -1209,11 +1375,11 @@ async function openGoto() {
   const entry = map.entries[Math.min(cue, map.entries.length - 1)];
   if (!entry) return;
   store.cursor.row = entry.startRow + Math.min(row, entry.rowLimit - 1);
-  timeline.centreRow(store.cursor.row);
+  // "Take me there" means every pane looking at it, not just the focused one.
+  eachView("timeline", (v) => v.centreRow(store.cursor.row));
   store.emit("cursor");
   if (store.view === "cues") {
-    cuesView.cursor.cue = entry.cue;
-    cuesView.invalidate();
+    eachView("cues", (v) => { v.cursor.cue = entry.cue; v.invalidate(); });
   }
 }
 
@@ -1274,7 +1440,21 @@ if (bootParams.has("load")) {
 }
 
 // Expose internals for the headless editing smoke test (harmless in prod).
-window.__microtone = { store, timeline, cuesView, patternView, samplesView, instrumentsView, projectView, filesView, welcomeView, jam, instLookup, masterStrip, loadBytes, playCursor };
+// The view handles are GETTERS: with the screen split there can be two copies
+// of a view, and the one that matters is the one the keyboard is on (item
+// 148.1). Unsplit — which is how the smoke tests run — they answer exactly the
+// single instance they always did.
+window.__microtone = {
+  store, jam, instLookup, masterStrip, split, loadBytes, playCursor, paneViews,
+  get timeline() { return viewNamed("timeline"); },
+  get cuesView() { return viewNamed("cues"); },
+  get patternView() { return viewNamed("pattern"); },
+  get samplesView() { return viewNamed("samples"); },
+  get instrumentsView() { return viewNamed("instruments"); },
+  get projectView() { return viewNamed("project"); },
+  get filesView() { return viewNamed("files"); },
+  get welcomeView() { return paneViews[split.focus].get("timeline")?.welcome ?? paneViews[0].get("timeline").welcome; },
+};
 
 // Paint the initial view (item 104): with nothing loaded that is the welcome
 // screen, and it also puts the no-document tabs into their disabled state. A
@@ -1291,11 +1471,13 @@ function frame() {
     $("posBpm").textContent = audio.getBPM() || "–";
     $("posSpd").textContent = audio.getTickRate() || "–";
   }
-  if (store.view === "timeline") { timeline.frame(); masterStrip.frame(); }
-  if (store.view === "cues") cuesView.frame();
-  if (store.view === "pattern") patternView.frame();
-  if (store.view === "samples") samplesView.frame();
-  if (store.view === "instruments") instrumentsView.frame();
+  // Every view a pane is showing gets a frame, not just the focused one — and
+  // two panes on the same view are two copies, each with its own scroll.
+  for (let i = 0; i < paneViews.length; i++) {
+    const name = split.paneView(i);
+    if (name) paneViews[i].get(name)?.obj.frame?.();
+  }
+  if (store.viewOpen("timeline")) masterStrip.frame();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

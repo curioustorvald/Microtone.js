@@ -45,9 +45,11 @@ export class InstLookup {
     return this.enabled;
   }
 
-  /** Shown only when enabled AND on a grid view (Timeline/Patterns) with a doc. */
+  /** Shown only when enabled AND on a grid view (Timeline/Patterns) with a doc.
+   *  With the view split (item 148) either pane will do — the shell moves the
+   *  panel into whichever one is holding a grid. */
   applyVisibility() {
-    const onGrid = this.store.view === "timeline" || this.store.view === "pattern";
+    const onGrid = this.store.viewOpen("timeline") || this.store.viewOpen("pattern");
     const show = this.enabled && onGrid && !!this.store.doc;
     this.el.hidden = !show;
     if (show) this.render();

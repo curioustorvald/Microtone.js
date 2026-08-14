@@ -1,0 +1,255 @@
+<!doctype html><meta charset="utf-8"><title>two-pane split (item 148)</title>
+<pre id="out">running… (~10s)</pre>
+<!-- Everything here waits on ResizeObserver deliveries, which are starved by
+     --virtual-time-budget: run this page in REAL time
+     (tools/test-server.py + chromium --timeout=25000; the /hang image below is
+     what keeps the load event pending that long). -->
+<img src="/hang" hidden>
+<!-- Landscape to begin with: wider than tall, so the panes must open side by
+     side. The test reshapes the frame later to check the other direction. -->
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1400px;height:900px"></iframe>
+<script type="module">
+// Drives the REAL app: splitting the view area in two, what each pane's own
+// tab strip does, the direction rule (aspect ≥ 1.05 ⇒ side by side, else
+// stacked), the draggable seam, and the master strip keeping the right-hand
+// edge through all of it.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; console.log("SPLIT: " + s); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+(async () => {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone?.store.doc; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone\nDONE"); return; }
+  const doc = win.document;
+  const { store, split } = M;
+  const $ = (id) => doc.getElementById(id);
+  const host = $("splitHost");
+  const panes = [...host.querySelectorAll(".pane")];
+  const paneBtn = (i) => panes[i].querySelector(".pane-btn");
+  const tab = (i, v) => panes[i].querySelector(`.tabs button[data-view="${v}"]`);
+  const rect = (el) => el.getBoundingClientRect();
+  // Each pane owns its own COPY of a view (item 148.1), so the host element is
+  // per pane — only the first copy has the id index.html gives it.
+  const hostOf = (i, name) => M.paneViews[i].get(name)?.el ?? null;
+  const objOf = (i, name) => M.paneViews[i].get(name)?.obj ?? null;
+
+  // ── 1. it starts as one pane ──────────────────────────────────────────────
+  check(panes.length === 2 && panes[1].hidden && rect(panes[1]).width === 0,
+    "the second pane starts closed", `${panes.length} panes`);
+  check(!split.isSplit && store.views.length === 1 && store.view === "timeline",
+    "one pane, showing the Timeline", store.views.join());
+  check(panes[0].querySelector(".tabs").id === "tabs" &&
+    panes[0].querySelector(".tabs").children.length === 7,
+    "pane 0 keeps the seven tabs (#tabs)");
+  check(panes[1].querySelector(".tabs").children.length === 7,
+    "…and the closed pane carries its own seven");
+  check(!$("splitHost").classList.contains("is-split") && split.divider.hidden,
+    "no seam while there is one pane");
+
+  // ── 2. splitting ─────────────────────────────────────────────────────────
+  paneBtn(0).click();
+  await sleep(250);
+  check(split.isSplit && !panes[1].hidden, "the split button opens the second pane");
+  check(store.views.join() === "timeline,pattern",
+    "the new pane opens on something else (Timeline | Patterns)", store.views.join());
+  check(!hostOf(0, "timeline").hidden && !hostOf(1, "pattern").hidden,
+    "both views are on screen at once");
+  check(hostOf(1, "pattern").parentElement === $("viewStage2") &&
+    hostOf(0, "timeline").parentElement === $("viewStage"),
+    "each pane's view host sits in its own stage");
+  check(store.view === "pattern" && panes[1].classList.contains("focused"),
+    "the new pane takes the keyboard", store.view);
+  // Wider than tall ⇒ left/right.
+  check(!host.classList.contains("stacked") &&
+    Math.abs(rect(panes[0]).top - rect(panes[1]).top) < 2 &&
+    rect(panes[0]).right <= rect(panes[1]).left + 1,
+    "a landscape canvas splits left-right",
+    `${Math.round(rect(host).width)}x${Math.round(rect(host).height)}`);
+  check(!split.divider.hidden && rect(split.divider).left >= rect(panes[0]).right - 1,
+    "the seam sits between them");
+
+  // ── 3. the master strip keeps the right-hand edge ────────────────────────
+  const strip = $("masterStrip");
+  check(!strip.hidden, "the master strip stays out while a pane shows the Timeline");
+  check(!host.contains(strip) &&
+    Math.abs(rect(strip).right - rect($("viewHost")).right) < 2 &&
+    rect(host).right <= rect(strip).left + 1,
+    "…on the right end of the canvas, beside the WHOLE split",
+    `${Math.round(rect(strip).right)} vs ${Math.round(rect($("viewHost")).right)}`);
+
+  // ── 4. the seam resizes the panes ────────────────────────────────────────
+  const w0 = rect(panes[0]).width;
+  const y = rect(split.divider).top + 20;
+  const target = rect(host).left + rect(host).width * 0.3;
+  split.divider.dispatchEvent(new win.PointerEvent("pointerdown",
+    { clientX: rect(split.divider).left + 4, clientY: y, bubbles: true, pointerId: 1 }));
+  split.divider.dispatchEvent(new win.PointerEvent("pointermove",
+    { clientX: target, clientY: y, bubbles: true, pointerId: 1 }));
+  split.divider.dispatchEvent(new win.PointerEvent("pointerup",
+    { clientX: target, clientY: y, bubbles: true, pointerId: 1 }));
+  await sleep(200);
+  const w1 = rect(panes[0]).width;
+  check(w1 < w0 - 50 && Math.abs(w1 - rect(host).width * 0.3) < 12,
+    "dragging the seam resizes the panes", `${Math.round(w0)} → ${Math.round(w1)}`);
+  // The Timeline canvas followed its pane, not the old stage width.
+  check(Math.abs($("timeline").getBoundingClientRect().width - rect(panes[0]).width) < 2,
+    "the grid canvas re-measures its pane");
+  split.divider.dispatchEvent(new win.MouseEvent("dblclick", { bubbles: true }));
+  await sleep(150);
+  check(Math.abs(rect(panes[0]).width - rect(panes[1]).width) < 12,
+    "double-clicking the seam evens them up");
+
+  // ── 5. the SAME view in both panes (item 148.1) ──────────────────────────
+  tab(1, "timeline").click();
+  await sleep(250);
+  check(store.views.join() === "timeline,timeline",
+    "both panes can show the Timeline at once", store.views.join());
+  const tl2 = hostOf(1, "timeline");
+  check(!!tl2 && tl2 !== $("timeline") && tl2.parentElement === $("viewStage2") &&
+    !tl2.hidden && rect(tl2).width > 10 && rect($("timeline")).width > 10,
+    "the second pane got a Timeline canvas of its own, both drawn");
+  // Two copies, so they scroll independently — the whole point of the thing.
+  const copies = [objOf(0, "timeline"), objOf(1, "timeline")];
+  check(copies[0] !== copies[1], "…backed by two separate Timeline views");
+  copies[1].scrollBy(32);
+  await sleep(120);
+  check(copies[0].scrollRow !== copies[1].scrollRow,
+    "scrolling one leaves the other where it was",
+    `${copies[0].scrollRow} vs ${copies[1].scrollRow}`);
+  check(!strip.hidden, "the master strip is out for either of them");
+  // The keyboard talks to the focused copy — pane 1's, which was clicked last.
+  check(M.timeline === copies[1], "the exposed handle follows the keyboard");
+
+  tab(1, "samples").click();
+  await sleep(200);
+  check(store.views.join() === "timeline,samples" && !strip.hidden,
+    "a pane can go back to another view", store.views.join());
+  tab(0, "pattern").click();
+  await sleep(200);
+  check(store.views.join() === "pattern,samples" && strip.hidden,
+    "…and the strip goes once no pane shows the Timeline", store.views.join());
+
+  // ── 6. the direction follows the shape of the canvas ─────────────────────
+  tab(0, "timeline").click(); // Timeline | Samples — the strip is out again
+  await sleep(200);
+  app.style.width = "700px";
+  app.style.height = "1100px";
+  await sleep(400);
+  check(host.classList.contains("stacked") &&
+    Math.abs(rect(panes[0]).left - rect(panes[1]).left) < 2 &&
+    rect(panes[0]).bottom <= rect(panes[1]).top + 1,
+    "a portrait canvas splits up-down",
+    `${Math.round(rect(host).width)}x${Math.round(rect(host).height)}`);
+  check(Math.abs(rect(strip).right - rect($("viewHost")).right) < 2 &&
+    rect(strip).height > rect(panes[0]).height,
+    "the master strip STILL keeps the right end, spanning both panes");
+  // …and the seam drags the other way now.
+  const h0 = rect(panes[0]).height;
+  const yT = rect(host).top + rect(host).height * 0.3;
+  const x = rect(split.divider).left + 20;
+  split.divider.dispatchEvent(new win.PointerEvent("pointerdown",
+    { clientX: x, clientY: rect(split.divider).top + 4, bubbles: true, pointerId: 2 }));
+  split.divider.dispatchEvent(new win.PointerEvent("pointermove",
+    { clientX: x, clientY: yT, bubbles: true, pointerId: 2 }));
+  split.divider.dispatchEvent(new win.PointerEvent("pointerup",
+    { clientX: x, clientY: yT, bubbles: true, pointerId: 2 }));
+  await sleep(200);
+  check(rect(panes[0]).height < h0 - 50, "the seam drags vertically when stacked",
+    `${Math.round(h0)} → ${Math.round(rect(panes[0]).height)}`);
+  app.style.width = "1400px";
+  app.style.height = "900px";
+  await sleep(400);
+  check(!host.classList.contains("stacked"), "…and back to side by side");
+
+  // ── 7. closing ───────────────────────────────────────────────────────────
+  // (a) closing the pane the keyboard is IN hands its copy over, not just its
+  //     tab: with two Timelines at different bars you keep the bar you were on.
+  tab(1, "timeline").click();
+  await sleep(250);
+  const kept = objOf(1, "timeline");
+  kept.scrollBy(48);
+  const keptRow = kept.scrollRow;
+  check(keptRow > 0 && objOf(0, "timeline").scrollRow !== keptRow,
+    "two Timelines, scrolled apart", `${objOf(0, "timeline").scrollRow} vs ${keptRow}`);
+  paneBtn(0).click();  // ✕ on the pane the keyboard is in
+  await sleep(250);
+  check(!split.isSplit && objOf(0, "timeline") === kept,
+    "closing your own pane moves its view across, not just its tab");
+  check(objOf(0, "timeline").scrollRow === keptRow &&
+    hostOf(0, "timeline").parentElement === $("viewStage") &&
+    Math.abs(rect(hostOf(0, "timeline")).width - rect($("viewStage")).width) < 2,
+    "…keeping where it was scrolled to, re-measured for the full stage",
+    `${objOf(0, "timeline").scrollRow} vs ${keptRow}`);
+
+  // (b) closing the OTHER pane leaves yours exactly as it was.
+  paneBtn(0).click();          // split again
+  await sleep(250);
+  tab(1, "samples").click();
+  await sleep(200);
+  paneBtn(1).click();  // close the pane holding Samples
+  await sleep(250);
+  check(!split.isSplit && store.views.join() === "timeline",
+    "closing a pane leaves the other pane's view", store.views.join());
+  check(panes[1].hidden && split.divider.hidden && hostOf(1, "samples").hidden,
+    "the closed pane and the seam are gone, and so is the view it held");
+  check(hostOf(0, "timeline").parentElement === $("viewStage") && store.view === "timeline",
+    "the survivor lands in pane 0 (#viewStage), with the keyboard");
+  check(Math.abs(rect(hostOf(0, "timeline")).width - rect($("viewStage")).width) < 2,
+    "…and the grid canvas fills the whole stage again");
+
+  // ── 8. F8 does the same from the keyboard ────────────────────────────────
+  const key = (code, shift = false) => win.dispatchEvent(
+    new win.KeyboardEvent("keydown", { code, shiftKey: shift, bubbles: true }));
+  key("F8");
+  await sleep(250);
+  check(split.isSplit && store.views.length === 2, "F8 splits", store.views.join());
+  const focused = split.focus;
+  key("F8", true);
+  await sleep(150);
+  check(split.focus === 1 - focused, "Shift+F8 hands the keyboard to the other pane");
+  key("F8");
+  await sleep(250);
+  check(!split.isSplit, "F8 again closes the pane it is in", store.views.join());
+  // Back to a single Timeline pane: the shell is where it started.
+  tab(0, "timeline").click();
+  await sleep(200);
+  check(store.views.join() === "timeline" && !hostOf(0, "timeline").hidden && !strip.hidden,
+    "one pane, Timeline, master strip out");
+
+  // ── 9. splitting with nothing loaded ─────────────────────────────────────
+  // Before a project is open the Timeline pane IS the welcome screen (item
+  // 104) and every tab but File is a dead end — so that is what the second
+  // pane has to open on, rather than a disabled one.
+  {
+    const f2 = document.createElement("iframe");
+    f2.src = "../../index.html";
+    f2.style.cssText = "width:1400px;height:900px";
+    document.body.appendChild(f2);
+    await new Promise((r) => f2.addEventListener("load", r));
+    const w2 = f2.contentWindow;
+    for (let i = 0; i < 100 && !w2.__microtone; i++) await sleep(50);
+    const M2 = w2.__microtone;
+    const d2 = w2.document;
+    M2.split.split();
+    await sleep(300);
+    check(M2.store.views.join() === "timeline,files",
+      "with no document the new pane opens on the File tab", M2.store.views.join());
+    check(!d2.getElementById("welcomeHost").hidden &&
+      !M2.paneViews[1].get("files").el.hidden,
+      "the welcome screen and the file browser, side by side");
+    check([...d2.querySelectorAll('.pane .tabs button[data-view="samples"]')]
+      .every((b) => b.disabled),
+      "…and both strips still grey out the dead-end tabs");
+    f2.remove();
+  }
+
+  log(fails === 0 ? "RESULT: PASS" : `RESULT: ${fails} FAILURE(S)`);
+  log("DONE");
+})().catch((err) => log(`EXCEPTION ${err.message}\n${err.stack}\nDONE`));
+</script>

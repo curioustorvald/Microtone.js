@@ -12,6 +12,7 @@ export function showHelp() {
     ["Shift+Enter", t("help.playStart")],
     ["Ctrl+Enter", t("help.playCue")],
     ["F1…F7", t("help.views")],
+    ["F8 · Shift+F8", t("help.split")],
     ["[ ]", t("help.octave")],
     ["{ }", t("help.instStep")],
     ["M / N", t("help.muteSolo")],

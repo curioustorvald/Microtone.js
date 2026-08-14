@@ -2,8 +2,10 @@
 // "edit" (dirty tags), "view", "cursor", "transport", "mutes", "fx2".
 
 /** Panes the Patterns view can hold — the fx2 flags are kept per pane INDEX so
- *  they survive the pane churn a viewport resize causes (pattern.js MAX_PANES). */
-const FX2_PANES = 16;
+ *  they survive the pane churn a viewport resize causes (pattern.js MAX_PANES).
+ *  Twice that, because a split screen can hold TWO Patterns views (item 148.1)
+ *  and the second one's columns index from the halfway mark (its fx2Base). */
+const FX2_PANES = 32;
 
 export class Store {
   constructor() {
@@ -12,7 +14,10 @@ export class Store {
     this.undo = null;        // UndoStack
     this.audio = null;       // AudioSystem
     this.songIndex = 0;
+    // The FOCUSED pane's view — what the keyboard is talking to. `views` is
+    // every open pane's view in pane order (item 148: one entry, or two).
     this.view = "timeline";
+    this.views = ["timeline"];
     this.fileName = null;
     this.follow = true;
     /** #998.3: monitor surround songs through the binaural head model. Default
@@ -28,6 +33,11 @@ export class Store {
     this.fx2Panes = new Array(FX2_PANES).fill(false);
     this._subs = new Map();
   }
+
+  /** Is `name` on screen in ANY pane? Fixtures that belong to a view rather
+   *  than to the keyboard (the master strip, the instrument lookup) ask this
+   *  instead of comparing against `view`. */
+  viewOpen(name) { return this.views.includes(name); }
 
   // ── the second effect column ──
   /** Is the column exposed on channel `ch`? Only a v3 document HAS one. */

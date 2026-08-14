@@ -382,13 +382,94 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 
 .grow { flex: 1; }
 
-.tabs {
+/* ── split panes (item 148) ───────────────────────────────────────────────
+ * The view area holds one pane or two, and each pane carries its own tab strip
+ * plus the button that splits it (or closes it again). Which WAY it splits
+ * follows the shape of the area being split — side by side while it is wider
+ * than tall, stacked otherwise; splitview.js measures and sets the class, the
+ * stylesheet knows nothing about the threshold. The master strip is a sibling
+ * of the whole split, so it keeps the right-hand edge either way. */
+.split-host {
+  flex: 1;
   display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
+.split-host.stacked { flex-direction: column; }
+.pane {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* …but a closed pane is closed: `display: flex` above would otherwise beat the
+   UA stylesheet's [hidden] rule and leave the empty pane on screen. */
+.pane[hidden] { display: none; }
+/* The seam between the panes, and the grip that resizes them (like the master
+   strip's ms-split). Its 8px are what splitview.js budgets out of the ratio. */
+.pane-divider {
+  flex: 0 0 8px;
+  background:
+    linear-gradient(var(--dim), var(--dim)) center/1px 28px no-repeat,
+    var(--panel);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
+  opacity: 0.65;
+  touch-action: none;
+}
+.split-host.stacked .pane-divider {
+  background:
+    linear-gradient(var(--dim), var(--dim)) center/28px 1px no-repeat,
+    var(--panel);
+  border: none;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: row-resize;
+}
+.pane-divider:hover { opacity: 1; }
+
+.pane-head {
+  display: flex;
+  align-items: flex-end;
   gap: 2px;
   padding: 0.25rem 0.8rem 0;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+.pane-btn { align-self: center; margin-left: 0.5rem; padding: 0.1rem 0.4rem; color: var(--dim); }
+.pane-btn:hover { color: var(--fg); }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+/* Half the width means the seven tabs have to give up their comfortable
+   minimum — they shrink to their labels and, when even those will not fit,
+   wrap onto a second row. Wrapping costs the pane a line of height; clipping
+   would cost you the difference between SAMPLES and SAMPLE, which on a strip
+   of seven abbreviations is the whole point of reading them. */
+.split-host.is-split .tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+.split-host.is-split .tabs button {
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.6rem;
+  white-space: nowrap;
+}
+/* Which pane the keyboard is talking to: its active tab is in the accent, the
+   other pane's is merely legible. */
+.split-host.is-split .pane:not(.focused) .tabs button.active { color: var(--fg); }
+
 .tabs button {
   border-radius: 6px 6px 0 0;
   border-bottom: none;
@@ -418,11 +499,13 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   min-height: 0;
   overflow: hidden;
 }
-/* Views live here; the master strip (item 98) sits beside it, not over it. */
+/* Views live here — one stage per pane, under that pane's tab strip. The
+   master strip (item 98) sits beside the whole split, not over it. */
 .view-stage {
   flex: 1;
   position: relative;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 

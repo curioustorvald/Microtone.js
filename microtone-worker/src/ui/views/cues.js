@@ -87,7 +87,16 @@ export class CuesView {
     canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
     canvas.addEventListener("contextmenu", (e) => this.onContextMenu(e));
     canvas.addEventListener("dblclick", () => this.openCmdEditor());
-    new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
+    this._ro = new ResizeObserver(() => this.resize());
+    this._ro.observe(canvas.parentElement);
+  }
+
+  /** The canvas can be moved between split panes (item 148) — point the size
+   *  observer at the stage it landed in and measure that one. */
+  rehost() {
+    this._ro.disconnect();
+    this._ro.observe(this.canvas.parentElement);
+    this.resize();
   }
 
   invalidate() { this.needsRedraw = true; }

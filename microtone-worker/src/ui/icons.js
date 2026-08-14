@@ -225,6 +225,8 @@ export const BTN_ICON = {
   dot: solid('<circle cx="12" cy="12" r="5"/>'),
   /** Delete this file (✕). */
   close: line('<path d="M6 6l12 12M18 6 6 18"/>'),
+  /** Split the view area in two (item 148) — one frame with a seam down it. */
+  split: line('<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M12 4.5v15"/>'),
   /** Duplicate this row (⧉) — a card in front of the one it was copied from.
    *  Deliberately plainer than ICON.duplicate, which is drawn for a context
    *  menu: at a button's 1em the copied card's text lines smear into a block,

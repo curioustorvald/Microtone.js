@@ -97,7 +97,7 @@ without pressing Play.
 From top to bottom:
 
 - **Top bar** — transport, record toggle, undo/redo, octave / instrument / speed displays (hover and use the mouse wheel to change them), song selector, file buttons, language / theme / help buttons. Click the **Microtone** logo for the About box.
-- **Tabs** — the seven views, on **F1**–**F7**.
+- **Tabs** — the seven views, on **F1**–**F7**. The strip belongs to the pane below it, so a split screen has one per pane, each ending in the button that splits the view (**⊞**) or closes that pane (**✕**).
 - **Toolbox** (Timeline and Patterns only) — **Retune…**, the **Raw** hex-note toggle and the quick **Instruments** lookup panel.
 - **The main view.**
 - **Command palette** — a context strip above the status bar showing the actions and documentation for the column under the cursor while recording.
@@ -114,6 +114,20 @@ From top to bottom:
 | **F5** | Instruments | The instrument bank: envelopes, zones, layers |
 | **F6** | Project | Song properties, tuning, song list |
 | **F7** | File | Browser storage, import/export |
+
+### Two views at once
+
+**F8** (or the **⊞** button at the end of the tab strip) splits the screen in
+two, and every pane carries its own set of the seven tabs — Timeline against
+Patterns, a pattern against the instrument it plays, the Cues list against the
+song it orders.
+
+- Which way it splits follows the shape of the screen: side by side while it is wider than tall, one above the other otherwise. Turning a tablet on its side re-splits it the other way by itself.
+- **Drag the seam** between the panes to give one more room; double-click it to even them up again.
+- The pane you last clicked in has the keyboard — its active tab is the one in the accent colour. **Shift+F8** moves to the other pane.
+- **Both panes can show the same view**: two Timelines scrolled to different bars of the song, two Patterns views, two of anything. Each is a copy of its own, with its own scroll position and its own selection, and both edit the one document — a change in either shows up in the other at once. (**F1**–**F7** never open a second copy of something already on screen: they take you to the pane that has it. Clicking the tab is how you ask for a second one.)
+- **F8** again, or the pane's **✕**, closes it; the view in the other pane keeps the screen — including which bar it was scrolled to, so closing the pane you are working in leaves you where you were.
+- The master strip (see [Timeline](#timeline-f1)) stays where it is down the right-hand edge, beside both panes, and is on screen whenever *either* pane shows the Timeline.
 
 ## Timeline (F1)
 
@@ -1420,6 +1434,7 @@ hear, exactly as if you had played through the arming row.
 | Enter | Play from cursor / stop |
 | Shift+Enter | Play from start |
 | F1…F7 | Switch views |
+| F8 · Shift+F8 | Split the view in two / close the pane · the other pane |
 | Space | Record mode on/off |
 | [ ] | Octave down / up |
 | M / N | Mute / solo the cursor channel (navigate mode) |

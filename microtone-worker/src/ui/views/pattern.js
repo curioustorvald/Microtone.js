@@ -50,6 +50,10 @@ const PREVIEW_CUE = 8191; // device-only scratch cue (taut PREVIEW_CUE_IDX idiom
 
 const MIN_PANES = 2;         // spec: at least two columns
 const MAX_PANES = 16;         // sanity cap for very wide viewports
+/** What a second Patterns view (item 148.1) adds to its columns' indices when
+ *  it reads the store's per-pane second-effect flags — one whole pane row, so
+ *  the two copies can never land on the same flag. */
+export const FX2_BASE_STEP = MAX_PANES;
 const MIN_PANE_W = 250;      // floor for the per-column px budget (see paneBudget)
 // Canvas border + breathing room beside the cell. Wide enough that a column is
 // not merely *able* to draw its cell but comfortable doing so — at 12 the v3
@@ -70,7 +74,11 @@ class PatternPane {
    *  geometry read below goes through these, so the two flags drive the
    *  painter, the cursor walk and hit-testing alike. */
   wide() { return this.store.doc?.wideCells === true; }
-  fx2() { return this.store.fx2Pane(this.index); }
+  /** …and which of the store's per-pane flags is ours: a second Patterns view
+   *  in the other split pane (item 148.1) indexes from its own fx2Base, so the
+   *  two copies do not toggle each other's columns. */
+  fx2Slot() { return this.container.fx2Base + this.index; }
+  fx2() { return this.store.fx2Pane(this.fx2Slot()); }
   subPos() { return subPositions(this.wide(), this.fx2()); }
   cellChars() { return cellChars(this.wide(), this.fx2()); }
   /** The last logical column this pane shows (what "the whole cell" means). */
@@ -120,7 +128,7 @@ class PatternPane {
     });
     // Second-effect toggle (§5.5) — this column only. Hidden on anything that
     // is not a format-v3 project, which has no second effect to show.
-    this.fx2Btn = mkBtn("ƒx2", () => this.store.toggleFx2Pane(this.index));
+    this.fx2Btn = mkBtn("ƒx2", () => this.store.toggleFx2Pane(this.fx2Slot()));
     this.fx2Btn.className = "pane-fx2";
     this.info = document.createElement("span");
     this.info.className = "pane-info";
@@ -933,9 +941,13 @@ class PatternPane {
 // the clipboard methods) delegates to the active pane so app.js + the smoke
 // tests keep talking to `patternView` unchanged.
 export class PatternView {
-  constructor(store, host, jam) {
+  /** `fx2Base` offsets this view's columns into the store's per-pane
+   *  second-effect flags — 0 for the first copy, MAX_PANES for the one in the
+   *  other split pane (item 148.1). */
+  constructor(store, host, jam, { fx2Base = 0 } = {}) {
     this.store = store;
     this.jam = jam;
+    this.fx2Base = fx2Base;
     this.visible = false;
     this.panes = [];
     this.activeIdx = 0;

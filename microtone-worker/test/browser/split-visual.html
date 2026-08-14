@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>two-pane split — visual</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #2f3134; }
+    iframe { display: block; border: 0; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <!-- Item 148: the view area split in two, for eyeballing. Both directions
+       come out of the SAME page — the split follows the shape of the window,
+       so the window size is the control:
+
+         python3 tools/test-server.py, then
+         chromium --headless=new --window-size=1280,800 --timeout=12000 \
+           --screenshot=/tmp/split.png \
+           http://localhost:8932/test/browser/split-visual.html
+
+       …gives the side-by-side form, and --window-size=820,1100 the stacked
+       one. ?second=<view> chooses what the new pane opens on (default: what
+       the split button picks), ?load=<file> the corpus song, and
+       ?theme=dark|dim|light the palette. The pending /hang image holds the
+       load event open for --timeout, so the song is in and both panes have
+       been laid out before the frame is grabbed. -->
+  <img src="/hang" hidden alt="" />
+  <iframe id="app"></iframe>
+  <script type="module">
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const p = new URLSearchParams(location.search);
+    const app = document.getElementById("app");
+    const song = p.get("load") ?? "test/corpus/WHEN.taud";
+    app.src = `../../index.html?load=${encodeURIComponent(song)}` +
+      (p.get("theme") ? `&theme=${p.get("theme")}` : "");
+    await new Promise((r) => app.addEventListener("load", r));
+    const win = app.contentWindow;
+    for (let i = 0; i < 200 && !win.__microtone?.store.doc; i++) await sleep(50);
+    await sleep(400);            // the panes measure themselves first
+    win.__microtone.split.split();
+    await sleep(400);
+    const second = p.get("second");
+    if (second) {
+      win.document.querySelectorAll(".pane")[1]
+        .querySelector(`.tabs button[data-view="${second}"]`)?.click();
+    }
+  </script>
+</body>
+</html>
