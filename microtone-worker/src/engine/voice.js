@@ -367,6 +367,12 @@ export class Voice {
     this.funkAccumulator = 0;
     this.funkWritePos = 0;
 
+    // Sample modification (notefx 2 / 3) — the operation and its region live on
+    // the instrument; the channel only drives the speed.
+    this.modSpeed = 0;
+    this.modAccumulator = 0;
+    this.modWritePos = 0;
+
     // Pattern loop (S$Bx).
     this.loopStartRow = 0;
     this.loopCount = 0;

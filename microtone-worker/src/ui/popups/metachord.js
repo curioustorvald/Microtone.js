@@ -14,12 +14,13 @@
 // adds one above and one below instead of transposing the whole stack down.
 
 import {
-  CHORD_GROUPS, CHORD_PRESETS, applyChordPreset, maxInversion, voiceUnits, UNITS_PER_OCTAVE,
+  CHORD_GROUPS, applyChordPreset, chordPresetLabel, chordPresetsFor,
+  maxInversion, voiceUnits, UNITS_PER_OCTAVE,
 } from "../../doc/chord.js";
 import { metaLayers, metaRecordOf, stackLayer, clampDetune, META_MAX_LAYERS } from "../../doc/metaedit.js";
 import { setMetaRecordOp } from "../../doc/ops.js";
 import { ANCHOR_NOTE } from "../pitchtables.js";
-import { noteToStr } from "../notenames.js";
+import { noteGlyphCanvas } from "../noteglyph.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
 
@@ -70,7 +71,9 @@ export function showChordStack(store, metaSlot, layerIdx) {
 
   const base = layers[layerIdx];
   const pitchPreset = store.pitchPreset;
-  let presetId = CHORD_PRESETS[0].id;
+  // Tetrachords are offered only in the tuning they belong to (item 141).
+  const menu = chordPresetsFor(pitchPreset);
+  let presetId = menu[0].id;
   let inversion = 0;
 
   return new Promise((resolve) => {
@@ -86,14 +89,14 @@ export function showChordStack(store, metaSlot, layerIdx) {
     const bar = el("div", "import-bar");
     const sel = document.createElement("select");
     for (const g of CHORD_GROUPS) {
-      const items = CHORD_PRESETS.filter((p) => p.group === g);
+      const items = menu.filter((p) => p.group === g);
       if (!items.length) continue;
       const grp = document.createElement("optgroup");
       grp.label = t(`chord.group.${g}`);
       for (const p of items) {
         const o = document.createElement("option");
         o.value = p.id;
-        o.textContent = t(p.key);
+        o.textContent = chordPresetLabel(p, t);
         grp.appendChild(o);
       }
       sel.appendChild(grp);
@@ -139,9 +142,13 @@ export function showChordStack(store, metaSlot, layerIdx) {
       for (const r of rows) {
         const units = clampDetune(base.detune + r.d);
         const line = el("div", "meta-chord-voice" + (r.root ? " root" : ""));
-        line.append(
-          el("span", "meta-chord-note", noteToStr(Math.min(Math.max(ANCHOR_NOTE + units, 0x20), 0xffff))),
-          el("span", "dim", r.root ? t("meta.chordRoot") : signedCents(r.d)));
+        // Painted in the song's own notation, like every other note readout —
+        // a stack built from degrees of a 31-TET table must not report itself
+        // in 12-EDO letter names.
+        const noteEl = el("span", "meta-chord-note");
+        noteEl.appendChild(
+          noteGlyphCanvas(Math.min(Math.max(ANCHOR_NOTE + units, 0x20), 0xffff), pitchPreset));
+        line.append(noteEl, el("span", "dim", r.root ? t("meta.chordRoot") : signedCents(r.d)));
         preview.appendChild(line);
       }
       const total = layers.length + use.length;

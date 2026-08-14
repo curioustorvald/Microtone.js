@@ -22,6 +22,9 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
+  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, modTouches,
+} from "./samplemod.js";
+import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
 } from "./spatial.js";
 
@@ -360,6 +363,44 @@ export function applyTrackerTick(eng, ts, playhead) {
         voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
       voice.funkWritePos = (voice.funkWritePos + 1) % loopLen;
       inst.toggleFunkBit(voice.funkWritePos, loopLen);
+    }
+  }
+
+  // Sample modification (notefx 2 / 3) — one step of the instrument's live
+  // operation per accumulator overflow, on the same >= $80 ladder funk repeat
+  // walks (item 130).
+  for (const voice of ts.voices) {
+    if (voice.modSpeed === 0 || !voice.active) continue;
+    const inst = eng.instruments[voice.instrumentId];
+    if (inst.modOp === MOD_OFF) continue;
+    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
+    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
+    if (ee <= es) continue;
+    voice.modAccumulator += voice.modSpeed;
+    if (voice.modAccumulator < 0x80) continue;
+    voice.modAccumulator = 0;
+    const sampleLen = Math.max(voice.activeSampleLength, 1);
+    const step = MOD_STEP[inst.modOp];
+    if (inst.modOp === MOD_FUNK) {
+      // Walk to the next byte the region actually touches and flip it. An
+      // inverted region can exclude a long stretch, so the scan is bounded —
+      // past MOD_WALK_SCAN misses this step simply does not land.
+      const span = inst.modInvert ? sampleLen : ee - es;
+      const base = inst.modInvert ? 0 : es;
+      for (let n = 0; n < MOD_WALK_SCAN; n++) {
+        voice.modWritePos = (voice.modWritePos + 1) % Math.max(span, 1);
+        const i = base + voice.modWritePos;
+        if (modTouches(inst, i, es, ee)) { inst.toggleModBit(i, sampleLen); break; }
+      }
+    } else if (isRolOp(inst.modOp)) {
+      const dl = inst.modInvert ? sampleLen : ee - es;
+      if (dl > 1) {
+        inst.modRot = (inst.modRot + step) % dl;
+        inst.modOn = inst.modRot !== 0;
+      }
+    } else {
+      inst.modSub = (inst.modSub + step) & 0xff;
+      inst.modOn = inst.modSub !== 0;
     }
   }
 

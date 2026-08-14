@@ -51,6 +51,8 @@ export class AudioSystem {
                                 // stale tail when a shorter song loads over it)
     this.engineTarget = null;   // where engine commands go: worklet port or the worker
     this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
+    this.sampleMods = new Map(); // slot → notefx 2/3 modification state (item 130)
+    this.modMasks = new Map();   // slot → Uint8Array (its inversion mask)
     this.wideCells = false; // format v3's 16-byte cell (set by loadDocument)
     this.monitorMode = 0;   // #998.3 fold/binaural — re-sent on every song load
     this.analysisTarget = ANALYSIS_OFF; // item 98 master-strip tap; the strip owns it
@@ -148,6 +150,8 @@ export class AudioSystem {
       this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
     } else if (m.t === MSG.FUNK_MASK) {
       this.funkMasks.set(m.slot, new Uint8Array(m.mask));
+      if (m.mod) this.sampleMods.set(m.slot, m.mod);
+      if (m.modMask) this.modMasks.set(m.slot, new Uint8Array(m.modMask));
     } else if (m.t === MSG.PROFILE) {
       // Enrich the worklet report with main-side facts it cannot see.
       m.usingSab = this.usingSab;
@@ -329,6 +333,11 @@ export class AudioSystem {
   requestFunkMask(slot) { this._post({ t: CMD.QUERY_FUNK_MASK, slot }); }
   /** Latest queried funk mask for `slot` (Uint8Array; empty when none). */
   getFunkMask(slot) { return this.funkMasks.get(slot) ?? null; }
+  /** Latest queried notefx 2/3 modification for `slot` (item 130), or null.
+   *  Arrives with the funk mask — one query answers for all of it. */
+  getSampleMod(slot) { return this.sampleMods.get(slot) ?? null; }
+  /** …and its inversion mask (Uint8Array; empty when the operation is not one). */
+  getModMask(slot) { return this.modMasks.get(slot) ?? null; }
 
   // ── snapshot-backed synchronous readbacks (audio.*-shaped) ──
 

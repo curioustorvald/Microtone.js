@@ -14,7 +14,7 @@ import { TaudEngine } from "../engine/engine.js";
 import { TRACKER_CHUNK } from "../engine/constants.js";
 import { CMD, MSG, SNAP_FLOATS, SNAP_INTERRUPT_MASK } from "../worklet/protocol.js";
 import {
-  applyAudioCommand, isTransportReset, funkMaskBuffer, fillSnapshotInto,
+  applyAudioCommand, isTransportReset, funkMaskBuffer, modMaskBuffer, fillSnapshotInto,
 } from "../worklet/engine-commands.js";
 import {
   audioRingViews, AR_FRAMES, AR_MASK,
@@ -106,7 +106,11 @@ self.onmessage = (e) => {
       break;
     case CMD.QUERY_FUNK_MASK: {
       const buf = funkMaskBuffer(engine, m.slot);
-      self.postMessage({ t: MSG.FUNK_MASK, slot: m.slot, mask: buf }, [buf]);
+      const modBuf = modMaskBuffer(engine, m.slot);
+      self.postMessage({
+        t: MSG.FUNK_MASK, slot: m.slot, mask: buf,
+        mod: engine.getInstrumentSampleMod(m.slot), modMask: modBuf,
+      }, [buf, modBuf]);
       break;
     }
   }

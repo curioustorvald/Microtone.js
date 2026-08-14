@@ -6,9 +6,9 @@ import assert from "node:assert/strict";
 
 import {
   JI_INTERVALS, CHORD_GROUPS, CHORD_PRESETS, MAX_UNITS, MAX_VOICES, UNITS_PER_OCTAVE,
-  applyChordPreset, buildChord, chordLength, defaultVoice, defaultVoices,
-  degreeUnits, invertVoiceSpecs, jiById, maxInversion, presetVoiceCount,
-  voiceNote, voiceRatio, voiceUnits,
+  applyChordPreset, buildChord, chordLength, chordPresetLabel, chordPresetsFor,
+  defaultVoice, defaultVoices, degreeUnits, invertVoiceSpecs, jiById,
+  maxInversion, presetVoiceCount, voiceNote, voiceRatio, voiceUnits,
 } from "../../src/doc/chord.js";
 import en from "../../src/ui/lang/en.js";
 import ko from "../../src/ui/lang/ko.js";
@@ -145,15 +145,90 @@ test("chord presets fill six slots, extras stay silent", () => {
   assert.ok(applyChordPreset("detune").filter((v) => v.on).every((v) => v.mode === "ratio"));
 });
 
+// ── tetrachords (item 141) ─────────────────────────────────────────────────
+
+test("tetrachords divide their tuning's perfect fourth three ways", () => {
+  // The complete charts of the Xenharmonic Wiki: every composition of the
+  // fourth into three positive steps, which is (fourth−1 choose 2) of them.
+  const expected = { 170: [7, 15], 220: [9, 28], 310: [13, 66] };
+  for (const [notation, [fourth, count]] of Object.entries(expected)) {
+    const tetra = CHORD_PRESETS.filter((p) => p.notation === Number(notation));
+    assert.equal(tetra.length, count, `${notation} has ${count} tetrachords`);
+    for (const p of tetra) {
+      const steps = p.steps.split("-").map(Number);
+      assert.equal(steps.length, 3, `${p.id} is three steps`);
+      assert.ok(steps.every((n) => n >= 1), `${p.id} has no zero step`);
+      assert.equal(steps.reduce((a, b) => a + b, 0), fourth,
+        `${p.id} adds up to the fourth`);
+      // …and the voices stand on the unison, the two inner degrees and the fourth
+      assert.deepEqual(p.voices.map((v) => v.step),
+        [0, steps[0], steps[0] + steps[1], fourth], `${p.id} voice degrees`);
+      assert.ok(p.voices.every((v) => v.mode === "key"), `${p.id} counts degrees`);
+    }
+    assert.equal(new Set(tetra.map((p) => p.steps)).size, count, "no duplicates");
+  }
+});
+
+test("a tetrachord's top voice IS the perfect fourth of its own tuning", () => {
+  const cents = (u) => (u * 1200) / UNITS_PER_OCTAVE;
+  for (const [notation, table] of [[170, pitchTablePresets[170]],
+    [220, pitchTablePresets[220]], [310, pitchTablePresets[310]]]) {
+    const p = CHORD_PRESETS.find((q) => q.notation === notation);
+    const units = applyChordPreset(p.id).filter((v) => v.on).map((v) => voiceUnits(v, table));
+    assert.equal(units.length, 4, "four pitches");
+    assert.equal(units[0], 0, "…standing on the root");
+    // A fourth is ~498 ¢ in any of these EDOs (17edo's is the widest, 494 ¢).
+    assert.ok(Math.abs(cents(units[3]) - 498) < 12,
+      `${notation} tetrachord spans a fourth (got ${Math.round(cents(units[3]))} ¢)`);
+    for (let i = 1; i < units.length; i++) assert.ok(units[i] > units[i - 1]);
+  }
+});
+
+test("tetrachords are offered only in their own tuning, and never invert", () => {
+  const ids = (index) => new Set(chordPresetsFor({ index }).map((p) => p.id));
+  const plain = CHORD_PRESETS.filter((p) => p.notation === undefined);
+  assert.equal(chordPresetsFor({ index: 120 }).length, plain.length,
+    "12-TET sees the tuning-independent vocabulary and nothing else");
+  assert.equal(chordPresetsFor(null).length, plain.length, "…as does no notation at all");
+  assert.equal(ids(170).size, plain.length + 15);
+  assert.equal(ids(220).size, plain.length + 28);
+  assert.equal(ids(310).size, plain.length + 66);
+  assert.ok(!ids(220).has("tetra170-3-3-1"), "17-TET's tetrachords stay in 17-TET");
+  assert.ok(ids(170).has("major"), "…and the ordinary chords are always there");
+
+  // A tetrachord is a scale segment: inverting it would only scramble it.
+  assert.equal(maxInversion("tetra170-3-3-1"), 0);
+  assert.deepEqual(applyChordPreset("tetra170-3-3-1", 2), applyChordPreset("tetra170-3-3-1"));
+});
+
+test("tetrachord menu labels are the step pattern, plus the source's name", () => {
+  const t = (k) => `«${k}»`;
+  assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "major"), t),
+    "«chord.preset.major»");
+  assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra170-3-3-1"), t),
+    "3-3-1 · ionian (jins ʻAjam)");
+  assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra220-3-3-3"), t),
+    "3-3-3 · diatonic · Porcupine, perfectly even");
+  // 31edo's chart names nothing, so the pattern stands alone
+  assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra310-5-3-5"), t), "5-3-5");
+  assert.equal(chordPresetLabel(null, t), "");
+});
+
 test("the vocabulary is grouped, named in both languages, and fits the slots", () => {
   const cents = (u) => Math.round((u * 1200) / UNITS_PER_OCTAVE);
   for (const p of CHORD_PRESETS) {
     assert.ok(CHORD_GROUPS.includes(p.group), `${p.id} is in a known group`);
     assert.ok(p.voices.length >= 2 && p.voices.length <= MAX_VOICES, `${p.id} fits six slots`);
-    assert.ok(en[p.key], `${p.id} is named in en`);
-    assert.ok(ko[p.key], `${p.id} is named in ko`);
+    if (p.steps) {
+      // A tetrachord is named by its step pattern, in any language (item 141).
+      assert.match(p.steps, /^\d+-\d+-\d+$/, `${p.id} carries a step pattern`);
+    } else {
+      assert.ok(en[p.key], `${p.id} is named in en`);
+      assert.ok(ko[p.key], `${p.id} is named in ko`);
+    }
     // …and reads bottom to top, which is what makes a preset checkable by eye
-    const units = p.voices.map((v) => voiceUnits({ ...defaultVoice(), ...v }, P12));
+    const table = p.notation === undefined ? P12 : pitchTablePresets[p.notation];
+    const units = p.voices.map((v) => voiceUnits({ ...defaultVoice(), ...v }, table));
     for (let i = 1; i < units.length; i++) {
       assert.ok(units[i] > units[i - 1], `${p.id} voice ${i} is above voice ${i - 1}`);
     }

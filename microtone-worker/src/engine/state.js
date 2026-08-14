@@ -480,6 +480,9 @@ export class Playhead {
       it.funkSpeed = 0;
       it.funkAccumulator = 0;
       it.funkWritePos = 0;
+      it.modSpeed = 0;
+      it.modAccumulator = 0;
+      it.modWritePos = 0;
       it.fader = 0;
       it.nnaOverride = -1;
       it.volEnvOn = true; it.panEnvOn = true; it.pitchEnvOn = true; it.filterEnvOn = true;
@@ -518,16 +521,19 @@ export class Playhead {
       it.activeChanCount = 1; it.activeChanMode = 0; it.activeChanPtr2 = 0;
     }
     ts.backgroundVoices.length = 0;
-    // Funk masks + notefx 5/6 overrides are per-instrument runtime state — clear
-    // so a replay (or song loop) starts from the file defaults.
+    // Sample modifications (funk masks + notefx 2/3 regions) and notefx 5/6
+    // overrides are per-instrument runtime state — clear so a replay (or song
+    // loop) starts from the file defaults.
     for (const inst of this.parent.instruments) {
       inst.funkMask = null;
+      inst.resetMod();
       inst.cutoffOverride = -1;
       inst.resonanceOverride = -1;
     }
   }
 
-  /** Clear funk-repeat state only (per-voice + per-instrument masks). */
+  /** Clear sample-modification state only (per-voice speeds + per-instrument
+   *  masks, regions and rotations). */
   resetFunkState() {
     const ts = this.trackerState;
     if (ts !== null) {
@@ -535,8 +541,14 @@ export class Playhead {
         it.funkSpeed = 0;
         it.funkAccumulator = 0;
         it.funkWritePos = 0;
+        it.modSpeed = 0;
+        it.modAccumulator = 0;
+        it.modWritePos = 0;
       }
     }
-    for (const inst of this.parent.instruments) inst.funkMask = null;
+    for (const inst of this.parent.instruments) {
+      inst.funkMask = null;
+      inst.resetMod();
+    }
   }
 }

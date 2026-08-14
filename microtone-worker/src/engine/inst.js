@@ -342,6 +342,20 @@ export class TaudInst {
 
     // Funk repeat (S$Fx00) XOR bit-mask over the loop region.
     this.funkMask = null;
+
+    // Sample modification (item 130, notefx 2 / 3) — ONE per instrument: the
+    // opcodes are the same command, `2` inverting which side of the region is
+    // touched. Start -1 = "the sounding voice's loop region"; combShift -1 =
+    // solid. Only the ACTIVE operation's accumulator is ever non-zero.
+    this.modOp = 0;               // MOD_OFF
+    this.modInvert = false;       // notefx 2: the region is what is NOT touched
+    this.modStart = -1;
+    this.modEnd = -1;
+    this.modComb = -1;
+    this.modMask = null;          // MOD_FUNK: one bit per sample byte
+    this.modRot = 0;              // MOD_ROL*: byte displacement
+    this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
+    this.modOn = false;           // hot-path guard: does it change any byte yet?
   }
 
   get sampleLoopSustain() { return (this.loopMode & 0x04) !== 0; }
@@ -479,6 +493,82 @@ export class TaudInst {
     if (mask.length !== (len + 7) >> 3) { this.funkMask = null; return false; }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     return ((mask[idx >> 3] >>> (idx & 7)) & 1) !== 0;
+  }
+
+  /**
+   * Point the modification at a new region (item 130). Its accumulated state is
+   * indexed against that region, so a move invalidates it. Returns whether
+   * anything MOVED, which is what tells the caller to restart the walk: writing
+   * the same region every row must not keep resetting it.
+   */
+  setModRegion(start, end, combShift) {
+    if (this.modStart === start && this.modEnd === end && this.modComb === combShift) return false;
+    this.modStart = start;
+    this.modEnd = end;
+    this.modComb = combShift;
+    this.clearModState();
+    return true;
+  }
+
+  /** Comb the region without moving its ends ($Fn). */
+  setModComb(combShift) {
+    if (this.modComb === combShift) return false;
+    this.modComb = combShift;
+    this.clearModState();
+    return true;
+  }
+
+  /** Select the operation and which side of the region it works on. Changing
+   *  either starts the new operation from scratch — a rotation offset means
+   *  nothing to a subtract. */
+  setModOp(op, invert) {
+    if (this.modOp === op && this.modInvert === invert) return false;
+    this.modOp = op;
+    this.modInvert = invert;
+    this.clearModState();
+    return true;
+  }
+
+  /** Drop what the operation has accumulated, keeping its region. */
+  clearModState() {
+    this.modMask = null;
+    this.modRot = 0;
+    this.modSub = 0;
+    this.modOn = false;
+  }
+
+  /** $x = 0 — the modification, region and all. */
+  resetMod() {
+    this.modOp = 0;
+    this.modInvert = false;
+    this.modStart = -1;
+    this.modEnd = -1;
+    this.modComb = -1;
+    this.clearModState();
+  }
+
+  /** Flip the modification's inversion bit for sample byte `i` (MOD_FUNK). The
+   *  mask spans the whole SAMPLE — an inverted region's touched set is not a
+   *  contiguous span, so there is no smaller origin to index from. */
+  toggleModBit(i, sampleLen) {
+    const len = Math.max(sampleLen, 1);
+    const expectedSize = (len + 7) >> 3;
+    let mask = this.modMask;
+    if (mask === null || mask.length !== expectedSize) {
+      mask = new Uint8Array(expectedSize);
+      this.modMask = mask;
+    }
+    const idx = Math.min(Math.max(i, 0), len - 1);
+    mask[idx >> 3] ^= 1 << (idx & 7);
+    this.modOn = true;
+  }
+
+  modBit(i) {
+    const mask = this.modMask;
+    if (mask === null) return false;
+    const byte = i >> 3;
+    if (byte < 0 || byte >= mask.length) return false;
+    return ((mask[byte] >>> (i & 7)) & 1) !== 0;
   }
 
   _envPointGet(env, base, offset) {

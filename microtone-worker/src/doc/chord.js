@@ -74,7 +74,89 @@ export function defaultVoices(presetId = "major") {
  * The order the preset menus group their entries in — one optgroup each, so a
  * vocabulary this size stays readable in a `<select>`.
  */
-export const CHORD_GROUPS = ["triad", "seventh", "added", "extended", "spread"];
+export const CHORD_GROUPS = ["triad", "seventh", "added", "extended", "spread", "tetrachord"];
+
+// ── Tetrachords (item 141) ───────────────────────────────────────────────────
+// A tetrachord is the ancient Greeks' unit of scale construction: four pitches
+// spanning a perfect fourth, named by the three scalar steps between them
+// ("3-3-1"), which always add up to the fourth. Every EDO divides the fourth
+// its own way, so the vocabulary is per-tuning — these only appear when the
+// project notation IS the tuning they belong to, since a 17edo tetrachord
+// counted out in 12-TET degrees would be a different chord entirely.
+//
+// The step patterns are the complete charts from the Xenharmonic Wiki:
+// "17edo tetrachords", "22edo tetrachords" and, for 31edo, "Tricesimoprimal
+// Tetrachordal Tesseract" — every way of breaking the fourth into three steps
+// (15, 28 and 66 of them). The names are the wiki's own; where it leaves a
+// tetrachord unnamed, so do we, and the step pattern speaks for itself.
+const TETRACHORD_TUNINGS = [
+  { notation: 170, fourth: 7 },   // 17-TET
+  { notation: 220, fourth: 9 },   // 22-TET
+  { notation: 310, fourth: 13 },  // 31-TET
+];
+
+// Wiki names, by tuning and step pattern. 17edo's are maqam/mode names; 22edo's
+// are the genus (the classical enharmonic/chromatic/diatonic split) plus the
+// temperament each belongs to where the page names one. 31edo's chart is a bare
+// enumeration — the tesseract is the point, not the naming.
+const TETRACHORD_NAMES = {
+  170: {
+    "1-3-3": "phrygian (jins Kurd)",
+    "1-5-1": "balkan, jins Hijaz",
+    "2-2-3": "jins Bayyati",
+    "2-3-2": "ʻIraq",
+    "3-1-3": "aeolian (jins Nahawand)",
+    "3-2-2": "jins Rast",
+    "3-3-1": "ionian (jins ʻAjam)",
+  },
+  220: {
+    "1-1-7": "enharmonic", "1-7-1": "enharmonic", "7-1-1": "enharmonic",
+    "1-2-6": "chromatic", "2-1-6": "chromatic", "1-6-2": "chromatic",
+    "2-6-1": "chromatic", "6-1-2": "chromatic", "6-2-1": "chromatic",
+    "1-3-5": "chromatic", "3-1-5": "chromatic", "1-5-3": "chromatic",
+    "3-5-1": "chromatic", "5-1-3": "chromatic", "5-3-1": "chromatic",
+    "2-2-5": "chromatic", "2-5-2": "chromatic", "5-2-2": "chromatic",
+    "2-3-4": "diatonic", "3-2-4": "diatonic", "2-4-3": "diatonic",
+    "3-4-2": "diatonic", "4-2-3": "diatonic", "4-3-2": "diatonic",
+    "1-4-4": "diatonic · Superpyth phrygian",
+    "4-1-4": "diatonic · Superpyth minor, dorian",
+    "4-4-1": "diatonic · Superpyth major, mixolydian, lydian",
+    "3-3-3": "diatonic · Porcupine, perfectly even",
+  },
+  310: {},
+};
+
+/**
+ * Every tetrachord of every supported tuning, as chord presets: four voices in
+ * `key` mode standing on the unison, the two inner degrees and the fourth.
+ * Ordered first step ascending, then middle step — the wiki charts' own layout,
+ * which puts the primary tetrachords (one second and one third) in the middle.
+ */
+function buildTetrachords() {
+  const out = [];
+  for (const { notation, fourth } of TETRACHORD_TUNINGS) {
+    for (let a = 1; a <= fourth - 2; a++) {
+      for (let b = 1; b <= fourth - a - 1; b++) {
+        const c = fourth - a - b;
+        const steps = `${a}-${b}-${c}`;
+        out.push({
+          id: `tetra${notation}-${steps}`,
+          group: "tetrachord",
+          notation,
+          steps,
+          name: TETRACHORD_NAMES[notation][steps] ?? "",
+          voices: [
+            { mode: "key", step: 0 },
+            { mode: "key", step: a },
+            { mode: "key", step: a + b },
+            { mode: "key", step: fourth },
+          ],
+        });
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * Ready-made voicings, all in `ji` mode except `detune` — which demonstrates
@@ -128,7 +210,30 @@ export const CHORD_PRESETS = [
   { id: "detune",  group: "spread", key: "chord.preset.detune",  voices: [
     { mode: "ratio", ratio: 0.994 }, { mode: "ratio", ratio: 1 }, { mode: "ratio", ratio: 1.006 },
   ] },
+  // ── tetrachords: one group per tuning, and only its own tuning sees it ──
+  ...buildTetrachords(),
 ];
+
+/**
+ * The presets offered for a project in `pitchPreset`'s notation: everything
+ * tuning-independent, plus the tetrachords of THIS tuning. A preset with no
+ * `notation` field is always on the menu.
+ */
+export function chordPresetsFor(pitchPreset) {
+  const index = pitchPreset?.index ?? -1;
+  return CHORD_PRESETS.filter((p) => p.notation === undefined || p.notation === index);
+}
+
+/**
+ * A preset's menu label. Named chords are an i18n lookup (pass `t`); a
+ * tetrachord is its step pattern, followed by what the source calls it when
+ * the source calls it anything — the pattern IS the name in that literature.
+ */
+export function chordPresetLabel(preset, translate) {
+  if (!preset) return "";
+  if (preset.steps) return preset.name ? `${preset.steps} · ${preset.name}` : preset.steps;
+  return translate(preset.key);
+}
 
 /** The preset entry for an id, or null — an unknown id is silence, not a throw. */
 export function chordPresetById(presetId) {
@@ -140,9 +245,17 @@ export function presetVoiceCount(presetId) {
   return chordPresetById(presetId)?.voices.length ?? 0;
 }
 
-/** Highest inversion a preset has: the Nth lifts N voices, and lifting them
- *  all is just the same chord an octave up. */
+/**
+ * Highest inversion a preset has: the Nth lifts N voices, and lifting them all
+ * is just the same chord an octave up.
+ *
+ * A tetrachord has none. It is a SCALE SEGMENT rather than a voicing — the
+ * order of its degrees is the whole point of it — and its voices are counted in
+ * degrees of one tuning, which the notation-independent ranking below cannot
+ * weigh against an octave (invertVoiceSpecs).
+ */
 export function maxInversion(presetId) {
+  if (chordPresetById(presetId)?.steps) return 0;
   return Math.max(0, presetVoiceCount(presetId) - 1);
 }
 
@@ -185,7 +298,9 @@ export function invertVoiceSpecs(specs, inversion = 0) {
  *  unused slots stay off. */
 export function applyChordPreset(presetId, inversion = 0) {
   const preset = chordPresetById(presetId);
-  const specs = preset ? invertVoiceSpecs(preset.voices, inversion) : [];
+  const specs = preset
+    ? invertVoiceSpecs(preset.voices, maxInversion(presetId) === 0 ? 0 : inversion)
+    : [];
   const out = [];
   for (let i = 0; i < MAX_VOICES; i++) {
     const spec = specs[i];

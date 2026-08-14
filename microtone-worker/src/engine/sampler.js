@@ -12,6 +12,7 @@ import {
   SINC_WIDTH, RAMP_OUT_SAMPLES, ATTACK_RAMP_SAMPLES, FAST_FADE_SEC, VOL_RAMP_SAMPLES,
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
+import { modTouches } from "./samplemod.js";
 
 /**
  * Active-sample-aware playback rate (patch-aware via the voice snapshot).
@@ -28,14 +29,41 @@ export function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 
 /**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
- * instrument's funk-repeat mask. Caller wraps loop regions first.
+ * instrument's sample modifications — notefx 3's rotation (which moves WHICH
+ * byte is read) and then the funk-repeat mask (which inverts the byte read).
+ * Caller wraps loop regions first.
  * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
  * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
  * for its right channel (both channels share the funk mask and geometry).
+ *
+ * Regions default to the ACTIVE loop: an Ixmp patch replaces the loop points,
+ * and the funk mask is sized and indexed against whichever loop is sounding
+ * (item 116). notefx 2 / 3 may point either modification somewhere else.
  */
 export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
-  const i = Math.min(Math.max(idx, 0), sampleLen - 1);
+  let i = Math.min(Math.max(idx, 0), sampleLen - 1);
+  // Sample modification (notefx 2 / 3). ONE operation is live at a time, so a
+  // ROL's address transform and a FUNK/SUB's value transform never meet.
+  let touched = false;
+  if (inst.modOn) {
+    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
+    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
+    if (ee > es) {
+      touched = modTouches(inst, i, es, ee);
+      if (touched && inst.modRot !== 0) {
+        // An inverted region's touched set reaches both ends of the sample, so
+        // that is the span the rotation wraps in; a plain region wraps in itself.
+        const ds = inst.modInvert ? 0 : es;
+        const dl = inst.modInvert ? sampleLen : ee - es;
+        if (dl > 1) {
+          let k = (i - ds + inst.modRot) % dl;
+          if (k < 0) k += dl;
+          i = ds + k;
+        }
+      }
+    }
+  }
   let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
   // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
   // funk mask is sized and indexed against whichever loop is sounding (item 116).
@@ -43,6 +71,10 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
   const le = voice.activeSampleLoopEnd;
   if (inst.funkMask !== null && le > ls) {
     if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
+  }
+  if (touched) {
+    if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
+    else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
   }
   return (b - 127.5) / 127.5;
 }

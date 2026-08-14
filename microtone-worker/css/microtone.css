@@ -792,8 +792,15 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .meta-table .idxCell { font-family: "Roboto Mono", monospace; }
 .meta-table .meta-fg { color: var(--accent); margin-right: 0.2rem; }
 .meta-table .meta-link { margin-left: 0.4rem; }
+/* Note readouts are PAINTED (noteglyph.js), so they carry the song's own
+   notation rather than 12-EDO letter names — the canvas has to line up with
+   the units/cents text beside it. */
 .meta-table .meta-det-ann,
-.meta-table .meta-rng-ann { margin-left: 0.4rem; font-size: 0.8rem; }
+.meta-table .meta-rng-ann {
+  margin-left: 0.4rem; font-size: 0.8rem;
+  display: inline-flex; align-items: center; gap: 0.15rem;
+}
+.note-glyph { vertical-align: middle; }
 .meta-table .rngCell .meta-num,
 .meta-table .velCell .meta-num { width: 4em; margin-right: 0.25rem; }
 .meta-table .meta-act {
@@ -830,8 +837,11 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .meta-chord-voice { display: flex; gap: 0.6rem; align-items: baseline; }
 .meta-chord-voice .meta-chord-note {
   font-family: "Roboto Mono", monospace; min-width: 4rem;
+  display: inline-flex; align-items: center;
 }
-.meta-chord-voice.root .meta-chord-note { color: var(--accent); }
+/* The root row's emphasis moved to its label: the note itself is a painted
+   glyph now, and accent is what the painter uses for an OFF-GRID pitch. */
+.meta-chord-voice.root span.dim { color: var(--accent); }
 
 .cmd-palette {
   display: flex;

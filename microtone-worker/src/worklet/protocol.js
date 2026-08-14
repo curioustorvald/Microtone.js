@@ -52,7 +52,9 @@ export const CMD = Object.freeze({
 
 export const MSG = Object.freeze({
   SNAPSHOT: "snapshot", // {buffer: ArrayBuffer} — Float32Array, layout below
-  FUNK_MASK: "funkMask", // {slot, mask: ArrayBuffer} — S$Fx invert-loop bit mask
+  // {slot, mask: ArrayBuffer, mod} — S$Fx/notefx 2 invert-loop bit mask, plus
+  // the instrument's notefx 2/3 region geometry (engine getInstrumentSampleMod).
+  FUNK_MASK: "funkMask",
   READY: "ready",
   PROFILE: "profile",   // {cpuFrac, renderFrac, ...} — dev profiler, ~1/s (opt-in)
 });

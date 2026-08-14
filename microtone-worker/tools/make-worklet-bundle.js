@@ -26,6 +26,7 @@ const FILES = [
   "src/engine/analysis.js",  // before state.js (TrackerState builds a tap) AND
                              // before protocol.js (the snapshot layout sizes
                              // its blocks from the tap's own constants)
+  "src/engine/samplemod.js",  // …before sampler.js (readSamplePoint) and inst.js
   "src/engine/inst.js",
   "src/engine/voice.js",
   "src/engine/state.js",

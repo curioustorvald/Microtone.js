@@ -57,13 +57,20 @@
         ok(dlg.querySelectorAll(".chord-voice").length === 6, "a1 six voice slots");
         ok(ch.voices().filter((v) => v.on).length === 3, "a2 opens on a major triad");
 
-        // a2b (item 138): the whole vocabulary is on the menu, in its groups
-        const { CHORD_GROUPS, CHORD_PRESETS } = await win.eval('import("/src/doc/chord.js")');
+        // a2b (item 138): the whole vocabulary is on the menu, in its groups —
+        // minus the tetrachords of OTHER tunings (item 141), which is all of
+        // them in this 12-TET project, so its Tetrachords group never appears.
+        const { CHORD_GROUPS, CHORD_PRESETS, chordPresetsFor } =
+          await win.eval('import("/src/doc/chord.js")');
+        const menu = chordPresetsFor(store.pitchPreset);
+        const groups = new Set(menu.map((p) => p.group));
         const presetSel = dlg.querySelector(".chord-preset");
-        ok(presetSel.querySelectorAll("optgroup").length === CHORD_GROUPS.length &&
-          presetSel.querySelectorAll("option").length === CHORD_PRESETS.length,
+        ok(presetSel.querySelectorAll("optgroup").length === groups.size &&
+          presetSel.querySelectorAll("option").length === menu.length,
           `a2b preset menu is grouped (${presetSel.querySelectorAll("optgroup").length} groups, ` +
           `${presetSel.querySelectorAll("option").length} chords)`);
+        ok(menu.length < CHORD_PRESETS.length && !menu.some((p) => p.notation !== undefined),
+          `a2b2 a 12-TET project is offered no tetrachords (${CHORD_PRESETS.length - menu.length} hidden)`);
         ok([...presetSel.querySelectorAll("option")].every((o) => o.textContent && !/^chord\./.test(o.textContent)),
           "a2c every chord is named (no raw i18n keys)");
 
@@ -106,6 +113,32 @@
         ok(dlg24.__chord.units(0) === 0x2ab, `a6 4 degrees of 24-TET is a whole tone (${dlg24.__chord.units(0)})`);
         dlg24.__chord.cancel();
         ok((await pMaker24) === null, "a6b cancel resolves null");
+
+        // a6c (item 141): tetrachords appear in the tuning they belong to, and
+        // picking one really does span that tuning's perfect fourth
+        const pitchTables = (await win.eval('import("/src/ui/pitchtables.js")')).pitchTablePresets;
+        store.pitchPreset = pitchTables[170];
+        const pMaker17 = openChordMaker(store, { data, rate, name: "17-TET" });
+        const dlg17 = await waitFor(() => {
+          const l = [...win.document.querySelectorAll(".chord-modal")];
+          return l.length === 2 ? l[1] : null;
+        });
+        const sel17 = dlg17.querySelector(".chord-preset");
+        const tetraGroup = [...sel17.querySelectorAll("optgroup")]
+          .find((g) => [...g.children].some((o) => o.value.startsWith("tetra")));
+        ok(tetraGroup && tetraGroup.children.length === 15,
+          `a6c 17-TET is offered its 15 tetrachords (${tetraGroup?.children.length})`);
+        ok([...tetraGroup.children].some((o) => o.textContent === "3-3-1 · ionian (jins ʻAjam)"),
+          "a6c2 …named as the wiki names them");
+        dlg17.__chord.setChordPreset("tetra170-3-3-1");
+        await sleep(50);
+        const tetraUnits = [0, 1, 2, 3].map((i) => dlg17.__chord.units(i));
+        ok(tetraUnits[0] === 0 && tetraUnits[3] === pitchTables[170].table[7],
+          `a6c3 …and it spans 17-TET's own fourth (${tetraUnits.join(", ")})`);
+        ok(dlg17.querySelector(".chord-inv").disabled,
+          "a6c4 a tetrachord has no inversions");
+        dlg17.__chord.cancel();
+        await pMaker17;
         store.pitchPreset = prevPreset;
 
         // a7: the mix — three voices at unison length, normalised to full scale

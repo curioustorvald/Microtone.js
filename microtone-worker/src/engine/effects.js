@@ -9,6 +9,10 @@ import {
   amigaSlideOnce, linearFreqSlideOnce, clamp,
 } from "./tables.js";
 import { computePlaybackRate } from "./sampler.js";
+import {
+  decodeSampleRegion, regionScratch, REGION_NONE, REGION_COMB,
+  MOD_OFF, MOD_MAX, FUNK_SPEED_TABLE,
+} from "./samplemod.js";
 import { patchAt } from "./inst.js";
 import { applyPastNoteAction } from "./trigger.js";
 import {
@@ -34,6 +38,9 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       playhead.updateTrackerGlobalBehaviour(flags);
       break;
     }
+    // 2 spares the region it names; 3 modifies it. Same command otherwise.
+    case EffectOp.OP_2: applySampleModEffect(eng, voice, rawArg, true); break;
+    case EffectOp.OP_3: applySampleModEffect(eng, voice, rawArg, false); break;
     case EffectOp.OP_5: applyFilterParamEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_6: applyFilterParamEffect(eng, ts, voice, vi, rawArg, true); break;
     case EffectOp.OP_8: {
@@ -440,6 +447,47 @@ export function applySEffect(eng, ts, voice, vi, arg) {
       if (x === 0) voice.funkAccumulator = 0;
       break;
   }
+}
+
+/**
+ * notefx 2 and notefx 3 — the sample-modification command (item 130). `invert`
+ * is what tells them apart: `3 $sexy` names the region to modify, `2 $sexy`
+ * names the region to LEAVE ALONE. Everything else is identical, and an
+ * instrument carries ONE modification, so either opcode replaces it.
+ *
+ *   $se  region        $x  operation (0 = reset)      $y  funk-speed index
+ *
+ * The state splits the way S $Fxxx's does: the modification belongs to the
+ * INSTRUMENT (every channel sounding it hears the same sample) and the speed
+ * driving it to the CHANNEL. A reserved operation or a reserved region is
+ * ignored WHOLE, speed and all, so a typo cannot drive a modification the
+ * writer never named.
+ */
+export function applySampleModEffect(eng, voice, rawArg, invert) {
+  const inst = eng.instruments[voice.instrumentId];
+  const op = (rawArg >>> 4) & 0xf;
+  if (op === MOD_OFF) {
+    inst.resetMod();
+    voice.modSpeed = 0;
+    voice.modAccumulator = 0;
+    voice.modWritePos = 0;
+    return;
+  }
+  if (op > MOD_MAX) return;                       // $A..$F — reserved
+  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
+    voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
+  if (code === REGION_NONE) return;
+  const moved = code === REGION_COMB
+    ? inst.setModComb(regionScratch[2])
+    : inst.setModRegion(regionScratch[0], regionScratch[1], regionScratch[2]);
+  const swapped = inst.setModOp(op, invert);
+  // A changed region or operation restarts the walk; re-stating the SAME
+  // command row after row must not, or it would never get past its first step.
+  if (moved || swapped) {
+    voice.modAccumulator = 0;
+    voice.modWritePos = 0;
+  }
+  voice.modSpeed = FUNK_SPEED_TABLE[rawArg & 0xf];
 }
 
 /** Apply an env toggle to the foreground voice + (for a meta) its layer children. */

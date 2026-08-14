@@ -17,9 +17,9 @@
 // Apply replaces the Lab's working buffer with the mix.
 
 import {
-  JI_INTERVALS, CHORD_GROUPS, CHORD_PRESETS, MAX_VOICES, UNITS_PER_OCTAVE,
-  applyChordPreset, buildChord, chordLength, maxInversion,
-  voiceNote, voiceRatio, voiceUnits,
+  JI_INTERVALS, CHORD_GROUPS, MAX_VOICES, UNITS_PER_OCTAVE,
+  applyChordPreset, buildChord, chordLength, chordPresetLabel, chordPresetsFor,
+  maxInversion, voiceNote, voiceRatio, voiceUnits,
 } from "../../doc/chord.js";
 import { presetForNotation, gridDelta } from "../pitchtables.js";
 import { paintNoteCell } from "../glyphs.js";
@@ -74,11 +74,14 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     const modeOptions = ["ji", "key", "ratio", "units"]
       .map((m) => `<option value="${m}">${esc(t(`chord.mode.${m}`))}</option>`).join("");
     // Grouped, because the vocabulary is long enough to hunt through otherwise.
+    // The list follows the project's notation: tetrachords belong to ONE tuning
+    // each (item 141), so an empty group simply does not appear.
+    const menu = chordPresetsFor(preset);
     const presetOptions = CHORD_GROUPS.map((g) => {
-      const items = CHORD_PRESETS.filter((p) => p.group === g);
+      const items = menu.filter((p) => p.group === g);
       if (!items.length) return "";
       return `<optgroup label="${esc(t(`chord.group.${g}`))}">` +
-        items.map((p) => `<option value="${esc(p.id)}">${esc(t(p.key))}</option>`).join("") +
+        items.map((p) => `<option value="${esc(p.id)}">${esc(chordPresetLabel(p, t))}</option>`).join("") +
         "</optgroup>";
     }).join("");
 

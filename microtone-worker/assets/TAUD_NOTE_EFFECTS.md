@@ -769,6 +769,80 @@ on every tick (including tick 0):
 
 The `else` branch is where a row without `Y` puts the voice back on its base pan, and it **MUST** live in the tick pass rather than the per-row reset. A row boundary runs the row pass *after* the tick pass, so an offset cleared by the row pass is still cleared while the new row's first tick renders — which drops one tick of dead centre into the middle of every sweep held across rows. Peak at maximum settings: $7F × $FF >> 7 = $FE — the full panning range, so the deepest settings drive the sum into the clamp at both ends. An NNA ghost freezes at the offset it carried out of the channel; a metainstrument's layer children follow their parent's offset, exactly as they follow its pan. Retrigger behaviour tracks the S $5x waveform nibble bit 2: cleared means retrigger on new note, set means preserve LFO position.
 
+## 2 $sexy and 3 $sexy — Sample modification
+
+**Plain.** One command with two spellings: it applies a running, non-destructive modification to part of a sample. `3` names the region to **modify**; `2` names the region to **leave alone** and modifies everything else. Otherwise they are identical.
+
+| nibble | meaning |
+| --- | --- |
+| `$s $e` | the region — see *The region argument* below |
+| `$x` | the operation (below); `$0` switches the modification off |
+| `$y` | speed, as an index into ProTracker's funk-speed table |
+
+Operations:
+
+| `$x` | operation |
+| --- | --- |
+| `$0` | off / reset |
+| `$1` | funk repeat — invert one more byte of the region per step |
+| `$2` `$3` `$4` `$5` | rotate the region's bytes **left** by 1 / 2 / 4 / 8 bytes per step |
+| `$6` `$7` `$8` `$9` | subtract 2 / 8 / 32 / 128 from every byte of the region per step, wrapping through zero |
+| `$A`…`$F` | reserved |
+
+There is no rotate-right: rotating left by `n` and right by `span − n` are the same picture, and the ladder buys more spent on step sizes. The speed index reads the same table `S $Fxxx` and ProTracker's `EFx` are built on:
+
+```
+funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
+```
+
+`$y = 0` is speed zero: the modification **freezes** where it is and keeps everything it has accumulated. `$x = 0` is the reset — the operation, the region and the accumulated state all go.
+
+**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $Fxxx` remains the ProTracker-compatible funk repeat and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
+
+**Implementation.** An instrument carries **one** modification — writing either opcode replaces it — and the state splits the way `S $Fxxx`'s does: the modification belongs to the **instrument** (every channel sounding it hears the same sample) and the speed driving it to the **channel**. Nothing is ever written to the sample pool; the operation is applied as bytes are read.
+
+```
+on every tick (when $y's speed != 0 and an operation is selected):
+    mod_accumulator += mod_speed
+    if mod_accumulator >= $80:                    # hard reset, as funk repeat
+        mod_accumulator = 0
+        step the operation once (below)
+
+on sample byte read at position i:
+    if the modification TOUCHES i (region, comb and $2's inversion):
+        ROL: read from  domain_start + ((i - domain_start + rot) mod domain_length)
+        FUNK: invert the byte when mod_mask[i] is set
+        SUB:  byte = (byte - sub) AND $FF
+```
+
+- **FUNK** keeps a bit-mask one bit per **sample** byte (not per region byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole sample, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
+- **ROL** accumulates a byte displacement. The wrap domain is the region for `3` and the **whole sample** for `2`, whose touched set reaches both ends.
+- **SUB** accumulates a subtrahend modulo 256, so `$9` (128) inverts the level on odd steps and restores it on even ones, while `$6` (2) crawls.
+- Changing the operation, the region or the inversion **MUST** discard whatever the previous operation accumulated and restart the walk — a rotation offset means nothing to a subtract. Re-stating the **same** command row after row **MUST NOT** restart anything, or a command repeated down a pattern would never get past its first step.
+- A reserved operation and a reserved region are both ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
+- The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the funk mask.
+
+## The region argument ($se, effects 2 and 3)
+
+The region byte's two nibbles are read as a **from/to pair covering the whole sample** while `s <= e`, and as a **selector** when `s > e`:
+
+| `$se` | region |
+| --- | --- |
+| `$00` | the loop region — as `S $Fxxx` has always meant it, so an instrument that does not loop has no region and neither effect does anything (reach for `$0F`) |
+| `$se`, `s <= e` | from `s/16` to `(e+1)/16` of the sample — so `$0F` is the whole sample and `$4B` the middle half |
+| `$10` | the middle half |
+| `$20` / `$21` | the first two thirds / the last two thirds |
+| `$30` / `$31` / `$32` | the first / middle / last third |
+| `$F0`…`$FE` | **comb**: keep the current extent, but alternate in and out of it every 2^n bytes — `$F0` every other byte, `$F3` runs of 8, `$FE` runs of 16384 |
+| `$40`…`$ED` where `s > e` | reserved |
+
+Notes an engine **MUST** honour:
+
+- Region ends are **rounded** to the nearest byte.
+- `$00` is the loop region **as the sounding voice sees it**: an Ixmp patch brings its own loop points, and the region follows them rather than the base record's.
+- A comb selector leaves the extent alone, so `3 $311F` followed by `3 $F21F` combs the middle third. The extent and the comb are independent halves of one region.
+- The inversion of effect `2` applies to the region **and** its comb: `2 $F01F` is every OTHER byte of whatever extent is standing.
+
 ## 5 $xxyy and 6 $xxyy — Filter Cutoff/Resonance Control
 
 **Plain.** `5` sets the cutoff and `6` sets the resonance of the instrument's filter directly. When the filter is in ImpulseTracker mode, only the high byte (the `xx` part) is read; when the filter is in SoundFont2 mode, both bytes are read. Argument `$FFFF` resets the parameter to its default value (for both IT and SF2 mode). Every note that shares the instrument is affected — the change is **instrument-wide**, not per-voice. If cutoff vibrato is what you are after, modify the filter envelope directly.
@@ -1250,6 +1324,8 @@ on sample byte read during loop playback:
     else:
         output_byte = raw_byte
 ```
+
+Effects `2` and `3` offer the same inversion over a region you choose, as one of several operations — see their entry. They keep their own mask; this one is `S $Fxxx`'s alone.
 
 `S $F000` **MUST** clear `funk_accumulator` but **MUST** leave `funk_mask` intact (the accumulated inversion pattern persists). **On every fresh note trigger**, `funk_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `funk_accumulator` and `funk_speed` **MUST** persist across notes. The `funk_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
 

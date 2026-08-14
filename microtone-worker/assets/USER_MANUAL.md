@@ -752,9 +752,12 @@ patches alike) with its name, length and rate. The waveform display shades
 loop regions and shows live play-position cursors while audio runs. Piano keys
 audition the selected sample's instrument.
 
-If a voice using the sample is running the funk repeat effect (`S$Fx`), the
-waveform display XORs the loop region live with the engine's invert mask, so
-you see the bit-flipped waveform actually being played back, not the sample's
+If a voice using the sample is running funk repeat (`S$Fx`) or one of the
+sample-modification effects (`2` and `3`), the waveform display shows the
+result live: bytes the invert mask has flipped are XORed, bytes a rotation has
+moved are drawn where they are being read from, a level slide is drawn at the
+level it is playing, and everything the modification touches is drawn in the
+funk colour. You see the waveform actually being played back, not the sample's
 original bytes.
 
 **Edit…** opens the selected sample in the [Sample Lab](#the-sample-lab) — the
@@ -857,6 +860,7 @@ major third in 12-TET therefore shows up as `E-4` in the off-grid colour with
 `off by −13 cents` beside it; the same third in 31-TET lands on a degree and says nothing.
 
 - **Chord** fills all six slots at once with a ready-made voicing, grouped by family: triads (major, minor, sus2, sus4, diminished, augmented), sevenths (including minor-major, half-diminished, diminished 7th and 7sus4), sixths and added notes (6, m6, add9, m(add9), add11, 6/9), the extended chords (major/dominant/minor 9ths, an 11th without its third and a 13th without its 11th) — or a spread: power, quartal, octaves, and **Detune (chorus)**, three near-unison copies that show what the manual ratio mode is for.
+- **Tetrachords** appear in the same menu when the song is in 17-TET, 22-TET or 31-TET, and only then: they are named in degrees of one tuning, so they mean nothing in any other. A tetrachord is the ancient Greeks' scale unit — four pitches spanning a perfect fourth, named by the three steps between them, `3-3-1` being the one the major scale is built from. The complete chart of each tuning is offered (15, 28 and 66 of them), with the names the Xenharmonic Wiki gives where it gives any: `3-3-1 · ionian (jins ʻAjam)` in 17-TET, `3-3-3 · diatonic · Porcupine, perfectly even` in 22-TET. Being a scale segment rather than a voicing, a tetrachord has no inversions — its order is the whole point of it.
 - **Inversion** lifts the lowest voices an octave each, so the chord keeps its notes and sits on a different one: the 1st inversion of a major triad is built up from its third. Only the inversions a chord actually has are offered — two for a triad, five for a six-voice chord — and a chord that already contains its own octave (power, octaves) lifts past it rather than doubling a voice onto one it already has.
 - **Length** — *longest voice* lets a voice below unison run past the end of the source (it plays slower, so it lasts longer) and keeps its whole tail; *source length* crops back to the original length, which is what you want if the result is going to loop.
 - **Normalise result** scales the mix to full scale. Leave it on: six copies at unity peak far above what 8 bits can hold, and the info line tells you what the raw mix peaked at.
@@ -1358,6 +1362,8 @@ sidebar (also at [Note Effects](#effects)).
 | Op | Name | Argument |
 |---|---|---|
 | 1 | Global flags | `$ff00` — tone-slide mode and interpolation bits |
+| 2 | Sample mod (outside) | `$sexy` — as 3, but `se` is the region left alone |
+| 3 | Sample mod (region) | `$sexy` — region, operation, speed |
 | 5 | Filter cutoff | IT: `$xx00` · SF2: `$xxxx` absolute cents · `$FFFF` reset |
 | 6 | Filter resonance | IT: `$xx00` · SF2: `$xxxx` centibels · `$FFFF` reset |
 | 7 | Pattern ditto | `$llrr` — repeat the last `ll` rows `rr` times |

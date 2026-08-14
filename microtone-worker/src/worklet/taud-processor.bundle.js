@@ -434,7 +434,8 @@ function lfoSample(pos, wave) {
 // ── Effect opcode constants (base-36 digit values; 1438-1472) ──
 const EffectOp = Object.freeze({
   OP_NONE: 0x00,
-  OP_1: 0x01, OP_4: 0x04, OP_5: 0x05, OP_6: 0x06, OP_7: 0x07, OP_8: 0x08, OP_9: 0x09,
+  OP_1: 0x01, OP_2: 0x02, OP_3: 0x03, OP_4: 0x04,
+  OP_5: 0x05, OP_6: 0x06, OP_7: 0x07, OP_8: 0x08, OP_9: 0x09,
   OP_A: 0x0a, OP_B: 0x0b, OP_C: 0x0c, OP_D: 0x0d, OP_E: 0x0e, OP_F: 0x0f,
   OP_G: 0x10, OP_H: 0x11, OP_I: 0x12, OP_J: 0x13, OP_K: 0x14, OP_L: 0x15,
   OP_M: 0x16, OP_N: 0x17, OP_O: 0x18, OP_P: 0x19, OP_Q: 0x1a, OP_R: 0x1b,
@@ -2130,6 +2131,143 @@ function makeAnalysisReadout() {
   };
 }
 
+// ══ src/engine/samplemod.js ══
+// Sample-modification note effects (item 130) — notefx 2 and 3, ONE command
+// with two spellings: `3` names the region to modify, `2` names the region to
+// leave alone. Both are NON-DESTRUCTIVE views over the sample pool, exactly as
+// S $Fxxx is: the state lives on the INSTRUMENT and is applied when a byte is
+// read (sampler.js readSamplePoint), so the pool itself is never written.
+//
+// Behavioural contract: TAUD_NOTE_EFFECTS.md §"2 $sexy and 3 $sexy".
+//
+//   $s $e   the region (see decodeSampleRegion)
+//   $x      the operation — one at a time, so an instrument carries ONE
+//           modification and writing either opcode replaces it
+//   $y      index into FUNK_SPEED_TABLE, ProTracker's own funk-speed ladder
+//
+// Region argument, decoded once here so the two spellings cannot drift apart:
+//
+//   $00        the sounding voice's LOOP region (the S $Fxxx region)
+//   $s..$e     s <= e: from s/16 to (e+1)/16 of the sample, rounded
+//              — so $0F is the whole sample and $4B the middle half
+//   $10        middle half            $20 first two thirds   $21 last two thirds
+//   $30 $31 $32  first / middle / last third
+//   $F0..$FE   COMB: keep the extent, alternate in and out of it every 2^n
+//              bytes ($F0 = every other byte, $F3 = runs of 8, $FE = 16384)
+//   otherwise (s > e)  reserved — the whole command is ignored
+//
+// The extent is stored with a -1 sentinel meaning "follow the sounding voice's
+// loop", which is what keeps an Ixmp-patched voice on its own loop (item 116).
+
+/** decodeSampleRegion result: nothing (reserved argument). */
+const REGION_NONE = 0;
+/** decodeSampleRegion result: out = [start, end, combShift] — a whole region. */
+const REGION_SET = 1;
+/** decodeSampleRegion result: out[2] = combShift only; the extent is kept. */
+const REGION_COMB = 2;
+
+// ── the operations ($x) ──────────────────────────────────────────────────────
+// ROL rotates the region's BYTES left by 1/2/4/8 per step (there is no
+// rotate-right: a left rotation of n and a right rotation of span−n are the
+// same picture, and the ladder is more useful spent on step sizes). SUB
+// subtracts from each byte's U8 value, wrapping through zero, by 2/8/32/128 per
+// step — a running level slide that folds rather than clips.
+const MOD_OFF = 0x0;
+const MOD_FUNK = 0x1;
+const MOD_ROL1 = 0x2;
+const MOD_ROL8 = 0x5;
+const MOD_SUB2 = 0x6;
+const MOD_SUB128 = 0x9;
+/** Highest assigned operation; $A..$F are reserved. */
+const MOD_MAX = MOD_SUB128;
+
+/** Step size per operation — bytes for the ROLs, U8 levels for the SUBs. */
+const MOD_STEP = Object.freeze([0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
+
+const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
+const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
+
+/**
+ * ProTracker's funk-speed ladder, indexed by $y. The same table converters use
+ * to lift `EFx` into `S $Fyyy`, so "speed 4" means one thing across the format.
+ */
+const FUNK_SPEED_TABLE = Object.freeze([
+  0, 5, 6, 7, 8, 0x0a, 0x0b, 0x0d, 0x10, 0x13, 0x16, 0x1a, 0x20, 0x2b, 0x40, 0x80,
+]);
+
+/** Scratch triple for the decoders (callers own theirs; engine never allocates
+ *  inside a tick). */
+const regionScratch = new Int32Array(3);
+
+/**
+ * Decode the $se region byte against one voice's ACTIVE sample geometry.
+ * Writes [start, end, combShift] into `out` and returns one of the REGION_*
+ * codes. `combShift` is -1 for a solid region, else n where the comb runs are
+ * 2^n bytes long.
+ */
+function decodeSampleRegion(se, sampleLen, loopStart, loopEnd, out) {
+  const s = (se >>> 4) & 0xf;
+  const e = se & 0xf;
+  const len = sampleLen;
+  out[2] = -1;
+  // $Fn — comb only. Listed before the s <= e rule so $FF stays a comb rather
+  // than becoming "the last sixteenth", and n = $E is the largest run.
+  if (s === 0xf && e !== 0xf) { out[2] = e; return REGION_COMB; }
+  if (se === 0x00) {
+    // The loop region — spelled as the -1 sentinel so an Ixmp-patched voice
+    // still follows ITS OWN loop (item 116) rather than a baked-in span.
+    out[0] = -1;
+    out[1] = -1;
+    return REGION_SET;
+  }
+  if (len < 2) return REGION_NONE;
+  if (s <= e) {
+    out[0] = Math.round((len * s) / 16);
+    out[1] = Math.round((len * (e + 1)) / 16);
+    return REGION_SET;
+  }
+  switch (se) {
+    case 0x10: out[0] = Math.round(len / 4); out[1] = Math.round((len * 3) / 4); break;
+    case 0x20: out[0] = 0;                   out[1] = Math.round((len * 2) / 3); break;
+    case 0x21: out[0] = Math.round(len / 3); out[1] = len;                       break;
+    case 0x30: out[0] = 0;                   out[1] = Math.round(len / 3);       break;
+    case 0x31: out[0] = Math.round(len / 3); out[1] = Math.round((len * 2) / 3); break;
+    case 0x32: out[0] = Math.round((len * 2) / 3); out[1] = len;                 break;
+    default: return REGION_NONE; // $40..$ED with s > e — reserved
+  }
+  if (out[1] - out[0] < 2) return REGION_NONE;
+  return REGION_SET;
+}
+
+/**
+ * Is byte `k` (an offset from the extent start) INSIDE the comb's runs?
+ * `shift` < 0 is a solid region. Runs are 2^shift bytes, alternating in and
+ * out, so the test is one shift and one bit — this sits in the sample-read
+ * hot path.
+ */
+function inCombRun(k, shift) {
+  return shift < 0 || ((k >>> shift) & 1) === 0;
+}
+
+/**
+ * Does the modification touch sample byte `i`? The extent and comb decide, and
+ * notefx 2's inversion flips the answer — which is the ONLY difference between
+ * the two opcodes.
+ */
+function modTouches(inst, i, extentStart, extentEnd) {
+  const inside = i >= extentStart && i < extentEnd &&
+    inCombRun(i - extentStart, inst.modComb);
+  return inst.modInvert ? !inside : inside;
+}
+
+/**
+ * How far the funk walk may scan for the next byte the modification touches.
+ * An inverted region can exclude almost the whole sample, and the walk must
+ * not turn into a linear search for the one byte that is left — past this many
+ * misses the step simply does not land. Well above any musically useful comb.
+ */
+const MOD_WALK_SCAN = 4096;
+
 // ══ src/engine/inst.js ══
 // Taud instrument data model — port of AudioAdapter.kt TaudInstEnvPoint (5246),
 // TaudInstPatch (5261), MetaLayer (5312), TaudInst (5378-5766).
@@ -2475,6 +2613,20 @@ class TaudInst {
 
     // Funk repeat (S$Fx00) XOR bit-mask over the loop region.
     this.funkMask = null;
+
+    // Sample modification (item 130, notefx 2 / 3) — ONE per instrument: the
+    // opcodes are the same command, `2` inverting which side of the region is
+    // touched. Start -1 = "the sounding voice's loop region"; combShift -1 =
+    // solid. Only the ACTIVE operation's accumulator is ever non-zero.
+    this.modOp = 0;               // MOD_OFF
+    this.modInvert = false;       // notefx 2: the region is what is NOT touched
+    this.modStart = -1;
+    this.modEnd = -1;
+    this.modComb = -1;
+    this.modMask = null;          // MOD_FUNK: one bit per sample byte
+    this.modRot = 0;              // MOD_ROL*: byte displacement
+    this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
+    this.modOn = false;           // hot-path guard: does it change any byte yet?
   }
 
   get sampleLoopSustain() { return (this.loopMode & 0x04) !== 0; }
@@ -2612,6 +2764,82 @@ class TaudInst {
     if (mask.length !== (len + 7) >> 3) { this.funkMask = null; return false; }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     return ((mask[idx >> 3] >>> (idx & 7)) & 1) !== 0;
+  }
+
+  /**
+   * Point the modification at a new region (item 130). Its accumulated state is
+   * indexed against that region, so a move invalidates it. Returns whether
+   * anything MOVED, which is what tells the caller to restart the walk: writing
+   * the same region every row must not keep resetting it.
+   */
+  setModRegion(start, end, combShift) {
+    if (this.modStart === start && this.modEnd === end && this.modComb === combShift) return false;
+    this.modStart = start;
+    this.modEnd = end;
+    this.modComb = combShift;
+    this.clearModState();
+    return true;
+  }
+
+  /** Comb the region without moving its ends ($Fn). */
+  setModComb(combShift) {
+    if (this.modComb === combShift) return false;
+    this.modComb = combShift;
+    this.clearModState();
+    return true;
+  }
+
+  /** Select the operation and which side of the region it works on. Changing
+   *  either starts the new operation from scratch — a rotation offset means
+   *  nothing to a subtract. */
+  setModOp(op, invert) {
+    if (this.modOp === op && this.modInvert === invert) return false;
+    this.modOp = op;
+    this.modInvert = invert;
+    this.clearModState();
+    return true;
+  }
+
+  /** Drop what the operation has accumulated, keeping its region. */
+  clearModState() {
+    this.modMask = null;
+    this.modRot = 0;
+    this.modSub = 0;
+    this.modOn = false;
+  }
+
+  /** $x = 0 — the modification, region and all. */
+  resetMod() {
+    this.modOp = 0;
+    this.modInvert = false;
+    this.modStart = -1;
+    this.modEnd = -1;
+    this.modComb = -1;
+    this.clearModState();
+  }
+
+  /** Flip the modification's inversion bit for sample byte `i` (MOD_FUNK). The
+   *  mask spans the whole SAMPLE — an inverted region's touched set is not a
+   *  contiguous span, so there is no smaller origin to index from. */
+  toggleModBit(i, sampleLen) {
+    const len = Math.max(sampleLen, 1);
+    const expectedSize = (len + 7) >> 3;
+    let mask = this.modMask;
+    if (mask === null || mask.length !== expectedSize) {
+      mask = new Uint8Array(expectedSize);
+      this.modMask = mask;
+    }
+    const idx = Math.min(Math.max(i, 0), len - 1);
+    mask[idx >> 3] ^= 1 << (idx & 7);
+    this.modOn = true;
+  }
+
+  modBit(i) {
+    const mask = this.modMask;
+    if (mask === null) return false;
+    const byte = i >> 3;
+    if (byte < 0 || byte >= mask.length) return false;
+    return ((mask[byte] >>> (i & 7)) & 1) !== 0;
   }
 
   _envPointGet(env, base, offset) {
@@ -3128,6 +3356,12 @@ class Voice {
     this.funkSpeed = 0;
     this.funkAccumulator = 0;
     this.funkWritePos = 0;
+
+    // Sample modification (notefx 2 / 3) — the operation and its region live on
+    // the instrument; the channel only drives the speed.
+    this.modSpeed = 0;
+    this.modAccumulator = 0;
+    this.modWritePos = 0;
 
     // Pattern loop (S$Bx).
     this.loopStartRow = 0;
@@ -3657,6 +3891,9 @@ class Playhead {
       it.funkSpeed = 0;
       it.funkAccumulator = 0;
       it.funkWritePos = 0;
+      it.modSpeed = 0;
+      it.modAccumulator = 0;
+      it.modWritePos = 0;
       it.fader = 0;
       it.nnaOverride = -1;
       it.volEnvOn = true; it.panEnvOn = true; it.pitchEnvOn = true; it.filterEnvOn = true;
@@ -3695,16 +3932,19 @@ class Playhead {
       it.activeChanCount = 1; it.activeChanMode = 0; it.activeChanPtr2 = 0;
     }
     ts.backgroundVoices.length = 0;
-    // Funk masks + notefx 5/6 overrides are per-instrument runtime state — clear
-    // so a replay (or song loop) starts from the file defaults.
+    // Sample modifications (funk masks + notefx 2/3 regions) and notefx 5/6
+    // overrides are per-instrument runtime state — clear so a replay (or song
+    // loop) starts from the file defaults.
     for (const inst of this.parent.instruments) {
       inst.funkMask = null;
+      inst.resetMod();
       inst.cutoffOverride = -1;
       inst.resonanceOverride = -1;
     }
   }
 
-  /** Clear funk-repeat state only (per-voice + per-instrument masks). */
+  /** Clear sample-modification state only (per-voice speeds + per-instrument
+   *  masks, regions and rotations). */
   resetFunkState() {
     const ts = this.trackerState;
     if (ts !== null) {
@@ -3712,9 +3952,15 @@ class Playhead {
         it.funkSpeed = 0;
         it.funkAccumulator = 0;
         it.funkWritePos = 0;
+        it.modSpeed = 0;
+        it.modAccumulator = 0;
+        it.modWritePos = 0;
       }
     }
-    for (const inst of this.parent.instruments) inst.funkMask = null;
+    for (const inst of this.parent.instruments) {
+      inst.funkMask = null;
+      inst.resetMod();
+    }
   }
 }
 
@@ -3726,6 +3972,7 @@ class Playhead {
 // `eng` is the TaudEngine instance (carries sampleBin as a Uint8Array; playback
 // addresses the 8 MB pool directly by samplePtr — banking is a device-protocol
 // concern that does not exist here).
+
 
 
 
@@ -3744,14 +3991,41 @@ function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 
 /**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
- * instrument's funk-repeat mask. Caller wraps loop regions first.
+ * instrument's sample modifications — notefx 3's rotation (which moves WHICH
+ * byte is read) and then the funk-repeat mask (which inverts the byte read).
+ * Caller wraps loop regions first.
  * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
  * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
  * for its right channel (both channels share the funk mask and geometry).
+ *
+ * Regions default to the ACTIVE loop: an Ixmp patch replaces the loop points,
+ * and the funk mask is sized and indexed against whichever loop is sounding
+ * (item 116). notefx 2 / 3 may point either modification somewhere else.
  */
 function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
-  const i = Math.min(Math.max(idx, 0), sampleLen - 1);
+  let i = Math.min(Math.max(idx, 0), sampleLen - 1);
+  // Sample modification (notefx 2 / 3). ONE operation is live at a time, so a
+  // ROL's address transform and a FUNK/SUB's value transform never meet.
+  let touched = false;
+  if (inst.modOn) {
+    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
+    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
+    if (ee > es) {
+      touched = modTouches(inst, i, es, ee);
+      if (touched && inst.modRot !== 0) {
+        // An inverted region's touched set reaches both ends of the sample, so
+        // that is the span the rotation wraps in; a plain region wraps in itself.
+        const ds = inst.modInvert ? 0 : es;
+        const dl = inst.modInvert ? sampleLen : ee - es;
+        if (dl > 1) {
+          let k = (i - ds + inst.modRot) % dl;
+          if (k < 0) k += dl;
+          i = ds + k;
+        }
+      }
+    }
+  }
   let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
   // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
   // funk mask is sized and indexed against whichever loop is sounding (item 116).
@@ -3759,6 +4033,10 @@ function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
   const le = voice.activeSampleLoopEnd;
   if (inst.funkMask !== null && le > ls) {
     if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
+  }
+  if (touched) {
+    if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
+    else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
   }
   return (b - 127.5) / 127.5;
 }
@@ -5299,6 +5577,7 @@ function rowSlidesSpatially(row) {
 
 
 
+
 /** Scratch [azimuth, elevation] for the X / 4 argument decode. */
 const spatialArg = new Float64Array(2);
 
@@ -5317,6 +5596,9 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       playhead.updateTrackerGlobalBehaviour(flags);
       break;
     }
+    // 2 spares the region it names; 3 modifies it. Same command otherwise.
+    case EffectOp.OP_2: applySampleModEffect(eng, voice, rawArg, true); break;
+    case EffectOp.OP_3: applySampleModEffect(eng, voice, rawArg, false); break;
     case EffectOp.OP_5: applyFilterParamEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_6: applyFilterParamEffect(eng, ts, voice, vi, rawArg, true); break;
     case EffectOp.OP_8: {
@@ -5723,6 +6005,47 @@ function applySEffect(eng, ts, voice, vi, arg) {
       if (x === 0) voice.funkAccumulator = 0;
       break;
   }
+}
+
+/**
+ * notefx 2 and notefx 3 — the sample-modification command (item 130). `invert`
+ * is what tells them apart: `3 $sexy` names the region to modify, `2 $sexy`
+ * names the region to LEAVE ALONE. Everything else is identical, and an
+ * instrument carries ONE modification, so either opcode replaces it.
+ *
+ *   $se  region        $x  operation (0 = reset)      $y  funk-speed index
+ *
+ * The state splits the way S $Fxxx's does: the modification belongs to the
+ * INSTRUMENT (every channel sounding it hears the same sample) and the speed
+ * driving it to the CHANNEL. A reserved operation or a reserved region is
+ * ignored WHOLE, speed and all, so a typo cannot drive a modification the
+ * writer never named.
+ */
+function applySampleModEffect(eng, voice, rawArg, invert) {
+  const inst = eng.instruments[voice.instrumentId];
+  const op = (rawArg >>> 4) & 0xf;
+  if (op === MOD_OFF) {
+    inst.resetMod();
+    voice.modSpeed = 0;
+    voice.modAccumulator = 0;
+    voice.modWritePos = 0;
+    return;
+  }
+  if (op > MOD_MAX) return;                       // $A..$F — reserved
+  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
+    voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
+  if (code === REGION_NONE) return;
+  const moved = code === REGION_COMB
+    ? inst.setModComb(regionScratch[2])
+    : inst.setModRegion(regionScratch[0], regionScratch[1], regionScratch[2]);
+  const swapped = inst.setModOp(op, invert);
+  // A changed region or operation restarts the walk; re-stating the SAME
+  // command row after row must not, or it would never get past its first step.
+  if (moved || swapped) {
+    voice.modAccumulator = 0;
+    voice.modWritePos = 0;
+  }
+  voice.modSpeed = FUNK_SPEED_TABLE[rawArg & 0xf];
 }
 
 /** Apply an env toggle to the foreground voice + (for a meta) its layer children. */
@@ -6242,6 +6565,7 @@ function advanceRow(eng, ts, playhead) {
 
 
 
+
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
 
@@ -6577,6 +6901,44 @@ function applyTrackerTick(eng, ts, playhead) {
         voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
       voice.funkWritePos = (voice.funkWritePos + 1) % loopLen;
       inst.toggleFunkBit(voice.funkWritePos, loopLen);
+    }
+  }
+
+  // Sample modification (notefx 2 / 3) — one step of the instrument's live
+  // operation per accumulator overflow, on the same >= $80 ladder funk repeat
+  // walks (item 130).
+  for (const voice of ts.voices) {
+    if (voice.modSpeed === 0 || !voice.active) continue;
+    const inst = eng.instruments[voice.instrumentId];
+    if (inst.modOp === MOD_OFF) continue;
+    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
+    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
+    if (ee <= es) continue;
+    voice.modAccumulator += voice.modSpeed;
+    if (voice.modAccumulator < 0x80) continue;
+    voice.modAccumulator = 0;
+    const sampleLen = Math.max(voice.activeSampleLength, 1);
+    const step = MOD_STEP[inst.modOp];
+    if (inst.modOp === MOD_FUNK) {
+      // Walk to the next byte the region actually touches and flip it. An
+      // inverted region can exclude a long stretch, so the scan is bounded —
+      // past MOD_WALK_SCAN misses this step simply does not land.
+      const span = inst.modInvert ? sampleLen : ee - es;
+      const base = inst.modInvert ? 0 : es;
+      for (let n = 0; n < MOD_WALK_SCAN; n++) {
+        voice.modWritePos = (voice.modWritePos + 1) % Math.max(span, 1);
+        const i = base + voice.modWritePos;
+        if (modTouches(inst, i, es, ee)) { inst.toggleModBit(i, sampleLen); break; }
+      }
+    } else if (isRolOp(inst.modOp)) {
+      const dl = inst.modInvert ? sampleLen : ee - es;
+      if (dl > 1) {
+        inst.modRot = (inst.modRot + step) % dl;
+        inst.modOn = inst.modRot !== 0;
+      }
+    } else {
+      inst.modSub = (inst.modSub + step) & 0xff;
+      inst.modOn = inst.modSub !== 0;
     }
   }
 
@@ -7641,6 +8003,28 @@ class TaudEngine {
     return mask === null ? new Uint8Array(0) : mask.slice();
   }
 
+  /**
+   * The instrument's live sample modification (item 130), for the sample view's
+   * overlay: the operation, which side of the region it works on, the region as
+   * [start, end, combShift] with -1 meaning "the sample's own loop", and
+   * whatever the operation has accumulated. Plain numbers — the reply crosses a
+   * postMessage. The MOD_FUNK bit-mask travels with it as `modMask`.
+   */
+  getInstrumentSampleMod(slot) {
+    const inst = this.instruments[slot & 0x3ff];
+    return {
+      op: inst.modOp, invert: inst.modInvert,
+      start: inst.modStart, end: inst.modEnd, comb: inst.modComb,
+      rot: inst.modRot, sub: inst.modSub, on: inst.modOn,
+    };
+  }
+
+  /** The modification's inversion mask, one bit per SAMPLE byte (item 130). */
+  getInstrumentModMask(slot) {
+    const mask = this.instruments[slot & 0x3ff].modMask;
+    return mask === null ? new Uint8Array(0) : mask.slice();
+  }
+
   getVoiceNote(ph, vi) {
     const v = this._voice(ph, vi);
     return v.active ? v.noteVal & 0xffff : 0;
@@ -7742,7 +8126,9 @@ const CMD = Object.freeze({
 
 const MSG = Object.freeze({
   SNAPSHOT: "snapshot", // {buffer: ArrayBuffer} — Float32Array, layout below
-  FUNK_MASK: "funkMask", // {slot, mask: ArrayBuffer} — S$Fx invert-loop bit mask
+  // {slot, mask: ArrayBuffer, mod} — S$Fx/notefx 2 invert-loop bit mask, plus
+  // the instrument's notefx 2/3 region geometry (engine getInstrumentSampleMod).
+  FUNK_MASK: "funkMask",
   READY: "ready",
   PROFILE: "profile",   // {cpuFrac, renderFrac, ...} — dev profiler, ~1/s (opt-in)
 });
@@ -8174,6 +8560,12 @@ function funkMaskBuffer(eng, slot) {
   return mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
 }
 
+/** Detached copy of notefx 2/3's inversion mask for `slot` (item 130). */
+function modMaskBuffer(eng, slot) {
+  const mask = eng.getInstrumentModMask(slot);
+  return mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+}
+
 /** Write every snapshot field except the interrupt latch into `f`. */
 function fillSnapshotInto(eng, playhead, f) {
   const ph = eng.playheads[playhead];
@@ -8409,7 +8801,11 @@ class TaudProcessor extends AudioWorkletProcessor {
         break;
       case CMD.QUERY_FUNK_MASK: {
         const buf = funkMaskBuffer(eng, m.slot);
-        this.port.postMessage({ t: MSG.FUNK_MASK, slot: m.slot, mask: buf }, [buf]);
+        const modBuf = modMaskBuffer(eng, m.slot);
+        this.port.postMessage({
+          t: MSG.FUNK_MASK, slot: m.slot, mask: buf,
+          mod: eng.getInstrumentSampleMod(m.slot), modMask: modBuf,
+        }, [buf, modBuf]);
         break;
       }
       case CMD.SNAPSHOT_RETURN:

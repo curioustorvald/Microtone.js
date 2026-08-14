@@ -502,6 +502,7 @@ export default {
   "chord.group.added": "6화음 · 부가음",
   "chord.group.extended": "확장 화음",
   "chord.group.spread": "옥타브 · 디튠",
+  "chord.group.tetrachord": "테트라코드",
   "chord.preset.major": "장3화음",
   "chord.preset.minor": "단3화음",
   "chord.preset.sus2": "sus2",
@@ -940,6 +941,10 @@ export default {
   // (palette.js의 fxName/fxArg 참고) — TAUD_NOTE_EFFECTS.md 요약.
   "pal.fx.1.n": "전역 플래그",
   "pal.fx.1.a": "$xx00 — 0-1비트 톤 슬라이드 모드, 2-4비트 보간",
+  "pal.fx.2.n": "샘플 변형 (구간 밖)",
+  "pal.fx.2.a": "$sexy — 3번 명령과 같으나 se는 변형하지 않을 구간",
+  "pal.fx.3.n": "샘플 변형 (구간)",
+  "pal.fx.3.a": "$sexy — se 구간 ($00 루프 · $0F 전체 · $10 가운데 절반 · $20/$21 3분의 2 · $30/$31/$32 3분의 1 · $Fn 2^n바이트 빗살) · x 연산 (0 끄기, 1 펑크, 2-5 왼쪽 회전 1/2/4/8바이트, 6-9 빼기 2/8/32/128) · y 속도 0-F",
   "pal.fx.4.n": "공간 슬라이드 목표",
   "pal.fx.4.a": "$eeaa — Z 슬라이드의 목표 지정: aa 방위각(00 왼쪽, 40 정면, 80 오른쪽, C0 뒤), ee 고도(부호 있음) · 서라운드 곡 전용",
   "pal.fx.5.n": "필터 컷오프",

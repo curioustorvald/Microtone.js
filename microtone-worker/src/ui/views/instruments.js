@@ -27,7 +27,8 @@ import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { envPresent } from "../../engine/envelope.js";
-import { hex2, rangeToStr, noteToStr } from "../notenames.js";
+import { hex2, rangeToStr } from "../notenames.js";
+import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
 import { ANCHOR_NOTE, stepNoteInTable } from "../pitchtables.js";
 import { UNITS_PER_OCTAVE } from "../../doc/chord.js";
 import { themeColors } from "../theme.js";
@@ -1444,25 +1445,31 @@ export class InstrumentsView {
         commit(patchLayer(layers, i,
           { detune: clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0) }));
       });
+      // The note the detune lands on, painted in the SONG's notation (the
+      // grids' own glyph painter) rather than spelled in 12-EDO — the ◂ ▸
+      // buttons already step degrees of this table, so the readout has to agree
+      // with them. The raw 4096-TET units stay as text beside the glyph.
+      const detAnn = Object.assign(document.createElement("span"), { className: "dim meta-det-ann" });
+      detAnn.append(
+        noteGlyphCanvas(clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff), preset),
+        ` · ${l.detune}`);
       detCell.append(
         iconBtn(null, "◂", t("meta.detuneDownTitle"), () => stepDeg(-1)),
         centsIn,
         iconBtn(null, "▸", t("meta.detuneUpTitle"), () => stepDeg(+1)),
-        Object.assign(document.createElement("span"), {
-          className: "dim meta-det-ann",
-          textContent: `${noteToStr(clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff))} · ${l.detune}`,
-        }));
+        detAnn);
 
       // Gating rectangle. The new-meta hint has always told people to "narrow
       // them on the Layers tab"; until item 113 there was nothing here to narrow.
       const rngCell = tr.querySelector(".rngCell");
+      const rngAnn = Object.assign(document.createElement("span"), { className: "dim meta-rng-ann" });
+      rngAnn.append(rangeGlyphCanvas(l.pitchStart, l.pitchEnd, preset, t("range.whole")));
       rngCell.append(
         numIn(l.pitchStart, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchStart: v })),
           t("meta.pitchLoTitle")),
         numIn(l.pitchEnd, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchEnd: v })),
           t("meta.pitchHiTitle")),
-        Object.assign(document.createElement("span"),
-          { className: "dim meta-rng-ann", textContent: rangeToStr(l.pitchStart, l.pitchEnd) }));
+        rngAnn);
 
       const velCell = tr.querySelector(".velCell");
       velCell.append(

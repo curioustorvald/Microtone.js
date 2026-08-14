@@ -226,24 +226,59 @@ export class SamplesView {
       ctx.fillRect((s.loopStart / s.len) * w, 0, ((s.loopEnd - s.loopStart) / s.len) * w, h);
     }
 
-    // Live funk-repeat (S$Fx) invert-loop overlay: the engine's per-instrument
-    // XOR mask flips loop-region bytes by 0xFF and persists like ProTracker's
-    // destructive EFx. Bytes it flips are drawn in the funk colour. (taut.js)
+    // Live sample-modification overlay: the funk repeat's per-instrument XOR
+    // mask (S$Fx, and notefx 2/3's FUNK operation) flips bytes by 0xFF and
+    // persists like ProTracker's destructive EFx; notefx 2/3 can also rotate a
+    // region's bytes or slide their level. Everything the modifications touch
+    // — inverted, moved or shifted — is drawn in the funk colour. (taut.js)
     const audio = this.store.audio;
     let funkMask = null;
-    if (hasLoop && audio) {
+    let mod = null;
+    let modMask = null;
+    if (audio) {
       for (const inst of s.users) {
         const m = audio.getFunkMask(inst);
         if (m && m.length) { funkMask = m; break; }
       }
+      for (const inst of s.users) {
+        const g = audio.getSampleMod(inst);
+        if (g && g.on) { mod = g; modMask = audio.getModMask(inst); break; }
+      }
     }
-    const funkEnd = funkMask ? Math.min(s.loopEnd, s.loopStart + funkMask.length * 8) : 0;
+    // A region of -1 means "the sample's own loop" — the sentinel S$Fx has
+    // always implied and notefx 2/3 keep for their $00 argument.
+    const modStart = mod ? (mod.start >= 0 ? mod.start : s.loopStart) : 0;
+    const modEnd = mod ? (mod.start >= 0 ? mod.end : s.loopEnd) : 0;
+    const modLive = mod !== null && modEnd > modStart;
+    const inRun = (k, comb) => comb < 0 || ((k >>> comb) & 1) === 0;
+    const touches = (p) => {
+      const inside = p >= modStart && p < modEnd && inRun(p - modStart, mod.comb);
+      return mod.invert ? !inside : inside;
+    };
+    // A mask sized for a shorter sample than the one on screen (the engine
+    // grows it lazily) stops where the bits do.
+    const funkEnd = funkMask
+      ? Math.min(s.loopEnd, s.loopStart + funkMask.length * 8) : 0;
     const byteAt = (p, base = s.ptr) => {
-      let v = bin[base + p];
-      let flipped = false;
-      if (funkMask && p >= s.loopStart && p < funkEnd) {
-        const k = p - s.loopStart;
+      let src = p;
+      const hit = modLive && touches(p);
+      if (hit && mod.rot) {
+        const ds = mod.invert ? 0 : modStart;
+        const dl = mod.invert ? s.len : modEnd - modStart;
+        if (dl > 1) src = ds + (((p - ds + mod.rot) % dl) + dl) % dl;
+      }
+      let v = bin[base + src];
+      let flipped = src !== p;
+      // The legacy mask is tested against the byte actually READ, exactly as
+      // the engine does — a rotation moves which byte that is.
+      if (funkMask && src >= s.loopStart && src < funkEnd) {
+        const k = src - s.loopStart;
         if ((funkMask[k >>> 3] >>> (k & 7)) & 1) { v ^= 0xff; flipped = true; }
+      }
+      if (hit) {
+        if (modMask && modMask.length) {
+          if ((modMask[src >>> 3] >>> (src & 7)) & 1) { v ^= 0xff; flipped = true; }
+        } else if (mod.sub) { v = (v - mod.sub) & 0xff; flipped = true; }
       }
       return { v, flipped };
     };

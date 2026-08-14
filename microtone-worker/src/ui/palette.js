@@ -16,6 +16,8 @@ import { t } from "./i18n.js";
 // themselves live in lang/en.js (source of truth) and its translations.
 export const FX_INFO = {
   0x01: { l: "1" },
+  0x02: { l: "2" },
+  0x03: { l: "3" },
   0x04: { l: "4" },
   0x05: { l: "5" },
   0x06: { l: "6" },

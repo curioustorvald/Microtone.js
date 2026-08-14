@@ -40,12 +40,17 @@ export function noteCentsOff(note) {
 const RANGE_LO_SENTINELS = new Set([0x0000, 0x0020]);
 const RANGE_HI_SENTINEL = 0xffff;
 
+/** Which ends of a zone/layer range are OPEN — shared so the text form below
+ *  and the glyph form (noteglyph.js rangeGlyphCanvas) collapse them alike. */
+export function rangeBoundsOpen(lo, hi) {
+  return { openLo: RANGE_LO_SENTINELS.has(lo), openHi: hi === RANGE_HI_SENTINEL };
+}
+
 /** Note-range text for Ixmp zones / meta layers / Advanced Edit: collapses an
  *  open lower/upper bound into "~note" / "note~", both bounds into a
  *  translated "whole range", otherwise the plain "lo‥hi" pair. */
 export function rangeToStr(lo, hi) {
-  const openLo = RANGE_LO_SENTINELS.has(lo);
-  const openHi = hi === RANGE_HI_SENTINEL;
+  const { openLo, openHi } = rangeBoundsOpen(lo, hi);
   if (openLo && openHi) return t("range.whole");
   if (openLo) return "~" + noteToStr(hi);
   if (openHi) return noteToStr(lo) + "~";
@@ -72,8 +77,8 @@ export function hex4(v) { return v.toString(16).toUpperCase().padStart(4, "0"); 
 const FX_LAYOUT = {
   0: "1111", // no effect (an argument here is junk, but show it)
   1: "11..", // 1 $xx00  global behaviour flags
-  2: "1111", // unassigned
-  3: "1111", // unassigned
+  2: "1123", // 2 $sexy  sample modification, region INVERTED: region, op, speed
+  3: "1123", // 3 $sexy  sample modification: region, operation, funk speed
   4: "1122", // 4 $eeaa  spherical slide target: elevation, azimuth
   5: "1111", // 5 $xxyy  filter cutoff (one value: 16-bit in SF2 mode, high byte in IT)
   6: "1111", // 6 $xxyy  filter resonance, as 5

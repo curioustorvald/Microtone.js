@@ -573,6 +573,28 @@ export class TaudEngine {
     return mask === null ? new Uint8Array(0) : mask.slice();
   }
 
+  /**
+   * The instrument's live sample modification (item 130), for the sample view's
+   * overlay: the operation, which side of the region it works on, the region as
+   * [start, end, combShift] with -1 meaning "the sample's own loop", and
+   * whatever the operation has accumulated. Plain numbers — the reply crosses a
+   * postMessage. The MOD_FUNK bit-mask travels with it as `modMask`.
+   */
+  getInstrumentSampleMod(slot) {
+    const inst = this.instruments[slot & 0x3ff];
+    return {
+      op: inst.modOp, invert: inst.modInvert,
+      start: inst.modStart, end: inst.modEnd, comb: inst.modComb,
+      rot: inst.modRot, sub: inst.modSub, on: inst.modOn,
+    };
+  }
+
+  /** The modification's inversion mask, one bit per SAMPLE byte (item 130). */
+  getInstrumentModMask(slot) {
+    const mask = this.instruments[slot & 0x3ff].modMask;
+    return mask === null ? new Uint8Array(0) : mask.slice();
+  }
+
   getVoiceNote(ph, vi) {
     const v = this._voice(ph, vi);
     return v.active ? v.noteVal & 0xffff : 0;

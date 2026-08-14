@@ -94,6 +94,12 @@ export function funkMaskBuffer(eng, slot) {
   return mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
 }
 
+/** Detached copy of notefx 2/3's inversion mask for `slot` (item 130). */
+export function modMaskBuffer(eng, slot) {
+  const mask = eng.getInstrumentModMask(slot);
+  return mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+}
+
 /** Write every snapshot field except the interrupt latch into `f`. */
 export function fillSnapshotInto(eng, playhead, f) {
   const ph = eng.playheads[playhead];
