@@ -618,7 +618,7 @@ export class CuesView {
         }
       }
 
-      ctx.fillStyle = this.cursor.cue === cueIdx ? C.fg : C.accent;
+      ctx.fillStyle = cueIdx % 4 === 0 ? C.accent : C.fg;
       ctx.fillText(cueIdx.toString(16).toUpperCase().padStart(4, "0"), 6, y + ROW_H / 2);
       ctx.fillStyle = info.inst0.type !== INST_NOP ? C.accent2 : C.dim;
       if (info.inst0.type === INST_NOP) ctx.globalAlpha = 0.35;

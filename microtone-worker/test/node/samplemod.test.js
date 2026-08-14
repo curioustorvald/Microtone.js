@@ -81,6 +81,28 @@ test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
   assert.equal(MOD_MAX, 9, "$A..$F are reserved");
 });
 
+// The JVM twin (tsvm devtests/webconf/SampleModTest.java) prints the same
+// checksum over the same sweep: rounding is the classic port hazard here
+// (Math.round on a .5 boundary, integer vs double division), so every argument
+// is decoded against a spread of sample lengths and reduced to ONE number the
+// two engines can be compared on.
+test("region decode: the whole $se space matches the JVM engine", () => {
+  const out = new Int32Array(3);
+  // FNV-1a 64, in BigInt so the multiply cannot lose the high bits.
+  let h = 0xcbf29ce484222325n;
+  const MASK = (1n << 64n) - 1n;
+  for (const len of [2, 3, 1000, 999, 4095, 65535, 1048577]) {
+    for (let se = 0; se < 256; se++) {
+      const code = decodeSampleRegion(se, len, 0, len, out);
+      for (const v of [code, out[0], out[1], out[2]]) {
+        h = ((h ^ (BigInt(v) & 0xffffffffn)) * 1099511628211n) & MASK;
+      }
+    }
+  }
+  assert.equal(h.toString(16), "43411e372b055f5d",
+    "region decode must agree with SampleModTest's REGION-DECODE-CHECKSUM");
+});
+
 test("comb runs alternate every 2^n bytes", () => {
   assert.ok(inCombRun(0, -1) && inCombRun(9999, -1), "solid region has no gaps");
   // $F0 — every other byte.
@@ -260,14 +282,17 @@ test("SUB slides the region's level, wrapping through zero", () => {
 
 test("SUB wraps: 128 twice over is the sample back again", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x0f9f]]); // SUB128 at top speed — one step per tick
-  render(eng, ROW - TICK); // 5 steps: odd, so the whole sample is inverted-in-level
+  // $y = 8 is speed $10, so a step lands every 8th tick (5120 samples). The JVM
+  // twin (tsvm devtests/webconf/SampleModTest.java) drives the same argument
+  // over the same spans — its render granularity cannot straddle a step there.
+  loadRows(eng, [[0x03, 0x0f98]]); // whole sample, SUB128, speed $10
+  render(eng, 5632); // one step: past tick 8, before tick 16
   const inst = eng.instruments[1];
   assert.equal(inst.modSub, 128);
   const voice = eng.playheads[0].trackerState.voices[0];
   const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
   assert.equal(raw(10), (10 - 128) & 0xff);
-  render(eng, TICK); // …and the sixth step lands back on zero
+  render(eng, 5632); // …the second lands back on zero
   assert.equal(inst.modSub, 0);
   assert.equal(inst.modOn, false, "a modification that changes nothing costs nothing to read");
   assert.equal(raw(10), 10);
