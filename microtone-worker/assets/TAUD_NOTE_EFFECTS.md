@@ -784,7 +784,7 @@ Operations:
 | `$x` | operation |
 | --- | --- |
 | `$0` | off / reset |
-| `$1` | funk repeat — invert one more byte of the region per step |
+| `$1` | invert loop — invert one more byte of the region per step |
 | `$2` `$3` `$4` `$5` | rotate the region's bytes **left** by 1 / 2 / 4 / 8 bytes per step |
 | `$6` `$7` `$8` `$9` | subtract 2 / 8 / 32 / 128 from every byte of the region per step, wrapping through zero |
 | `$A`…`$F` | reserved |
@@ -797,14 +797,14 @@ funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40,
 
 `$y = 0` is speed zero: the modification **freezes** where it is and keeps everything it has accumulated. `$x = 0` is the reset — the operation, the region and the accumulated state all go.
 
-**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $Fxxx` remains the ProTracker-compatible funk repeat and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
+**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $Fxxx` remains the ProTracker-compatible invert loop and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
 
 **Implementation.** An instrument carries **one** modification — writing either opcode replaces it — and the state splits the way `S $Fxxx`'s does: the modification belongs to the **instrument** (every channel sounding it hears the same sample) and the speed driving it to the **channel**. Nothing is ever written to the sample pool; the operation is applied as bytes are read.
 
 ```
 on every tick (when $y's speed != 0 and an operation is selected):
     mod_accumulator += mod_speed
-    if mod_accumulator >= $80:                    # hard reset, as funk repeat
+    if mod_accumulator >= $80:                    # hard reset, as invert loop
         mod_accumulator = 0
         step the operation once (below)
 
@@ -822,7 +822,7 @@ on sample byte read at position i:
 - A reserved operation and a reserved region are both ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
 - The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the funk mask.
 
-## The region argument ($se, effects 2 and 3)
+### The region argument ($se, effects 2 and 3)
 
 The region byte's two nibbles are read as a **from/to pair covering the whole sample** while `s <= e`, and as a **selector** when `s > e`:
 
@@ -842,6 +842,18 @@ Notes an engine **MUST** honour:
 - `$00` is the loop region **as the sounding voice sees it**: an Ixmp patch brings its own loop points, and the region follows them rather than the base record's.
 - A comb selector leaves the extent alone, so `3 $311F` followed by `3 $F21F` combs the middle third. The extent and the comb are independent halves of one region.
 - The inversion of effect `2` applies to the region **and** its comb: `2 $F01F` is every OTHER byte of whatever extent is standing.
+
+### Why sample mods and why more of them
+
+**Invert Loop** is a deliberately unusual effect inherited from the ProTracker tradition. The original Funk Repeat manipulated the playback loop itself; later ProTracker versions used the EFx command for Invert Loop, progressively modifying samples within the loop.
+
+Its practical musical value was never obvious, and that is precisely why it survived in tracker folklore. Composers such as *4mat* demonstrated that effects which initially appeared useless could become distinctive musical techniques when placed in the right hands.
+
+**Sample Subtraction** subtracts a controlled value from the sample waveform during playback, producing an evolving change in its harmonic structure.
+
+This technique has historical precedent in Konami's MSX-era sound design, where waveform manipulation of the SCC's wavetable was used to create evolving timbres, including a characteristic "growing" sawtooth-like sound whose harmonic content shifts toward an octave-up character.
+
+It may look strange compared with conventional effects such as chorus or phaser, but sample-domain manipulation is very much in the tradition of tracker and programmable-sound synthesis: the waveform itself becomes part of the instrument's performance.
 
 ## 5 $xxyy and 6 $xxyy — Filter Cutoff/Resonance Control
 
@@ -1299,7 +1311,7 @@ Q retrigger counters do **not** reset between SEx repetitions.
 
 **Implementation.** Row duration becomes `speed × (1 + arg_x)` ticks. Treat each repetition as a fresh row for tick-0 purposes (so fine slides, delayed notes, and the like re-trigger), but do not reset arpeggio, vibrato, or tremolo LFO positions, and do not decrement SBx's loop counter more than once across the whole delay block.
 
-## S $Fxxx — Funk repeat (Invert loop) with speed $xxx (non-destructive)
+## S $Fxxx — Invert loop with speed $xxx (non-destructive)
 
 **Plain.** Produces a hiss-like progressive inversion of the sample loop, toggling individual bytes over time for a gritty textural effect. Setting `$x = 0` turns the effect off; higher `$x` advances the inversion faster.
 
@@ -1453,7 +1465,7 @@ This table maps each PT effect to its Taud equivalent. Arguments follow PT's two
 | `E $Cx` | `S $Cx00` | Note cut |
 | `E $Dx` | `S $Dx00` | Note delay |
 | `E $Ex` | `S $Ex00` | Pattern delay |
-| `E $Fx` | `S $Fyyy` | Funk repeat, where `yyy = funk_table[x]` |
+| `E $Fx` | `S $Fyyy` | Invert loop, where `yyy = funk_table[x]` |
 | `F $xx` (xx < $20) | `A $xx00` | Set speed |
 | `F $xx` (xx ≥ $20) | `T $(xx−$18)00` | Set tempo |
 
