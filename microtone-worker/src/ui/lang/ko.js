@@ -699,8 +699,6 @@ export default {
   "inst.loopEnd": "루프 끝",
   "inst.loopMode": "루프 모드",
   "inst.percussion": "타악기",
-  "inst.no": "아니오",
-  "inst.yes": "예",
   "inst.detune": "디튠",
   "inst.on": "켬",
   "inst.off": "끔",

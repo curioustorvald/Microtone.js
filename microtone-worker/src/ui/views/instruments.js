@@ -694,15 +694,17 @@ export class InstrumentsView {
     row.className = "slider-row select";
     const lab = document.createElement("span");
     lab.className = "sl-label"; lab.textContent = label;
-    const sel = document.createElement("select");
-    sel.className = "sl-select";
+    const group = document.createElement("div");
+    group.className = "sl-buttons";
     options.forEach(([v, text]) => {
-      const o = document.createElement("option");
-      o.value = v; o.textContent = text; sel.appendChild(o);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      b.className = v === value ? "active" : "";
+      b.addEventListener("click", () => onChange(v));
+      group.appendChild(b);
     });
-    sel.value = value;
-    sel.addEventListener("change", () => onChange(parseInt(sel.value, 10)));
-    row.append(lab, sel);
+    row.append(lab, group);
     return row;
   }
 
@@ -855,8 +857,8 @@ export class InstrumentsView {
       this.selectRow(t("inst.loopMode"), inst.loopMode & 3,
         [[0, t("smp.loopOff")], [1, t("smp.loopForward")], [2, t("smp.loopPingpong")], [3, t("smp.loopOneshot")]],
         (v) => this.setField("loopMode", (inst.loopMode & ~3) | v)),
-      this.selectRow(t("inst.percussion"), (inst.loopMode >> 4) & 1, [[0, t("inst.no")], [1, t("inst.yes")]],
-        (v) => this.setField("loopMode", (inst.loopMode & ~0x10) | (v << 4))),
+      this.checkRow(t("inst.percussion"), ((inst.loopMode >> 4) & 1) !== 0,
+        (on) => this.setField("loopMode", (inst.loopMode & ~0x10) | (on ? 0x10 : 0))),
       editRow,
     );
 

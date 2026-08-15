@@ -141,6 +141,39 @@
         check("saved 64-channel (xHDR)", re.is64Channel === true);
         check("saved bpm/speed", re.songs[0].bpm === 140 && re.songs[0].tickRate === 8);
 
+        // ── item 149: non-ASCII project/song names must survive a save→reload
+        //    round trip, not just look right in the live session (the bug was a
+        //    dormant corruption — right on screen, mojibake after save+reload,
+        //    because newProject() skipped the \uHHHH escape every other name
+        //    write path applies before the ASCII-only sMet/PNam readers see it). ──
+        const { unescapeName } = await import("../../src/ui/names.js");
+        win.confirm = () => true; // doc is dirty now — newProject()'s discard guard
+        doc.getElementById("newBtn").click();
+        await sleep(60);
+        const dlg2 = doc.querySelector("dialog.np-modal");
+        check("second modal opens", !!dlg2 && dlg2.open);
+        const inp2 = (f) => dlg2.querySelector(`[data-f="${f}"]`);
+        const korean = "이딴게";
+        inp2("name").value = korean;
+        inp2("comp").value = "테스터";
+        dlg2.querySelector(".np-ok").click();
+        await sleep(80);
+
+        const sm2 = store.doc.meta.songMeta[0];
+        check("Korean name stored ASCII-escaped in memory", /^[\x00-\x7f]*$/.test(sm2.name));
+        check("Korean name unescapes back for display", unescapeName(sm2.name) === korean);
+        check("Korean composer unescapes back for display", unescapeName(sm2.composer) === "테스터");
+
+        const bytes2 = store.doc.toBytes();
+        const re2 = parseTaud(bytes2);
+        const sm2re = re2.meta.songMeta[0];
+        check("saved+reloaded name round-trips (not mojibake)", unescapeName(sm2re.name) === korean);
+        check("saved+reloaded composer round-trips", unescapeName(sm2re.composer) === "테스터");
+        // meta.projectName is decoded from PNam via the same ASCII-only strNul
+        // reader as sMet — go through it (not a plain TextDecoder pass, which
+        // would read the raw UTF-8 bytes correctly and mask the bug).
+        check("saved PNam round-trips", unescapeName(re2.meta.projectName) === korean);
+
         log(ok ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (e) {
         log("ERROR: " + e.message + "\n" + e.stack);

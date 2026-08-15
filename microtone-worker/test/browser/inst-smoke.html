@@ -85,8 +85,9 @@
         log(`use default pan: bit7 ${useDefBefore}→${(inst.panEnvLoop >> 7) & 1} (${useDefOk ? "ok" : "FAIL"})`);
 
         // Filter: switch to SoundFont2, verify 16-bit + Hz/dB annotations, edit cutoff.
-        const modeSel = findRow("Mode").querySelector(".sl-select");
-        modeSel.value = "1"; fire(modeSel, "change"); // re-renders the panel
+        const findBtn = (row, text) =>
+          [...row.querySelectorAll(".sl-buttons button")].find((b) => b.textContent === text);
+        findBtn(findRow("Mode"), "SoundFont2").click(); // re-renders the panel
         const sfMode = inst.filterSfMode;
         const cutRow = findRow("Cutoff");
         const cutAnn = cutRow.querySelector(".sl-ann").textContent;
@@ -106,9 +107,9 @@
         log(`SF reso: reso16=${inst.defaultResonance16} ann0="${resAnn}" (${resOk ? "ok" : "FAIL"})`);
 
         // NNA key-lift as the 5th option → flag bit 5 set, bits 0-1 clear.
-        const nnaSel = findRow("New Note Action").querySelector(".sl-select");
-        const nnaOptCount = nnaSel.options.length;
-        nnaSel.value = "4"; fire(nnaSel, "change");
+        const nnaRow = findRow("New Note Action");
+        const nnaOptCount = nnaRow.querySelectorAll(".sl-buttons button").length;
+        findBtn(nnaRow, "Key lift").click();
         const kl = ((inst.instrumentFlag >> 5) & 1) === 1 && (inst.instrumentFlag & 3) === 0;
         const nnaOk = nnaOptCount === 5 && kl;
         log(`NNA key-lift: options=${nnaOptCount} flag=0x${inst.instrumentFlag.toString(16)} (${nnaOk ? "ok" : "FAIL"})`);

@@ -708,8 +708,6 @@ export default {
   "inst.loopEnd": "Loop end",
   "inst.loopMode": "Loop mode",
   "inst.percussion": "Percussion",
-  "inst.no": "no",
-  "inst.yes": "yes",
   "inst.detune": "Detune",
   "inst.on": "on",
   "inst.off": "off",

@@ -38,7 +38,7 @@ import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfon
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange, THEMES } from "./theme.js";
 import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
-import { unescapeName } from "./names.js";
+import { escapeNonAscii, unescapeName } from "./names.js";
 import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
 
 initTheme(); // before any canvas paints (saved choice ?? OS preference)
@@ -346,7 +346,8 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
       }
     }
   }
-  projSections.push({ fourcc: "PNam", payload: Uint8Array.from([...enc.encode(projName), 0]) });
+  const escapedProjName = escapeNonAscii(projName);
+  projSections.push({ fourcc: "PNam", payload: Uint8Array.from([...enc.encode(escapedProjName), 0]) });
 
   const parsedShape = {
     kind: "taud",
@@ -372,10 +373,11 @@ async function newProject({ fromBank = null, bankName = null } = {}) {
     projSections,
     ixmp: fromBank ? fromBank.ixmp : [],
     meta: {
-      projectName: projName,
+      projectName: escapedProjName,
       songMeta: { 0: {
         notation: result.notation, beatPri: result.beatPri, beatSec: result.beatSec,
-        name: projName, composer: result.composer || "", copyright: result.copyright || "",
+        name: escapedProjName, composer: escapeNonAscii(result.composer || ""),
+        copyright: escapeNonAscii(result.copyright || ""),
       } },
     },
   };

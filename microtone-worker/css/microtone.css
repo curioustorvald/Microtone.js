@@ -1320,8 +1320,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 }
 .slider-row .sl-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .slider-row .sl-ann { color: var(--fg); font-variant-numeric: tabular-nums; font-size: 0.82rem; }
-.slider-row input.sl-num,
-.slider-row select.sl-select {
+.slider-row input.sl-num {
   background: var(--panel-2);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -1329,7 +1328,9 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   padding: 0.12rem 0.3rem;
   width: 100%;
 }
-.slider-row select.sl-select { grid-column: 2 / -1; width: auto; justify-self: start; min-width: 12rem; }
+.slider-row .sl-buttons { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2px; justify-self: start; }
+.slider-row .sl-buttons button { padding: 0.15rem 0.6rem; font-size: 0.85rem; color: var(--dim); }
+.slider-row .sl-buttons button.active { color: var(--accent); border-color: var(--accent); }
 .slider-row .sl-check { grid-column: 2 / -1; display: flex; align-items: center; gap: 0.35rem; color: var(--fg); justify-self: start; }
 .slider-row .sl-check input { accent-color: var(--accent); }
 .slider-row input.sl-num.wide { width: 100%; }
