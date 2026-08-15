@@ -1027,7 +1027,7 @@ export default {
   "pal.fx.1.n": "Global flags",
   "pal.fx.1.a": "$xx00 — bits0-1 tone-slide mode, bits2-4 interpolation",
   "pal.fx.2.n": "Sample mod (outside)",
-  "pal.fx.2.a": "$sexy — as effect 3, but se is the region NOT modified",
+  "pal.fx.2.a": "$sexy — se mask ($00 loop · $0F all · $10 mid half · $20/$21 two thirds · $30/$31/$32 thirds · $Fn comb of 2^n bytes) · x op (0 off, 1 funk, 2-5 rotate left 1/2/4/8 bytes, 6-9 subtract 2/8/32/128) · y speed 0-F",
   "pal.fx.3.n": "Sample mod (region)",
   "pal.fx.3.a": "$sexy — se region ($00 loop · $0F all · $10 mid half · $20/$21 two thirds · $30/$31/$32 thirds · $Fn comb of 2^n bytes) · x op (0 off, 1 funk, 2-5 rotate left 1/2/4/8 bytes, 6-9 subtract 2/8/32/128) · y speed 0-F",
   "pal.fx.4.n": "Spatial slide target",
