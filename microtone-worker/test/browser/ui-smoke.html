@@ -422,9 +422,9 @@
           const barLabels = [...patternView.bar.querySelectorAll("button")].map((b) => b.textContent);
           // Item 55: Duplicate renamed "Duplicate pattern" and moved to the very end.
           const barOk = ["Duplicate pattern", "Transpose…", "Lengthen…", "Shorten…",
-            "Volume…", "Pan…", "Instrument…"].every((x) => barLabels.includes(x)) &&
+            "Volume…", "Pan…", "Instrument…", "Find & Change…"].every((x) => barLabels.includes(x)) &&
             barLabels[barLabels.length - 1] === "Duplicate pattern";
-          log(`pattern Lengthen via bar (+ all seven buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
+          log(`pattern Lengthen via bar (+ all eight buttons): ${exOk && barOk ? "ok" : "FAIL"}`);
 
           // ── item 22: volume / pan / instrument bulk popups ──
           // seed pattern 2 row 0 with vol 20 / pan 40 / inst 05, then drive each popup

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Find &amp; Change visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Leaves the Find & Change dialog (item 132) open on a filled-in query, a
+       layout harness like panner-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/fc.png \
+           --timeout=15000 "http://localhost:8932/test/browser/findchange-visual.html?theme=dark"
+       ?theme=light for the light theme, ?v3=1 to upgrade the project to the
+       wide cell first (elevation and the second effect join the column lists),
+       ?empty=1 to see the no-conditions state. -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store, patternView } = win.__microtone;
+      for (let i = 0; i < 100 && !store.song; i++) await sleep(50);
+      if (params.get("v3")) {
+        const { upgradeCellFormatOp } = await win.eval('import("/src/doc/ops.js")');
+        store.undo.apply(upgradeCellFormatOp(store.songIndex, 2));
+        await sleep(120);
+      }
+
+      // Patterns view, pattern 3 (the corpus's first with several instruments).
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F3", bubbles: true }));
+      await sleep(300);
+      patternView.setActiveIdx(0);
+      patternView.panes[0].setPattern(3);
+      await sleep(150);
+      patternView.findChangeOp();
+
+      const doc = win.document;
+      let dlg = null;
+      for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.findchange-modal"); await sleep(20); }
+      if (!dlg) return;
+      const fire = (el, t) => el.dispatchEvent(new win.Event(t, { bubbles: true }));
+      const pick = (el, v) => { el.value = String(v); fire(el, "change"); };
+      const type = (el, v) => { el.value = String(v); fire(el, "input"); };
+      const term = (ci, ti) => doc.querySelector(`.fc-term[data-ci="${ci}"][data-ti="${ti}"]`);
+      const act = (ai) => doc.querySelector(`.fc-act[data-ai="${ai}"]`);
+      const fill = async (get, field, op, a, b) => {
+        pick(get().querySelector(".fc-field"), field); await sleep(20);
+        pick(get().querySelector(".fc-op"), op); await sleep(20);
+        for (const [k, v] of [["a", a], ["b", b]]) {
+          if (v === undefined) continue;
+          const el = get().querySelector(`.fc-val[data-k="${k}"]`);
+          if (el.tagName === "SELECT") pick(el, v); else type(el, v);
+          await sleep(20);
+        }
+      };
+
+      if (params.get("empty")) {
+        dlg.querySelector('.fc-cond[data-ci="0"] .fc-delcond').click();
+        await sleep(40);
+      } else {
+        // A predicate worth looking at, and one that actually selects something
+        // in this pattern so the per-card event counts have digits in them:
+        // any cell carrying content in the low octaves, OR any `S` command.
+        await fill(() => term(0, 0), "cell", "has");
+        dlg.querySelector('.fc-addterm[data-ci="0"]').click();
+        await sleep(30);
+        await fill(() => term(0, 1), "note", "in", "C-3", "B-4");
+        dlg.querySelector(".fc-addcond").click();
+        await sleep(30);
+        await fill(() => term(1, 0), "fx1", "eq", "28"); // S — special
+      }
+      await fill(() => act(0), "vol", "muladd", "1.5", "2");
+      dlg.querySelector(".fc-addact").click();
+      await sleep(30);
+      await fill(() => act(1), "fx1", "set", "28"); // S — special
+      await sleep(60);
+      document.title = "ready";
+    })();
+  </script>
+</body>
+</html>

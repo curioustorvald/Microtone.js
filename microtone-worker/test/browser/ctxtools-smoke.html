@@ -68,28 +68,31 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   timeline.sel = null;
   let dlg = await menuAt(charX(0, COL_X.note), rowY(0));
   check(rows(dlg).length === 2, "the menu now has two rows", String(rows(dlg).length));
-  check(rows(dlg)[1].join() === "transpose", "note column → Transpose", rows(dlg)[1].join());
+  check(rows(dlg)[1].join() === "transpose,findchange", "note column → Transpose", rows(dlg)[1].join());
   await dismiss(dlg);
 
   dlg = await menuAt(charX(0, COL_X.inst), rowY(0));
-  check(rows(dlg)[1].join() === "instrument", "instrument column → Instrument", rows(dlg)[1].join());
+  check(rows(dlg)[1].join() === "instrument,findchange", "instrument column → Instrument", rows(dlg)[1].join());
   await dismiss(dlg);
 
   dlg = await menuAt(charX(0, COL_X.vol), rowY(0));
-  check(rows(dlg)[1].join() === "volume", "volume column → Volume", rows(dlg)[1].join());
+  check(rows(dlg)[1].join() === "volume,findchange", "volume column → Volume", rows(dlg)[1].join());
   await dismiss(dlg);
 
   dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
-  check(rows(dlg)[1].join() === "pan", "panning column → Panning", rows(dlg)[1].join());
+  check(rows(dlg)[1].join() === "pan,findchange", "panning column → Panning", rows(dlg)[1].join());
   await dismiss(dlg);
 
   // ── 2. the effect column → the quick effect palette ────────────────────
   dlg = await menuAt(charX(0, COL_X.fx), rowY(0));
   const fxIds = rows(dlg)[1];
-  check(fxIds.length === QUICK_FX.length && fxIds.every((id) => id.startsWith("fx:")),
+  check(fxIds.length === QUICK_FX.length + 1 &&
+    fxIds.slice(0, -1).every((id) => id.startsWith("fx:")),
     "effect column → the quick effect palette", fxIds.join());
-  check(fxIds.join() === QUICK_FX.map((n) => "fx:" + n).join(),
+  check(fxIds.slice(0, -1).join() === QUICK_FX.map((n) => "fx:" + n).join(),
     "…in the surveyed order (most-used first)", fxIds.join());
+  check(fxIds[fxIds.length - 1] === "findchange",
+    "…with Find & Change closing the row here too (item 132)", fxIds.join());
   const gCell = cell(dlg, "fx:16"); // 0x10 = G, tone portamento
   check(!!gCell && gCell.querySelector(".ctx-name").textContent === "Tone portamento",
     "…each named after the effect", gCell?.querySelector(".ctx-name")?.textContent);
@@ -99,13 +102,13 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   // ── 3. a multi-column band offers each tool but NOT the effects ────────
   timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_PAN, row: 3, ch: 0, sub: E.SUB_FX_ARG };
   dlg = await menuAt(charX(0, COL_X.pan), rowY(1));
-  check(rows(dlg)[1].join() === "pan",
+  check(rows(dlg)[1].join() === "pan,findchange",
     "pan + effects selected → only the pan tool", rows(dlg)[1].join());
   await dismiss(dlg);
 
   timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_NOTE, row: 3, ch: 0, sub: E.SUB_FX_ARG };
   dlg = await menuAt(charX(0, COL_X.note), rowY(1));
-  check(rows(dlg)[1].join() === "transpose,instrument,volume,pan",
+  check(rows(dlg)[1].join() === "transpose,instrument,volume,pan,findchange",
     "the whole cell selected → all four, effects still excluded", rows(dlg)[1].join());
   await dismiss(dlg);
 
@@ -192,14 +195,14 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   const { setSongScalarOp } = await import("../../src/doc/ops.js");
   timeline.sel = null;
   dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
-  check(rows(dlg)[1].join() === "pan",
+  check(rows(dlg)[1].join() === "pan,findchange",
     "a stereo song's panning column offers the pan tool alone", rows(dlg)[1].join());
   await dismiss(dlg);
 
   store.undo.apply(setSongScalarOp(store.songIndex, "surroundModel", 2));
   await sleep(120);
   dlg = await menuAt(charX(0, COL_X.pan), rowY(0));
-  check(rows(dlg)[1].join() === "pan,panner",
+  check(rows(dlg)[1].join() === "pan,panner,findchange",
     "a surround song adds the Panner beside it", rows(dlg)[1].join());
   check(!win.document.getElementById("tbPanner").hidden,
     "…on the same condition as the toolbox button");
@@ -258,7 +261,7 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   pane.sel = null;
   store.clipboard = null;
   dlg = await pMenu(9, 3); // volume column
-  check(JSON.stringify(rows(dlg)) === '[["volume"]]',
+  check(JSON.stringify(rows(dlg)) === '[["volume","findchange"]]',
     "a Patterns column offers the volume tool, alone when there is nothing to copy",
     JSON.stringify(rows(dlg)));
   await dismiss(dlg);
@@ -266,14 +269,15 @@ window.addEventListener("error", (e) => log("ERROR " + e.message));
   // With a selection, both rows are there.
   pane.sel = { aRow: 2, row: 5, aSub: E.SUB_VOL, sub: E.SUB_VOL };
   dlg = await pMenu(9, 3);
-  check(JSON.stringify(rows(dlg)) === '[["copy","cut"],["volume"]]',
+  check(JSON.stringify(rows(dlg)) === '[["copy","cut"],["volume","findchange"]]',
     "…and with a block selected, the clipboard row joins it", JSON.stringify(rows(dlg)));
   await dismiss(dlg);
 
   pane.sel = null;
   dlg = await pMenu(17, 3); // effect column
   const pFx = rows(dlg)[rows(dlg).length - 1];
-  check(pFx.length === QUICK_FX.length, "…including the effect palette", String(pFx.length));
+  check(pFx.length === QUICK_FX.length + 1 && pFx[pFx.length - 1] === "findchange",
+    "…including the effect palette (plus Find & Change)", String(pFx.length));
   await dismiss(dlg);
 
   // …and it really edits the pattern it was opened on.

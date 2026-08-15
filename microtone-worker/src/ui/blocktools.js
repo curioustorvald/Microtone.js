@@ -58,6 +58,8 @@ const TOOL_ITEM = {
   pan: () => ({ id: "pan", label: t("ctx.pan"), icon: ICON.pan, title: t("ctx.panTitle") }),
   panner: () => ({ id: "panner", label: t("toolbox.panner").replace(/…$/, ""),
     icon: ICON.panner, title: t("toolbox.pannerTitle") }),
+  findchange: () => ({ id: "findchange", label: t("ctx.findchange"),
+    icon: ICON.findchange, title: t("ctx.findchangeTitle") }),
 };
 
 /**
@@ -69,6 +71,10 @@ const TOOL_ITEM = {
  * the toolbox button uses (the song declares a surround model): the two are the
  * same popup, so they should appear and disappear together. A stereo song has
  * no circle to place anything on.
+ *
+ * Find & Change (item 132) closes every row, including the effect palette's:
+ * it is the only tool here that is not about a column, so which column you
+ * happened to open the menu on has no bearing on whether it is offered.
  */
 export function blockToolItems(cols, { surround = false } = {}) {
   // Either effect column alone gets the quick palette, writing to that column's
@@ -77,11 +83,12 @@ export function blockToolItems(cols, { surround = false } = {}) {
     const prefix = cols[0] === COL_FX2 ? "fx2" : "fx";
     // The name and the argument format are i18n lookups, not fields on FX_INFO
     // — reading them off the record gave every cell an `undefined` label.
-    return QUICK_FX.map((op) => {
+    const quick = QUICK_FX.map((op) => {
       const info = FX_INFO[op];
       return { id: `${prefix}:${op}`, label: fxName(info), icon: fxGlyph(info.l),
         title: `${info.l} ${fxName(info)} — ${fxArg(info)}` };
     });
+    return [...quick, TOOL_ITEM.findchange()];
   }
   const items = [];
   for (const col of cols) {
@@ -89,6 +96,7 @@ export function blockToolItems(cols, { surround = false } = {}) {
     if (tool) items.push(TOOL_ITEM[tool]());
     if (col === COL_PAN && surround) items.push(TOOL_ITEM.panner());
   }
+  items.push(TOOL_ITEM.findchange());
   return items;
 }
 
@@ -143,8 +151,20 @@ export async function runBlockTool(id, ctx) {
     case "volume": return volumeTool(ctx);
     case "pan": return panTool(ctx);
     case "panner": return pannerTool(ctx);
+    case "findchange": return findChangeTool(ctx);
   }
   return false;
+}
+
+/** Find & Change (item 132) on the block. The dialog owns its own commit —
+ *  it has to run the query to count the matches anyway, so handing back a
+ *  cell transform and letting applyCellBytes redo the work would mean running
+ *  it twice and hoping the two agreed. */
+async function findChangeTool(ctx) {
+  const { showFindChange } = await import("./popups/findchange.js");
+  // No pattern number in the title: a block on the Timeline crosses patterns,
+  // and naming one of them would be a lie about what Apply is going to touch.
+  return showFindChange(ctx.store, { cells: ctx.cells, scope: ctx.scope });
 }
 
 /**

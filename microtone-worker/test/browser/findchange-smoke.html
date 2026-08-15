@@ -1,0 +1,318 @@
+<!doctype html><meta charset="utf-8"><title>Find &amp; Change (item 132)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Item 132 — the advanced pattern edit. That the dialog opens from both routes
+// (the grids' right-click menu and the Patterns toolbar), that its columns and
+// operators follow the FORMAT, that the live readout counts what the predicate
+// really selects, and that Apply writes exactly the matched cells in one undo
+// step — arithmetic leaving blank cells blank, as the core promises.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`); };
+
+window.addEventListener("error", (e) => log("ERROR " + e.message));
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, timeline, patternView } = M;
+  const E = await import("../../src/ui/edit.js");
+  const { setCellOp } = await import("../../src/doc/ops.js");
+
+  // ── driving the grid's menu (same geometry as ctxtools-smoke) ───────────
+  const canvas = doc.getElementById("timeline");
+  const CHAR_W = 7.9, GUTTER = 76, ROW_H = 16;
+  const colW = timeline.colWFor(0);
+  const charX = (ch, c) => GUTTER + (ch - timeline.scrollCh) * colW + 2 + c * CHAR_W + 1;
+  const rowY = (r) => timeline.headerH() + (r - Math.floor(timeline.scrollRow)) * ROW_H + 8;
+  const COL_X = { note: 1, inst: 6, vol: 9, pan: 13, fx: 17 };
+  const menuAt = async (x, y) => {
+    const r = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new win.MouseEvent("contextmenu", {
+      clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2 }));
+    let dlg = null;
+    for (let i = 0; i < 60 && !dlg; i++) { dlg = doc.querySelector("dialog.ctxmenu"); await sleep(20); }
+    return dlg;
+  };
+  const menuCell = (dlg, id) => dlg.querySelector(`.ctx-cell[data-id="${id}"]`);
+
+  // ── driving the dialog ──────────────────────────────────────────────────
+  const fc = () => doc.querySelector("dialog.findchange-modal");
+  const openFc = async () => {
+    let d = null;
+    for (let i = 0; i < 100 && !d; i++) { d = fc(); await sleep(20); }
+    return d;
+  };
+  const fire = (el, type) => el.dispatchEvent(new win.Event(type, { bubbles: true }));
+  const pick = (el, v) => { el.value = String(v); fire(el, "change"); };
+  const type = (el, v) => { el.value = String(v); fire(el, "input"); };
+  const termRow = (ci, ti) => fc().querySelector(`.fc-term[data-ci="${ci}"][data-ti="${ti}"]`);
+  const actRow = (ai) => fc().querySelector(`.fc-act[data-ai="${ai}"]`);
+  const opts = (sel) => [...sel.options].map((o) => o.value);
+  const countText = () => fc().querySelector(".fc-count").textContent;
+  const okBtn = () => fc().querySelector(".fc-ok");
+  /** Fill one row, re-querying between steps: changing the column or the
+   *  operator rebuilds the form (different operands need different widgets). */
+  const fill = async (get, field, op, a, b) => {
+    if (field !== undefined) { pick(get().querySelector(".fc-field"), field); await sleep(20); }
+    if (op !== undefined) { pick(get().querySelector(".fc-op"), op); await sleep(20); }
+    for (const [k, v] of [["a", a], ["b", b]]) {
+      if (v === undefined) continue;
+      const el = get().querySelector(`.fc-val[data-k="${k}"]`);
+      if (el.tagName === "SELECT") pick(el, v); else type(el, v);
+      await sleep(20);
+    }
+  };
+
+  // ── 1. it opens from the grid's right-click menu ────────────────────────
+  timeline.sel = null;
+  let menu = await menuAt(charX(0, COL_X.vol), rowY(0));
+  check(!!menuCell(menu, "findchange"), "the volume column's tool row carries Find & Change");
+  menuCell(menu, "findchange").click();
+  let dlg = await openFc();
+  check(!!dlg, "…and it opens the dialog");
+  check(dlg.querySelectorAll(".fc-term").length === 1 &&
+        dlg.querySelectorAll(".fc-act").length === 1,
+    "a fresh query is one condition of one term, and one change");
+  check(okBtn().disabled, "…with Apply off until something would actually change");
+
+  // ── 2. columns and operators follow the FORMAT (WHEN is a v2 project) ───
+  const fieldOpts = opts(termRow(0, 0).querySelector(".fc-field"));
+  check(!fieldOpts.includes("elev") && !fieldOpts.includes("fx2") && !fieldOpts.includes("fx2arg"),
+    "a version-2 project offers no elevation and no second effect", fieldOpts.join());
+  check(fieldOpts.includes("row") && fieldOpts.includes("cell"),
+    "…but does offer the row number and the whole-cell test");
+  const actFieldOpts = opts(actRow(0).querySelector(".fc-field"));
+  check(!actFieldOpts.includes("row") && !actFieldOpts.includes("cell"),
+    "…neither of which can be WRITTEN", actFieldOpts.join());
+  await fill(() => termRow(0, 0), "fx1");
+  check(opts(termRow(0, 0).querySelector(".fc-op")).join() === "eq,ne,has,blank",
+    "an opcode can only be matched, not ordered",
+    opts(termRow(0, 0).querySelector(".fc-op")).join());
+  check(termRow(0, 0).querySelector('.fc-val[data-k="a"]').tagName === "SELECT",
+    "…and is picked from the effect list rather than typed");
+  await fill(() => termRow(0, 0), "note");
+  check(opts(termRow(0, 0).querySelector(".fc-op")).includes("ge"),
+    "a numeric column can be");
+
+  // ── 3. the readout says what it parsed ──────────────────────────────────
+  await fill(() => termRow(0, 0), undefined, "ge", "C-4");
+  check(termRow(0, 0).querySelector(".fc-read").textContent === "$5000 C-4",
+    "a note operand reads back as its word AND its name",
+    termRow(0, 0).querySelector(".fc-read").textContent);
+  await fill(() => termRow(0, 0), "vol", "ge", "30");
+  check(termRow(0, 0).querySelector(".fc-read").textContent === "$30 (48)",
+    "a column value is hex, with the decimal beside it",
+    termRow(0, 0).querySelector(".fc-read").textContent);
+  await fill(() => termRow(0, 0), undefined, undefined, "zz");
+  check(termRow(0, 0).querySelector(".fc-read").textContent === "?",
+    "…and nonsense says so", termRow(0, 0).querySelector(".fc-read").textContent);
+  fc().querySelector(".fc-cancel").click();
+  await sleep(60);
+  check(!fc(), "Cancel closes it");
+
+  // ── 4. a real edit, on the block and nothing else ───────────────────────
+  const t0 = timeline.cellAt(0, 0), t1 = timeline.cellAt(1, 0), t4 = timeline.cellAt(4, 0);
+  check(!!t0 && !!t1 && !!t4, "found three cells on channel 0 to work with");
+  for (const [tgt, vol] of [[t0, 0x10], [t1, 0x30], [t4, 0x30]]) {
+    store.undo.apply(setCellOp(0, tgt.pat, tgt.rowInCue,
+      { note: 0x5000, instrment: 3, volume: vol, volumeEff: 0, pan: 32, panEff: 0,
+        effect: 0, effectArg: 0 }));
+  }
+  await sleep(60);
+  const volAt = (r) => timeline.cellAt(r, 0)?.cell.volume;
+  const depth0 = store.undo.undoStack.length;
+
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_VOL, row: 1, ch: 0, sub: E.SUB_VOL };
+  menu = await menuAt(charX(0, COL_X.vol), rowY(0));
+  menuCell(menu, "findchange").click();
+  dlg = await openFc();
+  check(!!dlg, "reopened on a two-row block");
+  check(dlg.querySelector(".fc-read").textContent === "?",
+    "…carrying the query the last one was left holding (item 132's re-run)");
+  await fill(() => termRow(0, 0), "vol", "ge", "30");
+  await fill(() => actRow(0), "vol", "set", "3F");
+  check(/1 of 2 cells match/.test(countText()), "the readout counts the block, live", countText());
+  check(!okBtn().disabled, "…and Apply is live");
+  okBtn().click();
+  await sleep(120);
+  check(!fc(), "Apply closes the dialog");
+  check(volAt(1) === 0x3f, "the matching row was set", "$" + volAt(1).toString(16));
+  check(volAt(0) === 0x10, "…the row that did not match was left alone", "$" + volAt(0).toString(16));
+  check(volAt(4) === 0x30, "…and so was the row outside the block", "$" + volAt(4).toString(16));
+  check(store.undo.undoStack.length === depth0 + 1, "…all in one undo step");
+  store.undo.undo();
+  await sleep(80);
+  check(volAt(1) === 0x30, "…which undoes");
+
+  // ── 5. terms AND inside a condition; conditions OR ──────────────────────
+  timeline.sel = { aRow: 0, aCh: 0, aSub: E.SUB_VOL, row: 4, ch: 0, sub: E.SUB_VOL };
+  menu = await menuAt(charX(0, COL_X.vol), rowY(0));
+  menuCell(menu, "findchange").click();
+  dlg = await openFc();
+  await fill(() => termRow(0, 0), "vol", "ge", "30");
+  const five = /(\d+) of (\d+) cells match/.exec(countText());
+  check(five && +five[2] === 5, "a five-row block is five cells", countText());
+  check(five && +five[1] === 2, "…two of which are at least $30", countText());
+  dlg.querySelector(".fc-addterm").click();
+  await sleep(30);
+  await fill(() => termRow(0, 1), "row", "eq", "1");
+  check(/1 of 5 cells match/.test(countText()),
+    "a second term NARROWS the condition (AND)", countText());
+  dlg.querySelector(".fc-addcond").click();
+  await sleep(30);
+  check(!!termRow(1, 0), "a second condition appears");
+  await fill(() => termRow(1, 0), "row", "eq", "0");
+  check(/2 of 5 cells match/.test(countText()),
+    "…and WIDENS the predicate (OR)", countText());
+  check(!!dlg.querySelector(".fc-or"), "…introduced by an 'or' between the two");
+
+  // ── 5b. every OR card counts its own events ─────────────────────────────
+  const condCount = (ci) =>
+    fc().querySelector(`.fc-cond[data-ci="${ci}"] .fc-condcount`).textContent;
+  check(condCount(0) === "1 events" && condCount(1) === "1 events",
+    "each condition says what IT selects", `${condCount(0)} / ${condCount(1)}`);
+  // Now make the two OVERLAP — widen the first to every loud row, and aim the
+  // second AT one of them. The shared cell is counted on both cards (2 + 1)
+  // while the predicate as a whole still selects two.
+  dlg.querySelector('.fc-cond[data-ci="0"] .fc-term[data-ti="1"] .fc-delterm').click();
+  await sleep(30);
+  await fill(() => termRow(1, 0), undefined, undefined, "1");
+  check(condCount(0) === "2 events" && condCount(1) === "1 events",
+    "…on its own, overlaps included", `${condCount(0)} / ${condCount(1)}`);
+  check(/2 of 5 cells match/.test(countText()),
+    "…while the total counts the shared cell once", countText());
+  // An unfinished condition is not "0 events" — it is not an answer yet.
+  dlg.querySelector(".fc-addcond").click();
+  await sleep(30);
+  check(condCount(2) === "", "an unfinished condition shows no count", `"${condCount(2)}"`);
+  dlg.querySelector('.fc-cond[data-ci="2"] .fc-delcond').click();
+  await sleep(30);
+  dlg.querySelector('.fc-cond[data-ci="0"] .fc-addterm').click();
+  await sleep(30);
+  await fill(() => termRow(0, 1), "row", "eq", "1");
+  dlg.querySelector('.fc-cond[data-ci="1"] .fc-delcond').click();
+  await sleep(30);
+  check(/1 of 5 cells match/.test(countText()) && !termRow(1, 0),
+    "…and can be removed again", countText());
+
+  // ── 6. no conditions at all = every cell in range ───────────────────────
+  dlg.querySelector('.fc-cond[data-ci="0"] .fc-delcond').click();
+  await sleep(30);
+  check(/5 of 5 cells match/.test(countText()) && !!dlg.querySelector(".fc-empty"),
+    "an empty predicate matches everything, and says so", countText());
+
+  // ── 7. arithmetic never fills a blank cell ──────────────────────────────
+  // Rows 2 and 3 of the block are untouched; an "add" over the whole block
+  // must move only the three that carry a volume.
+  await fill(() => actRow(0), "vol", "add", "01");
+  const add = /(\d+) of (\d+) cells match · (\d+) will change/.exec(countText());
+  check(add && +add[1] === 5 && +add[3] === 3,
+    "every cell matches, but only the ones carrying a volume would change", countText());
+  okBtn().click();
+  await sleep(120);
+  check(volAt(0) === 0x11 && volAt(1) === 0x31 && volAt(4) === 0x31,
+    "…which is what it did", `${volAt(0)}/${volAt(1)}/${volAt(4)}`);
+  const blankRow = timeline.cellAt(2, 0)?.cell;
+  check(blankRow && blankRow.volume === 0 && blankRow.volumeEff === 3,
+    "…the blank cells still blank", `${blankRow?.volume}/${blankRow?.volumeEff}`);
+  store.undo.undo();
+  await sleep(80);
+  check(volAt(0) === 0x10, "…and it undoes in one step");
+  timeline.sel = null;
+
+  // ── 8. the Patterns toolbar route, with its song-wide scope ─────────────
+  win.dispatchEvent(new win.KeyboardEvent("keydown", { code: "F3", bubbles: true }));
+  await sleep(250);
+  const bar = doc.querySelector(".pattern-bar") ?? doc.getElementById("patternBar");
+  const findBtn = [...doc.querySelectorAll("button")]
+    .find((b) => /Find & Change/.test(b.textContent) && !b.closest("dialog"));
+  check(!!findBtn, "the Patterns toolbar carries a Find & Change button");
+  const pane = patternView.panes[0];
+  patternView.setActiveIdx(0);
+  pane.setPattern(3); // the corpus's first pattern with several instruments
+  pane.sel = null;
+  await sleep(120);
+  findBtn.click();
+  dlg = await openFc();
+  check(!!dlg, "…which opens the same dialog");
+  check(/pattern 0003/i.test(dlg.querySelector("h3").textContent),
+    "…titled with the pattern it will act on", dlg.querySelector("h3").textContent);
+  const scopeOpts = opts(dlg.querySelector(".fc-scope"));
+  check(scopeOpts.join() === "here,song",
+    "…and offers the song-wide scope the toolbar tools offer", scopeOpts.join());
+  const hereCount = /of (\d+) cells/.exec(countText())?.[1];
+  check(hereCount === "64", "the pattern scope is its 64 rows", countText());
+  pick(dlg.querySelector(".fc-scope"), "song");
+  await sleep(60);
+  const songCount = +/of (\d+) cells/.exec(countText())[1];
+  check(songCount > 64 && songCount % 64 === 0,
+    "…and the song scope is every materialised pattern", String(songCount));
+
+  // A change-instrument $11 → $1A over the pattern, the kind of thing this
+  // exists for — and the proof that a hex operand means hex.
+  pick(dlg.querySelector(".fc-scope"), "here");
+  await sleep(40);
+  dlg.querySelector(".fc-addcond").click();
+  await sleep(30);
+  await fill(() => termRow(0, 0), "inst", "eq", "11");
+  await fill(() => actRow(0), "inst", "set", "1A");
+  const instIs = (v) => store.doc.songs[0].patterns[3].filter((c) => c.instrment === v).length;
+  const before = instIs(0x11);
+  check(before > 0, "pattern 0003 carries instrument $11 to work on", String(before));
+  const m = /(\d+) of 64 cells match · (\d+) will change/.exec(countText());
+  check(m && +m[1] === before && +m[2] === before,
+    "instrument $11 is found on exactly the cells that carry it", `${countText()} vs ${before}`);
+  okBtn().click();
+  await sleep(120);
+  check(instIs(0x1a) === before, "…and every one of them became $1A", String(instIs(0x1a)));
+  check(instIs(0x11) === 0, "…leaving none behind");
+  check(instIs(0x12) === 1, "…and the instruments beside it untouched", String(instIs(0x12)));
+  store.undo.undo();
+  await sleep(80);
+  check(instIs(0x11) === before, "…which undoes");
+  await sleep(40);
+
+  // ── 9. an arbitrary-number pattern nobody has edited yet (item 48) ──────
+  // The grid shows it as blank and lets you type into it; so does this.
+  pane.setPattern(0x0700);
+  await sleep(120);
+  check(!store.doc.songs[0].patterns[0x0700], "pattern 0700 is unmaterialised");
+  findBtn.click();
+  dlg = await openFc();
+  dlg.querySelector('.fc-cond[data-ci="0"] .fc-delcond').click(); // drop the carried-over term
+  await sleep(30);
+  check(/64 of 64 cells match/.test(countText()),
+    "…and still reads as its 64 blank rows", countText());
+  await fill(() => actRow(0), "note", "set", "C-4");
+  const depth9 = store.undo.undoStack.length;
+  okBtn().click();
+  await sleep(120);
+  check(store.doc.songs[0].patterns[0x0700]?.[0].note === 0x5000,
+    "…writing to it materialises it",
+    String(store.doc.songs[0].patterns[0x0700]?.[0].note));
+  check(store.undo.undoStack.length === depth9 + 1, "…in one undo step");
+  store.undo.undo();
+  await sleep(80);
+  check((store.doc.songs[0].patterns[0x0700]?.[0].note ?? 0) === 0, "…which undoes");
+
+  for (let i = 0; i < 3; i++) { store.undo.undo(); await sleep(40); } // drop the seeds
+
+  log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
+  log(`RESULT: ${fails === 0 ? "PASS" : "FAIL"}`);
+ } catch (err) {
+  log("EXCEPTION " + (err && err.stack || err));
+  log("RESULT: FAIL");
+ }
+})();
+</script>

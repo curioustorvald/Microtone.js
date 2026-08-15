@@ -163,6 +163,11 @@ export const ICON = {
     '<path d="M12 17V8"/>' +
     '<circle cx="12" cy="19.5" r="1.8" fill="currentColor" stroke="none"/>' +
     '<path d="M2.5 20.5h3M18.5 20.5h3"/>'),
+  /** Find & Change (item 132): a funnel — the predicate — with what came
+   *  through it going somewhere else. */
+  findchange: SVG(
+    '<path d="M2.5 4.5h11l-4.2 5v6.8l-2.6 1.6V9.5z"/>' +
+    '<path d="M14.5 12h6"/><path d="M18 9.2 20.8 12 18 14.8"/>'),
   /** Panner: the surround dial seen from above — listener at the centre, front
    *  tick at the top, a source placed off to one side. */
   panner: SVG(

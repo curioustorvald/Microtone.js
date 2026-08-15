@@ -25,31 +25,59 @@ const SEL_FINE = 3;
 // azimuth (low byte at +4, bit 8 in the top bit of the shared selector byte
 // +8), with both selectors in that byte 8 — so reading a column is not a mask
 // on one byte there, and writing one must leave the rest of byte 8 alone.
+//
+// Exported because Find & Change (doc/patternquery.js) addresses the same
+// columns by name: two files working out where the volume lives is how the two
+// end up disagreeing about it, so this is the one place that knows.
 
-function readVol(b, o, wide) {
+export function readVol(b, o, wide) {
   return wide
     ? { value: b[o + 3], sel: (b[o + 8] >>> 4) & 3 }
     : { value: b[o + 3] & 0x3f, sel: (b[o + 3] >>> 6) & 3 };
 }
 
-function writeVol(b, o, wide, value) {
+export function writeVol(b, o, wide, value) {
   if (wide) b[o + 3] = value & 0xff;
   else b[o + 3] = (b[o + 3] & 0xc0) | (value & 0x3f);
 }
 
-function readPan(b, o, wide) {
+/** Volume SELECTOR only, leaving the value (and the rest of byte 8) alone. */
+export function writeVolSel(b, o, wide, sel) {
+  if (wide) b[o + 8] = ((b[o + 8] & ~0x70) & 0xff) | ((sel & 7) << 4);
+  else b[o + 3] = (b[o + 3] & 0x3f) | ((sel & 3) << 6);
+}
+
+export function readPan(b, o, wide) {
   return wide
     ? { value: b[o + 4] | ((b[o + 8] & 0x80) << 1), sel: b[o + 8] & 3 }
     : { value: b[o + 4] & 0x3f, sel: (b[o + 4] >>> 6) & 3 };
 }
 
-function writePan(b, o, wide, value) {
+export function writePan(b, o, wide, value) {
   if (wide) {
     b[o + 4] = value & 0xff;
     b[o + 8] = (b[o + 8] & 0x7f) | (((value >>> 8) & 1) << 7);
   } else {
     b[o + 4] = (b[o + 4] & 0xc0) | (value & 0x3f);
   }
+}
+
+/** Panning SELECTOR only — the wide cell's low nibble of byte 8, the narrow
+ *  cell's top two bits of byte 4. */
+export function writePanSel(b, o, wide, sel) {
+  if (wide) b[o + 8] = ((b[o + 8] & ~0x0f) & 0xff) | (sel & 0xf);
+  else b[o + 4] = (b[o + 4] & 0x3f) | ((sel & 3) << 6);
+}
+
+/** Elevation (wide cell only, byte 9): a SIGNED byte, −128…127. */
+export function readElev(b, o, wide) {
+  if (!wide) return 0;
+  const v = b[o + 9];
+  return v >= 0x80 ? v - 0x100 : v;
+}
+
+export function writeElev(b, o, wide, value) {
+  if (wide) b[o + 9] = value & 0xff;
 }
 
 /** A fully empty pattern image (the newProject/converter blank-cell shape). */

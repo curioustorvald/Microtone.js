@@ -1701,6 +1701,70 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 }
 .chord-info { font-size: 0.85rem; margin: 0.35rem 0 0; }
 
+/* ── Find & Change (item 132) ── */
+/* A form that GROWS: conditions, terms inside them and changes are all added
+   a row at a time, so the dialog caps its height and scrolls rather than
+   walking off a laptop screen, and keeps the count + Apply pinned to the foot
+   where they stay readable while the form above them scrolls. */
+.findchange-modal { max-width: min(1080px, 96vw); max-height: min(88vh, 56rem); overflow-y: auto; }
+.findchange-modal .fc-lead { margin: 0.2rem 0 0.7rem; font-size: 0.85rem; }
+.fc-block { margin: 0 0 0.7rem; }
+.fc-legend { font-size: 0.9rem; color: var(--fg2); margin-bottom: 0.3rem; }
+.fc-legend .dim { font-size: 0.82rem; margin-left: 0.4rem; }
+.fc-cond {
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); padding: 0.35rem 0.45rem; margin-bottom: 0.35rem;
+}
+/* The OR between conditions belongs to the pair, not to either one — it sits
+   above the condition it introduces, outdented so the stack reads as a list of
+   alternatives rather than a nested box. */
+.fc-or {
+  margin: -0.6rem 0 0.35rem -0.2rem;
+  font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--dim);
+}
+.fc-terms, .fc-acts { display: flex; flex-direction: column; gap: 0.25rem; }
+.fc-row {
+  display: grid; gap: 0.4rem; align-items: center;
+  /* column · operator · operands · what they parsed to · remove */
+  grid-template-columns: 10.5rem 9.5rem minmax(9rem, 1fr) 12rem auto;
+  font-size: 0.85rem; color: var(--dim);
+}
+.fc-act { padding: 0.15rem 0.45rem; }
+.fc-row select, .fc-row input[type="text"] {
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.12rem 0.25rem; font-size: 0.82rem;
+  min-width: 0; width: 100%;
+}
+.fc-vals { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.fc-vals .fc-and { color: var(--dim); flex: 0 0 auto; }
+.fc-read {
+  color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.fc-row button, .fc-condfoot button, .fc-addcond, .fc-addact {
+  padding: 0.1rem 0.4rem; font-size: 0.8rem;
+}
+.fc-row button .btn-ico { width: 0.9em; height: 0.9em; }
+.fc-condfoot { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.3rem; }
+/* Each OR card's own event count, pushed to the card's right edge — it is a
+   readout about the card, not another button beside them. */
+.fc-condcount {
+  margin-left: auto; color: var(--fg2);
+  font-variant-numeric: tabular-nums; font-size: 0.82rem;
+}
+.fc-empty { font-size: 0.85rem; margin: 0.2rem 0 0.4rem; }
+.fc-foot {
+  display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;
+  margin: 0.6rem 0 0; color: var(--dim); font-size: 0.85rem;
+}
+.fc-foot select {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.12rem 0.25rem;
+}
+.fc-count { color: var(--fg2); font-variant-numeric: tabular-nums; }
+.fc-count.fc-none { color: var(--dim); }
+
 /* ── mic recorder (item 83.1) ── */
 .record-modal { max-width: 420px; }
 .rec-meter { display: block; margin: 0.5rem 0 0.3rem; border: 1px solid var(--border); border-radius: 4px; }

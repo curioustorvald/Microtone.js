@@ -639,6 +639,27 @@ class PatternPane {
     }
   }
 
+  /**
+   * Find & Change (item 132) — the advanced edit, on this pane's pattern.
+   *
+   * It takes the same row span the other bulk tools do (the selection, else
+   * the whole pattern) and offers the song-wide scope beside it, exactly as
+   * Change instrument does: the toolbar acts on a pattern you have named, so
+   * "and every other one too" is a question worth asking here. The dialog owns
+   * the commit.
+   */
+  async findChangeOp() {
+    if (!this.pattern()) return;
+    const { rows, scope } = this._opScope();
+    const [r0, r1] = rows ?? [0, 63];
+    const cells = [];
+    for (let r = r0; r <= r1; r++) cells.push({ pat: this.patIdx, row: r });
+    const { showFindChange } = await import("../popups/findchange.js");
+    const changed = await showFindChange(this.store,
+      { cells, scope, titleArg: this._titlePat(), allowSong: true });
+    if (changed) { this.refreshHeader(); this.invalidate(); }
+  }
+
   /** Apply a bytes→bytes pattern transform as one undo step + repaint. */
   _applyBytes(fn) {
     const store = this.store;
@@ -997,6 +1018,7 @@ export class PatternView {
   pattern() { return this.active.pattern(); }
   setPattern(i) { return this.active.setPattern(i); }
   duplicate() { return this.active.duplicate(); }
+  findChangeOp() { return this.active.findChangeOp(); }
   applyPatternBytes(fn) { return this.active.applyPatternBytes(fn); }
   hasSelection() { return this.active.hasSelection(); }
   clearSelection() { return this.active.clearSelection(); }
@@ -1040,9 +1062,14 @@ export class PatternView {
     panBtn.title = t("pat.panTitle");
     const instBtn = mkBtn(t("pat.instrument"), () => this.active.instrumentOp());
     instBtn.title = t("pat.instrumentTitle");
+    // Find & Change is the general case of the four tools before it, so it
+    // sits at the end of them rather than among them (item 132).
+    const findBtn = mkBtn(t("pat.findchange"), () => this.active.findChangeOp());
+    findBtn.title = t("pat.findchangeTitle");
     // Duplicate moves to the very end (item 55): preview, transpose, lengthen,
-    // shorten, volume, pan, instrument, then Duplicate pattern.
-    this.bar.append(this.previewBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn, dupBtn);
+    // shorten, volume, pan, instrument, Find & Change, then Duplicate pattern.
+    this.bar.append(this.previewBtn, trBtn, lenBtn, shortBtn, volBtn, panBtn, instBtn,
+      findBtn, dupBtn);
     this.syncPreviewBtn();
   }
 

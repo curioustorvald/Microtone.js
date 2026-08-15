@@ -6,6 +6,15 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-08-15
 
+- **Find & Change: pick cells by what they hold, then change them.** A new button on the Patterns toolbar, and a new cell closing the right-click menu's tool row in the Timeline and Patterns grids. Say what to look for — *volume at least $30*, *note within C-4‥B-4*, *effect is S*, *row number modulo 4 is 0* — and what to do to what it finds: set a column, add to it, multiply and add, or clear it.
+  - **Conditions and terms.** The terms inside a condition all have to hold (*and*); any one condition matching is enough (*or*). With no conditions at all, every cell in range matches.
+  - **Every condition counts its own events** (rows × channels) in its corner, so you can see which alternative of an *or* is doing the work. Cells matched by two conditions are counted on both, which is why those numbers can add up to more than the total below them.
+  - **Every column can be tested and written**: note, instrument, volume and what its column does, panning and what its column does, elevation, both effects and their arguments — plus the row number and a whole-cell *is blank* test, which are tests only. A project is never offered a column its format hasn't got.
+  - **From the toolbar it acts on the selected rows** — or the whole pattern with nothing selected — with *all patterns in this song* beside it; **from a right-click it acts on the block**, which on the Timeline may cross channels and patterns.
+  - **Values are typed in the column's own base**, hex like the grid, with `#48` for decimal, note names (`C-4`, `F#3`) in the note column, and effects picked from a named list. Every row reads back what it parsed: `$30 (48)`, `$5000 C-4`.
+  - **The count under the form is live** — *17 of 512 cells match · 12 will change*, recomputed as you type — and Apply stays greyed out until something really would change.
+  - **Arithmetic never fills a blank cell.** *Add* and *multiply* move the volumes, notes and arguments that are already there, while *set* writes regardless. Setting a value into a blank volume or panning column makes it a plain *set* rather than a fine slide, and a transpose still skips key-offs and cannot slide a note down into the sentinels.
+  - The whole edit is **one Ctrl+Z** however many patterns it crossed, and the query is kept until the tab closes, so running it again with one field changed does not mean retyping six.
 - **The screen splits in two.** **F8**, or the **⊞** at the end of the tab strip, opens a second pane with its own set of the seven tabs: the Timeline against the pattern it is playing, a pattern against the instrument it uses, the Cues list against the song it orders. **F8** again, or that pane's **✕**, closes it and hands the screen back to the view in the other one.
   - **Which way it splits follows the shape of the screen** — side by side while it is wider than tall, one above the other otherwise. A tablet turned on its side re-splits itself the other way, with no setting to find.
   - **Drag the seam** between the panes to give one of them more room; double-click it to even them up again.

@@ -217,6 +217,10 @@ column you clicked (or, with a block selected, at the columns the block covers):
 | Panning | **Panning** — widen / narrow / shift; in a surround song a **Panner** cell sits beside it, opening the same dial as the toolbox button |
 | Effect | the eight most-used effect commands: **S** Special, **D** Volume slide, **G** Tone portamento, **H** Vibrato, **E** / **F** Pitch slide down / up, **O** Sample offset, **A** Set tick rate. Picking one writes the opcode and leaves the argument alone; everything else is in the command palette at the foot of the screen. |
 
+**Find & Change** closes that row whatever column you opened it on — it is the
+general case of the tools beside it and has no column of its own. See
+[Find & Change](#find-change-advanced-pattern-edit).
+
 Each tool acts on the **selected block** — which on the Timeline may span
 channels and cross several patterns — or on the single cell you clicked when
 nothing is selected, in one undo step either way. The Panner reads its starting
@@ -749,6 +753,7 @@ editing a shared pattern changes every place it plays.
 - **Volume…** rescales set volumes (`new = old × multiply + add`).
 - **Pan…** widens/narrows around centre and shifts (`new = 20 + (old − 20) × widen + shift`); a negative widen mirrors left/right.
 - **Instrument…** replaces instrument numbers (leave *From* blank to replace all).
+- **Find & Change…** is the general case of the four above it: pick cells by what they contain, then change any column of the ones that match. It has [its own section](#find-change-advanced-pattern-edit) below.
 
 The volume/pan/instrument tools honour an active row selection; otherwise they
 act on the whole pattern.
@@ -758,6 +763,98 @@ units: volume runs 00–FF rather than 00–3F, so *add* reaches ±255; and the
 panning column is a whole angle, so *shift* reaches a full turn, the centre it
 widens about is **front**, and a move past hard left carries on round behind you
 instead of stopping there — on a circle, hard left is a direction, not an edge.
+
+### Find & Change (advanced pattern edit)
+
+Every tool above answers one fixed question — *scale these volumes*, *replace
+this instrument*. **Find & Change** lets you ask your own: it takes a
+**predicate** that picks cells out by what they contain, and a list of
+**changes** to make to the ones it picks. *Halve the volume of every note
+quieter than $20*, *put a `H` vibrato on every fourth row*, *clear the second
+effect wherever the first one is a `G`* — none of which any of the fixed tools
+can express.
+
+It opens from two places, and is the same dialog either way:
+
+- the **Find & Change…** button on the Patterns toolbar, which acts on the selected rows (or the whole pattern with nothing selected), and offers **all patterns in this song** beside that;
+- the last cell of the right-click menu's tool row in the **Timeline** and **Patterns** grids, which acts on the selected block — on the Timeline that may cross channels and patterns — or on the single cell you clicked. (The Cues grid holds pattern numbers rather than note cells, so it has no tool row at all.)
+
+**Conditions and terms.** A *term* is one test on one column. The terms inside a
+*condition* must **all** hold; **any one** condition matching is enough. So
+`+ and…` narrows a condition, `+ or…` adds an alternative beside it. With no
+conditions at all, every cell in range is a match, which is how you say "all of
+them".
+
+Each condition carries its **own event count** in its bottom-right corner — the
+events (rows × channels) *that* condition selects on its own, whatever the
+others do. It is how you see which alternative of an *or* is doing the work, and
+which one is quietly selecting half the song. A cell that two conditions both
+match is counted on both, so the per-condition numbers can add up to more than
+the total underneath: they answer "what does this one match", not "what did this
+one add". A condition you have not finished typing shows no count at all rather
+than a zero.
+
+The columns you can test:
+
+| Column | Notes |
+|---|---|
+| **Note** | the note word; type a name (`C-4`, `F#3`) or the word itself |
+| **Instrument** | 00–FF |
+| **Volume** / **Panning** | the column's value |
+| **Volume column** / **Panning column** | what the column *does* — set, slide, fine slide, or blank |
+| **Elevation** | version-3 projects only, signed −128…127 |
+| **Effect** / **Effect argument** | picked from the named opcode list; the argument is four hex digits |
+| **2nd effect** / **2nd effect argument** | version-3 projects only |
+| **Row number** | 0–63 within the pattern — a test only, never written |
+| **Whole cell** | *carries something* / *is blank* — a test only |
+
+A project is never offered a column its format has not got: a version-2 song has
+no elevation and no second effect, so they are not in the list.
+
+The operators are the ordinary comparisons (`is`, `is not`, `is below`, `is at
+most`, `is above`, `is at least`), `is within` / `is outside` a pair of bounds,
+`modulo` (`row number modulo 4 = 0` is every fourth row), and the two that need
+no value at all: **carries something** and **is blank**. An opcode or a column
+operation can only be matched, not ordered — there is no "effect above `G`".
+
+**The changes.** Each one is a column, an operation and its values:
+
+| Operation | Effect |
+|---|---|
+| **set to** | write the value |
+| **add** | value + this (negative to subtract) |
+| **multiply by … +** | value × this + that — the general case, and how a proportional change is made |
+| **clear** | blank the column |
+
+They run **in the order listed**, each seeing the one before it, so *× 2* then
+*+ 1* is a two-line answer as well as a one-line one.
+
+Three rules keep a bulk edit from doing damage on your behalf:
+
+- **Arithmetic only moves what is already there.** *Add* and *multiply* skip a column that carries nothing, so a `+1` over a whole pattern will not stamp instrument 01 into every empty cell. *Set* writes regardless — that is what makes it *set*.
+- **Setting a value into a blank volume or panning column makes it a plain *set***, not the fine slide the blank column's encoding would otherwise turn it into. Same rule as typing a digit into an empty column by hand.
+- **Notes keep out of the sentinel space.** Arithmetic skips key-offs, cuts, fades and interrupts, and a downward transpose stops at the lowest playable note rather than falling into them. *Set* can still write a sentinel, which is how a key-off is stamped across a block.
+
+Two smaller ones: changing what a column *does* leaves a blank column blank (the
+operation describes what to do with a value it has not got), and clearing an
+effect clears its argument with it. On a version-3 cell, clearing the panning
+column clears the elevation too — they are one column on screen and one
+statement to the engine.
+
+**Typing values.** Columns are read in the base the grid shows them in, which is
+**hex** — `30` in the volume column is $30. Prefix with `#` for decimal (`#48`),
+or with `$` / `0x` if you like typing it. The note column also takes note names,
+the effect columns their opcode from a list. Every row reads back what it
+actually parsed — `$30 (48)`, `$5000 C-4` — so a column's base is never
+something you have to hold in your head.
+
+**Before you commit.** The line under the form counts what the query really
+selects, live, as you type: *17 of 512 cells match · 12 will change*. The two
+numbers differ when a change would leave some matches as they were. **Apply**
+stays greyed out until something really would change, and the whole edit is one
+**Ctrl+Z** however many patterns it crossed. The query is kept for as long as
+the tab is open, so running it again with one field changed does not mean
+retyping the other six.
 
 ## Samples (F4)
 
