@@ -551,12 +551,17 @@ export class ProjectView {
     this.refresh();
   }
 
-  /** Remove unused instruments + free their orphaned samples (one undo step). */
+  /** Remove unused instruments, prune the survivors' unreachable patches, and
+   *  free every sample byte that leaves behind (items 60 + 147) — one undo step. */
   cleanupBank() {
     const store = this.store;
     const plan = planBankCleanup(store.doc);
-    if (plan.removedInstruments === 0 && plan.freedSampleBytes === 0) { alert(t("clean.nothing")); return; }
-    if (!confirm(t("clean.bankConfirm", { insts: plan.removedInstruments, bytes: plan.freedSampleBytes }))) return;
+    if (plan.removedInstruments === 0 && plan.removedPatches === 0 && plan.freedSampleBytes === 0) {
+      alert(t("clean.nothing")); return;
+    }
+    if (!confirm(t("clean.bankConfirm", {
+      insts: plan.removedInstruments, patches: plan.removedPatches, bytes: plan.freedSampleBytes,
+    }))) return;
     store.undo.apply(cleanupBankOp(plan));
     store.emit("edit", [{ kind: "bank" }]);
     this.refresh();

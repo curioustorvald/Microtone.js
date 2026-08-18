@@ -613,6 +613,106 @@ export function planExistingSampleAsInstrument(destDoc, sample, nameBytes = new 
   };
 }
 
+/**
+ * Duplicate a POOLED sample (item 151): copy its bytes into FRESH pool spans
+ * and mint an instrument that plays the copy. The point of the copy is that it
+ * can be edited on its own, so nothing is deduped here — "New instrument" (
+ * planExistingSampleAsInstrument) is the version that shares the bytes, and
+ * this one costs `len` bytes per channel.
+ *
+ * Loop points, rate and loop mode carry over verbatim; a stereo sample (item
+ * 90) duplicates BOTH channels and the copy gets the same full-range Ixmp 's'
+ * patch the importer builds. The census gains an entry, so SNam is rebuilt
+ * from sample identity after apply (the pool order IS the name order).
+ *
+ * Returns {error} or a planImport-shaped plan (apply with importBankOp), with
+ * `duplicate: {ptr, slot}` naming the copy.
+ */
+export function planDuplicateSample(destDoc, sample, nameBytes = new Uint8Array(0)) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  if (!sample || sample.len <= 0) return { error: "The selected sample is empty." };
+
+  const taken = new Set(destDoc.usedInstrumentSlots());
+  let slot = 1;
+  while (slot <= 255 && taken.has(slot)) slot++;
+  if (slot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+
+  // One fresh span per channel. A stereo pair that only got one new span would
+  // be half a duplicate sharing half the original.
+  const census = destDoc.sampleList();
+  const extents = freeExtents(census);
+  const spans = sampleSpans(sample);
+  const samples = [];
+  const newPtrs = [];
+  for (const sp of spans) {
+    const ptr = carveFirstFit(extents, sp.len);
+    if (ptr === null) {
+      return { error: `Sample pool full: needs ${sp.len} more bytes and no free extent is large enough.` };
+    }
+    newPtrs.push(ptr);
+    samples.push({
+      ptr,
+      bytes: Uint8Array.from(destDoc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len)),
+      srcKeys: [],
+    });
+  }
+
+  const rate = Math.max(1, Math.min(0xffff, Math.round(sample.rate) || 0));
+  const record = buildFreshInstRecord({
+    samplePtr: newPtrs[0],
+    sampleLength: sample.len,
+    samplingRate: rate,
+    sampleLoopStart: sample.loopStart & 0xffff,
+    sampleLoopEnd: sample.loopEnd & 0xffff,
+    loopMode: sample.loopMode & 0x17,
+  });
+  const stereo = newPtrs.length > 1;
+  const ixmpBlob = stereo
+    ? writePatchesBlob([makeInstPatch({
+        pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+        samplePtr: newPtrs[0], sampleLength: sample.len, playStart: 0,
+        loopStart: sample.loopStart & 0xffff, loopEnd: sample.loopEnd & 0xffff,
+        samplingRate: rate, loopMode: sample.loopMode & 0x07,
+        hasChanBlock: true, chanCount: newPtrs.length,
+        chanMode: sample.chanMode ?? CHAN_MODE_DISCRETE,
+        chanPtrs: newPtrs.slice(1),
+      })])
+    : null;
+
+  // INam: splice the instrument name in by slot.
+  const destInamPayload = sectionPayload(destDoc, "INam");
+  let inamPayload = null;
+  if (nameBytes.length > 0 || destInamPayload !== null) {
+    const parts = splitNameTable(destInamPayload);
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = nameBytes;
+    inamPayload = joinNameTable(parts);
+  }
+
+  // SNam: the census gains an entry, so every existing name has to be re-pinned
+  // to its (ptr:len) identity before the payload is rebuilt from the new order.
+  const snamNames = new Map();
+  const destSnam = splitNameTable(sectionPayload(destDoc, "SNam"));
+  census.forEach((e, i) => snamNames.set(sampleKey(e.ptr, e.len), destSnam[i] ?? new Uint8Array(0)));
+  snamNames.set(sampleKey(newPtrs[0], sample.len), nameBytes);
+
+  return {
+    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob, ixmpCount: stereo ? 1 : 0 }],
+    samples,
+    inamPayload,
+    snamNames,
+    writeSnam: true,
+    slotMap: new Map([[-1, slot]]),
+    newSampleBytes: sample.len * newPtrs.length,
+    dedupedSamples: 0,
+    duplicate: { ptr: newPtrs[0], slot },
+  };
+}
+
 // ── in-place sample replace (item 109) ──
 
 /** Remove [ptr, ptr+len) from a free-extent list; false when no single extent

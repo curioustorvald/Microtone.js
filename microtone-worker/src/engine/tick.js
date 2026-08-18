@@ -22,7 +22,7 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
-  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, modTouches,
+  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isRndOp, modTouches, scatterRot,
 } from "./samplemod.js";
 import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
@@ -398,6 +398,11 @@ export function applyTrackerTick(eng, ts, playhead) {
         inst.modRot = (inst.modRot + step) % dl;
         inst.modOn = inst.modRot !== 0;
       }
+    } else if (isRndOp(inst.modOp)) {
+      // Scatter (item 152): a fresh displacement from the ORIGINAL position,
+      // not one more step — that is what holds $C inside its 12.5% forever.
+      inst.modRot = scatterRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
+      inst.modOn = inst.modRot !== 0;
     } else {
       inst.modSub = (inst.modSub + step) & 0xff;
       inst.modOn = inst.modSub !== 0;

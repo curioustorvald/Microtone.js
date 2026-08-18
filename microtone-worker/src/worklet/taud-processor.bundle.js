@@ -2151,7 +2151,7 @@ function makeAnalysisReadout() {
 }
 
 // ══ src/engine/samplemod.js ══
-// Sample-modification note effects (item 130) — notefx 2 and 3, ONE command
+// Sample-modification note effects (items 130, 152) — notefx 2 and 3, ONE command
 // with two spellings: `3` names the region to modify, `2` names the region to
 // leave alone. Both are NON-DESTRUCTIVE views over the sample pool, exactly as
 // S $Fxxx is: the state lives on the INSTRUMENT and is applied when a byte is
@@ -2178,6 +2178,7 @@ function makeAnalysisReadout() {
 // The extent is stored with a -1 sentinel meaning "follow the sounding voice's
 // loop", which is what keeps an Ixmp-patched voice on its own loop (item 116).
 
+
 /** decodeSampleRegion result: nothing (reserved argument). */
 const REGION_NONE = 0;
 /** decodeSampleRegion result: out = [start, end, combShift] — a whole region. */
@@ -2190,21 +2191,54 @@ const REGION_COMB = 2;
 // rotate-right: a left rotation of n and a right rotation of span−n are the
 // same picture, and the ladder is more useful spent on step sizes). SUB
 // subtracts from each byte's U8 value, wrapping through zero, by 2/8/32/128 per
-// step — a running level slide that folds rather than clips.
+// step — a running level slide that folds rather than clips. RND (item 152) is
+// the ROL ladder's random twin: instead of one more fixed step, each step
+// throws the region a fresh displacement bounded by 12.5 / 25 / 50 / 100% of
+// the wrap domain.
 const MOD_OFF = 0x0;
 const MOD_FUNK = 0x1;
 const MOD_ROL1 = 0x2;
 const MOD_ROL8 = 0x5;
 const MOD_SUB2 = 0x6;
 const MOD_SUB128 = 0x9;
-/** Highest assigned operation; $A..$F are reserved. */
-const MOD_MAX = MOD_SUB128;
+const MOD_RND12 = 0xc;
+const MOD_RND_ALL = 0xf;
+/** Highest assigned operation; $A and $B are reserved (isModOpReserved). */
+const MOD_MAX = MOD_RND_ALL;
 
-/** Step size per operation — bytes for the ROLs, U8 levels for the SUBs. */
-const MOD_STEP = Object.freeze([0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
+/** Step size per operation — bytes for the ROLs, U8 levels for the SUBs. The
+ *  RNDs take their reach from MOD_SCATTER_FRAC instead, so they read 0 here. */
+const MOD_STEP = Object.freeze(
+  [0, 0, 1, 2, 4, 8, 2, 8, 32, 128, 0, 0, 0, 0, 0, 0]);
+
+/** RND displacement bound as a fraction of the wrap domain, by op − MOD_RND12. */
+const MOD_SCATTER_FRAC = Object.freeze([0.125, 0.25, 0.5, 1]);
 
 const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
 const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
+const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
+/** $A and $B carry no operation — a whole command naming one is ignored. */
+const isModOpReserved = (op) => op === 0xa || op === 0xb;
+
+/**
+ * One scatter step's displacement (item 152). NOT an accumulation: the offset
+ * is drawn afresh from the ORIGINAL position every step, which is what keeps
+ * `$C` inside 12.5% of it however long the effect runs — accumulating would
+ * random-walk out to anywhere within a few seconds and make the four operations
+ * one operation. `$F` draws from the whole domain, so it IS anywhere.
+ *
+ * `domainLen` is the wrap domain readSamplePoint rotates in — the region for
+ * notefx 3, the whole sample for notefx 2, exactly as ROL uses it.
+ */
+function scatterRot(op, domainLen) {
+  if (domainLen < 2) return 0;
+  const frac = MOD_SCATTER_FRAC[op - MOD_RND12];
+  if (frac === undefined) return 0;
+  if (frac >= 1) return Math.min(Math.floor(random() * domainLen), domainLen - 1);
+  const reach = Math.max(1, Math.round(domainLen * frac));
+  const d = Math.round((random() * 2 - 1) * reach) % domainLen;
+  return d < 0 ? d + domainLen : d;
+}
 
 /**
  * ProTracker's funk-speed ladder, indexed by $y. The same table converters use
@@ -6124,7 +6158,7 @@ function applySampleModEffect(eng, voice, rawArg, invert) {
     voice.modWritePos = 0;
     return;
   }
-  if (op > MOD_MAX) return;                       // $A..$F — reserved
+  if (op > MOD_MAX || isModOpReserved(op)) return; // $A / $B — reserved
   const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
     voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
   if (code === REGION_NONE) return;
@@ -7029,6 +7063,11 @@ function applyTrackerTick(eng, ts, playhead) {
         inst.modRot = (inst.modRot + step) % dl;
         inst.modOn = inst.modRot !== 0;
       }
+    } else if (isRndOp(inst.modOp)) {
+      // Scatter (item 152): a fresh displacement from the ORIGINAL position,
+      // not one more step — that is what holds $C inside its 12.5% forever.
+      inst.modRot = scatterRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
+      inst.modOn = inst.modRot !== 0;
     } else {
       inst.modSub = (inst.modSub + step) & 0xff;
       inst.modOn = inst.modSub !== 0;

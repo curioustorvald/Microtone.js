@@ -787,9 +787,10 @@ Operations:
 | `$1` | invert loop — invert one more byte of the region per step |
 | `$2` `$3` `$4` `$5` | rotate the region's bytes **left** by 1 / 2 / 4 / 8 bytes per step |
 | `$6` `$7` `$8` `$9` | subtract 2 / 8 / 32 / 128 from every byte of the region per step, wrapping through zero |
-| `$A`…`$F` | reserved |
+| `$A` `$B` | reserved |
+| `$C` `$D` `$E` `$F` | **scatter**: displace the region by a fresh random offset each step, within 12.5% / 25% / 50% / 100% of the wrap domain |
 
-There is no rotate-right: rotating left by `n` and right by `span − n` are the same picture, and the ladder buys more spent on step sizes. The speed index reads the same table `S $Fxxx` and ProTracker's `EFx` are built on:
+There is no rotate-right: rotating left by `n` and right by `span − n` are the same picture, and the ladder buys more spent on step sizes. The scatter operations are the rotate ladder's random twin — same address transform, same wrap domain, but the displacement is *thrown* rather than *stepped*. The speed index reads the same table `S $Fxxx` and ProTracker's `EFx` are built on:
 
 ```
 funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
@@ -810,7 +811,7 @@ on every tick (when $y's speed != 0 and an operation is selected):
 
 on sample byte read at position i:
     if the modification TOUCHES i (region, comb and $2's inversion):
-        ROL: read from  domain_start + ((i - domain_start + rot) mod domain_length)
+        ROL/RND: read from  domain_start + ((i - domain_start + rot) mod domain_length)
         FUNK: invert the byte when mod_mask[i] is set
         SUB:  byte = (byte - sub) AND $FF
 ```
@@ -818,6 +819,7 @@ on sample byte read at position i:
 - **FUNK** keeps a bit-mask one bit per **sample** byte (not per region byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole sample, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
 - **ROL** accumulates a byte displacement. The wrap domain is the region for `3` and the **whole sample** for `2`, whose touched set reaches both ends.
 - **SUB** accumulates a subtrahend modulo 256, so `$9` (128) inverts the level on odd steps and restores it on even ones, while `$6` (2) crawls.
+- **RND** writes the same byte displacement ROL does, and is read back through the same transform — but it **MUST NOT** accumulate. Each step draws a *new* offset from the sample's ORIGINAL position, uniform over `±round(domain_length × fraction)` and taken modulo the domain; `$F` draws uniformly over the whole domain instead. Accumulating would random-walk `$C` out to anywhere within a few seconds and collapse the four operations into one. The draw is genuinely random — two plays of the same song place the displacement differently, the way volume and pan swing already do — so a scatter is the one modification a replay does not reproduce byte-for-byte.
 - Changing the operation, the region or the inversion **MUST** discard whatever the previous operation accumulated and restart the walk — a rotation offset means nothing to a subtract. Re-stating the **same** command row after row **MUST NOT** restart anything, or a command repeated down a pattern would never get past its first step.
 - A reserved operation and a reserved region are both ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
 - The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the funk mask.
@@ -848,6 +850,8 @@ Notes an engine **MUST** honour:
 **Invert Loop** is a deliberately unusual effect inherited from the ProTracker tradition. The original Funk Repeat manipulated the playback loop itself; later ProTracker versions used the EFx command for Invert Loop, progressively modifying samples within the loop.
 
 Its practical musical value was never obvious, and that is precisely why it survived in tracker folklore. Composers such as *4mat* demonstrated that effects which initially appeared useless could become distinctive musical techniques when placed in the right hands.
+
+**Sample Scatter** displaces the region at the playback tick rate, in bounded throws rather than an even sweep. At `$C` it is a fine judder around the original position — the sample still reads as itself, breathing; by `$F` the read position lands anywhere in the domain every step, which turns a looped sample into a granular cloud of its own contents. The bounded settings between them are the useful ones: the wider the throw, the further the timbre drifts from the source while still being made entirely of it.
 
 **Sample Subtraction** subtracts a controlled value from the sample waveform during playback, producing an evolving change in its harmonic structure.
 

@@ -11,7 +11,7 @@ import {
 import { computePlaybackRate } from "./sampler.js";
 import {
   decodeSampleRegion, regionScratch, REGION_NONE, REGION_COMB,
-  MOD_OFF, MOD_MAX, FUNK_SPEED_TABLE,
+  MOD_OFF, MOD_MAX, isModOpReserved, FUNK_SPEED_TABLE,
 } from "./samplemod.js";
 import { patchAt } from "./inst.js";
 import { applyPastNoteAction } from "./trigger.js";
@@ -473,7 +473,7 @@ export function applySampleModEffect(eng, voice, rawArg, invert) {
     voice.modWritePos = 0;
     return;
   }
-  if (op > MOD_MAX) return;                       // $A..$F — reserved
+  if (op > MOD_MAX || isModOpReserved(op)) return; // $A / $B — reserved
   const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
     voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
   if (code === REGION_NONE) return;

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   referencedPatterns, planCleanupPatterns, planMergeDuplicatePatterns, planRenumberPatterns,
   applyPatternOrder, encodeNameTable, usedInstrumentSlots,
-  planRenumberInstrument, instrumentCellRefs, planIxmpCleanup,
+  planRenumberInstrument, instrumentCellRefs, planIxmpCleanup, reachablePatchSets,
 } from "../../src/doc/cleanup.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { EffectOp } from "../../src/engine/tables.js";
@@ -615,4 +615,114 @@ test("instrumentCellRefs never masks a $100+ sub-instrument onto an $01-$FF slot
   assert.equal(doc.instruments[0xfe].isMeta, false);
   // Slot $100's low byte is $00 = "no instrument" — it must not match empty cells either.
   assert.equal(instrumentCellRefs(doc, 0x100).length, 0);
+});
+
+// ── item 147: the usage pass reaches through metainstruments ──
+
+/** WHEN with `slot` carrying two patches on disjoint pitches (each with its own
+ *  pool span), wrapped in a fresh metainstrument whose layer child inherits
+ *  them. Returns {doc, meta, child, lowPitch, highPitch, lowPtr, highPtr, len}. */
+function kitDoc() {
+  const doc = loadWhen();
+  const slot = doc.selectableInstrumentSlots().find((s) => !doc.instruments[s].isMeta);
+  const lowPtr = 900000, highPtr = 901000, len = 500;
+  doc.sampleInstImage.fill(0x11, lowPtr, lowPtr + len);
+  doc.sampleInstImage.fill(0x22, highPtr, highPtr + len);
+  const patches = [
+    mkPatch(0x1000, 0x1000, 0, 63, { samplePtr: lowPtr, sampleLength: len }),
+    mkPatch(0x2000, 0x2000, 0, 63, { samplePtr: highPtr, sampleLength: len }),
+  ];
+  doc.ixmp = [{ instId: slot, count: patches.length, blob: writePatchesBlob(patches) }];
+  doc.setSection("Ixmp", buildIxmpSection(doc.ixmp));
+  doc._resetInstrumentCache();
+
+  const plan = planCreateMeta(doc, [slot], "Kit");
+  assert.ok(!plan.error, plan.error);
+  new UndoStack(doc).apply(importBankOp(plan));
+  const meta = plan.insts.find((it) => it.topLevel).destSlot;
+  const child = plan.insts.find((it) => !it.topLevel).destSlot;
+  assert.ok(doc.instruments[meta].isMeta && doc.metaChildSlots().has(child));
+
+  // The kit is played on ONE note, at one velocity — the item 147 report.
+  for (const song of doc.songs) for (const p of song.patterns) if (p) {
+    for (const cell of p) {
+      cell.note = 0; cell.instrment = 0; cell.effect = 0; cell.volumeEff = 1;
+    }
+  }
+  const pat = doc.songs[0].patterns.find((p) => p);
+  pat[0].note = 0x1000;
+  pat[0].instrment = meta;
+  pat[0].volumeEff = 0;
+  pat[0].volume = doc.wideCells ? 0xff : 0x3f;
+  return { doc, meta, child, lowPtr, highPtr, len };
+}
+
+test("planIxmpCleanup prunes a metainstrument layer child's unplayed patches (item 147)", () => {
+  const { doc, child, lowPtr, highPtr, len } = kitDoc();
+  const plan = planIxmpCleanup(doc);
+  assert.ok(!plan.noop, "a meta's children used to be skipped entirely");
+  const kept = plan.report.find((r) => r.slot === child);
+  assert.ok(kept, "the layer child was analysed");
+  assert.equal(kept.kept, 1, "only the patch the one played note reaches survives");
+  assert.equal(kept.keep[0].samplePtr, lowPtr);
+  assert.ok([...plan.image.subarray(highPtr, highPtr + len)].every((b) => b === 0),
+    "the unplayed patch's sample is freed");
+  assert.ok([...plan.image.subarray(lowPtr, lowPtr + len)].every((b) => b === 0x11),
+    "the played one's is not");
+});
+
+test("the layer's detune moves which patch the child reaches", () => {
+  const { doc, child } = kitDoc();
+  // Retune the layer a whole 0x1000 up: the cell's 0x1000 now lands the child
+  // on 0x2000, so the OTHER patch is the reachable one.
+  for (const l of doc.instruments[doc.selectableInstrumentSlots().find(
+    (s) => doc.instruments[s].isMeta && doc.instruments[s].metaLayers?.some(
+      (x) => (x.instIdx & 0x3ff) === child))].metaLayers) {
+    if ((l.instIdx & 0x3ff) === child) l.detune = 0x1000;
+  }
+  const sets = reachablePatchSets(doc);
+  const reachable = [...sets.get(child)];
+  assert.equal(reachable.length, 1);
+  assert.equal(reachable[0].pitchStart, 0x2000, "the detuned pitch is what resolves");
+});
+
+test("planBankCleanup frees a kept instrument's unreachable patch samples (item 147)", () => {
+  const { doc, meta, child, lowPtr, highPtr, len } = kitDoc();
+  const before = Buffer.from(doc.toBytes());
+  const plan = planBankCleanup(doc);
+  assert.ok(plan.removedPatches > 0, "the survivors' dead patches go with the dead instruments");
+  const undo = new UndoStack(doc);
+  undo.apply(cleanupBankOp(plan));
+
+  assert.ok(doc.usedInstrumentSlots().includes(meta), "the played metainstrument stays");
+  assert.deepEqual((doc.instruments[child].extraPatches ?? []).map((p) => p.samplePtr), [lowPtr]);
+  assert.ok(doc.sampleBin.subarray(highPtr, highPtr + len).every((b) => b === 0),
+    "and the sample only the dropped patch used is freed");
+  // Idempotent: a second pass over the cleaned document finds nothing.
+  const again = planBankCleanup(doc);
+  assert.equal(again.removedInstruments, 0);
+  assert.equal(again.removedPatches, 0);
+  assert.equal(again.freedSampleBytes, 0);
+
+  undo.undo();
+  assert.ok(Buffer.from(doc.toBytes()).equals(before), "undo byte-exact");
+});
+
+test("a note with no instrument byte keeps every candidate's patches", () => {
+  // The channel's latched instrument sounds it, and which one that is depends on
+  // what came before — so the note must not be read as "only what the row says".
+  const { doc, child } = kitDoc();
+  const pat = doc.songs[0].patterns.find((p) => p);
+  pat[1].note = 0x2000; // no instrument byte: any latched instrument could sound it
+  pat[1].volumeEff = 1;
+  const reachable = reachablePatchSets(doc).get(child);
+  assert.equal(reachable.size, 2, "both patches stay reachable");
+});
+
+test("planBankCleanup on the real corpus prunes no patch — everything there is played", () => {
+  for (const f of ["Onestop.taud", "town.taud", "flourish.taud"]) {
+    const doc = new Document(parseTaud(readFileSync(corpusDir + f)));
+    const plan = planBankCleanup(doc);
+    assert.equal(plan.removedPatches, 0, `${f} keeps every patch`);
+  }
 });

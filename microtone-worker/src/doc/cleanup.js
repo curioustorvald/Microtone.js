@@ -177,7 +177,7 @@ export function usedInstrumentSlots(song, allUsedSlots, instAt) {
  *  chan > 0 marks the EXTRA channels of a stereo/multi-channel patch (item 90):
  *  those bytes are live and must survive the pool sweep, but they are not
  *  separate samples — only chan 0 spans carry an SNam name. */
-function censusForSlots(instAt, slots) {
+function censusForSlots(instAt, slots, patchOverrides = null) {
   const byKey = new Map();
   const add = (ptr, len, chan = 0) => {
     if (len <= 0) return;
@@ -188,8 +188,9 @@ function censusForSlots(instAt, slots) {
     const inst = instAt(s);
     if (!inst) continue;
     if (!inst.isMeta) add(inst.samplePtr, inst.sampleLength);
-    if (inst.extraPatches) {
-      for (const p of inst.extraPatches) {
+    const patches = patchOverrides?.has(s) ? patchOverrides.get(s) : inst.extraPatches;
+    if (patches) {
+      for (const p of patches) {
         add(p.samplePtr, p.sampleLength);
         if (p.hasChanBlock) {
           for (let k = 0; k < Math.min(p.chanPtrs.length, p.chanCount - 1); k++) {
@@ -203,10 +204,22 @@ function censusForSlots(instAt, slots) {
 }
 
 /**
- * Plan a bank cleanup (item 60): drop instruments no pattern cell references
- * (keeping meta-layer children of used metas) and free the sample bytes that
- * only they used. Returns the NEW bank state for cleanupBankOp:
- *   { image, inam, snam, ixmp, removedInstruments, freedSampleBytes }
+ * Plan a bank cleanup (items 60 + 147): drop instruments no pattern cell
+ * references (keeping meta-layer children of used metas), prune the SURVIVORS'
+ * Ixmp patches down to the ones the document can still trigger, and free every
+ * sample byte nothing points at any more.
+ *
+ * Item 147 is the second of those: a used instrument drags its whole patch set
+ * in, and a General MIDI drum kit's patch set is most of a project's sample
+ * budget. Pruning it here means one Housekeeping button reclaims the space
+ * whether it was a whole instrument or one kit note that went unused. The pool
+ * sweep already zeroes everything outside the surviving census, so freeing the
+ * dropped patches' samples needs nothing beyond censusing the survivors with
+ * their pruned patch lists.
+ *
+ * Returns the NEW bank state for cleanupBankOp:
+ *   { image, inam, snam, ixmp, removedInstruments, removedPatches,
+ *     removedBlobs, freedSampleBytes, report }
  * `inam`/`snam` are name-table payloads (or null). Pure w.r.t. the doc except a
  * _rebuildInstRegion() to make the image current first.
  */
@@ -237,9 +250,14 @@ export function planBankCleanup(doc) {
   const image = doc.sampleInstImage.slice();
   for (const s of unused) image.fill(0, SAMPLEBIN_SIZE + s * 256, SAMPLEBIN_SIZE + (s + 1) * 256);
 
-  // Free sample bytes referenced ONLY by removed instruments: zero the pool
-  // outside the surviving census spans (shared samples are kept).
-  const keep = censusForSlots(instAt, survivors);
+  // Item 147: the survivors' unreachable patches go too, and their samples with
+  // them. `used` is the keep-set, so the removed instruments' blobs drop here
+  // rather than in a second filter.
+  const prune = planPatchPrune(doc, used);
+
+  // Free sample bytes nothing points at any more: zero the pool outside the
+  // surviving census spans (shared samples are kept).
+  const keep = censusForSlots(instAt, survivors, prune.overrides);
   const pool = image.subarray(0, SAMPLEBIN_SIZE);
   let freedSampleBytes = 0;
   const zeroRange = (from, to) => {
@@ -264,12 +282,11 @@ export function planBankCleanup(doc) {
   const snamArr = keep.filter((sp) => sp.chan === 0).map((sp) => oldNameByKey.get(sp.key) ?? "");
   while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
 
-  // Ixmp: keep the patches of surviving slots only.
-  const ixmp = doc.ixmp.filter((e) => used.has(e.instId & 0x3ff));
-
   return {
-    image, inam: encodeNameTable(inamArr), snam: encodeNameTable(snamArr), ixmp,
+    image, inam: encodeNameTable(inamArr), snam: encodeNameTable(snamArr),
+    ixmp: prune.ixmp, report: prune.report,
     removedInstruments: unused.length, freedSampleBytes,
+    removedPatches: prune.removedPatches, removedBlobs: prune.removedBlobs,
   };
 }
 
@@ -393,51 +410,270 @@ function patchIsShadowed(p, earlier) {
 }
 
 /**
- * Every Ixmp patch of `slot` that some pattern cell in the document actually
- * reaches via resolvePatch() (engine truth: trigger.js triggerNote/
- * triggerMetaOrNote, inst.js TaudInst.resolvePatch — see TAUD_ENGINE_SPEC.md),
- * or null when `slot` cannot be safely analysed this way — the caller must
- * then leave its patches exactly as the geometric pass found them, never
- * treating an empty result as "nothing is reachable".
+ * Usage reachability (item 74, widened by item 147).
  *
- * A slot is UNANALYSABLE (returns null) when it's a metainstrument or one of
- * its layer children (a layer's own detune shifts pitch and its gating volume
- * defaults differently than the leaf's own DNV fallback — see trigger.js
- * triggerMetaOrNote's `seedVol` vs. the leaf's own resolvePatch call inside
- * triggerNote — not modelled here), or when ANY of its trigger rows is
- * AMBIGUOUS: an instrument-byte-only row (note 0x0000, row.js's
- * "no note + instrument byte" branch) or a tone-portamento continuation
- * (effect G/L retargeting an already-sounding note). Both resolve pitch
- * and/or volume from the CHANNEL'S PRIOR STATE (voice.noteVal /
- * voice.noteVolume) rather than from the row itself, so a static per-cell
- * scan can't know what they'd hit — one ambiguous row anywhere for this slot
- * means the whole slot is left untouched by usage-pruning.
+ * A patch is reachable when SOME trigger the document can perform resolves to
+ * it. The engine truth is trigger.js (triggerMetaOrNote / triggerNote) and
+ * inst.js TaudInst.resolvePatch — see TAUD_ENGINE_SPEC.md. Every trigger boils
+ * down to a pair `(noteVal, seedVol)` handed to resolvePatch, so the analysis
+ * collects the pairs the patterns can produce and resolves them.
  *
- * A CERTAIN row (a plain note+instrument trigger, note >= 0x0020, not a G/L
- * continuation) resolves exactly like triggerNote: volume = the vol-column
- * SET (volumeEff === 0) narrowed by narrowVolAxis, else
- * rowVolumeFromDefault(inst, null) — the instrument's own defaultNoteVolume;
- * pitch = the cell's note verbatim (no per-instrument transpose exists for a
- * plain, non-meta instrument).
+ * Some rows do not fix both coordinates: an instrument-byte-only row and a
+ * tone-portamento continuation take the pitch (and sometimes the volume) from
+ * the CHANNEL'S prior state, and a note with no instrument byte sounds whatever
+ * the channel had latched. Those coordinates become WILDCARDS rather than
+ * making the whole slot unanalysable, which is what item 147 turns on: the
+ * wildcard axis is swept over every value that can change the answer, so the
+ * result is still a guaranteed SUPERSET of what can sound — a drum kit played
+ * on one note keeps its patches for that note and loses the rest, even though
+ * some other channel's porta row leaves a volume unknown.
+ *
+ * The sweep is exact rather than sampled: resolvePatch returns the FIRST patch
+ * whose rectangle contains the pair, so the answer is constant inside every
+ * cell of the grid the patch boundaries cut, and one probe per cell sees
+ * everything. The volume axis is only 6 bits, so it is swept whole.
  */
-function reachablePatchesByUsage(doc, slot) {
-  const inst = doc.instruments[slot];
-  if (inst.isMeta || doc.metaChildSlots().has(slot)) return null;
+
+/** Wildcard coordinate: "the channel decides, and we do not know what it had". */
+const WILD = -2;
+/** Every seed volume a wildcard volume can stand for: -1 is "no volume column",
+ *  which resolves to the instrument's own Default Note Volume. */
+const VOL_SWEEP = Array.from({ length: 65 }, (_, i) => i - 1);
+
+const packPair = (note, vol) => note * 65 + (vol + 1);
+const pairNote = (k) => Math.trunc(k / 65);
+const pairVol = (k) => (k % 65) - 1;
+const clampNote = (n) => Math.min(Math.max(n, 0x20), 0xffff);
+
+function newDemand() {
+  return { pairs: new Set(), wildVolNotes: new Set(), wildNoteVols: new Set(), wildBoth: false };
+}
+
+/** Record that `slot` can be triggered at (note, vol); either may be WILD. */
+function addDemand(demands, slot, note, vol) {
+  let d = demands.get(slot);
+  if (d === undefined) { d = newDemand(); demands.set(slot, d); }
+  if (note === WILD && vol === WILD) d.wildBoth = true;
+  else if (note === WILD) d.wildNoteVols.add(vol);
+  else if (vol === WILD) d.wildVolNotes.add(note);
+  else d.pairs.add(packPair(note, vol));
+}
+
+/**
+ * Every (slot, note, seedVol) trigger the document's pattern cells can produce.
+ * Mirrors row.js's note branches one for one; anything the row leaves to the
+ * channel becomes WILD.
+ */
+function collectCellDemands(doc) {
   const ts = { wideCells: doc.wideCells };
+  const demands = new Map();
+  // Which instrument a note-with-no-instrument-byte row sounds depends on what
+  // the channel had latched, so every instrument the document names is a
+  // candidate. (Scanning by channel would narrow it, but a cue can put any
+  // pattern on any channel, so the narrowing would be worth little.)
+  const latchable = new Set();
+  for (const song of doc.songs) {
+    for (const rows of song.patterns) {
+      if (!rows) continue;
+      for (const cell of rows) if (cell.instrment !== 0) latchable.add(cell.instrment & 0xff);
+    }
+  }
+
+  for (const song of doc.songs) {
+    for (const rows of song.patterns) {
+      if (!rows) continue;
+      // A pattern ditto (effect 7) replays earlier rows of the same pattern with
+      // the destination row's explicit columns patched over them, so the triples
+      // it can produce are not the ones written in any single cell. They are
+      // still built from THIS pattern's notes and instruments, so pair those up
+      // with an unknown volume and let the sweep cover the rest.
+      if (rows.some((c) => c.effect === EffectOp.OP_7)) {
+        const notes = [...new Set(rows.map((c) => c.note).filter((n) => n >= 0x20))];
+        const slots = [...new Set(rows.map((c) => c.instrment).filter((i) => i !== 0))];
+        for (const s of slots) for (const n of notes) addDemand(demands, s, n, WILD);
+      }
+      for (const cell of rows) {
+        const note = cell.note;
+        const slot = cell.instrment & 0xff;
+        const vol = cell.volumeEff === 0 ? narrowVolAxis(ts, cell.volume) : -1;
+        if (note === 0x0000) {
+          // No note. An instrument byte either TRIGGERS at the channel's current
+          // pitch (row.js's E/F/G branch) or swaps the instrument under the
+          // sounding note, resolving at that pitch AND the channel's running
+          // volume. Both read channel state; the second reads both axes.
+          if (slot !== 0) {
+            addDemand(demands, slot, WILD, vol);
+            addDemand(demands, slot, WILD, WILD);
+          }
+          continue;
+        }
+        if (note < 0x0020) continue; // key-off / cut / fade / interrupt: no lookup
+        if (slot === 0) {
+          // The channel's latched instrument sounds it, seeded from the
+          // channel's running volume unless the row SETS one (triggerNote's
+          // `instId === 0` branch).
+          for (const s of latchable) addDemand(demands, s, note, vol >= 0 ? vol : WILD);
+          continue;
+        }
+        addDemand(demands, slot, note, vol);
+        // applyDuplicateCheck runs on every fresh trigger and resolves its own
+        // patch at full velocity to compare sample pointers.
+        addDemand(demands, slot, note, 0x3f);
+        if (cell.effect === EffectOp.OP_G || cell.effect === EffectOp.OP_L) {
+          // Tone porta: on an ALREADY SOUNDING voice the row re-resolves the
+          // channel's note and volume under the new instrument instead of
+          // triggering (row.js); on a silent one it falls through to the plain
+          // trigger recorded above, so both are kept.
+          addDemand(demands, slot, WILD, WILD);
+        }
+      }
+    }
+  }
+  return demands;
+}
+
+/**
+ * Fan a metainstrument's demands out onto its layer children, exactly as
+ * triggerMetaOrNote does: the gate is the meta's own rectangle at the row's
+ * volume (0x3F when the row sets none), each surviving layer is triggered at
+ * `note + detune`, and the child's own resolvePatch is seeded from the row
+ * volume or — with no volume column — from the CHILD's Default Note Volume.
+ *
+ * A wildcard note propagates as a wildcard: the child's pitch tracks the
+ * meta's, so pinning the layer set at sampled notes would not pin the child's.
+ */
+function expandMetaDemands(doc, demands) {
+  for (const slot of [...demands.keys()]) {
+    const inst = doc.instruments[slot];
+    if (!inst?.isMeta || !inst.metaLayers) continue;
+    const d = demands.get(slot);
+    const emit = (note, vol) => {
+      const seedVol = vol >= 0 ? vol : 0x3f;
+      let layers = inst.resolveMetaLayers(note, seedVol);
+      if (inst.metaStrict) {
+        layers = layers.filter((l) => doc.instruments[l.instIdx & 0x3ff]
+          ?.resolvePatch(clampNote(note + l.detune), seedVol) != null);
+      }
+      for (const l of layers) addDemand(demands, l.instIdx & 0x3ff, clampNote(note + l.detune), vol);
+    };
+    for (const k of d.pairs) emit(pairNote(k), pairVol(k));
+    for (const note of d.wildVolNotes) for (const v of VOL_SWEEP) emit(note, v);
+    if (d.wildBoth || d.wildNoteVols.size > 0) {
+      const vols = d.wildBoth ? [WILD] : [...d.wildNoteVols];
+      for (const l of inst.metaLayers) {
+        for (const v of vols) addDemand(demands, l.instIdx & 0x3ff, WILD, v);
+      }
+    }
+  }
+}
+
+/** Note probes that see every distinct answer resolvePatch can give `patches`:
+ *  one inside each band the patch pitch boundaries cut. */
+function noteProbes(patches) {
+  const cuts = new Set([0x20]);
+  for (const p of patches) {
+    if (p.pitchStart > 0x20) cuts.add(p.pitchStart);
+    if (p.pitchEnd < 0xffff) cuts.add(p.pitchEnd + 1);
+  }
+  return [...cuts];
+}
+
+/** The patches `slot` can be triggered on, given everything demanded of it. */
+function resolveDemand(doc, slot, demand) {
+  const inst = doc.instruments[slot];
+  const patches = inst?.extraPatches ?? [];
   const reachable = new Set();
-  for (const ref of instrumentCellRefs(doc, slot)) {
-    const cell = doc.songs[ref.song].patterns[ref.pat][ref.row];
-    const note = cell.note;
-    if (note === 0x0000) return null; // instrument-byte-only row: ambiguous
-    if (note < 0x0020) continue; // key-off/cut/fade/reserved/interrupt: no patch lookup
-    if (cell.effect === EffectOp.OP_G || cell.effect === EffectOp.OP_L) return null; // tone porta: ambiguous
-    const seedVol = cell.volumeEff === 0
-      ? narrowVolAxis(ts, cell.volume)
-      : rowVolumeFromDefault(inst, null);
-    const patch = inst.resolvePatch(note, seedVol);
-    if (patch) reachable.add(patch);
+  if (patches.length === 0 || demand === undefined) return reachable;
+  const dnv = rowVolumeFromDefault(inst, null);
+  const hit = (note, vol) => {
+    const p = inst.resolvePatch(note, vol >= 0 ? vol : dnv);
+    if (p !== null) reachable.add(p);
+  };
+  for (const k of demand.pairs) hit(pairNote(k), pairVol(k));
+  if (demand.wildVolNotes.size > 0) {
+    for (const note of demand.wildVolNotes) for (const v of VOL_SWEEP) hit(note, v);
+  }
+  if (demand.wildNoteVols.size > 0 || demand.wildBoth) {
+    const probes = noteProbes(patches);
+    const vols = demand.wildBoth ? VOL_SWEEP : [...demand.wildNoteVols];
+    for (const note of probes) for (const v of vols) hit(note, v);
   }
   return reachable;
+}
+
+/**
+ * Map slot → the Set of its Ixmp patches the document can actually trigger.
+ * Every slot carrying patches gets an entry (an empty Set means nothing in the
+ * document reaches it). See the block comment above for what makes this sound.
+ */
+export function reachablePatchSets(doc) {
+  const demands = collectCellDemands(doc);
+  expandMetaDemands(doc, demands);
+  const out = new Map();
+  for (const e of doc.ixmp) {
+    const slot = e.instId & 0x3ff;
+    if (!out.has(slot)) out.set(slot, resolveDemand(doc, slot, demands.get(slot)));
+  }
+  return out;
+}
+
+/**
+ * Prune every Ixmp entry down to the patches that can still be triggered —
+ * shared by the Ixmp cleanup (item 74) and the bank cleanup (item 147, which
+ * runs it over the instruments it is keeping). `keepSlots` null means every
+ * slot; otherwise entries for slots outside it are dropped whole (the caller is
+ * deleting those instruments).
+ *
+ * Reasons a patch goes: `degenerate` (empty rectangle or no sample),
+ * `shadowed` (fully covered by higher-priority patches) and `unused` (no
+ * trigger in the document resolves to it). An entry whose slot holds no
+ * instrument record at all is an `orphan` and goes whole.
+ *
+ * Returns {ixmp, report, overrides, removedPatches, removedBlobs}; `overrides`
+ * maps each touched slot to its surviving patch list, which is what
+ * doc.sampleList()/censusForSlots need to see the post-prune census.
+ */
+function planPatchPrune(doc, keepSlots = null) {
+  const instRegion = doc.sampleInstImage.subarray(SAMPLEBIN_SIZE);
+  const hasRecord = (slot) =>
+    !instRegion.subarray(slot * 256, (slot + 1) * 256).every((b) => b === 0);
+  const reachableBySlot = reachablePatchSets(doc);
+
+  const ixmp = [];
+  const report = [];
+  const overrides = new Map();
+  let removedPatches = 0;
+  let removedBlobs = 0;
+  for (const e of doc.ixmp) {
+    const slot = e.instId & 0x3ff;
+    const patches = doc.instruments[slot].extraPatches ?? [];
+    if (keepSlots !== null && !keepSlots.has(slot)) continue; // the caller drops the slot
+    if (!hasRecord(slot)) { // orphan blob: nothing to trigger it
+      removedBlobs++;
+      removedPatches += patches.length;
+      overrides.set(slot, []);
+      report.push({ slot, reason: "orphan", dropped: patches.length, kept: 0, keep: [] });
+      continue;
+    }
+    const geomKeep = [];
+    let geomDropped = 0;
+    for (const p of patches) {
+      if (patchIsDegenerate(p) || patchIsShadowed(p, geomKeep)) { geomDropped++; continue; }
+      geomKeep.push(p);
+    }
+    // Usage pass: among the geometrically-reachable survivors, drop any patch no
+    // trigger the document can perform actually resolves to.
+    const reachable = reachableBySlot.get(slot);
+    const keep = reachable ? geomKeep.filter((p) => reachable.has(p)) : geomKeep;
+    const dropped = geomDropped + (geomKeep.length - keep.length);
+    if (dropped === 0) { ixmp.push(e); continue; }
+    removedPatches += dropped;
+    overrides.set(slot, keep);
+    report.push({ slot, reason: "unreachable", dropped, kept: keep.length, keep });
+    if (keep.length === 0) { removedBlobs++; continue; }
+    ixmp.push({ instId: e.instId, count: keep.length, blob: writePatchesBlob(keep) });
+  }
+  return { ixmp, report, overrides, removedPatches, removedBlobs };
 }
 
 /**
@@ -445,9 +681,8 @@ function reachablePatchesByUsage(doc, slot) {
  *   * orphan    — the blob's instrument slot holds no record at all
  *   * degenerate— empty pitch/velocity range, or a zero-length sample
  *   * shadowed  — fully covered by higher-priority (earlier) patches
- *   * unused    — geometrically reachable, but no pattern cell in the document
- *                 actually triggers it (reachablePatchesByUsage) — skipped for
- *                 a slot this can't safely determine (see that function)
+ *   * unused    — geometrically reachable, but no trigger the document can
+ *                 perform resolves to it (reachablePatchSets)
  * A slot whose patches all drop loses its Ixmp entry. Removing patches can change
  * the sample census, so SNam is realigned by (ptr:len) identity like planBankCleanup,
  * and any pool span that drops out of the census as a result (no surviving patch or
@@ -461,40 +696,7 @@ function reachablePatchesByUsage(doc, slot) {
 export function planIxmpCleanup(doc) {
   if (!doc.sampleInstImage) return { noop: true, removedPatches: 0, removedBlobs: 0 };
   doc._rebuildInstRegion();
-  const instRegion = doc.sampleInstImage.subarray(SAMPLEBIN_SIZE);
-  const hasRecord = (slot) =>
-    !instRegion.subarray(slot * 256, (slot + 1) * 256).every((b) => b === 0);
-
-  const ixmp = [];
-  const report = [];
-  let removedPatches = 0;
-  let removedBlobs = 0;
-  for (const e of doc.ixmp) {
-    const slot = e.instId & 0x3ff;
-    const patches = doc.instruments[slot].extraPatches ?? [];
-    if (!hasRecord(slot)) { // orphan blob: nothing to trigger it
-      removedBlobs++;
-      removedPatches += patches.length;
-      report.push({ slot, reason: "orphan", dropped: patches.length, kept: 0, keep: [] });
-      continue;
-    }
-    const geomKeep = [];
-    let geomDropped = 0;
-    for (const p of patches) {
-      if (patchIsDegenerate(p) || patchIsShadowed(p, geomKeep)) { geomDropped++; continue; }
-      geomKeep.push(p);
-    }
-    // Usage pass: among the geometrically-reachable survivors, drop any patch
-    // no pattern cell actually triggers (skipped when the slot is unanalysable).
-    const reachable = reachablePatchesByUsage(doc, slot);
-    const keep = reachable ? geomKeep.filter((p) => reachable.has(p)) : geomKeep;
-    const dropped = geomDropped + (geomKeep.length - keep.length);
-    if (dropped === 0) { ixmp.push(e); continue; }
-    removedPatches += dropped;
-    report.push({ slot, reason: "unreachable", dropped, kept: keep.length, keep });
-    if (keep.length === 0) { removedBlobs++; continue; }
-    ixmp.push({ instId: e.instId, count: keep.length, blob: writePatchesBlob(keep) });
-  }
+  const { ixmp, report, overrides, removedPatches, removedBlobs } = planPatchPrune(doc);
   if (removedPatches === 0) {
     return { noop: true, removedPatches: 0, removedBlobs: 0, report: [] };
   }
@@ -505,7 +707,6 @@ export function planIxmpCleanup(doc) {
   // so its pool bytes are freed too (a span still used by an untouched instrument,
   // or by another touched slot's surviving patch, stays in both censuses and is
   // therefore kept).
-  const overrides = new Map(report.map((r) => [r.slot, r.keep]));
   const oldCensus = doc.sampleList();
   const oldNameByKey = new Map();
   for (const e of oldCensus) oldNameByKey.set(e.ptr + ":" + e.len, e.name);
@@ -534,6 +735,120 @@ export function planIxmpCleanup(doc) {
     removedPatches,
     removedBlobs,
     freedSampleBytes,
+  };
+}
+
+// ── sample delete (item 151) ──
+
+/** Merge [{ptr, len}] spans into sorted, non-overlapping [from, to) intervals. */
+function mergedIntervals(spans) {
+  const iv = spans.map((s) => [s.ptr, s.ptr + s.len]).sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [a, b] of iv) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/**
+ * Delete a pooled sample (item 151): free its bytes and cut every reference to
+ * it loose. The census is derived from instruments, so a sample only stops
+ * existing once nothing points at it any more:
+ *   * a base record bound to it keeps its slot but loses its sample — bytes
+ *     0..5 (pointer + length) and the loop markers go, which is the "dangling
+ *     pointer" the confirm dialog warns about: the instrument survives, its
+ *     notes survive, and it plays nothing until it is given a sample again;
+ *   * an Ixmp patch bound to it is dropped, and a slot left with no patches
+ *     loses its blob (the base record then answers for the whole range again).
+ * Pool bytes are zeroed only where no SURVIVING census span covers them, so a
+ * sample overlapping another one can never eat its neighbour's audio.
+ *
+ * Returns {error} or a cleanupBankOp plan (INam passes through unchanged) with
+ * the report the dialog needs: `clearedInsts` (base records left dangling),
+ * `patchedInsts` (slots that lost patches), `removedPatches`, `removedBlobs`,
+ * `freedSampleBytes`.
+ */
+export function planDeleteSample(doc, sample) {
+  if (!doc.sampleInstImage) return { error: "This project has no sample+instrument image." };
+  if (!sample || !(sample.len > 0)) return { error: "The selected sample is empty." };
+  doc._rebuildInstRegion(); // flush pending inst edits into the image
+
+  const key = sample.ptr + ":" + sample.len;
+  const image = doc.sampleInstImage.slice();
+  const recOff = (s) => SAMPLEBIN_SIZE + s * 256;
+
+  // Ixmp: drop every patch bound to this sample. A patch that carries it as an
+  // EXTRA channel carries it as its first one too (a census entry is keyed by
+  // channel 0), so matching ptr:len is the whole test.
+  const ixmp = [];
+  const patchedInsts = [];
+  let removedPatches = 0;
+  let removedBlobs = 0;
+  for (const e of doc.ixmp) {
+    const slot = e.instId & 0x3ff;
+    const patches = doc.instruments[slot].extraPatches ?? [];
+    const keep = patches.filter((p) => !(p.samplePtr === sample.ptr && p.sampleLength === sample.len));
+    if (keep.length === patches.length) { ixmp.push(e); continue; }
+    removedPatches += patches.length - keep.length;
+    patchedInsts.push({ slot, dropped: patches.length - keep.length, kept: keep.length });
+    if (keep.length === 0) { removedBlobs++; continue; }
+    ixmp.push({ instId: e.instId, count: keep.length, blob: writePatchesBlob(keep) });
+  }
+
+  // Base records: null the pointer, the length and the loop markers. The rest of
+  // the record (envelopes, filter, pan, NNA) is left alone — the instrument is
+  // still the instrument, it just has nothing to play.
+  const clearedInsts = [];
+  for (const s of doc.usedInstrumentSlots()) {
+    const inst = doc.instruments[s];
+    if (inst.isMeta) continue;
+    if (inst.samplePtr !== sample.ptr || inst.sampleLength !== sample.len) continue;
+    const o = recOff(s);
+    image.fill(0, o, o + 6);       // 0..3 samplePtr, 4..5 sampleLength
+    image.fill(0, o + 10, o + 14); // 10..11 loop start, 12..13 loop end
+    image[o + 14] &= ~0x07;        // loop mode + sustain
+    clearedInsts.push(s);
+  }
+  if (clearedInsts.length === 0 && removedPatches === 0) {
+    return { error: "Nothing in this project points at that sample." };
+  }
+
+  // Only this entry leaves the census: every other one keeps its own users,
+  // and nothing else was repointed.
+  const oldCensus = doc.sampleList();
+  const oldNameByKey = new Map(oldCensus.map((e) => [e.ptr + ":" + e.len, e.name]));
+  const newCensus = oldCensus.filter((e) => e.ptr + ":" + e.len !== key);
+
+  const pool = image.subarray(0, SAMPLEBIN_SIZE);
+  const keepIv = mergedIntervals(newCensus.flatMap(sampleSpans));
+  let freedSampleBytes = 0;
+  const zeroRange = (from, to) => {
+    for (let i = from; i < to; i++) if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
+  };
+  for (const sp of sampleSpans(sample)) {
+    let cur = sp.ptr;
+    const end = sp.ptr + sp.len;
+    for (const [a, b] of keepIv) {
+      if (b <= cur) continue;
+      if (a >= end) break;
+      if (a > cur) zeroRange(cur, Math.min(a, end));
+      cur = Math.max(cur, b);
+      if (cur >= end) break;
+    }
+    if (cur < end) zeroRange(cur, end);
+  }
+
+  const snamArr = newCensus.map((e) => oldNameByKey.get(e.ptr + ":" + e.len) ?? "");
+  while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
+
+  return {
+    image,
+    inam: doc.projSections.find((s) => s.fourcc === "INam")?.payload ?? null,
+    snam: encodeNameTable(snamArr),
+    ixmp,
+    clearedInsts, patchedInsts, removedPatches, removedBlobs, freedSampleBytes,
   };
 }
 

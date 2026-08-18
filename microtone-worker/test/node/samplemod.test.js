@@ -12,8 +12,10 @@ import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
   decodeSampleRegion, inCombRun, FUNK_SPEED_TABLE, MOD_STEP, MOD_MAX,
+  MOD_SCATTER_FRAC, MOD_RND12, MOD_RND_ALL, isModOpReserved, scatterRot,
   REGION_NONE, REGION_SET, REGION_COMB,
 } from "../../src/engine/samplemod.js";
+import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
 import { readSamplePoint } from "../../src/engine/sampler.js";
 
 setSamplingRate(32000);
@@ -77,8 +79,12 @@ test("the funk-speed ladder is ProTracker's own", () => {
 });
 
 test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
-  assert.deepEqual([...MOD_STEP], [0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
-  assert.equal(MOD_MAX, 9, "$A..$F are reserved");
+  assert.deepEqual([...MOD_STEP].slice(0, 10), [0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
+  assert.equal(MOD_STEP.length, 16, "one entry per $x nibble");
+  // Item 152 spent $C..$F on the scatter ladder; $A and $B are what is left.
+  assert.equal(MOD_MAX, 0xf);
+  assert.deepEqual([0xa, 0xb, 0xc, 0xf].map(isModOpReserved), [true, true, false, false]);
+  assert.deepEqual([...MOD_SCATTER_FRAC], [0.125, 0.25, 0.5, 1]);
 });
 
 // The JVM twin (tsvm devtests/webconf/SampleModTest.java) prints the same
@@ -299,7 +305,8 @@ test("SUB wraps: 128 twice over is the sample back again", () => {
 });
 
 test("a reserved operation or region is ignored whole — speed included", () => {
-  for (const [name, arg] of [["operation $A", 0x0f_af], ["region $54", 0x548f]]) {
+  for (const [name, arg] of [["operation $A", 0x0f_af], ["operation $B", 0x0f_bf],
+                             ["region $54", 0x548f]]) {
     const eng = makeEngine();
     loadRows(eng, [[0x03, arg]]);
     render(eng, ROW);
@@ -335,4 +342,98 @@ test("resetFunkState clears the modification and the legacy mask alike", () => {
   assert.equal(v.funkSpeed, 0);
   assert.equal(v.modSpeed, 0);
   assert.equal(v.modWritePos, 0);
+});
+
+// ── the scatter ladder (item 152) ────────────────────────────────────────────
+
+/** rot as a SIGNED displacement: the short way round the wrap domain. */
+const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
+
+test("scatterRot stays inside its fraction of the domain, whatever the draw", () => {
+  const dl = 1000;
+  try {
+    setRandomSource(makeSeededRandom(0xc0ffee));
+    for (const op of [MOD_RND12, 0xd, 0xe]) {
+      const reach = Math.round(dl * MOD_SCATTER_FRAC[op - MOD_RND12]);
+      let sawNear = false;
+      for (let n = 0; n < 4000; n++) {
+        const d = Math.abs(signedRot(scatterRot(op, dl), dl));
+        assert.ok(d <= reach, `op $${op.toString(16)}: |${d}| must be <= ${reach}`);
+        if (d > reach * 0.9) sawNear = true;
+      }
+      assert.ok(sawNear, `op $${op.toString(16)} must actually use its whole reach`);
+    }
+    // $F is "everywhere": it must reach past the widest bounded op.
+    let far = 0;
+    for (let n = 0; n < 4000; n++) far = Math.max(far, Math.abs(signedRot(scatterRot(MOD_RND_ALL, dl), dl)));
+    assert.ok(far > dl * 0.45, "$F draws from the whole domain");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("scatterRot is safe on a domain too short to displace", () => {
+  for (const dl of [0, 1]) {
+    for (let op = MOD_RND12; op <= MOD_RND_ALL; op++) assert.equal(scatterRot(op, dl), 0);
+  }
+});
+
+test("notefx 3 $C..$F displace the region and never accumulate past their bound", () => {
+  try {
+    setRandomSource(makeSeededRandom(7));
+    for (const [op, frac] of [[0xc, 0.125], [0xd, 0.25], [0xe, 0.5]]) {
+      const eng = makeEngine();
+      loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F — whole sample, top speed
+      const inst = eng.instruments[1];
+      const reach = Math.round(1000 * frac);
+      // 40 rows is ~240 steps at speed $F: a random WALK would have wandered
+      // far past `reach` long before the end of that.
+      for (let r = 0; r < 40; r++) {
+        render(eng, ROW);
+        assert.equal(inst.modOp, op);
+        assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= reach,
+          `op $${op.toString(16)} stayed within ${reach} of the original position`);
+      }
+    }
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("a scatter really moves which byte is read", () => {
+  try {
+    setRandomSource(makeSeededRandom(99));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 50% scatter, top speed
+    render(eng, ROW);
+    const inst = eng.instruments[1];
+    assert.ok(inst.modOn, "the displacement is live");
+    assert.equal(inst.modSub, 0, "a scatter is an address transform, not a level one");
+    assert.equal(inst.modMask, null, "…and keeps no inversion mask");
+    const voice = eng.playheads[0].trackerState.voices[0];
+    const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+    for (const i of [0, 1, 250, 500, 999]) {
+      assert.equal(raw(i), (i + inst.modRot) % 1000 & 0xff, `byte ${i} is read from the displaced position`);
+    }
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("switching from a rotate to a scatter restarts the displacement", () => {
+  try {
+    setRandomSource(makeSeededRandom(3));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0f5f], [0x03, 0x0fcf]]); // ROL8 for a row, then scatter
+    render(eng, ROW - TICK);
+    const inst = eng.instruments[1];
+    assert.equal(inst.modOp, 5);
+    assert.ok(inst.modRot > 0, "the rotate accumulated");
+    render(eng, TICK + 1); // into row 1: the operation changes
+    assert.equal(inst.modOp, 0xc);
+    assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= 125,
+      "the ROL's offset was discarded rather than scattered from");
+  } finally {
+    setRandomSource(null);
+  }
 });

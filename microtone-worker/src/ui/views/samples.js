@@ -4,21 +4,31 @@
 // tab. The toolbar's editors: "Edit…" opens the Sample Lab (item 109 — one
 // editor, which both replaces the sample in place and imports as new),
 // "Paint…" redraws its waveform by hand, "Chord…" is the Lab with the chord
-// maker on top.
+// maker on top. "Duplicate" and "Delete" (item 151) are the pool-level pair:
+// one copies the bytes into a new sample + instrument, the other frees them and
+// leaves every instrument bound to them dangling.
 
 import { hex2 } from "../notenames.js";
 import { themeColors } from "../theme.js";
-import { unescapeName } from "../names.js";
+import { unescapeName, escapeNonAscii } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
 import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
+import { planDuplicateSample, duplicateInstrumentName } from "../../doc/bankmerge.js";
+import { planDeleteSample } from "../../doc/cleanup.js";
+import { importBankOp, cleanupBankOp } from "../../doc/ops.js";
+import { showModal } from "../widgets/modal.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 
 /** Waveform canvas height PER CHANNEL (px). */
 const WAVE_LANE_H = 220;
+
+/** An instrument slot as the rest of the app spells it: $01–$FF in two digits,
+ *  a $100+ layer child in three (a sample's users are often layer children). */
+const instLabel = (slot) => "$" + (slot > 0xff ? slot.toString(16).toUpperCase().padStart(3, "0") : hex2(slot));
 
 export class SamplesView {
   constructor(store, host, callbacks = {}) {
@@ -83,7 +93,21 @@ export class SamplesView {
     setIconLabel(this.exportBtn, "download", t("smp.export"), { after: true });
     this.exportBtn.title = t("smp.exportTitle");
     this.exportBtn.addEventListener("click", () => this.exportSample());
-    this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.exportBtn, this.newInstBtn);
+    // "Duplicate" (item 151) copies the bytes — the copy is a sample of its own,
+    // so editing it can never reach the music written with the original. (New
+    // instrument, next to it, is the version that SHARES the bytes.)
+    this.dupBtn = document.createElement("button");
+    this.dupBtn.textContent = t("smp.duplicate");
+    this.dupBtn.title = t("smp.duplicateTitle");
+    this.dupBtn.addEventListener("click", () => this.duplicateSample());
+    // "Delete" frees the pool bytes. Every instrument bound to the sample is
+    // named in the confirm dialog: they keep their slot and lose their sample.
+    this.deleteBtn = document.createElement("button");
+    this.deleteBtn.textContent = t("smp.delete");
+    this.deleteBtn.title = t("smp.deleteTitle");
+    this.deleteBtn.addEventListener("click", () => this.deleteSample());
+    this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.dupBtn,
+      this.exportBtn, this.newInstBtn, this.deleteBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     this.right.append(this.info, this.toolbar, this.canvas);
@@ -125,6 +149,71 @@ export class SamplesView {
     });
     if (res?.firstSlot !== undefined) this.cb.onNewInstrument?.(res.firstSlot);
     else if (res?.replaced) this.refresh();
+  }
+
+  /** Copy the selected sample's bytes into a fresh pool span plus an instrument
+   *  that plays them (item 151). The name defaults to "<name> (2)" — the same
+   *  numbering a duplicated instrument gets — and the new sample is selected. */
+  async duplicateSample() {
+    const s = this.list?.[this.selected];
+    const doc = this.store.doc;
+    if (!s || !doc) return;
+    const base = unescapeName(s.name) || `sample ${s.index}`;
+    const takenNames = new Set(this.list.map((e) => unescapeName(e.name)));
+    const suggested = duplicateInstrumentName(takenNames, base) || base;
+    const res = await showModal({
+      title: t("smp.dupTitle", { name: base }),
+      body: t("smp.dupBody", { bytes: s.len * sampleSpans(s).length }),
+      fields: [{ name: "name", label: t("inst.sampleImportName"), value: suggested }],
+      okLabel: t("common.create"),
+    });
+    if (!res) return;
+    const nameBytes = new TextEncoder().encode(escapeNonAscii(res.name || suggested));
+    const plan = planDuplicateSample(doc, s, nameBytes);
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(importBankOp(plan));
+    this.store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
+    // Land on the copy: the census is pool-ordered, so find it by its pointer.
+    // The view stays put — this duplicated a SAMPLE, and the instrument minted
+    // to carry it is a means to that; "New instrument" is the button that means
+    // to go and edit one.
+    const at = this.list.findIndex((e) => e.ptr === plan.duplicate.ptr);
+    if (at >= 0) { this.selected = at; this.refresh(); }
+  }
+
+  /** Free the selected sample's pool bytes (item 151). Everything bound to it is
+   *  named first: base records are left DANGLING (slot and notes survive, the
+   *  sample does not) and Ixmp patches bound to it are dropped. */
+  async deleteSample() {
+    const s = this.list?.[this.selected];
+    const doc = this.store.doc;
+    if (!s || !doc) return;
+    const plan = planDeleteSample(doc, s);
+    if (plan.error) { alert(plan.error); return; }
+    const bodyParts = [];
+    if (plan.clearedInsts.length > 0) {
+      bodyParts.push(t("smp.delBodyDangling", {
+        n: plan.clearedInsts.length,
+        list: plan.clearedInsts.map(instLabel).join(", "),
+      }));
+    }
+    if (plan.removedPatches > 0) {
+      bodyParts.push(t("smp.delBodyPatches", {
+        n: plan.removedPatches, insts: plan.patchedInsts.length, blobs: plan.removedBlobs,
+      }));
+    }
+    bodyParts.push(t("smp.delBodyFrees", { kb: (plan.freedSampleBytes / 1024).toFixed(1) }));
+    const res = await showModal({
+      title: t("smp.delTitle", { name: unescapeName(s.name) || `sample ${s.index}`, idx: s.index }),
+      body: bodyParts.join(" "),
+      okLabel: t("smp.delOk"),
+    });
+    if (!res) return;
+    this.store.undo.apply(cleanupBankOp(plan));
+    this.store.emit("edit", [{ kind: "bank" }]);
+    this.selected = Math.max(0, Math.min(this.selected, doc.sampleList().length - 1));
+    this.refresh();
   }
 
   exportSample() {
@@ -181,7 +270,7 @@ export class SamplesView {
       `${s.rate} Hz@C4 · ${escape(loopModes[s.loopMode & 3])}` +
       `${(s.loopMode & 3) !== 0 ? ` [${s.loopStart}..${s.loopEnd}]` : ""}` +
       `${(s.loopMode & 4) !== 0 ? ` · ${escape(t("smp.infoSustain"))}` : ""}` +
-      ` · ${escape(t("smp.infoUsedBy", { list: s.users.map((u) => "$" + hex2(u)).join(" ") }))}`;
+      ` · ${escape(t("smp.infoUsedBy", { list: s.users.map(instLabel).join(" ") }))}`;
   }
 
   /** Per-frame: live play cursors + list dots while audio runs. */

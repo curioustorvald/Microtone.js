@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>sample duplicate/delete smoke (item 151)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox --dump-dom \
+           --virtual-time-budget=45000 \
+           http://localhost:8932/test/browser/sampledup-smoke.html -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, what) => log(`${what}: ${cond ? "ok" : "FAIL"}`);
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+    const clickOk = async (win) => {
+      const dlg = await waitFor(() => win.document.querySelector("dialog.modal"));
+      dlg.querySelector(".modal-buttons button").click();
+      return dlg;
+    };
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { store, samplesView: sv } = win.__microtone;
+        win.alert = (m) => log("alert: " + m);
+        log("app loaded");
+
+        sv.show();
+        const btnText = () => [...sv.toolbar.querySelectorAll("button")].map((b) => b.textContent);
+        ok(btnText().includes("Duplicate"), "a1 the Samples toolbar has Duplicate");
+        ok(btnText().includes("Delete"), "a2 …and Delete");
+
+        // ── Duplicate ──
+        sv.selected = 0;
+        sv.refresh();
+        const src = sv.list[0];
+        const countBefore = sv.list.length;
+        const undoBefore = store.undo.undoStack.length;
+        const dup = sv.duplicateSample();
+        const dlg = await waitFor(() => win.document.querySelector("dialog.modal"));
+        const suggested = dlg.querySelector("input")?.value ?? "";
+        dlg.querySelector(".modal-buttons button").click();
+        await dup;
+        ok(sv.list.length === countBefore + 1, `b1 the census gained an entry (${countBefore} → ${sv.list.length})`);
+        ok(store.undo.undoStack.length === undoBefore + 1, "b2 one undo step");
+        const copy = sv.list[sv.selected];
+        ok(copy && copy.ptr !== src.ptr, "b3 the copy has its own pool span");
+        ok(copy && copy.len === src.len && copy.rate === src.rate, "b4 …with the same length and rate");
+        const bin = store.doc.sampleBin;
+        let same = copy && copy.len > 0;
+        for (let i = 0; same && i < src.len; i++) if (bin[src.ptr + i] !== bin[copy.ptr + i]) same = false;
+        ok(same, "b5 the audio is copied byte for byte");
+        ok(copy && copy.users.length === 1 && store.doc.usedInstrumentSlots().includes(copy.users[0]),
+          `b6 a fresh instrument plays it ($${copy?.users[0]?.toString(16)})`);
+        ok(/\(2\)|copy/i.test(suggested) || suggested.length > 0, `b7 the name is pre-filled ("${suggested}")`);
+
+        store.undo.undo();
+        sv.refresh();
+        ok(sv.list.length === countBefore, "b8 undo puts the census back");
+
+        // ── Delete: the dialog names the instruments left dangling ──
+        sv.selected = 1;
+        sv.refresh();
+        const victim = sv.list[1];
+        const users = victim.users.slice();
+        const del = sv.deleteSample();
+        const dlg2 = await waitFor(() => win.document.querySelector("dialog.modal"));
+        const body = dlg2.querySelector("p")?.textContent ?? "";
+        ok(/dangling/.test(body), `c1 the warning says dangling pointer`);
+        ok(users.every((u) => body.includes("$" + u.toString(16).padStart(2, "0"))),
+          `c2 …and names every affected instrument (${users.map((u) => "$" + u.toString(16)).join(" ")})`);
+        dlg2.querySelector(".modal-buttons button").click();
+        await del;
+        ok(!sv.list.some((e) => e.ptr === victim.ptr && e.len === victim.len), "c3 the sample is gone");
+        ok(users.every((u) => store.doc.instruments[u].sampleLength === 0), "c4 its users kept their slot and lost the sample");
+        ok(users.every((u) => store.doc.usedInstrumentSlots().includes(u)), "c5 …the slots themselves survive");
+        ok(store.doc.sampleBin.subarray(victim.ptr, victim.ptr + victim.len).every((b) => b === 0),
+          "c6 the pool bytes are freed");
+        store.undo.undo();
+        sv.refresh();
+        ok(sv.list.some((e) => e.ptr === victim.ptr && e.len === victim.len), "c7 undo brings it back");
+
+        log(out.some((l) => l.includes("FAIL")) ? "SOME FAILED" : "ALL PASS");
+      } catch (err) {
+        log("EXCEPTION: " + (err && err.stack ? err.stack : err));
+      }
+    })();
+  </script>
+</body>
+</html>
