@@ -22,8 +22,8 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
-  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isRndOp, modTouches,
-  scatterReach, scatterSeed,
+  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isJumpOp, isRndOp, modTouches,
+  jumpRot, scatterReach, scatterSeed,
 } from "./samplemod.js";
 import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
@@ -399,6 +399,12 @@ export function applyTrackerTick(eng, ts, playhead) {
         inst.modRot = (inst.modRot + step) % dl;
         inst.modOn = inst.modRot !== 0;
       }
+    } else if (isJumpOp(inst.modOp)) {
+      // Jump (item 152): the ROL displacement, thrown instead of stepped. One
+      // offset for the whole region, measured from home rather than from the
+      // last throw, so $A paces around it instead of wandering off.
+      inst.modRot = jumpRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
+      inst.modOn = inst.modRot !== 0;
     } else if (isRndOp(inst.modOp)) {
       // Scatter (item 152): one new scramble of the whole region per step. The
       // per-byte throws live in the seed, so a step is a single draw however

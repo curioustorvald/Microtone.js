@@ -39,36 +39,65 @@ export const REGION_COMB = 2;
 // rotate-right: a left rotation of n and a right rotation of span−n are the
 // same picture, and the ladder is more useful spent on step sizes). SUB
 // subtracts from each byte's U8 value, wrapping through zero, by 2/8/32/128 per
-// step — a running level slide that folds rather than clips. RND (item 152)
-// SHUFFLES: every byte of the region is displaced independently, each by its
-// own random amount within 12.5 / 25 / 50 / 100% of the wrap domain — not the
-// region moved as a block (that is what ROL is for), which is why $F, drawing
-// from the whole domain, is a complete scramble of the sample.
+// step — a running level slide that folds rather than clips.
+//
+// Item 152 added the two random families, which share the ROL ladder's address
+// transform and differ in what they apply it to. JUMP ($A $B) throws the WHOLE
+// region to a new offset each step, within 50 / 100% of the wrap domain: the
+// waveform arrives intact, somewhere else — a randomised `O $xxyy`, one draw a
+// step. SCATTER ($C..$F) throws EVERY BYTE its own way within 12.5 / 25 / 50 /
+// 100%: the region is shuffled rather than moved, which is why $F, drawing from
+// the whole domain, leaves nothing where it was.
 export const MOD_OFF = 0x0;
 export const MOD_FUNK = 0x1;
 export const MOD_ROL1 = 0x2;
 export const MOD_ROL8 = 0x5;
 export const MOD_SUB2 = 0x6;
 export const MOD_SUB128 = 0x9;
+export const MOD_JUMP50 = 0xa;
+export const MOD_JUMP_ALL = 0xb;
 export const MOD_RND12 = 0xc;
 export const MOD_RND_ALL = 0xf;
-/** Highest assigned operation; $A and $B are reserved (isModOpReserved). */
+/** Highest operation; every $x nibble is assigned since item 152's second half. */
 export const MOD_MAX = MOD_RND_ALL;
 
 /** Step size per operation — bytes for the ROLs, U8 levels for the SUBs. The
- *  RNDs take their reach from MOD_SCATTER_FRAC instead, so they read 0 here. */
+ *  random operations take their reach from their own tables, so they read 0. */
 export const MOD_STEP = Object.freeze(
   [0, 0, 1, 2, 4, 8, 2, 8, 32, 128, 0, 0, 0, 0, 0, 0]);
 
-/** RND displacement bound as a fraction of the wrap domain, by op − MOD_RND12.
- *  Each BYTE is thrown this far, independently of its neighbours. */
+/** JUMP reach as a fraction of the wrap domain, by op − MOD_JUMP50. The WHOLE
+ *  region is thrown this far, in one piece. */
+export const MOD_JUMP_FRAC = Object.freeze([0.5, 1]);
+
+/** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND12. Each BYTE
+ *  is thrown this far, independently of its neighbours. */
 export const MOD_SCATTER_FRAC = Object.freeze([0.125, 0.25, 0.5, 1]);
 
 export const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
 export const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
+export const isJumpOp = (op) => op >= MOD_JUMP50 && op <= MOD_JUMP_ALL;
 export const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
-/** $A and $B carry no operation — a whole command naming one is ignored. */
-export const isModOpReserved = (op) => op === 0xa || op === 0xb;
+
+/**
+ * One JUMP step's displacement ($A $B): a single offset for the whole region,
+ * drawn afresh from its ORIGINAL position every step rather than added to the
+ * last one. Bounded, so `$A` paces around home and `$B` goes anywhere; a random
+ * WALK would have made the two the same effect arriving at different speeds.
+ *
+ * Read back through the same transform ROL uses (the region moves as one
+ * piece), so what comes out is the sample intact and re-seated — which is the
+ * whole difference between this pair and the scatter below.
+ */
+export function jumpRot(op, domainLen) {
+  if (domainLen < 2) return 0;
+  const frac = MOD_JUMP_FRAC[op - MOD_JUMP50];
+  if (frac === undefined) return 0;
+  if (frac >= 1) return Math.min(Math.floor(random() * domainLen), domainLen - 1);
+  const reach = Math.max(1, Math.round(domainLen * frac));
+  const d = Math.round((random() * 2 - 1) * reach) % domainLen;
+  return d < 0 ? d + domainLen : d;
+}
 
 /**
  * How far one scatter step may throw a byte, in bytes (0 = it cannot). The

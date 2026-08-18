@@ -12,8 +12,8 @@ import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
   decodeSampleRegion, inCombRun, FUNK_SPEED_TABLE, MOD_STEP, MOD_MAX,
-  MOD_SCATTER_FRAC, MOD_RND12, MOD_RND_ALL, isModOpReserved,
-  scatterReach, scatterSource,
+  MOD_SCATTER_FRAC, MOD_JUMP_FRAC, MOD_JUMP50, MOD_RND12, MOD_RND_ALL,
+  isJumpOp, isRndOp, jumpRot, scatterReach, scatterSource,
   REGION_NONE, REGION_SET, REGION_COMB,
 } from "../../src/engine/samplemod.js";
 import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
@@ -82,10 +82,13 @@ test("the funk-speed ladder is ProTracker's own", () => {
 test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
   assert.deepEqual([...MOD_STEP].slice(0, 10), [0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
   assert.equal(MOD_STEP.length, 16, "one entry per $x nibble");
-  // Item 152 spent $C..$F on the scatter ladder; $A and $B are what is left.
+  // Item 152 spent $A..$F on the two random families: $A/$B throw the region,
+  // $C..$F throw its bytes. No operation nibble is reserved any more.
   assert.equal(MOD_MAX, 0xf);
-  assert.deepEqual([0xa, 0xb, 0xc, 0xf].map(isModOpReserved), [true, true, false, false]);
+  assert.deepEqual([...MOD_JUMP_FRAC], [0.5, 1]);
   assert.deepEqual([...MOD_SCATTER_FRAC], [0.125, 0.25, 0.5, 1]);
+  assert.deepEqual([0x9, 0xa, 0xb, 0xc].map(isJumpOp), [false, true, true, false]);
+  assert.deepEqual([0xb, 0xc, 0xf].map(isRndOp), [false, true, true]);
 });
 
 // The JVM twin (tsvm devtests/webconf/SampleModTest.java) prints the same
@@ -305,9 +308,8 @@ test("SUB wraps: 128 twice over is the sample back again", () => {
   assert.equal(raw(10), 10);
 });
 
-test("a reserved operation or region is ignored whole — speed included", () => {
-  for (const [name, arg] of [["operation $A", 0x0f_af], ["operation $B", 0x0f_bf],
-                             ["region $54", 0x548f]]) {
+test("a reserved region is ignored whole — speed included", () => {
+  for (const [name, arg] of [["region $54", 0x548f], ["region $A9", 0xa98f]]) {
     const eng = makeEngine();
     loadRows(eng, [[0x03, arg]]);
     render(eng, ROW);
@@ -350,6 +352,9 @@ test("resetFunkState clears the modification and the legacy mask alike", () => {
 // $C..$F SHUFFLE: every byte of the region is displaced on its own, each by its
 // own draw within 12.5 / 25 / 50 / 100% of the wrap domain. Not the region
 // moved as a block — that is what $2..$5 are for.
+
+/** rot as a SIGNED displacement: the short way round the wrap domain. */
+const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
 
 /** How far byte `i` travelled, the short way round a domain of `dl`. */
 const travel = (i, src, dl) => {
@@ -542,6 +547,100 @@ test("$x = 0 clears the scatter with everything else", () => {
     assert.equal(inst.modScatter, 0);
     assert.equal(inst.modSeed, 0);
     assert.equal(inst.modOn, false);
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+// ── the jump pair (item 152, $A and $B) ──────────────────────────────────────
+//
+// The scatter ladder's other half: one draw moves the WHOLE region, so the
+// waveform survives intact and lands somewhere else. Same read transform the
+// ROLs use — a rotation whose step is thrown rather than fixed.
+
+test("jumpRot stays inside its fraction of the domain, whatever the draw", () => {
+  const dl = 1000;
+  try {
+    setRandomSource(makeSeededRandom(0xbeef));
+    const reach = Math.round(dl * 0.5);
+    let sawNear = false;
+    for (let n = 0; n < 4000; n++) {
+      const d = Math.abs(signedRot(jumpRot(MOD_JUMP50, dl), dl));
+      assert.ok(d <= reach, `$A: |${d}| must be <= ${reach}`);
+      if (d > reach * 0.9) sawNear = true;
+    }
+    assert.ok(sawNear, "$A uses its whole reach");
+    let far = 0;
+    for (let n = 0; n < 4000; n++) far = Math.max(far, Math.abs(signedRot(jumpRot(0xb, dl), dl)));
+    assert.ok(far > dl * 0.45, "$B draws from the whole domain");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("jumpRot is safe on a domain too short to displace", () => {
+  for (const dl of [0, 1]) {
+    for (const op of [MOD_JUMP50, 0xb]) assert.equal(jumpRot(op, dl), 0);
+  }
+});
+
+test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => {
+  try {
+    setRandomSource(makeSeededRandom(21));
+    for (const op of [0xa, 0xb]) {
+      const eng = makeEngine();
+      loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F
+      render(eng, ROW);
+      const inst = eng.instruments[1];
+      assert.equal(inst.modOp, op);
+      assert.equal(inst.modScatter, 0, "a jump is not a shuffle");
+      assert.ok(inst.modOn);
+      const voice = eng.playheads[0].trackerState.voices[0];
+      const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+      // EVERY byte moves by the SAME offset — that is what keeps the sound.
+      for (let i = 0; i < 1000; i++) {
+        assert.equal(raw(i), (i + inst.modRot) % 1000 & 0xff,
+          `op $${op.toString(16)}: byte ${i} follows the one offset`);
+      }
+    }
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$A never wanders past its half, however long it runs", () => {
+  try {
+    setRandomSource(makeSeededRandom(4));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0faf]]); // 3 $0FAF — whole sample, 50% jump, top speed
+    const inst = eng.instruments[1];
+    const seen = new Set();
+    for (let r = 0; r < 40; r++) {
+      render(eng, ROW);
+      assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= 500,
+        "each throw is measured from home, not from the last one");
+      seen.add(inst.modRot);
+    }
+    assert.ok(seen.size > 30, "and it really is a fresh throw each step");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("a jump and a scatter replace each other cleanly", () => {
+  try {
+    setRandomSource(makeSeededRandom(6));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0fbf], [0x03, 0x0fff]]); // $B then $F
+    render(eng, ROW - TICK);
+    const inst = eng.instruments[1];
+    assert.equal(inst.modOp, 0xb);
+    assert.equal(inst.modScatter, 0);
+    render(eng, TICK + 1);
+    assert.equal(inst.modOp, 0xf);
+    assert.equal(inst.modRot, 0, "the jump's offset is discarded");
+    render(eng, TICK);
+    assert.equal(inst.modScatter, 1000, "…and the scatter takes over");
   } finally {
     setRandomSource(null);
   }
