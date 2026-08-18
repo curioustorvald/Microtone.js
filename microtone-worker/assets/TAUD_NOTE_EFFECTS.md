@@ -851,13 +851,19 @@ Notes an engine **MUST** honour:
 
 Its practical musical value was never obvious, and that is precisely why it survived in tracker folklore. Composers such as *4mat* demonstrated that effects which initially appeared useless could become distinctive musical techniques when placed in the right hands.
 
-**Sample Scatter** displaces the region at the playback tick rate, in bounded throws rather than an even sweep. At `$C` it is a fine judder around the original position — the sample still reads as itself, breathing; by `$F` the read position lands anywhere in the domain every step, which turns a looped sample into a granular cloud of its own contents. The bounded settings between them are the useful ones: the wider the throw, the further the timbre drifts from the source while still being made entirely of it.
-
 **Sample Subtraction** subtracts a controlled value from the sample waveform during playback, producing an evolving change in its harmonic structure.
 
 This technique has historical precedent in Konami's MSX-era sound design, where waveform manipulation of the SCC's wavetable was used to create evolving timbres, including a characteristic "growing" sawtooth-like sound whose harmonic content shifts toward an octave-up character.
 
-It may look strange compared with conventional effects such as chorus or phaser, but sample-domain manipulation is very much in the tradition of tracker and programmable-sound synthesis: the waveform itself becomes part of the instrument's performance.
+**Sample Scatter** throws the region to a new position every step instead of stepping it evenly, and measures every throw from where the byte really lives rather than from the last throw — so `$C` is a fine judder the sample still reads as itself through, while `$F` gives up on bounds and lands anywhere in the domain.
+
+That is **granular synthesis**, arrived at from the other end. A granular engine cuts a sample into grains and sprays their read positions around a playhead; the spray amount is the parameter that decides whether the result is a slight thickening or a cloud that has forgotten what it was made of. Scatter is that parameter and almost nothing else — the grain lasts one step (a tick at `$y = $F`), the playhead is the note, and `$C`…`$F` is the spray control with four positions on it. It has no grain window, so a throw lands mid-waveform and the discontinuity is audible; that is the same edge Invert Loop and Sample Subtraction have, and the same reason. On this hardware it is a trait of the family, not an oversight in it.
+
+It is also the oldest trick on the Amiga, spelled out as an effect. **Paula** had no playback engine to speak of — a start pointer, a length, and DMA that fetched words until the loop came round — so everything a composer did to a note already sounding was done by writing those registers underneath it. ProTracker's `9xx` — the effect this format spells `O $xxyy` — is a read-head jump handed to the effect column, and Funk Repeat's whole idea was to interfere with the loop while it played. Scatter is that same poke, given a range and a clock.
+
+And pointed at the right sample it is **wavetable scanning**. Lay several single-cycle waveforms end to end into one sample — a wavetable, in the sense the word had before it meant a synth — take the region as `$0F`, and at `$C` the throw stays inside an eighth of the table: every step reads the note out of a different cycle of it, which is wavetable-position modulation with a random walk driving it. Sample Subtraction reaches the same MSX-era gesture through a table's *level*; Scatter reaches it through a table's *position*.
+
+It may look strange compared with conventional effects such as chorus or phaser, but sample-domain manipulation is very much in the tradition of tracker and programmable-sound synthesis: the waveform itself becomes part of the instrument's performance. Between them the operations perform the three things a sample has — its **content** (Invert Loop flips the bytes), its **level** (Subtraction slides them), and its **position** (the rotations sweep it, Scatter throws it) — with nothing written to the pool and nothing to undo when the song stops.
 
 ## 5 $xxyy and 6 $xxyy — Filter Cutoff/Resonance Control
 
