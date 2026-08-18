@@ -22,7 +22,8 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
-  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isRndOp, modTouches, scatterRot,
+  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isRndOp, modTouches,
+  scatterReach, scatterSeed,
 } from "./samplemod.js";
 import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
@@ -399,10 +400,15 @@ export function applyTrackerTick(eng, ts, playhead) {
         inst.modOn = inst.modRot !== 0;
       }
     } else if (isRndOp(inst.modOp)) {
-      // Scatter (item 152): a fresh displacement from the ORIGINAL position,
-      // not one more step — that is what holds $C inside its 12.5% forever.
-      inst.modRot = scatterRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
-      inst.modOn = inst.modRot !== 0;
+      // Scatter (item 152): one new scramble of the whole region per step. The
+      // per-byte throws live in the seed, so a step is a single draw however
+      // many bytes it rearranges, and each is measured from where its byte
+      // really belongs — nothing accumulates, so $C stays within its 12.5%
+      // however long the effect runs.
+      const dl = inst.modInvert ? sampleLen : ee - es;
+      inst.modScatter = scatterReach(inst.modOp, dl);
+      inst.modSeed = scatterSeed();
+      inst.modOn = inst.modScatter > 0;
     } else {
       inst.modSub = (inst.modSub + step) & 0xff;
       inst.modOn = inst.modSub !== 0;

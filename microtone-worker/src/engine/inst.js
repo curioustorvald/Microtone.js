@@ -355,6 +355,8 @@ export class TaudInst {
     this.modMask = null;          // MOD_FUNK: one bit per sample byte
     this.modRot = 0;              // MOD_ROL*: byte displacement
     this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
+    this.modScatter = 0;          // MOD_RND*: per-byte throw, in bytes (0 = off)
+    this.modSeed = 0;             // MOD_RND*: this step's scramble
     this.modOn = false;           // hot-path guard: does it change any byte yet?
   }
 
@@ -534,6 +536,8 @@ export class TaudInst {
     this.modMask = null;
     this.modRot = 0;
     this.modSub = 0;
+    this.modScatter = 0;
+    this.modSeed = 0;
     this.modOn = false;
   }
 

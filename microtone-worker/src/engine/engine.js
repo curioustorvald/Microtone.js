@@ -600,6 +600,7 @@ export class TaudEngine {
       op: inst.modOp, invert: inst.modInvert,
       start: inst.modStart, end: inst.modEnd, comb: inst.modComb,
       rot: inst.modRot, sub: inst.modSub, on: inst.modOn,
+      scatter: inst.modScatter, seed: inst.modSeed,
     };
   }
 

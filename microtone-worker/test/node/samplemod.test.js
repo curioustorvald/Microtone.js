@@ -12,7 +12,8 @@ import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
   decodeSampleRegion, inCombRun, FUNK_SPEED_TABLE, MOD_STEP, MOD_MAX,
-  MOD_SCATTER_FRAC, MOD_RND12, MOD_RND_ALL, isModOpReserved, scatterRot,
+  MOD_SCATTER_FRAC, MOD_RND12, MOD_RND_ALL, isModOpReserved,
+  scatterReach, scatterSource,
   REGION_NONE, REGION_SET, REGION_COMB,
 } from "../../src/engine/samplemod.js";
 import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
@@ -345,82 +346,170 @@ test("resetFunkState clears the modification and the legacy mask alike", () => {
 });
 
 // ── the scatter ladder (item 152) ────────────────────────────────────────────
+//
+// $C..$F SHUFFLE: every byte of the region is displaced on its own, each by its
+// own draw within 12.5 / 25 / 50 / 100% of the wrap domain. Not the region
+// moved as a block — that is what $2..$5 are for.
 
-/** rot as a SIGNED displacement: the short way round the wrap domain. */
-const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
+/** How far byte `i` travelled, the short way round a domain of `dl`. */
+const travel = (i, src, dl) => {
+  const d = ((src - i) % dl + dl) % dl;
+  return d > dl / 2 ? d - dl : d;
+};
 
-test("scatterRot stays inside its fraction of the domain, whatever the draw", () => {
-  const dl = 1000;
-  try {
-    setRandomSource(makeSeededRandom(0xc0ffee));
-    for (const op of [MOD_RND12, 0xd, 0xe]) {
-      const reach = Math.round(dl * MOD_SCATTER_FRAC[op - MOD_RND12]);
-      let sawNear = false;
-      for (let n = 0; n < 4000; n++) {
-        const d = Math.abs(signedRot(scatterRot(op, dl), dl));
-        assert.ok(d <= reach, `op $${op.toString(16)}: |${d}| must be <= ${reach}`);
-        if (d > reach * 0.9) sawNear = true;
-      }
-      assert.ok(sawNear, `op $${op.toString(16)} must actually use its whole reach`);
-    }
-    // $F is "everywhere": it must reach past the widest bounded op.
-    let far = 0;
-    for (let n = 0; n < 4000; n++) far = Math.max(far, Math.abs(signedRot(scatterRot(MOD_RND_ALL, dl), dl)));
-    assert.ok(far > dl * 0.45, "$F draws from the whole domain");
-  } finally {
-    setRandomSource(null);
-  }
-});
-
-test("scatterRot is safe on a domain too short to displace", () => {
+test("scatterReach: the fraction of the domain each byte may be thrown", () => {
+  assert.equal(scatterReach(0xc, 1000), 125);
+  assert.equal(scatterReach(0xd, 1000), 250);
+  assert.equal(scatterReach(0xe, 1000), 500);
+  assert.equal(scatterReach(0xf, 1000), 1000, "$F reaches the whole domain");
+  // Degenerate domains cannot displace anything.
   for (const dl of [0, 1]) {
-    for (let op = MOD_RND12; op <= MOD_RND_ALL; op++) assert.equal(scatterRot(op, dl), 0);
+    for (let op = MOD_RND12; op <= MOD_RND_ALL; op++) assert.equal(scatterReach(op, dl), 0);
   }
 });
 
-test("notefx 3 $C..$F displace the region and never accumulate past their bound", () => {
+test("scatterSource: every byte gets its OWN throw, inside the reach", () => {
+  const dl = 1000;
+  const seed = 0x12345678;
+  for (const op of [0xc, 0xd, 0xe]) {
+    const reach = scatterReach(op, dl);
+    const seen = new Set();
+    let moved = 0;
+    for (let i = 0; i < dl; i++) {
+      const src = scatterSource(i, 0, dl, reach, seed);
+      assert.ok(src >= 0 && src < dl, "the source stays inside the domain");
+      const d = travel(i, src, dl);
+      assert.ok(Math.abs(d) <= reach, `byte ${i} moved ${d}, past ±${reach}`);
+      seen.add(d);
+      if (d !== 0) moved++;
+    }
+    assert.ok(seen.size > reach, `op $${op.toString(16)}: the throws differ per byte (${seen.size} distinct)`);
+    assert.ok(moved > dl * 0.9, "nearly every byte moves — this is a shuffle, not a rotation");
+  }
+});
+
+test("scatterSource is NOT a rotation: neighbours do not keep their spacing", () => {
+  const dl = 1000, reach = scatterReach(0xd, dl), seed = 99;
+  let sameDelta = 0;
+  let prev = travel(0, scatterSource(0, 0, dl, reach, seed), dl);
+  for (let i = 1; i < dl; i++) {
+    const d = travel(i, scatterSource(i, 0, dl, reach, seed), dl);
+    if (d === prev) sameDelta++;
+    prev = d;
+  }
+  assert.ok(sameDelta < dl / 20, `adjacent bytes rarely share a throw (${sameDelta}/${dl - 1})`);
+});
+
+test("scatterSource is stable within a step and different across steps", () => {
+  const dl = 1000, reach = scatterReach(0xe, dl);
+  // Stable: an output sample reads the same position through every sinc tap.
+  for (let i = 0; i < 50; i++) {
+    assert.equal(scatterSource(i, 0, dl, reach, 7), scatterSource(i, 0, dl, reach, 7));
+  }
+  let differs = 0;
+  for (let i = 0; i < dl; i++) {
+    if (scatterSource(i, 0, dl, reach, 7) !== scatterSource(i, 0, dl, reach, 8)) differs++;
+  }
+  assert.ok(differs > dl * 0.9, "a new seed is a new scramble");
+});
+
+test("scatterSource wraps inside a region rather than leaving it", () => {
+  const start = 300, dl = 200, reach = scatterReach(0xf, dl);
+  for (let i = start; i < start + dl; i++) {
+    const src = scatterSource(i, start, dl, reach, 0xabcdef);
+    assert.ok(src >= start && src < start + dl, `byte ${i} left the region (${src})`);
+  }
+});
+
+test("$F spreads over the whole domain, $C stays local", () => {
+  const dl = 4096;
+  const spread = (op) => {
+    let far = 0;
+    const reach = scatterReach(op, dl);
+    for (let i = 0; i < dl; i++) {
+      far = Math.max(far, Math.abs(travel(i, scatterSource(i, 0, dl, reach, 55), dl)));
+    }
+    return far;
+  };
+  assert.ok(spread(0xc) <= Math.round(dl * 0.125));
+  assert.ok(spread(0xf) > dl * 0.45, "$F leaves nothing where it was");
+});
+
+test("notefx 3 $C..$F scramble the region byte by byte, and keep scrambling", () => {
   try {
     setRandomSource(makeSeededRandom(7));
-    for (const [op, frac] of [[0xc, 0.125], [0xd, 0.25], [0xe, 0.5]]) {
+    for (const [op, frac] of [[0xc, 0.125], [0xd, 0.25], [0xe, 0.5], [0xf, 1]]) {
       const eng = makeEngine();
       loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F — whole sample, top speed
       const inst = eng.instruments[1];
       const reach = Math.round(1000 * frac);
-      // 40 rows is ~240 steps at speed $F: a random WALK would have wandered
-      // far past `reach` long before the end of that.
+      const seeds = new Set();
+      // 40 rows is ~240 steps at speed $F: nothing accumulates, so every byte
+      // is still measured from where it belongs at the end of it.
       for (let r = 0; r < 40; r++) {
         render(eng, ROW);
         assert.equal(inst.modOp, op);
-        assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= reach,
-          `op $${op.toString(16)} stayed within ${reach} of the original position`);
+        assert.equal(inst.modScatter, reach, `op $${op.toString(16)} reach`);
+        assert.equal(inst.modRot, 0, "a scatter is not a rotation");
+        seeds.add(inst.modSeed);
+        for (let i = 0; i < 1000; i += 37) {
+          const src = scatterSource(i, 0, 1000, inst.modScatter, inst.modSeed);
+          assert.ok(Math.abs(travel(i, src, 1000)) <= reach,
+            `op $${op.toString(16)}: byte ${i} stayed within ${reach} of home`);
+        }
       }
+      assert.ok(seeds.size > 30, "each step is a fresh scramble");
     }
   } finally {
     setRandomSource(null);
   }
 });
 
-test("a scatter really moves which byte is read", () => {
+test("a scatter really moves which byte is read, per byte", () => {
   try {
     setRandomSource(makeSeededRandom(99));
     const eng = makeEngine();
     loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 50% scatter, top speed
     render(eng, ROW);
     const inst = eng.instruments[1];
-    assert.ok(inst.modOn, "the displacement is live");
+    assert.ok(inst.modOn, "the scramble is live");
     assert.equal(inst.modSub, 0, "a scatter is an address transform, not a level one");
     assert.equal(inst.modMask, null, "…and keeps no inversion mask");
     const voice = eng.playheads[0].trackerState.voices[0];
     const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
-    for (const i of [0, 1, 250, 500, 999]) {
-      assert.equal(raw(i), (i + inst.modRot) % 1000 & 0xff, `byte ${i} is read from the displaced position`);
+    let moved = 0;
+    for (let i = 0; i < 1000; i++) {
+      const src = scatterSource(i, 0, 1000, inst.modScatter, inst.modSeed);
+      assert.equal(raw(i), src & 0xff, `byte ${i} is read from its own displaced position`);
+      if (src !== i) moved++;
     }
+    assert.ok(moved > 900, "the whole region is shuffled, not shifted");
   } finally {
     setRandomSource(null);
   }
 });
 
-test("switching from a rotate to a scatter restarts the displacement", () => {
+test("notefx 2 scatters everything BUT the region it names", () => {
+  try {
+    setRandomSource(makeSeededRandom(11));
+    const eng = makeEngine();
+    loadRows(eng, [[0x02, 0x31ef]]); // 2 $31EF — spare the middle third, scatter the rest
+    render(eng, ROW);
+    const inst = eng.instruments[1];
+    assert.equal(inst.modInvert, true);
+    assert.ok(inst.modScatter > 0);
+    const voice = eng.playheads[0].trackerState.voices[0];
+    const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+    for (const i of [400, 500, 600]) assert.equal(raw(i), i & 0xff, `byte ${i} is spared`);
+    let moved = 0;
+    for (let i = 0; i < 333; i++) if (raw(i) !== (i & 0xff)) moved++;
+    assert.ok(moved > 250, "the region OUTSIDE the named third is scrambled");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("switching from a rotate to a scatter discards the rotation", () => {
   try {
     setRandomSource(makeSeededRandom(3));
     const eng = makeEngine();
@@ -429,10 +518,30 @@ test("switching from a rotate to a scatter restarts the displacement", () => {
     const inst = eng.instruments[1];
     assert.equal(inst.modOp, 5);
     assert.ok(inst.modRot > 0, "the rotate accumulated");
+    assert.equal(inst.modScatter, 0);
     render(eng, TICK + 1); // into row 1: the operation changes
     assert.equal(inst.modOp, 0xc);
-    assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= 125,
-      "the ROL's offset was discarded rather than scattered from");
+    assert.equal(inst.modRot, 0, "the ROL's offset is gone, not scattered from");
+    render(eng, TICK); // …and the first scatter step lands
+    assert.equal(inst.modScatter, 125);
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$x = 0 clears the scatter with everything else", () => {
+  try {
+    setRandomSource(makeSeededRandom(5));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0fff], [0x03, 0x0f0f]]);
+    render(eng, ROW - TICK);
+    assert.ok(eng.instruments[1].modScatter > 0);
+    render(eng, TICK + 1);
+    const inst = eng.instruments[1];
+    assert.equal(inst.modOp, 0);
+    assert.equal(inst.modScatter, 0);
+    assert.equal(inst.modSeed, 0);
+    assert.equal(inst.modOn, false);
   } finally {
     setRandomSource(null);
   }

@@ -13,7 +13,7 @@ import {
   PITCH_GLIDE_FULL_RATIO,
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
-import { modTouches } from "./samplemod.js";
+import { modTouches, scatterSource } from "./samplemod.js";
 
 /**
  * Active-sample-aware playback rate (patch-aware via the voice snapshot).
@@ -52,15 +52,21 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
     const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
     if (ee > es) {
       touched = modTouches(inst, i, es, ee);
-      if (touched && inst.modRot !== 0) {
+      if (touched && (inst.modScatter > 0 || inst.modRot !== 0)) {
         // An inverted region's touched set reaches both ends of the sample, so
-        // that is the span the rotation wraps in; a plain region wraps in itself.
+        // that is the span the address transform wraps in; a plain region wraps
+        // in itself. ROL moves every byte by the SAME offset, a scatter draws
+        // one per byte — only one of the two can be live.
         const ds = inst.modInvert ? 0 : es;
         const dl = inst.modInvert ? sampleLen : ee - es;
         if (dl > 1) {
-          let k = (i - ds + inst.modRot) % dl;
-          if (k < 0) k += dl;
-          i = ds + k;
+          if (inst.modScatter > 0) {
+            i = scatterSource(i, ds, dl, inst.modScatter, inst.modSeed);
+          } else {
+            let k = (i - ds + inst.modRot) % dl;
+            if (k < 0) k += dl;
+            i = ds + k;
+          }
         }
       }
     }

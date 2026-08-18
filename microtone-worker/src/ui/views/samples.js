@@ -13,6 +13,7 @@ import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
+import { scatterSource } from "../../engine/samplemod.js";
 import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
@@ -318,8 +319,9 @@ export class SamplesView {
     // Live sample-modification overlay: the funk repeat's per-instrument XOR
     // mask (S$Fx, and notefx 2/3's FUNK operation) flips bytes by 0xFF and
     // persists like ProTracker's destructive EFx; notefx 2/3 can also rotate a
-    // region's bytes or slide their level. Everything the modifications touch
-    // — inverted, moved or shifted — is drawn in the funk colour. (taut.js)
+    // region's bytes, scatter them one by one, or slide their level. Everything
+    // the modifications touch — inverted, moved or shifted — is drawn in the
+    // funk colour. (taut.js)
     const audio = this.store.audio;
     let funkMask = null;
     let mod = null;
@@ -351,10 +353,16 @@ export class SamplesView {
     const byteAt = (p, base = s.ptr) => {
       let src = p;
       const hit = modLive && touches(p);
-      if (hit && mod.rot) {
+      if (hit && (mod.scatter > 0 || mod.rot)) {
         const ds = mod.invert ? 0 : modStart;
         const dl = mod.invert ? s.len : modEnd - modStart;
-        if (dl > 1) src = ds + (((p - ds + mod.rot) % dl) + dl) % dl;
+        if (dl > 1) {
+          // The scatter throws every byte its own way, so the picture has to be
+          // drawn through the engine's own mapping rather than one offset.
+          src = mod.scatter > 0
+            ? scatterSource(p, ds, dl, mod.scatter, mod.seed)
+            : ds + (((p - ds + mod.rot) % dl) + dl) % dl;
+        }
       }
       let v = bin[base + src];
       let flipped = src !== p;
