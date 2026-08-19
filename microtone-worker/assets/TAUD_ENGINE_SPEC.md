@@ -43,8 +43,8 @@ A host whose output is at another rate **MAY** run the engine at that rate inste
 | Playback rate ([§3.2](#3-2-playback-rate)) | `sampling_rate ÷ rate` |
 | Ramp-out on sample end/cut ([§12](#12-output-stage)) | 8 ms — 256 samples at 32 kHz |
 | Volume-change ramp ([§12](#12-output-stage)) | 2 ms — 64 samples at 32 kHz |
-| Attack ramp-in on fresh trigger ([§8.6](#8-6-the-attack-ramp)) | ~⅔ ms — 21 samples at 32 kHz |
-| Pitch glide ([§8.7](#8-7-the-pitch-glide)) | One tick, shortened by the interval; floor is the attack ramp |
+| Attack ramp-in on fresh trigger ([§8.6](#8-7-the-attack-ramp)) | ~⅔ ms — 21 samples at 32 kHz |
+| Pitch glide ([§8.7](#8-8-the-pitch-glide)) | One tick, shortened by the interval; floor is the attack ramp |
 | Voice filter coefficients ([§9](#9-filters)) | `rate` in §9's formulae is the running rate, so the cutoff clamp rises with it |
 | Amiga LPF / LED coefficients ([§10.4](#10-4-the-post-mix-amiga-chain)) | Recomputed at the running rate, so both corners stay at their analogue frequencies (4420.971 Hz, 3090.533 Hz) |
 
@@ -121,7 +121,7 @@ playback_rate = (sampling_rate ÷ rate)
 
 where `sampling_rate` and `detune` come from the voice's **active sample** — the base instrument record, or the Ixmp patch this trigger resolved to ([§5.4](#5-4-patch-resolution)). `note` is the final per-tick pitch after slides, arpeggio, vibrato and the pitch envelope.
 
-Because that pitch is a per-*tick* quantity and the sample position advances per *sample*, the rate computed here is a **target**: what the sampler actually steps by glides toward it ([§8.7](#8-7-the-pitch-glide)).
+Because that pitch is a per-*tick* quantity and the sample position advances per *sample*, the rate computed here is a **target**: what the sampler actually steps by glides toward it ([§8.7](#8-8-the-pitch-glide)).
 
 ### 3.3 Song tuning
 
@@ -269,7 +269,7 @@ Triggering a note **MUST**:
 - Set the sample position to the active play start and the direction to forward.
 - Reset the volume and pan envelope playheads to node 0 and snap the per-sample smoothed envelope value, so an attack lands on node 0 immediately rather than gliding into it.
 - Seed the pitch and filter envelope playheads past any leading zero-duration nodes ([§7.3](#7-3-the-pitch-and-filter-walker)).
-- Reset the fadeout multiplier to 1, cancel any sample-end ramp, arm the attack ramp ([§8.6](#8-6-the-attack-ramp)), reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
+- Reset the fadeout multiplier to 1, cancel any sample-end ramp, arm the attack ramp ([§8.6](#8-7-the-attack-ramp)), reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
 - Draw fresh volume- and pan-swing biases.
 - Apply the instrument's default position and pitch-pan separation, if the row carried an instrument byte ([§5.3.1](#5-3-1-the-default-position)).
 - Reset the filter to the active defaults and clear its delay lines.
@@ -505,7 +505,9 @@ An instrument with the key-lift flag treats key-off as a true MIDI key release: 
 
 Sample data is unsigned 8-bit with `0x80` as zero; a byte converts to `(b − 127.5) ÷ 127.5`. Reads clamp the index into the sample and clamp the pool address into the 8 MiB pool, so a malformed pointer cannot read out of bounds.
 
-If the instrument has an active **funk-repeat** mask ([§8.4](#8-4-funk-repeat)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `0xFF` before conversion.
+If the instrument has an active **funk-repeat** mask ([§8.4](#8-4-invert-loop)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `0xFF` before conversion.
+
+A live **sample modification** ([§8.5](#8-5-sample-modifications)) may additionally move *which* byte this read takes and change its value; [§8.5](#8-5-sample-modifications) fixes the order the two features compose in.
 
 ### 8.2 Loop modes
 
@@ -539,19 +541,57 @@ The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225,
 
 SNES and NES DPCM modes carry per-voice state (the DPCM counter), and a stereo voice keeps a separate counter per channel.
 
-### 8.4 Funk repeat
+### 8.4 Invert loop
 
-`S $Fx` engages ProTracker's "funk repeat": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
+`S $Fx` engages ProTracker's "invert loop": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
 
 The loop the mask covers is the **active** one — an Ixmp patch replaces the base record's loop points, and the mask is sized and indexed against whichever loop the voice is actually sounding.
 
 The mask is instrument-scope runtime state and **MUST** be cleared on a transport reset, or a replay will start from a scrambled sample.
 
-### 8.5 The sample-end ramp
+### 8.5 Sample modifications
+
+Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modification to part of a sample. The argument encoding, the region selectors and the operation ladder belong to the **Note Effects** reference; what the sampler owes them is the read-time contract below. `3` names the region to modify and `2` names the region to spare — the inversion is the only difference between the opcodes, and it applies to the region *and* its comb.
+
+**State.** An instrument carries **one** modification: an operation, a region (extent plus optional comb), and whatever that operation has accumulated. Writing either opcode replaces it, and changing the operation, the region or the inversion **MUST** discard the accumulated state — a rotation offset means nothing to a subtract. Re-stating the *same* command **MUST NOT** discard anything, or a command repeated down a pattern would never get past its first step. The **speed** driving the modification is per voice, so the state is shared but the clock is not: N voices sounding one instrument step its modification N times per tick.
+
+**The step clock** is invert loop's, exactly: each tick the voice adds its speed to an accumulator, and on reaching `0x80` the accumulator resets and the operation steps once. Speed `0` freezes the modification without discarding it.
+
+**The touch test.** A modification touches sample byte `i` when `i` lies inside the extent and inside a comb run; effect `2` inverts that answer. Only touched bytes are transformed.
+
+**The read order** at position `i`, replacing the plain fetch of [§8.1](#8-1-reading-a-sample):
+
+1. Clamp `i` into the sample.
+2. If the modification is live and touches `i`, apply its **address** transform, wrapping the result into the domain below. `i` now names a different byte.
+3. Read the pool byte at `i`.
+4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
+5. If the touch test of step 2 passed, apply the modification's **value** transform.
+6. Convert to `(b − 127.5) ÷ 127.5`.
+
+Two positions are in play and an engine **MUST NOT** confuse them: the **touch test** is evaluated at the byte's *original* position, because that is where the region and comb are defined, while the pool read and the `S $Fx` mask use the position the address transform *moved to*. The modification's own address and value transforms never both fire — one operation is live at a time.
+
+**The wrap domain** is the region for effect `3` and the **whole sample** for effect `2`, whose touched set reaches both ends.
+
+| Kind | Operations | Transform |
+|---|---|---|
+| Address, uniform | rotate, jump | Every touched byte moves by the *same* offset |
+| Address, per byte | scatter | Every touched byte moves by its *own* offset |
+| Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
+| Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
+
+**Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh bounded draw, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
+
+**Scatter's per-byte offset MUST be a pure function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolation tap and through both channels of a stereo sample; an engine that draws afresh per read smears every setting into the same white noise. The reference engine draws one 32-bit seed per step and hashes it with the index. The mapping need not be a permutation: a source byte may be read twice and another not at all.
+
+**Interpolation is unchanged.** Every tap of [§8.3](#8-3-interpolation) goes through the read order above, so the modification is heard through the same kernel the unmodified sample would be — as if the transformed bytes had been written into the pool. A scatter whose reach is wide next to the sample's own period therefore reads back band-limited and several decibels quieter, because the kernel is averaging bytes that no longer correlate. That is the correct result and an engine **MUST NOT** compensate for it.
+
+**Nothing is ever written to the pool.** The modification is instrument-scope runtime state: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on a transport reset alongside the invert-loop mask, or a replay begins from a scrambled sample.
+
+### 8.6 The sample-end ramp
 
 When a voice reaches the end of a non-looping sample, or the volume envelope's cut rule fires, the engine engages an **8 ms linear ramp-out** (256 samples at the reference rate) rather than stopping instantly. During the ramp the sample position is held and the emitted value decays to zero, and the voice deactivates when the ramp completes. Re-engaging a ramp already in progress is a no-op, and a fresh trigger cancels any pending ramp so an attack is never muted by a stale one.
 
-### 8.6 The attack ramp
+### 8.7 The attack ramp
 
 A fresh trigger arms a countdown that feeds the same per-voice `ramp_gain` the sample-end ramp uses ([§10.2](#10-2-the-gain-chain)); the two multiply together when both are active, which only happens when a note is cut again inside its own attack. Where the sample-end ramp decays **linearly**, the attack ramp rises on a **half-cosine** curve:
 
@@ -563,7 +603,7 @@ ramp_gain = 0.5 − 0.5 × cos(π × i ÷ n)
 
 A fresh trigger always re-arms the ramp at length `n`, even when the previous note's own attack ramp on that voice was still counting down — a trigger is a hard restart, so there is no "already ramping" case to no-op against, unlike the sample-end ramp. An NNA ghost spawned while its source voice's attack ramp is still running **MUST** inherit the remaining count rather than restart it or skip straight to unity gain: either alternative reproduces, at the hand-off, the exact click this ramp exists to prevent.
 
-### 8.7 The pitch glide
+### 8.8 The pitch glide
 
 Everything that moves a voice's pitch — slides, tone portamento, arpeggio, both vibratos, the pitch envelope — is evaluated **once per tick**, while the sample position advances **every sample**. Stepping `playback_rate` at the tick boundary therefore turns a smooth modulation into a staircase of 50 steps a second, which is audible on a sustained note as a rasp riding the vibrato. The engine keeps two rates instead: the tick writes a **target**, and the sampler steps by a **current** rate that glides toward it.
 
@@ -668,7 +708,7 @@ global    = (song_global_volume ÷ 255) × (mixing_volume ÷ 255) × master_volu
 sample_out = sample × per_voice × global × pan_gain × ramp_gain
 ```
 
-`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **2 ms linear ramp** (64 samples at the reference rate), which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so a note's own target volume is reached immediately — the separate `ramp_gain` factor ([§8.6](#8-6-the-attack-ramp)) is what shapes the very start of the attack instead.
+`current_mix_volume` chases `(row_volume ÷ 63) × (channel_volume ÷ 63)` over a **2 ms linear ramp** (64 samples at the reference rate), which is what keeps volume-column edits from clicking. A fresh trigger **snaps** it instead of ramping, so a note's own target volume is reached immediately — the separate `ramp_gain` factor ([§8.6](#8-7-the-attack-ramp)) is what shapes the very start of the attack instead.
 
 The envelope volume is likewise smoothed per sample: at each tick the engine computes a slope `(new_envelope_value − current) ÷ samples_per_tick` and adds it once per frame. Without this, a 50 Hz envelope staircase is audible on sustained material.
 
