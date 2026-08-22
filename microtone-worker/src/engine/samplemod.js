@@ -43,18 +43,21 @@ export const REGION_COMB = 2;
 //
 // Item 152 added the two random families, which share the ROL ladder's address
 // transform and differ in what they apply it to. JUMP ($A $B) throws the WHOLE
-// region to a new offset each step, within 50 / 100% of the wrap domain: the
-// waveform arrives intact, somewhere else — a randomised `O $xxyy`, one draw a
-// step. SCATTER ($C..$F) throws EVERY BYTE its own way within 12.5 / 25 / 50 /
-// 100%: the region is shuffled rather than moved, which is why $F, drawing from
-// the whole domain, leaves nothing where it was.
+// region to a new offset each step — the waveform arrives intact, somewhere
+// else, a randomised `O $xxyy`, one draw a step. Both reach the whole domain
+// and they differ in GRAIN: $A lands only on eighths of it, so a one-bar drum
+// loop is re-dealt a slice at a time and every throw lands where a hit starts;
+// $B lands anywhere, mid-transient included. SCATTER ($C..$F) throws EVERY BYTE
+// its own way within 12.5 / 25 / 50 / 100%: the region is shuffled rather than
+// moved, which is why $F, drawing from the whole domain, leaves nothing where
+// it was.
 export const MOD_OFF = 0x0;
 export const MOD_FUNK = 0x1;
 export const MOD_ROL1 = 0x2;
 export const MOD_ROL8 = 0x5;
 export const MOD_SUB2 = 0x6;
 export const MOD_SUB128 = 0x9;
-export const MOD_JUMP50 = 0xa;
+export const MOD_JUMP8 = 0xa;
 export const MOD_JUMP_ALL = 0xb;
 export const MOD_RND12 = 0xc;
 export const MOD_RND_ALL = 0xf;
@@ -66,9 +69,9 @@ export const MOD_MAX = MOD_RND_ALL;
 export const MOD_STEP = Object.freeze(
   [0, 0, 1, 2, 4, 8, 2, 8, 32, 128, 0, 0, 0, 0, 0, 0]);
 
-/** JUMP reach as a fraction of the wrap domain, by op − MOD_JUMP50. The WHOLE
- *  region is thrown this far, in one piece. */
-export const MOD_JUMP_FRAC = Object.freeze([0.5, 1]);
+/** How many equal slices $A quantises its throw to. Eight is a bar of eighths,
+ *  which is what makes the throw land where a drum loop's hits start. */
+export const MOD_JUMP_SLICES = 8;
 
 /** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND12. Each BYTE
  *  is thrown this far, independently of its neighbours. */
@@ -76,14 +79,21 @@ export const MOD_SCATTER_FRAC = Object.freeze([0.125, 0.25, 0.5, 1]);
 
 export const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
 export const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
-export const isJumpOp = (op) => op >= MOD_JUMP50 && op <= MOD_JUMP_ALL;
+export const isJumpOp = (op) => op >= MOD_JUMP8 && op <= MOD_JUMP_ALL;
 export const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
 
 /**
  * One JUMP step's displacement ($A $B): a single offset for the whole region,
  * drawn afresh from its ORIGINAL position every step rather than added to the
- * last one. Bounded, so `$A` paces around home and `$B` goes anywhere; a random
- * WALK would have made the two the same effect arriving at different speeds.
+ * last one — a random WALK would have made the two the same effect arriving at
+ * different speeds. Both draw from the whole domain; the difference is where
+ * they are allowed to land.
+ *
+ * `$A` QUANTISES to eighths of the domain. That is the difference between a
+ * beat repeat and a glitch: a one-bar loop cut into eight lands every throw on
+ * a hit rather than in the middle of one, so what comes back is the loop
+ * re-ordered, still in time. `$B` is the free throw — anywhere, transients
+ * included.
  *
  * Read back through the same transform ROL uses (the region moves as one
  * piece), so what comes out is the sample intact and re-seated — which is the
@@ -91,12 +101,14 @@ export const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
  */
 export function jumpRot(op, domainLen) {
   if (domainLen < 2) return 0;
-  const frac = MOD_JUMP_FRAC[op - MOD_JUMP50];
-  if (frac === undefined) return 0;
-  if (frac >= 1) return Math.min(Math.floor(random() * domainLen), domainLen - 1);
-  const reach = Math.max(1, Math.round(domainLen * frac));
-  const d = Math.round((random() * 2 - 1) * reach) % domainLen;
-  return d < 0 ? d + domainLen : d;
+  if (op === MOD_JUMP8) {
+    // Round the slice, don't truncate it: a 1000-byte domain slices at 125, and
+    // the 8th slice would otherwise drift a byte further from home each time.
+    const slice = Math.max(1, Math.round(domainLen / MOD_JUMP_SLICES));
+    return (Math.min(Math.floor(random() * MOD_JUMP_SLICES), MOD_JUMP_SLICES - 1) * slice) % domainLen;
+  }
+  if (op !== MOD_JUMP_ALL) return 0;
+  return Math.min(Math.floor(random() * domainLen), domainLen - 1);
 }
 
 /**

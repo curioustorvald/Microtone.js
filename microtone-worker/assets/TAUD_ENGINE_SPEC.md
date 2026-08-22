@@ -574,12 +574,14 @@ Two positions are in play and an engine **MUST NOT** confuse them: the **touch t
 
 | Kind | Operations | Transform |
 |---|---|---|
-| Address, uniform | rotate, jump | Every touched byte moves by the *same* offset |
+| Address, uniform | rotate, jump | Every touched byte moves by the *same* offset. One jump spelling quantises that offset to a whole eighth of the domain, so a loop cut to the bar is re-dealt a slice at a time |
 | Address, per byte | scatter | Every touched byte moves by its *own* offset |
 | Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
 | Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
 
-**Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh bounded draw, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
+**Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh draw over the whole domain, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
+
+Where a jump spelling **quantises** its draw, the quantum is `round(domain_length ÷ n)` — **rounded**, not truncated, so the last slice boundary sits where the fraction says it does instead of a little short of it, and the error does not accumulate across the domain.
 
 **Scatter's per-byte offset MUST be a pure function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolation tap and through both channels of a stereo sample; an engine that draws afresh per read smears every setting into the same white noise. The reference engine draws one 32-bit seed per step and hashes it with the index. The mapping need not be a permutation: a source byte may be read twice and another not at all.
 

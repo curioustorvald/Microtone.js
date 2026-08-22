@@ -12,7 +12,7 @@ import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
   decodeSampleRegion, inCombRun, FUNK_SPEED_TABLE, MOD_STEP, MOD_MAX,
-  MOD_SCATTER_FRAC, MOD_JUMP_FRAC, MOD_JUMP50, MOD_RND12, MOD_RND_ALL,
+  MOD_SCATTER_FRAC, MOD_JUMP_SLICES, MOD_JUMP8, MOD_JUMP_ALL, MOD_RND12, MOD_RND_ALL,
   isJumpOp, isRndOp, jumpRot, scatterReach, scatterSource,
   REGION_NONE, REGION_SET, REGION_COMB,
 } from "../../src/engine/samplemod.js";
@@ -85,7 +85,7 @@ test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
   // Item 152 spent $A..$F on the two random families: $A/$B throw the region,
   // $C..$F throw its bytes. No operation nibble is reserved any more.
   assert.equal(MOD_MAX, 0xf);
-  assert.deepEqual([...MOD_JUMP_FRAC], [0.5, 1]);
+  assert.equal(MOD_JUMP_SLICES, 8);
   assert.deepEqual([...MOD_SCATTER_FRAC], [0.125, 0.25, 0.5, 1]);
   assert.deepEqual([0x9, 0xa, 0xb, 0xc].map(isJumpOp), [false, true, true, false]);
   assert.deepEqual([0xb, 0xc, 0xf].map(isRndOp), [false, true, true]);
@@ -558,21 +558,68 @@ test("$x = 0 clears the scatter with everything else", () => {
 // waveform survives intact and lands somewhere else. Same read transform the
 // ROLs use — a rotation whose step is thrown rather than fixed.
 
-test("jumpRot stays inside its fraction of the domain, whatever the draw", () => {
+test("$A lands only on eighths of the domain, and on all eight of them", () => {
   const dl = 1000;
+  const slice = dl / MOD_JUMP_SLICES;
   try {
     setRandomSource(makeSeededRandom(0xbeef));
-    const reach = Math.round(dl * 0.5);
-    let sawNear = false;
+    const seen = new Set();
     for (let n = 0; n < 4000; n++) {
-      const d = Math.abs(signedRot(jumpRot(MOD_JUMP50, dl), dl));
-      assert.ok(d <= reach, `$A: |${d}| must be <= ${reach}`);
-      if (d > reach * 0.9) sawNear = true;
+      const d = jumpRot(MOD_JUMP8, dl);
+      assert.equal(d % slice, 0, `$A: ${d} is not a whole slice of ${slice}`);
+      seen.add(d);
     }
-    assert.ok(sawNear, "$A uses its whole reach");
+    assert.deepEqual([...seen].sort((a, b) => a - b),
+      [0, 125, 250, 375, 500, 625, 750, 875], "every slice is reachable, home included");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$A reaches the whole domain — it is quantised, not narrowed", () => {
+  const dl = 1000;
+  try {
+    setRandomSource(makeSeededRandom(1234));
     let far = 0;
-    for (let n = 0; n < 4000; n++) far = Math.max(far, Math.abs(signedRot(jumpRot(0xb, dl), dl)));
+    for (let n = 0; n < 4000; n++) far = Math.max(far, Math.abs(signedRot(jumpRot(MOD_JUMP8, dl), dl)));
+    assert.ok(far >= 500, `$A reaches the far side of the domain (${far})`);
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$B is the free throw: anywhere, off the slice grid", () => {
+  const dl = 1000;
+  const slice = dl / MOD_JUMP_SLICES;
+  try {
+    setRandomSource(makeSeededRandom(0xf00d));
+    let far = 0, offGrid = 0;
+    for (let n = 0; n < 4000; n++) {
+      const d = jumpRot(MOD_JUMP_ALL, dl);
+      far = Math.max(far, Math.abs(signedRot(d, dl)));
+      if (d % slice !== 0) offGrid++;
+    }
     assert.ok(far > dl * 0.45, "$B draws from the whole domain");
+    assert.ok(offGrid > 3900, "…and is not on the eighth grid");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$A slices a domain that does not divide by eight without drifting", () => {
+  // 1007 / 8 = 125.875 → a rounded slice of 126; truncating would put the last
+  // slice 7 bytes short of where the eighth boundary really is.
+  const dl = 1007;
+  try {
+    setRandomSource(makeSeededRandom(5));
+    const seen = new Set();
+    for (let n = 0; n < 2000; n++) {
+      const d = jumpRot(MOD_JUMP8, dl);
+      assert.ok(d >= 0 && d < dl, `${d} stays inside the domain`);
+      assert.equal(d % 126, 0);
+      seen.add(d);
+    }
+    assert.equal(seen.size, 8);
   } finally {
     setRandomSource(null);
   }
@@ -580,7 +627,7 @@ test("jumpRot stays inside its fraction of the domain, whatever the draw", () =>
 
 test("jumpRot is safe on a domain too short to displace", () => {
   for (const dl of [0, 1]) {
-    for (const op of [MOD_JUMP50, 0xb]) assert.equal(jumpRot(op, dl), 0);
+    for (const op of [MOD_JUMP8, MOD_JUMP_ALL]) assert.equal(jumpRot(op, dl), 0);
   }
 });
 
@@ -594,7 +641,9 @@ test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => 
       const inst = eng.instruments[1];
       assert.equal(inst.modOp, op);
       assert.equal(inst.modScatter, 0, "a jump is not a shuffle");
-      assert.ok(inst.modOn);
+      // $A can draw slice 0 — landing at home is one of its eight outcomes, and
+      // the guard has to agree with the offset rather than assume it moved.
+      assert.equal(inst.modOn, inst.modRot !== 0);
       const voice = eng.playheads[0].trackerState.voices[0];
       const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
       // EVERY byte moves by the SAME offset — that is what keeps the sound.
@@ -608,20 +657,20 @@ test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => 
   }
 });
 
-test("$A never wanders past its half, however long it runs", () => {
+test("$A stays on the slice grid however long it runs", () => {
   try {
     setRandomSource(makeSeededRandom(4));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0faf]]); // 3 $0FAF — whole sample, 50% jump, top speed
+    loadRows(eng, [[0x03, 0x0faf]]); // 3 $0FAF — whole sample, sliced jump, top speed
     const inst = eng.instruments[1];
     const seen = new Set();
     for (let r = 0; r < 40; r++) {
       render(eng, ROW);
-      assert.ok(Math.abs(signedRot(inst.modRot, 1000)) <= 500,
-        "each throw is measured from home, not from the last one");
+      assert.equal(inst.modRot % 125, 0,
+        "every throw is measured from home in whole slices, not added to the last");
       seen.add(inst.modRot);
     }
-    assert.ok(seen.size > 30, "and it really is a fresh throw each step");
+    assert.ok(seen.size >= 6, `and it really is a fresh throw each step (${seen.size} of 8 slices)`);
   } finally {
     setRandomSource(null);
   }
