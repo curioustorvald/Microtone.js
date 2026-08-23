@@ -590,17 +590,22 @@ export class TaudEngine {
   /**
    * The instrument's live sample modification (item 130), for the sample view's
    * overlay: the operation, which side of the region it works on, the region as
-   * [start, end, combShift] with -1 meaning "the sample's own loop", and
-   * whatever the operation has accumulated. Plain numbers — the reply crosses a
-   * postMessage. The MOD_FUNK bit-mask travels with it as `modMask`.
+   * a FRACTION pair plus its comb (item 153), and whatever the operation has
+   * accumulated. Plain numbers — the reply crosses a postMessage. The MOD_FUNK
+   * bit-mask travels with it as `modMask`.
+   *
+   * Field names are the instrument's own, so the reply can be handed straight
+   * to resolveModGeom / modTouches: the view draws the modification through the
+   * engine's geometry rather than a re-implementation of it.
    */
   getInstrumentSampleMod(slot) {
     const inst = this.instruments[slot & 0x3ff];
     return {
-      op: inst.modOp, invert: inst.modInvert,
-      start: inst.modStart, end: inst.modEnd, comb: inst.modComb,
-      rot: inst.modRot, sub: inst.modSub, on: inst.modOn,
-      scatter: inst.modScatter, seed: inst.modSeed,
+      modOp: inst.modOp, modInvert: inst.modInvert,
+      modFrom: inst.modFrom, modTo: inst.modTo,
+      modCombBits: inst.modCombBits, modCombOdd: inst.modCombOdd,
+      modRot: inst.modRot, modSub: inst.modSub, modOn: inst.modOn,
+      modScatter: inst.modScatter, modSeed: inst.modSeed, modEpoch: inst.modEpoch,
     };
   }
 

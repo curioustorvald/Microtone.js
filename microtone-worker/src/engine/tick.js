@@ -22,7 +22,8 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
-  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, isRolOp, isJumpOp, isRndOp, modTouches,
+  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, MOD_XFADE_SAMPLES,
+  isRolOp, isJumpOp, isRndOp, modTouches, resolveModGeom,
   jumpRot, scatterReach, scatterSeed,
 } from "./samplemod.js";
 import {
@@ -31,6 +32,23 @@ import {
 
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
+
+/**
+ * Arm the anti-click crossfade on every voice sounding `instId` (item 153.5).
+ * The modification is instrument-scope, so one channel's step is heard by every
+ * voice bound to that instrument — NNA ghosts and layer children included — and
+ * each needs its own countdown because each is at its own point in its own
+ * output. The state being faded FROM is the instrument's (one snapshot, taken
+ * where the step is made), so this is a counter and nothing else.
+ */
+function armModXfade(ts, instId) {
+  for (const v of ts.voices) {
+    if (v.active && v.instrumentId === instId) v.modXfade = MOD_XFADE_SAMPLES;
+  }
+  for (const bg of ts.backgroundVoices) {
+    if (bg.active && bg.instrumentId === instId) bg.modXfade = MOD_XFADE_SAMPLES;
+  }
+}
 
 export function applyTrackerTick(eng, ts, playhead) {
   const tickSec = 2.5 / playhead.bpm;
@@ -368,42 +386,44 @@ export function applyTrackerTick(eng, ts, playhead) {
   }
 
   // Sample modification (notefx 2 / 3) — one step of the instrument's live
-  // operation per accumulator overflow, on the same >= $80 ladder funk repeat
-  // walks (item 130).
+  // operation every $y ticks (item 153.1: $F every tick, $1 every fifteenth),
+  // counted per channel because the clock is the channel's and the operation
+  // the instrument's.
   for (const voice of ts.voices) {
-    if (voice.modSpeed === 0 || !voice.active) continue;
+    if (voice.modPeriod === 0 || !voice.active) continue;
     const inst = eng.instruments[voice.instrumentId];
     if (inst.modOp === MOD_OFF) continue;
-    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
-    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
-    if (ee <= es) continue;
-    voice.modAccumulator += voice.modSpeed;
-    if (voice.modAccumulator < 0x80) continue;
-    voice.modAccumulator = 0;
     const sampleLen = Math.max(voice.activeSampleLength, 1);
+    const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
+      voice.activeSampleLoopEnd, sampleLen);
+    if (!g.live) continue;
+    if (++voice.modTickCount < voice.modPeriod) continue;
+    voice.modTickCount = 0;
     const step = MOD_STEP[inst.modOp];
     if (inst.modOp === MOD_FUNK) {
       // Walk to the next byte the region actually touches and flip it. An
       // inverted region can exclude a long stretch, so the scan is bounded —
-      // past MOD_WALK_SCAN misses this step simply does not land.
-      const span = inst.modInvert ? sampleLen : ee - es;
-      const base = inst.modInvert ? 0 : es;
+      // past MOD_WALK_SCAN misses this step simply does not land. One byte is
+      // not a discontinuity, so this is the one operation with no crossfade.
       for (let n = 0; n < MOD_WALK_SCAN; n++) {
-        voice.modWritePos = (voice.modWritePos + 1) % Math.max(span, 1);
-        const i = base + voice.modWritePos;
-        if (modTouches(inst, i, es, ee)) { inst.toggleModBit(i, sampleLen); break; }
+        voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
+        const i = g.ds + voice.modWritePos;
+        if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
       }
-    } else if (isRolOp(inst.modOp)) {
-      const dl = inst.modInvert ? sampleLen : ee - es;
-      if (dl > 1) {
-        inst.modRot = (inst.modRot + step) % dl;
-        inst.modOn = inst.modRot !== 0;
-      }
+      continue;
+    }
+    // Everything else replaces a mapping wholesale, so the voices sounding this
+    // instrument crossfade out of the old one rather than cutting to the new
+    // (item 153.5).
+    inst.snapshotModState();
+    if (isRolOp(inst.modOp)) {
+      inst.modRot = (inst.modRot + step) % g.dl;
+      inst.modOn = inst.modRot !== 0;
     } else if (isJumpOp(inst.modOp)) {
       // Jump (item 152): the ROL displacement, thrown instead of stepped. One
       // offset for the whole region, measured from home rather than from the
       // last throw, so $A paces around it instead of wandering off.
-      inst.modRot = jumpRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
+      inst.modRot = jumpRot(inst.modOp, g.dl);
       inst.modOn = inst.modRot !== 0;
     } else if (isRndOp(inst.modOp)) {
       // Scatter (item 152): one new scramble of the whole region per step. The
@@ -411,14 +431,14 @@ export function applyTrackerTick(eng, ts, playhead) {
       // many bytes it rearranges, and each is measured from where its byte
       // really belongs — nothing accumulates, so $C stays within its 12.5%
       // however long the effect runs.
-      const dl = inst.modInvert ? sampleLen : ee - es;
-      inst.modScatter = scatterReach(inst.modOp, dl);
+      inst.modScatter = scatterReach(inst.modOp, g.dl);
       inst.modSeed = scatterSeed();
       inst.modOn = inst.modScatter > 0;
     } else {
       inst.modSub = (inst.modSub + step) & 0xff;
       inst.modOn = inst.modSub !== 0;
     }
+    armModXfade(ts, voice.instrumentId);
   }
 
   // Background (NNA-ghost) voices: passive maintenance only.

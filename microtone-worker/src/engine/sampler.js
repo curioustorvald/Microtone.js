@@ -13,7 +13,9 @@ import {
   PITCH_GLIDE_FULL_RATIO,
 } from "./constants.js";
 import { sincTap, SNES_GAUSS } from "./tables.js";
-import { modTouches, scatterSource } from "./samplemod.js";
+import {
+  MOD_OFF, MOD_XFADE_SAMPLES, modTouches, modAddress, resolveModGeom,
+} from "./samplemod.js";
 
 /**
  * Active-sample-aware playback rate (patch-aware via the voice snapshot).
@@ -29,59 +31,70 @@ export function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 }
 
 /**
+ * The pool byte at `i` with S $Fxxx's own mask applied — the plain fetch of
+ * spec §8.1, and the point both halves of a sample-modification crossfade meet.
+ *
+ * Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
+ * funk mask is sized and indexed against whichever loop is sounding (item 116).
+ * The mask is tested against the byte ACTUALLY READ — a modification that moved
+ * the read moved which mask bit answers for it.
+ */
+function poolByte(eng, voice, inst, i, binMax, basePtr, ls, le) {
+  const b = eng.sampleBin[Math.min(basePtr + i, binMax)];
+  if (inst.funkMask !== null && le > ls && i >= ls && i < le && inst.funkBit(i - ls, le - ls)) {
+    return b ^ 0xff;
+  }
+  return b;
+}
+
+/**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
- * instrument's sample modifications — notefx 3's rotation (which moves WHICH
- * byte is read) and then the funk-repeat mask (which inverts the byte read).
- * Caller wraps loop regions first.
+ * instrument's sample modifications — notefx 2/3's address transform (which
+ * moves WHICH byte is read), its value transform, and the funk-repeat mask
+ * (which inverts the byte read). Caller wraps loop regions first.
  * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
  * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
  * for its right channel (both channels share the funk mask and geometry).
  *
- * Regions default to the ACTIVE loop: an Ixmp patch replaces the loop points,
- * and the funk mask is sized and indexed against whichever loop is sounding
- * (item 116). notefx 2 / 3 may point either modification somewhere else.
+ * The modification's region is resolved against the loop THIS voice is sounding
+ * (item 153) — the fractions on the instrument cut against the voice's own
+ * domain — so an Ixmp-patched voice follows its own loop (item 116) and every
+ * voice on a shared instrument hears the region its own sample defines.
  */
 export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
-  let i = Math.min(Math.max(idx, 0), sampleLen - 1);
-  // Sample modification (notefx 2 / 3). ONE operation is live at a time, so a
-  // ROL's address transform and a FUNK/SUB's value transform never meet.
-  let touched = false;
-  if (inst.modOn) {
-    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
-    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
-    if (ee > es) {
-      touched = modTouches(inst, i, es, ee);
-      if (touched && (inst.modScatter > 0 || inst.modRot !== 0)) {
-        // An inverted region's touched set reaches both ends of the sample, so
-        // that is the span the address transform wraps in; a plain region wraps
-        // in itself. ROL moves every byte by the SAME offset, a scatter draws
-        // one per byte — only one of the two can be live.
-        const ds = inst.modInvert ? 0 : es;
-        const dl = inst.modInvert ? sampleLen : ee - es;
-        if (dl > 1) {
-          if (inst.modScatter > 0) {
-            i = scatterSource(i, ds, dl, inst.modScatter, inst.modSeed);
-          } else {
-            let k = (i - ds + inst.modRot) % dl;
-            if (k < 0) k += dl;
-            i = ds + k;
-          }
-        }
-      }
-    }
-  }
-  let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
-  // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
-  // funk mask is sized and indexed against whichever loop is sounding (item 116).
+  const i0 = Math.min(Math.max(idx, 0), sampleLen - 1);
   const ls = voice.activeSampleLoopStart;
   const le = voice.activeSampleLoopEnd;
-  if (inst.funkMask !== null && le > ls) {
-    if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
+  // Nothing live and nothing fading out: the plain fetch. `modOn` alone is not
+  // the guard, because a step that lands on the identity mapping (a jump that
+  // throws to zero) still has the PREVIOUS one to fade out of.
+  if (inst.modOp === MOD_OFF || (!inst.modOn && voice.modXfade === 0)) {
+    return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
   }
-  if (touched) {
-    if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
-    else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
+  const g = resolveModGeom(voice.modGeom, inst, ls, le, sampleLen);
+  // The touch test is evaluated at the byte's ORIGINAL position — that is where
+  // the region and its comb are defined — and it does not move under a step, so
+  // both sides of the crossfade agree on which bytes are in play.
+  if (!g.live || !modTouches(g, inst.modInvert, i0)) {
+    return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
+  }
+  // ONE operation is live at a time, so an address transform and a FUNK/SUB
+  // value transform never meet.
+  const i = modAddress(g, i0, inst.modRot, inst.modScatter, inst.modSeed);
+  let b = poolByte(eng, voice, inst, i, binMax, basePtr, ls, le);
+  if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
+  else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
+  if (voice.modXfade > 0) {
+    // Anti-click crossfade (item 153.5): the mapping the last step replaced,
+    // read through the same geometry, mixed in on a falling weight. Costs one
+    // extra pool read per tap for 2 ms after each step.
+    const j = modAddress(g, i0, inst.modPrevRot, inst.modPrevScatter, inst.modPrevSeed);
+    let p = poolByte(eng, voice, inst, j, binMax, basePtr, ls, le);
+    if (inst.modMask !== null) { if (inst.modBit(j)) p = p ^ 0xff; }
+    else if (inst.modPrevSub !== 0) p = (p - inst.modPrevSub) & 0xff;
+    const w = voice.modXfade / MOD_XFADE_SAMPLES;
+    b = p * w + b * (1.0 - w);
   }
   return (b - 127.5) / 127.5;
 }
@@ -170,6 +183,7 @@ export function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
     voice.activeSamplePtr, voice);
   out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeChanPtr2, voice.right);
+  if (voice.modXfade > 0) voice.modXfade--;
   if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
   return out;
 }
@@ -182,6 +196,9 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
   const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
 
+  // The crossfade runs on the OUTPUT clock, once per sample however many taps
+  // read through it, and keeps running while the voice ramps out.
+  if (voice.modXfade > 0) voice.modXfade--;
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
   advanceSamplePos(voice, sampleLen);

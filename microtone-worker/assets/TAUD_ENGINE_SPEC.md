@@ -553,11 +553,13 @@ The mask is instrument-scope runtime state and **MUST** be cleared on a transpor
 
 Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modification to part of a sample. The argument encoding, the region selectors and the operation ladder belong to the **Note Effects** reference; what the sampler owes them is the read-time contract below. `3` names the region to modify and `2` names the region to spare — the inversion is the only difference between the opcodes, and it applies to the region *and* its comb.
 
-**State.** An instrument carries **one** modification: an operation, a region (extent plus optional comb), and whatever that operation has accumulated. Writing either opcode replaces it, and changing the operation, the region or the inversion **MUST** discard the accumulated state — a rotation offset means nothing to a subtract. Re-stating the *same* command **MUST NOT** discard anything, or a command repeated down a pattern would never get past its first step. The **speed** driving the modification is per voice, so the state is shared but the clock is not: N voices sounding one instrument step its modification N times per tick.
+**State.** An instrument carries **one** modification: an operation, a region (extent plus optional comb), and whatever that operation has accumulated. Writing either opcode replaces it, and changing the operation, the region or the inversion **MUST** discard the accumulated state — a rotation offset means nothing to a subtract. Re-stating the *same* command **MUST NOT** discard anything, or a command repeated down a pattern would never get past its first step. The **clock** driving the modification is per voice, so the state is shared but the clock is not: N voices sounding one instrument step its modification N times per tick.
 
-**The step clock** is invert loop's, exactly: each tick the voice adds its speed to an accumulator, and on reaching `0x80` the accumulator resets and the operation steps once. Speed `0` freezes the modification without discarding it.
+**The step clock** is a period in ticks: each tick the voice counts one, and on reaching `16 − $y` the count resets and the operation steps once. `$y = 0` freezes the modification without discarding it. This is deliberately *not* invert loop's accumulator ladder ([§8.4](#8-4-invert-loop)) — that table is a divisor whose steps land where the arithmetic puts them, and the jump operations are worth little off the tick grid.
 
-**The touch test.** A modification touches sample byte `i` when `i` lies inside the extent and inside a comb run; effect `2` inverts that answer. Only touched bytes are transformed.
+**The domain.** Everything the command measures is a fraction of one span, resolved **per sounding voice**: the active loop region when `loop_end > loop_start`, and the whole sample otherwise — the same test [§8.4](#8-4-invert-loop)'s mask makes. The extent is `domain_start + round(domain_length × from)` to `domain_start + round(domain_length × to)`, where `from`/`to` come from `$se`; the comb cuts *the extent* into `2^(n+1)` equal chunks and keeps the even or the odd ones. An engine **MUST** store the region as a fraction and resolve it at read time, not bake it into byte offsets when the command is written: an Ixmp patch replaces the loop points under a sounding voice ([§4.1](#4-1-the-active-view)), and a baked extent would then name bytes the voice is no longer playing.
+
+**The touch test.** A modification touches sample byte `i` when `i` lies inside the extent and inside a kept comb chunk; effect `2` inverts that answer **within the domain** and nowhere else — `2` spares its region and modifies the rest of the loop, never the rest of the file. Only touched bytes are transformed.
 
 **The read order** at position `i`, replacing the plain fetch of [§8.1](#8-1-reading-a-sample):
 
@@ -566,11 +568,12 @@ Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modificati
 3. Read the pool byte at `i`.
 4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
 5. If the touch test of step 2 passed, apply the modification's **value** transform.
-6. Convert to `(b − 127.5) ÷ 127.5`.
+6. If a step is being crossfaded (below), repeat steps 2–5 with the **previous** transform state and mix.
+7. Convert to `(b − 127.5) ÷ 127.5`.
 
 Two positions are in play and an engine **MUST NOT** confuse them: the **touch test** is evaluated at the byte's *original* position, because that is where the region and comb are defined, while the pool read and the `S $Fx` mask use the position the address transform *moved to*. The modification's own address and value transforms never both fire — one operation is live at a time.
 
-**The wrap domain** is the region for effect `3` and the **whole sample** for effect `2`, whose touched set reaches both ends.
+**The wrap domain** is the extent for effect `3` and the whole **domain** for effect `2`, whose touched set reaches both of its ends.
 
 | Kind | Operations | Transform |
 |---|---|---|
@@ -584,6 +587,8 @@ Two positions are in play and an engine **MUST NOT** confuse them: the **touch t
 Where a jump spelling **quantises** its draw, the quantum is `round(domain_length ÷ n)` — **rounded**, not truncated, so the last slice boundary sits where the fraction says it does instead of a little short of it, and the error does not accumulate across the domain.
 
 **Scatter's per-byte offset MUST be a pure function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolation tap and through both channels of a stereo sample; an engine that draws afresh per read smears every setting into the same white noise. The reference engine draws one 32-bit seed per step and hashes it with the index. The mapping need not be a permutation: a source byte may be read twice and another not at all.
+
+**A step is crossfaded, not cut.** Installing a new address or value mapping between one output sample and the next is a discontinuity, and at the fastest clock that is one per tick — audibly, a stream of clicks. An engine **SHOULD** run each step in over a short window: the reference engine keeps the state the step replaced, reads **both** mappings for 64 output samples (2 ms at the reference rate) and mixes them on a linear weight that runs on the **output** clock — one weight per output sample, shared by every interpolation tap and both channels, so the crossfade of the two mappings is exactly the crossfade of the two interpolated signals. The window costs one extra pool read per tap while it runs and nothing at all afterwards. The invert-loop operation is exempt (one flipped byte is not a discontinuity), and so is changing or clearing the command, which is a deliberate edit rather than a step.
 
 **Interpolation is unchanged.** Every tap of [§8.3](#8-3-interpolation) goes through the read order above, so the modification is heard through the same kernel the unmodified sample would be — as if the transformed bytes had been written into the pool. A scatter whose reach is wide next to the sample's own period therefore reads back band-limited and several decibels quieter, because the kernel is averaging bytes that no longer correlate. That is the correct result and an engine **MUST NOT** compensate for it.
 

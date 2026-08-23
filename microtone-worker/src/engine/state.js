@@ -512,9 +512,10 @@ export class Playhead {
       it.funkSpeed = 0;
       it.funkAccumulator = 0;
       it.funkWritePos = 0;
-      it.modSpeed = 0;
-      it.modAccumulator = 0;
+      it.modPeriod = 0;
+      it.modTickCount = 0;
       it.modWritePos = 0;
+      it.modXfade = 0;
       it.fader = 0;
       it.nnaOverride = -1;
       it.volEnvOn = true; it.panEnvOn = true; it.pitchEnvOn = true; it.filterEnvOn = true;
@@ -573,9 +574,10 @@ export class Playhead {
         it.funkSpeed = 0;
         it.funkAccumulator = 0;
         it.funkWritePos = 0;
-        it.modSpeed = 0;
-        it.modAccumulator = 0;
+        it.modPeriod = 0;
+        it.modTickCount = 0;
         it.modWritePos = 0;
+        it.modXfade = 0;
       }
     }
     for (const inst of this.parent.instruments) {

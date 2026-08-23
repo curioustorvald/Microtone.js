@@ -2151,39 +2151,53 @@ function makeAnalysisReadout() {
 }
 
 // ══ src/engine/samplemod.js ══
-// Sample-modification note effects (items 130, 152) — notefx 2 and 3, ONE command
-// with two spellings: `3` names the region to modify, `2` names the region to
-// leave alone. Both are NON-DESTRUCTIVE views over the sample pool, exactly as
-// S $Fxxx is: the state lives on the INSTRUMENT and is applied when a byte is
-// read (sampler.js readSamplePoint), so the pool itself is never written.
+// Sample-modification note effects (items 130, 152, 153) — notefx 2 and 3, ONE
+// command with two spellings: `3` names the region to modify, `2` names the
+// region to leave alone. Both are NON-DESTRUCTIVE views over the sample pool,
+// exactly as S $Fxxx is: the state lives on the INSTRUMENT and is applied when
+// a byte is read (sampler.js readSamplePoint), so the pool itself is never
+// written.
 //
 // Behavioural contract: TAUD_NOTE_EFFECTS.md §"2 $sexy and 3 $sexy".
 //
 //   $s $e   the region (see decodeSampleRegion)
 //   $x      the operation — one at a time, so an instrument carries ONE
 //           modification and writing either opcode replaces it
-//   $y      index into FUNK_SPEED_TABLE, ProTracker's own funk-speed ladder
+//   $y      the step period in TICKS: $F every tick, $E every other one, down
+//           to $1 every fifteenth; $0 freezes (see modStepPeriod)
+//
+// EVERYTHING IS RELATIVE TO THE LOOP REGION (item 153). The command's domain is
+// the sounding voice's loop when it has one and the whole sample when it does
+// not, and every selector, every comb, every wrap and every jump quantum is
+// measured against THAT — never against raw byte counts and never against the
+// base record, so an Ixmp-patched voice follows its own loop (item 116) and a
+// region written for one sample means the same thing on the next. The extent is
+// therefore stored as a FRACTION pair and resolved per voice at read time
+// (resolveModGeom), which is also what lets $A's eighths land on the eighths of
+// a bar-length loop rather than of the file that contains it.
 //
 // Region argument, decoded once here so the two spellings cannot drift apart:
 //
-//   $00        the sounding voice's LOOP region (the S $Fxxx region)
-//   $s..$e     s <= e: from s/16 to (e+1)/16 of the sample, rounded
-//              — so $0F is the whole sample and $4B the middle half
+//   $00        the whole domain — the loop region, as S $Fxxx has always meant
+//              it (same span as $0F, which is the spelling to reach for when
+//              the point is "all of it" rather than "the loop")
+//   $s..$e     s <= e: from s/16 to (e+1)/16 of the domain, rounded
+//              — so $0F is all of it and $4B the middle half
 //   $10        middle half            $20 first two thirds   $21 last two thirds
 //   $30 $31 $32  first / middle / last third
-//   $F0..$FE   COMB: keep the extent, alternate in and out of it every 2^n
-//              bytes ($F0 = every other byte, $F3 = runs of 8, $FE = 16384)
+//   $F0..$FE   COMB, even bristles: cut the extent into 2^(n+1) equal chunks
+//              and keep the 0th, 2nd, 4th… — $F0 is the first HALF, $F1 is
+//              '1-3-' of four, $FE is 32768 bristles
+//   $E0..$ED   COMB, odd bristles: the same cut keeping the 1st, 3rd, 5th…
+//              — $E0 is the second half, $E1 is '-2-4' of four
 //   otherwise (s > e)  reserved — the whole command is ignored
-//
-// The extent is stored with a -1 sentinel meaning "follow the sounding voice's
-// loop", which is what keeps an Ixmp-patched voice on its own loop (item 116).
 
 
 /** decodeSampleRegion result: nothing (reserved argument). */
 const REGION_NONE = 0;
-/** decodeSampleRegion result: out = [start, end, combShift] — a whole region. */
+/** decodeSampleRegion result: out = [from, to, combBits, combOdd] — a whole region. */
 const REGION_SET = 1;
-/** decodeSampleRegion result: out[2] = combShift only; the extent is kept. */
+/** decodeSampleRegion result: out[2..3] = the comb only; the extent is kept. */
 const REGION_COMB = 2;
 
 // ── the operations ($x) ──────────────────────────────────────────────────────
@@ -2200,9 +2214,10 @@ const REGION_COMB = 2;
 // and they differ in GRAIN: $A lands only on eighths of it, so a one-bar drum
 // loop is re-dealt a slice at a time and every throw lands where a hit starts;
 // $B lands anywhere, mid-transient included. SCATTER ($C..$F) throws EVERY BYTE
-// its own way within 12.5 / 25 / 50 / 100%: the region is shuffled rather than
-// moved, which is why $F, drawing from the whole domain, leaves nothing where
-// it was.
+// its own way, GAUSSIAN about where it belongs (item 153), out to 12.5 / 25 /
+// 50 / 100% of the domain at three sigma: the region is shuffled rather than
+// moved, and the bell is what keeps the narrow settings sounding like the
+// sample they came from instead of like a quieter version of $F.
 const MOD_OFF = 0x0;
 const MOD_FUNK = 0x1;
 const MOD_ROL1 = 0x2;
@@ -2225,9 +2240,36 @@ const MOD_STEP = Object.freeze(
  *  which is what makes the throw land where a drum loop's hits start. */
 const MOD_JUMP_SLICES = 8;
 
-/** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND12. Each BYTE
- *  is thrown this far, independently of its neighbours. */
+/** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND12. This is
+ *  the THREE-SIGMA bound of the per-byte gaussian, and its hard limit: no byte
+ *  is ever thrown further, and most land far closer to home. */
 const MOD_SCATTER_FRAC = Object.freeze([0.125, 0.25, 0.5, 1]);
+
+/** Largest comb exponent: $FE cuts the extent into 2^15 = 32768 bristles. The
+ *  odd-bristle ladder stops at $ED (16384) because $EE and $EF already read as
+ *  ordinary s <= e extents. */
+const MOD_COMB_MAX = 0xe;
+const MOD_COMB_ODD_MAX = 0xd;
+
+/**
+ * How far the funk walk may scan for the next byte the modification touches.
+ * An inverted region can exclude almost the whole domain, and the walk must
+ * not turn into a linear search for the one byte that is left — past this many
+ * misses the step simply does not land. Well above any musically useful comb.
+ */
+const MOD_WALK_SCAN = 4096;
+
+/**
+ * Anti-click crossfade, in output samples (item 153.5). Every step of an
+ * address or level transform is a discontinuity — a jump teleports the
+ * waveform, a scatter re-deals it, SUB128 inverts it — and at $y = $F that is
+ * one discontinuity per tick, which is what the clicking IS. So a step does not
+ * take effect instantly: for 2 ms the voice reads BOTH mappings and crossfades
+ * between them, which costs one extra pool read per tap for 64 samples and
+ * turns the click into a transition. Long enough to bury the edge, short enough
+ * to leave the effect its bite.
+ */
+const MOD_XFADE_SAMPLES = 64;
 
 const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
 const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
@@ -2235,11 +2277,28 @@ const isJumpOp = (op) => op >= MOD_JUMP8 && op <= MOD_JUMP_ALL;
 const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
 
 /**
+ * The step period in TICKS for speed nibble $y (item 153.1): $F every tick, $E
+ * every other tick, … $1 every fifteenth, $0 frozen.
+ *
+ * ProTracker's funk-speed ladder is gone from this command. That table is an
+ * accumulator divisor — it exists because EFx had to fit its timing into a
+ * running sum, which buys an uneven ladder whose steps land where the arithmetic
+ * puts them rather than where the bar does. Nothing here needs that compromise,
+ * and $A in particular is worth nothing without exact timing: a randomised drum
+ * loop has to re-deal itself ON the tick grid or it is not in time. (S $Fxxx
+ * keeps the historical ladder — it is ProTracker's effect and stays its own.)
+ */
+function modStepPeriod(y) {
+  return (y & 0xf) === 0 ? 0 : 16 - (y & 0xf);
+}
+
+/**
  * One JUMP step's displacement ($A $B): a single offset for the whole region,
  * drawn afresh from its ORIGINAL position every step rather than added to the
  * last one — a random WALK would have made the two the same effect arriving at
- * different speeds. Both draw from the whole domain; the difference is where
- * they are allowed to land.
+ * different speeds. Both draw from the whole domain UNIFORMLY (the bell belongs
+ * to scatter, where it decides a texture; here it would only make the throw
+ * timid); the difference is where they are allowed to land.
  *
  * `$A` QUANTISES to eighths of the domain. That is the difference between a
  * beat repeat and a glitch: a one-bar loop cut into eight lands every throw on
@@ -2264,8 +2323,8 @@ function jumpRot(op, domainLen) {
 }
 
 /**
- * How far one scatter step may throw a byte, in bytes (0 = it cannot). The
- * whole domain for `$F`, so its draw covers everything.
+ * How far one scatter step may throw a byte, in bytes (0 = it cannot) — the
+ * gaussian's three-sigma bound, so the typical throw is a third of it.
  */
 function scatterReach(op, domainLen) {
   const frac = MOD_SCATTER_FRAC[op - MOD_RND12];
@@ -2294,12 +2353,25 @@ function scatterHash(seed, i) {
   return h >>> 0;
 }
 
+/** Irwin–Hall n = 3: three 10-bit fields of one hash summed. Its span, so the
+ *  draw below can be centred and scaled without a second constant. */
+const GAUSS_SPAN = 3 * 0x3ff;
+
 /**
- * Where sample byte `i` is READ FROM under a live scatter (item 152): its own
- * position displaced by its own random amount within ±`reach`, wrapped into
+ * Where sample byte `i` is READ FROM under a live scatter (items 152, 153): its
+ * own position displaced by its own random amount, wrapped into
  * [domainStart, domainStart + domainLen). Every byte draws separately, so this
- * shuffles the region rather than moving it — `$F`, whose reach is the whole
- * domain, leaves nothing where it was.
+ * shuffles the region rather than moving it.
+ *
+ * The draw is GAUSSIAN (item 153.2), not uniform: three 10-bit slices of the
+ * one hash summed (Irwin–Hall n = 3, which is within a few percent of a normal
+ * curve and costs three ANDs), centred, and scaled so `reach` is exactly three
+ * standard deviations. A uniform draw made the four settings sound alike — every
+ * distance equally likely means even $C decorrelates its neighbours, so all four
+ * arrived at the same band-limited noise and only the loudness differed. Under
+ * the bell most bytes barely move and a few fly, which is what a granular spray
+ * actually does: $C roughens the waveform, $F forgets it, and $D and $E are
+ * genuinely between them.
  *
  * The mapping is not a permutation: a source byte may be drawn twice and
  * another not at all. Wanting one would mean shuffling an index table the size
@@ -2309,95 +2381,152 @@ function scatterHash(seed, i) {
  */
 function scatterSource(i, domainStart, domainLen, reach, seed) {
   if (reach <= 0 || domainLen < 2) return i;
-  const span = 2 * reach + 1;
-  // Map the hash onto [0, span) by multiply-shift: no modulo, and the product
-  // stays exact in a double (2^32 × 2^17 well under 2^53).
-  const d = ((scatterHash(seed, i) * span) / 4294967296 | 0) - reach;
+  const h = scatterHash(seed, i);
+  const t = (h & 0x3ff) + ((h >>> 10) & 0x3ff) + ((h >>> 20) & 0x3ff);
+  const d = Math.round((reach * (2 * t - GAUSS_SPAN)) / GAUSS_SPAN);
   let k = (i - domainStart + d) % domainLen;
   if (k < 0) k += domainLen;
   return domainStart + k;
 }
 
-/**
- * ProTracker's funk-speed ladder, indexed by $y. The same table converters use
- * to lift `EFx` into `S $Fyyy`, so "speed 4" means one thing across the format.
- */
-const FUNK_SPEED_TABLE = Object.freeze([
-  0, 5, 6, 7, 8, 0x0a, 0x0b, 0x0d, 0x10, 0x13, 0x16, 0x1a, 0x20, 0x2b, 0x40, 0x80,
-]);
-
-/** Scratch triple for the decoders (callers own theirs; engine never allocates
- *  inside a tick). */
-const regionScratch = new Int32Array(3);
+/** Scratch quad for the decoders (callers own theirs; engine never allocates
+ *  inside a tick): [from, to, combBits, combOdd]. */
+const regionScratch = new Float64Array(4);
 
 /**
- * Decode the $se region byte against one voice's ACTIVE sample geometry.
- * Writes [start, end, combShift] into `out` and returns one of the REGION_*
- * codes. `combShift` is -1 for a solid region, else n where the comb runs are
- * 2^n bytes long.
+ * Decode the $se region byte into a FRACTION of the command's domain. Nothing
+ * here knows how long anything is: the same $se means the same thing on every
+ * sample, and resolveModGeom below is what turns it into byte offsets against
+ * whichever loop the voice is actually sounding.
+ *
+ * Writes [from, to, combBits, combOdd] into `out` and returns one of the
+ * REGION_* codes. `combBits` is -1 for a solid region, else n where the extent
+ * is cut into 2^(n+1) chunks; `combOdd` picks which alternate chunks are kept.
  */
-function decodeSampleRegion(se, sampleLen, loopStart, loopEnd, out) {
+function decodeSampleRegion(se, out) {
   const s = (se >>> 4) & 0xf;
   const e = se & 0xf;
-  const len = sampleLen;
+  // The two comb ladders come first, so $F0..$FE and $E0..$ED stay combs rather
+  // than falling into the s > e reserved space. $FF, $EE and $EF have s <= e
+  // and are ordinary extents — which is exactly why the odd ladder is one rung
+  // shorter than the even one.
+  if (s === 0xf && e !== 0xf) { out[2] = e; out[3] = 0; return REGION_COMB; }
+  if (s === 0xe && e <= MOD_COMB_ODD_MAX) { out[2] = e; out[3] = 1; return REGION_COMB; }
+  // A new extent clears the comb: the two are independent halves of one region,
+  // but a region written from scratch is written solid.
   out[2] = -1;
-  // $Fn — comb only. Listed before the s <= e rule so $FF stays a comb rather
-  // than becoming "the last sixteenth", and n = $E is the largest run.
-  if (s === 0xf && e !== 0xf) { out[2] = e; return REGION_COMB; }
-  if (se === 0x00) {
-    // The loop region — spelled as the -1 sentinel so an Ixmp-patched voice
-    // still follows ITS OWN loop (item 116) rather than a baked-in span.
-    out[0] = -1;
-    out[1] = -1;
-    return REGION_SET;
-  }
-  if (len < 2) return REGION_NONE;
-  if (s <= e) {
-    out[0] = Math.round((len * s) / 16);
-    out[1] = Math.round((len * (e + 1)) / 16);
-    return REGION_SET;
-  }
+  out[3] = 0;
+  // $00 is the whole domain — the loop region, as S $Fxxx has always meant it.
+  // Listed before the s <= e rule, which would otherwise read it as the first
+  // sixteenth (unreachable, and no loss: $01 is the first two).
+  if (se === 0x00) { out[0] = 0; out[1] = 1; return REGION_SET; }
+  if (s <= e) { out[0] = s / 16; out[1] = (e + 1) / 16; return REGION_SET; }
   switch (se) {
-    case 0x10: out[0] = Math.round(len / 4); out[1] = Math.round((len * 3) / 4); break;
-    case 0x20: out[0] = 0;                   out[1] = Math.round((len * 2) / 3); break;
-    case 0x21: out[0] = Math.round(len / 3); out[1] = len;                       break;
-    case 0x30: out[0] = 0;                   out[1] = Math.round(len / 3);       break;
-    case 0x31: out[0] = Math.round(len / 3); out[1] = Math.round((len * 2) / 3); break;
-    case 0x32: out[0] = Math.round((len * 2) / 3); out[1] = len;                 break;
-    default: return REGION_NONE; // $40..$ED with s > e — reserved
+    case 0x10: out[0] = 1 / 4; out[1] = 3 / 4; break;
+    case 0x20: out[0] = 0;     out[1] = 2 / 3; break;
+    case 0x21: out[0] = 1 / 3; out[1] = 1;     break;
+    case 0x30: out[0] = 0;     out[1] = 1 / 3; break;
+    case 0x31: out[0] = 1 / 3; out[1] = 2 / 3; break;
+    case 0x32: out[0] = 2 / 3; out[1] = 1;     break;
+    default: return REGION_NONE; // $40..$DD with s > e — reserved
   }
-  if (out[1] - out[0] < 2) return REGION_NONE;
   return REGION_SET;
 }
 
 /**
- * Is byte `k` (an offset from the extent start) INSIDE the comb's runs?
- * `shift` < 0 is a solid region. Runs are 2^shift bytes, alternating in and
- * out, so the test is one shift and one bit — this sits in the sample-read
- * hot path.
+ * One voice's resolved view of the instrument's region: the fractions above cut
+ * against the loop the voice is really sounding. Cached on the Voice and
+ * refreshed by resolveModGeom when either side moves, because the read path
+ * costs two multiplies and a divide to build and is walked once per
+ * interpolator tap.
  */
-function inCombRun(k, shift) {
-  return shift < 0 || ((k >>> shift) & 1) === 0;
+class ModGeom {
+  constructor() {
+    // Cache key: the instrument's region and the voice's domain.
+    this.epoch = -1;
+    this.inst = null;
+    this.base = -1;
+    this.len = -1;
+    // Resolved geometry.
+    this.live = false;      // is there anything for the read path to do?
+    this.es = 0;            // extent, in absolute sample bytes
+    this.ee = 0;
+    this.combN = 0;         // chunks the extent is cut into (0 = solid)
+    this.combOdd = false;   // keep the odd chunks rather than the even ones
+    this.combScale = 0;     // combN / extent length — chunk index by multiply
+    this.ds = 0;            // wrap domain for the address transforms
+    this.dl = 0;
+  }
 }
 
 /**
- * Does the modification touch sample byte `i`? The extent and comb decide, and
- * notefx 2's inversion flips the answer — which is the ONLY difference between
- * the two opcodes.
+ * Resolve `inst`'s region against the loop the voice is sounding, into `g`.
+ * Returns `g`. The domain is the loop region when there is one and the whole
+ * sample when there is not — the same test §8.4's funk mask makes, so the two
+ * features cover the same bytes.
+ *
+ * `inst` is duck-typed: anything carrying modFrom / modTo / modCombBits /
+ * modCombOdd / modInvert / modEpoch will do, which is how the sample view draws
+ * the modification through the engine's own geometry instead of a copy of it.
  */
-function modTouches(inst, i, extentStart, extentEnd) {
-  const inside = i >= extentStart && i < extentEnd &&
-    inCombRun(i - extentStart, inst.modComb);
-  return inst.modInvert ? !inside : inside;
+function resolveModGeom(g, inst, loopStart, loopEnd, sampleLen) {
+  const looped = loopEnd > loopStart;
+  const base = looped ? loopStart : 0;
+  const len = looped ? loopEnd - loopStart : sampleLen;
+  if (g.epoch === inst.modEpoch && g.inst === inst && g.base === base && g.len === len) return g;
+  g.epoch = inst.modEpoch;
+  g.inst = inst;
+  g.base = base;
+  g.len = len;
+  const es = base + Math.round(len * inst.modFrom);
+  const ee = base + Math.round(len * inst.modTo);
+  g.es = es;
+  g.ee = ee;
+  g.live = len >= 2 && ee - es >= 2;
+  const bits = inst.modCombBits;
+  g.combN = bits < 0 ? 0 : 2 << bits;
+  g.combOdd = inst.modCombOdd;
+  g.combScale = g.combN / Math.max(ee - es, 1);
+  // An inverted region's touched set reaches both ends of the DOMAIN, so that
+  // is the span its address transform wraps in; a plain region wraps in itself.
+  g.ds = inst.modInvert ? base : es;
+  g.dl = inst.modInvert ? len : ee - es;
+  return g;
 }
 
 /**
- * How far the funk walk may scan for the next byte the modification touches.
- * An inverted region can exclude almost the whole sample, and the walk must
- * not turn into a linear search for the one byte that is left — past this many
- * misses the step simply does not land. Well above any musically useful comb.
+ * Does the modification touch sample byte `i`? The extent and its comb decide,
+ * and notefx 2's inversion flips the answer — which is the ONLY difference
+ * between the two opcodes. Nothing outside the domain is ever touched, by
+ * either spelling: `2` spares its region and modifies the REST OF THE LOOP, not
+ * the rest of the file.
  */
-const MOD_WALK_SCAN = 4096;
+function modTouches(g, invert, i) {
+  let inside = i >= g.es && i < g.ee;
+  if (inside && g.combN > 0) {
+    // Which bristle: the extent cut into combN equal chunks, truncated. One
+    // multiply, because the divide that makes combScale is done per geometry
+    // rather than per read.
+    inside = ((((i - g.es) * g.combScale) | 0) & 1) === (g.combOdd ? 1 : 0);
+  }
+  return invert ? !inside && i >= g.ds && i < g.ds + g.dl : inside;
+}
+
+/**
+ * Where a touched byte is actually READ FROM: the address transform of whatever
+ * operation is live, wrapped into the geometry's domain. `rot` moves every byte
+ * together (ROL and JUMP), `scatter` gives each its own throw; only one of the
+ * two is ever non-zero, since an instrument carries one operation.
+ */
+function modAddress(g, i, rot, scatter, seed) {
+  const dl = g.dl;
+  if (dl < 2) return i;
+  if (scatter > 0) return scatterSource(i, g.ds, dl, scatter, seed);
+  if (rot === 0) return i;
+  let k = (i - g.ds + rot) % dl;
+  if (k < 0) k += dl;
+  return g.ds + k;
+}
 
 // ══ src/engine/inst.js ══
 // Taud instrument data model — port of AudioAdapter.kt TaudInstEnvPoint (5246),
@@ -2745,21 +2874,32 @@ class TaudInst {
     // Funk repeat (S$Fx00) XOR bit-mask over the loop region.
     this.funkMask = null;
 
-    // Sample modification (item 130, notefx 2 / 3) — ONE per instrument: the
-    // opcodes are the same command, `2` inverting which side of the region is
-    // touched. Start -1 = "the sounding voice's loop region"; combShift -1 =
-    // solid. Only the ACTIVE operation's accumulator is ever non-zero.
+    // Sample modification (items 130, 152, 153, notefx 2 / 3) — ONE per
+    // instrument: the opcodes are the same command, `2` inverting which side of
+    // the region is touched. The extent is a FRACTION of the sounding voice's
+    // loop region (item 153), so it means the same thing whatever is loaded and
+    // wherever an Ixmp patch moves the loop; combBits -1 = solid. Only the
+    // ACTIVE operation's accumulator is ever non-zero.
     this.modOp = 0;               // MOD_OFF
     this.modInvert = false;       // notefx 2: the region is what is NOT touched
-    this.modStart = -1;
-    this.modEnd = -1;
-    this.modComb = -1;
+    this.modFrom = 0;             // extent, as a fraction of the domain
+    this.modTo = 1;
+    this.modCombBits = -1;        // comb: the extent cut into 2^(n+1) chunks
+    this.modCombOdd = false;      // ...keeping the odd ones ($Ex) or the even ($Fx)
     this.modMask = null;          // MOD_FUNK: one bit per sample byte
-    this.modRot = 0;              // MOD_ROL*: byte displacement
+    this.modRot = 0;              // MOD_ROL*/MOD_JUMP*: byte displacement
     this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
     this.modScatter = 0;          // MOD_RND*: per-byte throw, in bytes (0 = off)
     this.modSeed = 0;             // MOD_RND*: this step's scramble
     this.modOn = false;           // hot-path guard: does it change any byte yet?
+    this.modEpoch = 0;            // bumped whenever the GEOMETRY moves, so a
+                                  // voice's resolved view knows to rebuild
+    // The state the last step replaced, for the anti-click crossfade (item
+    // 153.5): for MOD_XFADE_SAMPLES output samples a voice reads both mappings.
+    this.modPrevRot = 0;
+    this.modPrevSub = 0;
+    this.modPrevScatter = 0;
+    this.modPrevSeed = 0;
   }
 
   get sampleLoopSustain() { return (this.loopMode & 0x04) !== 0; }
@@ -2900,24 +3040,30 @@ class TaudInst {
   }
 
   /**
-   * Point the modification at a new region (item 130). Its accumulated state is
-   * indexed against that region, so a move invalidates it. Returns whether
-   * anything MOVED, which is what tells the caller to restart the walk: writing
-   * the same region every row must not keep resetting it.
+   * Point the modification at a new extent (item 130), as a fraction of the
+   * sounding voice's domain. Its accumulated state is indexed against that
+   * region, so a move invalidates it, and a fresh extent is always solid — the
+   * comb is the other half of the same argument and is written after it.
+   * Returns whether anything MOVED, which is what tells the caller to restart
+   * the walk: writing the same region every row must not keep resetting it.
    */
-  setModRegion(start, end, combShift) {
-    if (this.modStart === start && this.modEnd === end && this.modComb === combShift) return false;
-    this.modStart = start;
-    this.modEnd = end;
-    this.modComb = combShift;
+  setModRegion(from, to) {
+    if (this.modFrom === from && this.modTo === to && this.modCombBits === -1) return false;
+    this.modFrom = from;
+    this.modTo = to;
+    this.modCombBits = -1;
+    this.modCombOdd = false;
+    this.modEpoch++;
     this.clearModState();
     return true;
   }
 
-  /** Comb the region without moving its ends ($Fn). */
-  setModComb(combShift) {
-    if (this.modComb === combShift) return false;
-    this.modComb = combShift;
+  /** Comb the extent without moving its ends ($Fn even bristles, $En odd). */
+  setModComb(bits, odd) {
+    if (this.modCombBits === bits && this.modCombOdd === odd) return false;
+    this.modCombBits = bits;
+    this.modCombOdd = odd;
+    this.modEpoch++;
     this.clearModState();
     return true;
   }
@@ -2929,6 +3075,7 @@ class TaudInst {
     if (this.modOp === op && this.modInvert === invert) return false;
     this.modOp = op;
     this.modInvert = invert;
+    this.modEpoch++;   // the inversion decides the wrap domain, so it is geometry
     this.clearModState();
     return true;
   }
@@ -2941,15 +3088,30 @@ class TaudInst {
     this.modScatter = 0;
     this.modSeed = 0;
     this.modOn = false;
+    this.modPrevRot = 0;
+    this.modPrevSub = 0;
+    this.modPrevScatter = 0;
+    this.modPrevSeed = 0;
+  }
+
+  /** Remember what the next step is replacing, for the crossfade that covers
+   *  it (item 153.5). Called immediately BEFORE the step lands. */
+  snapshotModState() {
+    this.modPrevRot = this.modRot;
+    this.modPrevSub = this.modSub;
+    this.modPrevScatter = this.modScatter;
+    this.modPrevSeed = this.modSeed;
   }
 
   /** $x = 0 — the modification, region and all. */
   resetMod() {
     this.modOp = 0;
     this.modInvert = false;
-    this.modStart = -1;
-    this.modEnd = -1;
-    this.modComb = -1;
+    this.modFrom = 0;
+    this.modTo = 1;
+    this.modCombBits = -1;
+    this.modCombOdd = false;
+    this.modEpoch++;
     this.clearModState();
   }
 
@@ -3128,6 +3290,7 @@ class TaudInst {
 // initialised in the constructor (monomorphic shape for the JIT); defaults
 // match the Kotlin field initialisers exactly. Envelope point `offset` fields
 // hold ThreeFiveMiniUfloat LUT indices.
+
 
 
 
@@ -3493,10 +3656,17 @@ class Voice {
     this.funkWritePos = 0;
 
     // Sample modification (notefx 2 / 3) — the operation and its region live on
-    // the instrument; the channel only drives the speed.
-    this.modSpeed = 0;
-    this.modAccumulator = 0;
+    // the instrument; the channel only drives the clock. `modPeriod` is the step
+    // period in TICKS (item 153.1), 0 = frozen, and modTickCount counts up to it.
+    this.modPeriod = 0;
+    this.modTickCount = 0;
     this.modWritePos = 0;
+    // Countdown of the anti-click crossfade between the mapping the last step
+    // replaced and the one it installed (item 153.5), in output samples.
+    this.modXfade = 0;
+    // This voice's resolved view of the instrument's region — the fractions cut
+    // against the loop THIS voice is sounding. Rebuilt only when either moves.
+    this.modGeom = new ModGeom();
 
     // Pattern loop (S$Bx).
     this.loopStartRow = 0;
@@ -4058,9 +4228,10 @@ class Playhead {
       it.funkSpeed = 0;
       it.funkAccumulator = 0;
       it.funkWritePos = 0;
-      it.modSpeed = 0;
-      it.modAccumulator = 0;
+      it.modPeriod = 0;
+      it.modTickCount = 0;
       it.modWritePos = 0;
+      it.modXfade = 0;
       it.fader = 0;
       it.nnaOverride = -1;
       it.volEnvOn = true; it.panEnvOn = true; it.pitchEnvOn = true; it.filterEnvOn = true;
@@ -4119,9 +4290,10 @@ class Playhead {
         it.funkSpeed = 0;
         it.funkAccumulator = 0;
         it.funkWritePos = 0;
-        it.modSpeed = 0;
-        it.modAccumulator = 0;
+        it.modPeriod = 0;
+        it.modTickCount = 0;
         it.modWritePos = 0;
+        it.modXfade = 0;
       }
     }
     for (const inst of this.parent.instruments) {
@@ -4157,59 +4329,70 @@ function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
 }
 
 /**
+ * The pool byte at `i` with S $Fxxx's own mask applied — the plain fetch of
+ * spec §8.1, and the point both halves of a sample-modification crossfade meet.
+ *
+ * Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
+ * funk mask is sized and indexed against whichever loop is sounding (item 116).
+ * The mask is tested against the byte ACTUALLY READ — a modification that moved
+ * the read moved which mask bit answers for it.
+ */
+function poolByte(eng, voice, inst, i, binMax, basePtr, ls, le) {
+  const b = eng.sampleBin[Math.min(basePtr + i, binMax)];
+  if (inst.funkMask !== null && le > ls && i >= ls && i < le && inst.funkBit(i - ls, le - ls)) {
+    return b ^ 0xff;
+  }
+  return b;
+}
+
+/**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
- * instrument's sample modifications — notefx 3's rotation (which moves WHICH
- * byte is read) and then the funk-repeat mask (which inverts the byte read).
- * Caller wraps loop regions first.
+ * instrument's sample modifications — notefx 2/3's address transform (which
+ * moves WHICH byte is read), its value transform, and the funk-repeat mask
+ * (which inverts the byte read). Caller wraps loop regions first.
  * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
  * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
  * for its right channel (both channels share the funk mask and geometry).
  *
- * Regions default to the ACTIVE loop: an Ixmp patch replaces the loop points,
- * and the funk mask is sized and indexed against whichever loop is sounding
- * (item 116). notefx 2 / 3 may point either modification somewhere else.
+ * The modification's region is resolved against the loop THIS voice is sounding
+ * (item 153) — the fractions on the instrument cut against the voice's own
+ * domain — so an Ixmp-patched voice follows its own loop (item 116) and every
+ * voice on a shared instrument hears the region its own sample defines.
  */
 function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
                                 basePtr = voice.activeSamplePtr) {
-  let i = Math.min(Math.max(idx, 0), sampleLen - 1);
-  // Sample modification (notefx 2 / 3). ONE operation is live at a time, so a
-  // ROL's address transform and a FUNK/SUB's value transform never meet.
-  let touched = false;
-  if (inst.modOn) {
-    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
-    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
-    if (ee > es) {
-      touched = modTouches(inst, i, es, ee);
-      if (touched && (inst.modScatter > 0 || inst.modRot !== 0)) {
-        // An inverted region's touched set reaches both ends of the sample, so
-        // that is the span the address transform wraps in; a plain region wraps
-        // in itself. ROL moves every byte by the SAME offset, a scatter draws
-        // one per byte — only one of the two can be live.
-        const ds = inst.modInvert ? 0 : es;
-        const dl = inst.modInvert ? sampleLen : ee - es;
-        if (dl > 1) {
-          if (inst.modScatter > 0) {
-            i = scatterSource(i, ds, dl, inst.modScatter, inst.modSeed);
-          } else {
-            let k = (i - ds + inst.modRot) % dl;
-            if (k < 0) k += dl;
-            i = ds + k;
-          }
-        }
-      }
-    }
-  }
-  let b = eng.sampleBin[Math.min(basePtr + i, binMax)];
-  // Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
-  // funk mask is sized and indexed against whichever loop is sounding (item 116).
+  const i0 = Math.min(Math.max(idx, 0), sampleLen - 1);
   const ls = voice.activeSampleLoopStart;
   const le = voice.activeSampleLoopEnd;
-  if (inst.funkMask !== null && le > ls) {
-    if (i >= ls && i < le && inst.funkBit(i - ls, le - ls)) b = b ^ 0xff;
+  // Nothing live and nothing fading out: the plain fetch. `modOn` alone is not
+  // the guard, because a step that lands on the identity mapping (a jump that
+  // throws to zero) still has the PREVIOUS one to fade out of.
+  if (inst.modOp === MOD_OFF || (!inst.modOn && voice.modXfade === 0)) {
+    return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
   }
-  if (touched) {
-    if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
-    else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
+  const g = resolveModGeom(voice.modGeom, inst, ls, le, sampleLen);
+  // The touch test is evaluated at the byte's ORIGINAL position — that is where
+  // the region and its comb are defined — and it does not move under a step, so
+  // both sides of the crossfade agree on which bytes are in play.
+  if (!g.live || !modTouches(g, inst.modInvert, i0)) {
+    return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
+  }
+  // ONE operation is live at a time, so an address transform and a FUNK/SUB
+  // value transform never meet.
+  const i = modAddress(g, i0, inst.modRot, inst.modScatter, inst.modSeed);
+  let b = poolByte(eng, voice, inst, i, binMax, basePtr, ls, le);
+  if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
+  else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
+  if (voice.modXfade > 0) {
+    // Anti-click crossfade (item 153.5): the mapping the last step replaced,
+    // read through the same geometry, mixed in on a falling weight. Costs one
+    // extra pool read per tap for 2 ms after each step.
+    const j = modAddress(g, i0, inst.modPrevRot, inst.modPrevScatter, inst.modPrevSeed);
+    let p = poolByte(eng, voice, inst, j, binMax, basePtr, ls, le);
+    if (inst.modMask !== null) { if (inst.modBit(j)) p = p ^ 0xff; }
+    else if (inst.modPrevSub !== 0) p = (p - inst.modPrevSub) & 0xff;
+    const w = voice.modXfade / MOD_XFADE_SAMPLES;
+    b = p * w + b * (1.0 - w);
   }
   return (b - 127.5) / 127.5;
 }
@@ -4298,6 +4481,7 @@ function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
     voice.activeSamplePtr, voice);
   out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeChanPtr2, voice.right);
+  if (voice.modXfade > 0) voice.modXfade--;
   if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
   return out;
 }
@@ -4310,6 +4494,9 @@ function fetchTrackerSample(eng, voice, inst, interpMode) {
   const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
 
+  // The crossfade runs on the OUTPUT clock, once per sample however many taps
+  // read through it, and keeps running while the voice ramps out.
+  if (voice.modXfade > 0) voice.modXfade--;
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
   advanceSamplePos(voice, sampleLen);
@@ -6228,38 +6415,36 @@ function applySEffect(eng, ts, voice, vi, arg) {
  * names the region to LEAVE ALONE. Everything else is identical, and an
  * instrument carries ONE modification, so either opcode replaces it.
  *
- *   $se  region        $x  operation (0 = reset)      $y  funk-speed index
+ *   $se  region        $x  operation (0 = reset)      $y  step period in ticks
  *
  * The state splits the way S $Fxxx's does: the modification belongs to the
- * INSTRUMENT (every channel sounding it hears the same sample) and the speed
- * driving it to the CHANNEL. A reserved operation or a reserved region is
- * ignored WHOLE, speed and all, so a typo cannot drive a modification the
- * writer never named.
+ * INSTRUMENT (every channel sounding it hears the same sample) and the clock
+ * driving it to the CHANNEL. A reserved region is ignored WHOLE, speed and all,
+ * so a typo cannot drive a modification the writer never named.
  */
 function applySampleModEffect(eng, voice, rawArg, invert) {
   const inst = eng.instruments[voice.instrumentId];
   const op = (rawArg >>> 4) & 0xf;
   if (op === MOD_OFF) {
     inst.resetMod();
-    voice.modSpeed = 0;
-    voice.modAccumulator = 0;
+    voice.modPeriod = 0;
+    voice.modTickCount = 0;
     voice.modWritePos = 0;
     return;
   }
-  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
-    voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
+  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
   if (code === REGION_NONE) return;
   const moved = code === REGION_COMB
-    ? inst.setModComb(regionScratch[2])
-    : inst.setModRegion(regionScratch[0], regionScratch[1], regionScratch[2]);
+    ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
+    : inst.setModRegion(regionScratch[0], regionScratch[1]);
   const swapped = inst.setModOp(op, invert);
   // A changed region or operation restarts the walk; re-stating the SAME
   // command row after row must not, or it would never get past its first step.
   if (moved || swapped) {
-    voice.modAccumulator = 0;
+    voice.modTickCount = 0;
     voice.modWritePos = 0;
   }
-  voice.modSpeed = FUNK_SPEED_TABLE[rawArg & 0xf];
+  voice.modPeriod = modStepPeriod(rawArg & 0xf);
 }
 
 /** Apply an env toggle to the foreground voice + (for a meta) its layer children. */
@@ -6783,6 +6968,23 @@ function advanceRow(eng, ts, playhead) {
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
 
+/**
+ * Arm the anti-click crossfade on every voice sounding `instId` (item 153.5).
+ * The modification is instrument-scope, so one channel's step is heard by every
+ * voice bound to that instrument — NNA ghosts and layer children included — and
+ * each needs its own countdown because each is at its own point in its own
+ * output. The state being faded FROM is the instrument's (one snapshot, taken
+ * where the step is made), so this is a counter and nothing else.
+ */
+function armModXfade(ts, instId) {
+  for (const v of ts.voices) {
+    if (v.active && v.instrumentId === instId) v.modXfade = MOD_XFADE_SAMPLES;
+  }
+  for (const bg of ts.backgroundVoices) {
+    if (bg.active && bg.instrumentId === instId) bg.modXfade = MOD_XFADE_SAMPLES;
+  }
+}
+
 function applyTrackerTick(eng, ts, playhead) {
   const tickSec = 2.5 / playhead.bpm;
   // Samples-per-tick — used to spread the per-tick envVolume jump across the
@@ -7119,42 +7321,44 @@ function applyTrackerTick(eng, ts, playhead) {
   }
 
   // Sample modification (notefx 2 / 3) — one step of the instrument's live
-  // operation per accumulator overflow, on the same >= $80 ladder funk repeat
-  // walks (item 130).
+  // operation every $y ticks (item 153.1: $F every tick, $1 every fifteenth),
+  // counted per channel because the clock is the channel's and the operation
+  // the instrument's.
   for (const voice of ts.voices) {
-    if (voice.modSpeed === 0 || !voice.active) continue;
+    if (voice.modPeriod === 0 || !voice.active) continue;
     const inst = eng.instruments[voice.instrumentId];
     if (inst.modOp === MOD_OFF) continue;
-    const es = inst.modStart >= 0 ? inst.modStart : voice.activeSampleLoopStart;
-    const ee = inst.modStart >= 0 ? inst.modEnd : voice.activeSampleLoopEnd;
-    if (ee <= es) continue;
-    voice.modAccumulator += voice.modSpeed;
-    if (voice.modAccumulator < 0x80) continue;
-    voice.modAccumulator = 0;
     const sampleLen = Math.max(voice.activeSampleLength, 1);
+    const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
+      voice.activeSampleLoopEnd, sampleLen);
+    if (!g.live) continue;
+    if (++voice.modTickCount < voice.modPeriod) continue;
+    voice.modTickCount = 0;
     const step = MOD_STEP[inst.modOp];
     if (inst.modOp === MOD_FUNK) {
       // Walk to the next byte the region actually touches and flip it. An
       // inverted region can exclude a long stretch, so the scan is bounded —
-      // past MOD_WALK_SCAN misses this step simply does not land.
-      const span = inst.modInvert ? sampleLen : ee - es;
-      const base = inst.modInvert ? 0 : es;
+      // past MOD_WALK_SCAN misses this step simply does not land. One byte is
+      // not a discontinuity, so this is the one operation with no crossfade.
       for (let n = 0; n < MOD_WALK_SCAN; n++) {
-        voice.modWritePos = (voice.modWritePos + 1) % Math.max(span, 1);
-        const i = base + voice.modWritePos;
-        if (modTouches(inst, i, es, ee)) { inst.toggleModBit(i, sampleLen); break; }
+        voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
+        const i = g.ds + voice.modWritePos;
+        if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
       }
-    } else if (isRolOp(inst.modOp)) {
-      const dl = inst.modInvert ? sampleLen : ee - es;
-      if (dl > 1) {
-        inst.modRot = (inst.modRot + step) % dl;
-        inst.modOn = inst.modRot !== 0;
-      }
+      continue;
+    }
+    // Everything else replaces a mapping wholesale, so the voices sounding this
+    // instrument crossfade out of the old one rather than cutting to the new
+    // (item 153.5).
+    inst.snapshotModState();
+    if (isRolOp(inst.modOp)) {
+      inst.modRot = (inst.modRot + step) % g.dl;
+      inst.modOn = inst.modRot !== 0;
     } else if (isJumpOp(inst.modOp)) {
       // Jump (item 152): the ROL displacement, thrown instead of stepped. One
       // offset for the whole region, measured from home rather than from the
       // last throw, so $A paces around it instead of wandering off.
-      inst.modRot = jumpRot(inst.modOp, inst.modInvert ? sampleLen : ee - es);
+      inst.modRot = jumpRot(inst.modOp, g.dl);
       inst.modOn = inst.modRot !== 0;
     } else if (isRndOp(inst.modOp)) {
       // Scatter (item 152): one new scramble of the whole region per step. The
@@ -7162,14 +7366,14 @@ function applyTrackerTick(eng, ts, playhead) {
       // many bytes it rearranges, and each is measured from where its byte
       // really belongs — nothing accumulates, so $C stays within its 12.5%
       // however long the effect runs.
-      const dl = inst.modInvert ? sampleLen : ee - es;
-      inst.modScatter = scatterReach(inst.modOp, dl);
+      inst.modScatter = scatterReach(inst.modOp, g.dl);
       inst.modSeed = scatterSeed();
       inst.modOn = inst.modScatter > 0;
     } else {
       inst.modSub = (inst.modSub + step) & 0xff;
       inst.modOn = inst.modSub !== 0;
     }
+    armModXfade(ts, voice.instrumentId);
   }
 
   // Background (NNA-ghost) voices: passive maintenance only.
@@ -8257,17 +8461,22 @@ class TaudEngine {
   /**
    * The instrument's live sample modification (item 130), for the sample view's
    * overlay: the operation, which side of the region it works on, the region as
-   * [start, end, combShift] with -1 meaning "the sample's own loop", and
-   * whatever the operation has accumulated. Plain numbers — the reply crosses a
-   * postMessage. The MOD_FUNK bit-mask travels with it as `modMask`.
+   * a FRACTION pair plus its comb (item 153), and whatever the operation has
+   * accumulated. Plain numbers — the reply crosses a postMessage. The MOD_FUNK
+   * bit-mask travels with it as `modMask`.
+   *
+   * Field names are the instrument's own, so the reply can be handed straight
+   * to resolveModGeom / modTouches: the view draws the modification through the
+   * engine's geometry rather than a re-implementation of it.
    */
   getInstrumentSampleMod(slot) {
     const inst = this.instruments[slot & 0x3ff];
     return {
-      op: inst.modOp, invert: inst.modInvert,
-      start: inst.modStart, end: inst.modEnd, comb: inst.modComb,
-      rot: inst.modRot, sub: inst.modSub, on: inst.modOn,
-      scatter: inst.modScatter, seed: inst.modSeed,
+      modOp: inst.modOp, modInvert: inst.modInvert,
+      modFrom: inst.modFrom, modTo: inst.modTo,
+      modCombBits: inst.modCombBits, modCombOdd: inst.modCombOdd,
+      modRot: inst.modRot, modSub: inst.modSub, modOn: inst.modOn,
+      modScatter: inst.modScatter, modSeed: inst.modSeed, modEpoch: inst.modEpoch,
     };
   }
 

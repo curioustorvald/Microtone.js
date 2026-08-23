@@ -4,6 +4,14 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-08-22
+
+- **Sample modification is now measured against the loop region, not the file.** Effects `2` and `3` used to cut their region out of the whole sample, so the same argument meant a different thing on every instrument you pointed it at. Now the loop region *is* the working area — every selector, every comb, every rotation wrap and `$A`'s eighths are a fraction of it — and a sample with no loop points uses the whole file exactly as before. One consequence worth knowing: `$00` and `$0F` now name the same span, so use whichever reads better. Another: `2` spares the region it names and modifies the rest of the *loop*, no longer the rest of the file.
+  - Because the region is stored as a proportion rather than a byte count, an instrument patch that brings its own loop points moves the modification with it — a kit whose samples are all different lengths finally answers one written region the same way.
+- **The speed nibble `$y` is now a period in ticks: `$F` every tick, `$E` every other one, down to `$1` every fifteenth.** It used to be an index into ProTracker's funk-speed ladder, an uneven table whose steps land where its arithmetic puts them. Exact timing is what `$A` (the eighth-quantised jump) is for: a randomised drum loop has to re-deal itself *on* the tick or it is not in time, and now it does. `$y = 0` still freezes the modification where it stands. `S $Fxxx` keeps the old ladder — it is ProTracker's effect and stays its own.
+- **The comb selector is now a bristle count, and it has a second ladder.** `$F0` is the first half of the region, `$F1` touches `1-3-` of four, `$F2` eight chunks, and so on down to `$FE` at 32768 bristles — where the chunks fall below a byte and you are back at the every-other-byte buzz the old comb started from. **`$E0`–`$ED` are the same combs the other way round**: `$E0` is the second half, `$E1` touches `-2-4`. Because the ladder counts chunks rather than bytes, one comb argument sounds like itself on a 400-byte loop and on a 40000-byte one.
+- **Fixed: sample modifications clicked on every step.** Swapping one read mapping for another between two output samples is a discontinuity by construction, and at full speed that is one per tick — the buzz that made `$A`–`$F` hard to leave running. Each step now crossfades over two milliseconds instead of cutting, which is short enough that a beat repeat still lands on the beat. Turning the effect off, or switching it to another operation, is still an instant change — that one is a deliberate edit.
+
 ## 2026-08-18
 
 - **Duplicate and delete samples, from the Samples view.** Two new buttons on the toolbar, either way one Ctrl+Z.

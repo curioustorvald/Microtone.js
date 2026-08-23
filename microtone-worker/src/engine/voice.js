@@ -5,6 +5,7 @@
 
 import { SCOPE_BUFFER_SIZE } from "./constants.js";
 import { envPoint } from "./inst.js";
+import { ModGeom } from "./samplemod.js";
 
 /** Per-channel effect memory cohorts and private slots (TAUD_NOTE_EFFECTS.md §6). */
 export class MemorySlots {
@@ -368,10 +369,17 @@ export class Voice {
     this.funkWritePos = 0;
 
     // Sample modification (notefx 2 / 3) — the operation and its region live on
-    // the instrument; the channel only drives the speed.
-    this.modSpeed = 0;
-    this.modAccumulator = 0;
+    // the instrument; the channel only drives the clock. `modPeriod` is the step
+    // period in TICKS (item 153.1), 0 = frozen, and modTickCount counts up to it.
+    this.modPeriod = 0;
+    this.modTickCount = 0;
     this.modWritePos = 0;
+    // Countdown of the anti-click crossfade between the mapping the last step
+    // replaced and the one it installed (item 153.5), in output samples.
+    this.modXfade = 0;
+    // This voice's resolved view of the instrument's region — the fractions cut
+    // against the loop THIS voice is sounding. Rebuilt only when either moves.
+    this.modGeom = new ModGeom();
 
     // Pattern loop (S$Bx).
     this.loopStartRow = 0;

@@ -1,9 +1,14 @@
-// Sample-modification note effects (item 130) — notefx 2 and 3, one command
-// with two spellings ($sexy: region, operation, funk-speed index; `2` inverts
-// which side of the region is touched). Region decoding is pinned here against
-// TAUD_NOTE_EFFECTS.md; the engine legs drive real rows through the tracker so
-// the per-tick accumulators and the read-time transforms are the ones the mixer
-// actually uses.
+// Sample-modification note effects (items 130, 152, 153) — notefx 2 and 3, one
+// command with two spellings ($sexy: region, operation, step period; `2`
+// inverts which side of the region is touched). Region decoding is pinned here
+// against TAUD_NOTE_EFFECTS.md; the engine legs drive real rows through the
+// tracker so the per-tick clock and the read-time transforms are the ones the
+// mixer actually uses.
+//
+// Item 153 made the command loop-relative: EVERY selector, comb, wrap and jump
+// quantum is measured against the sounding voice's loop region (the whole
+// sample when it has none), so the decoder returns FRACTIONS and resolveModGeom
+// cuts them per voice.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,9 +16,10 @@ import assert from "node:assert/strict";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
-  decodeSampleRegion, inCombRun, FUNK_SPEED_TABLE, MOD_STEP, MOD_MAX,
+  decodeSampleRegion, MOD_STEP, MOD_MAX, MOD_COMB_MAX, MOD_COMB_ODD_MAX,
   MOD_SCATTER_FRAC, MOD_JUMP_SLICES, MOD_JUMP8, MOD_JUMP_ALL, MOD_RND12, MOD_RND_ALL,
-  isJumpOp, isRndOp, jumpRot, scatterReach, scatterSource,
+  MOD_XFADE_SAMPLES, modStepPeriod, isJumpOp, isRndOp, jumpRot, scatterReach,
+  scatterSource, ModGeom, resolveModGeom, modTouches, modAddress,
   REGION_NONE, REGION_SET, REGION_COMB,
 } from "../../src/engine/samplemod.js";
 import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
@@ -21,62 +27,107 @@ import { readSamplePoint } from "../../src/engine/sampler.js";
 
 setSamplingRate(32000);
 
-const out = new Int32Array(3);
-/** decodeSampleRegion against a 1000-byte sample looping over [100, 900). */
-const dec = (se, len = 1000, ls = 100, le = 900) =>
-  ({ code: decodeSampleRegion(se, len, ls, le, out), start: out[0], end: out[1], comb: out[2] });
-
-test("region: s <= e is the percentage form, rounded", () => {
-  // $0F — the whole sample; $4B — exactly the middle half.
-  assert.deepEqual(dec(0x0f), { code: REGION_SET, start: 0, end: 1000, comb: -1 });
-  assert.deepEqual(dec(0x4b), { code: REGION_SET, start: 250, end: 750, comb: -1 });
-  // Boundaries: start s/16, end (e+1)/16 — so $88 is the ninth sixteenth alone.
-  assert.deepEqual(dec(0x88), { code: REGION_SET, start: 500, end: 563, comb: -1 });
-  assert.deepEqual(dec(0xff), { code: REGION_SET, start: 938, end: 1000, comb: -1 });
+const out = new Float64Array(4);
+/** decodeSampleRegion, as [from, to] fractions + the comb pair. */
+const dec = (se) => ({
+  code: decodeSampleRegion(se, out),
+  from: out[0], to: out[1], bits: out[2], odd: out[3],
 });
 
-test("region: $00 is the -1 sentinel, so the voice's own loop still wins", () => {
-  const r = dec(0x00);
-  assert.equal(r.code, REGION_SET);
-  assert.equal(r.start, -1, "start -1 = follow the sounding voice's loop (item 116)");
-  assert.equal(r.end, -1);
-  assert.equal(r.comb, -1);
+/**
+ * The decoded region resolved against a voice's geometry, exactly as
+ * applySampleModEffect + resolveModGeom do it: an extent replaces the extent
+ * and clears the comb, a comb keeps whatever extent is standing (here the
+ * whole domain, which is what a fresh instrument carries).
+ */
+function geomOf(se, { len = 1000, ls = 0, le = 0, invert = false } = {}) {
+  const code = decodeSampleRegion(se, out);
+  if (code === REGION_NONE) return null;
+  const view = {
+    modFrom: 0, modTo: 1, modCombBits: -1, modCombOdd: false,
+    modInvert: invert, modEpoch: 0,
+  };
+  if (code === REGION_COMB) {
+    view.modCombBits = out[2];
+    view.modCombOdd = out[3] !== 0;
+  } else {
+    view.modFrom = out[0];
+    view.modTo = out[1];
+  }
+  const g = new ModGeom();
+  resolveModGeom(g, view, ls, le, len);
+  return g;
+}
+
+/** Which bytes of [0, len) a resolved region touches. */
+function touchedOf(g, invert, len = 1000) {
+  const hits = [];
+  for (let i = 0; i < len; i++) if (modTouches(g, invert, i)) hits.push(i);
+  return hits;
+}
+
+test("region: s <= e is the percentage form of the DOMAIN", () => {
+  // $0F — all of it; $4B — exactly the middle half.
+  assert.deepEqual(dec(0x0f), { code: REGION_SET, from: 0, to: 1, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x4b), { code: REGION_SET, from: 4 / 16, to: 12 / 16, bits: -1, odd: 0 });
+  // Boundaries: start s/16, end (e+1)/16 — so $88 is the ninth sixteenth alone.
+  assert.deepEqual(dec(0x88), { code: REGION_SET, from: 8 / 16, to: 9 / 16, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0xff), { code: REGION_SET, from: 15 / 16, to: 1, bits: -1, odd: 0 });
+});
+
+test("region: $00 is the whole loop region — the same span as $0F", () => {
+  assert.deepEqual(dec(0x00), { code: REGION_SET, from: 0, to: 1, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x00), dec(0x0f),
+    "item 153: everything is relative to the loop, so 'the loop' and 'all of it' coincide");
 });
 
 test("region: the named fractions", () => {
-  assert.deepEqual(dec(0x10), { code: REGION_SET, start: 250, end: 750, comb: -1 });
-  assert.deepEqual(dec(0x20), { code: REGION_SET, start: 0, end: 667, comb: -1 });
-  assert.deepEqual(dec(0x21), { code: REGION_SET, start: 333, end: 1000, comb: -1 });
-  assert.deepEqual(dec(0x30), { code: REGION_SET, start: 0, end: 333, comb: -1 });
-  assert.deepEqual(dec(0x31), { code: REGION_SET, start: 333, end: 667, comb: -1 });
-  assert.deepEqual(dec(0x32), { code: REGION_SET, start: 667, end: 1000, comb: -1 });
+  assert.deepEqual(dec(0x10), { code: REGION_SET, from: 1 / 4, to: 3 / 4, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x20), { code: REGION_SET, from: 0, to: 2 / 3, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x21), { code: REGION_SET, from: 1 / 3, to: 1, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x30), { code: REGION_SET, from: 0, to: 1 / 3, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x31), { code: REGION_SET, from: 1 / 3, to: 2 / 3, bits: -1, odd: 0 });
+  assert.deepEqual(dec(0x32), { code: REGION_SET, from: 2 / 3, to: 1, bits: -1, odd: 0 });
   // $10 and $4B name the same middle half two ways.
   assert.deepEqual(dec(0x10), dec(0x4b));
 });
 
-test("region: $Fn is a comb of 2^n bytes and keeps the extent", () => {
-  for (let n = 0; n <= 0xe; n++) {
+test("region: a fresh extent is solid — the comb is written after it", () => {
+  assert.equal(dec(0x0f).bits, -1);
+  assert.equal(dec(0x31).bits, -1);
+});
+
+test("region: $Fn / $En are the two comb ladders and keep the extent", () => {
+  for (let n = 0; n <= MOD_COMB_MAX; n++) {
     const r = dec(0xf0 | n);
     assert.equal(r.code, REGION_COMB, `$F${n.toString(16)} combs`);
-    assert.equal(r.comb, n);
+    assert.equal(r.bits, n);
+    assert.equal(r.odd, 0, "$Fn keeps the EVEN chunks");
   }
-  // …but $FF is s == e, i.e. the last sixteenth, not a comb.
-  assert.equal(dec(0xff).code, REGION_SET);
+  for (let n = 0; n <= MOD_COMB_ODD_MAX; n++) {
+    const r = dec(0xe0 | n);
+    assert.equal(r.code, REGION_COMB, `$E${n.toString(16)} combs`);
+    assert.equal(r.bits, n);
+    assert.equal(r.odd, 1, "$En keeps the ODD chunks");
+  }
+  // …but $FF, $EE and $EF are s <= e, i.e. ordinary extents. That is exactly
+  // why the odd ladder is one rung shorter than the even one.
+  for (const se of [0xff, 0xee, 0xef]) assert.equal(dec(se).code, REGION_SET);
 });
 
 test("region: s > e outside the named set is reserved and ignored", () => {
   // $40 and $41 are among them: they used to set the rotate step, which the
   // operation nibble now carries.
-  for (const se of [0x40, 0x41, 0x54, 0xa9, 0xed, 0x73]) {
+  for (const se of [0x40, 0x41, 0x54, 0xa9, 0xd3, 0x73]) {
     assert.ok((se >> 4) > (se & 0xf), `$${se.toString(16)} really is s > e`);
     assert.equal(dec(se).code, REGION_NONE, `$${se.toString(16)} is reserved`);
   }
 });
 
-test("the funk-speed ladder is ProTracker's own", () => {
-  assert.deepEqual([...FUNK_SPEED_TABLE],
-    [0, 5, 6, 7, 8, 0x0a, 0x0b, 0x0d, 0x10, 0x13, 0x16, 0x1a, 0x20, 0x2b, 0x40, 0x80]);
-  assert.equal(FUNK_SPEED_TABLE.length, 16, "one entry per $y nibble");
+test("the speed nibble is a period in TICKS, not a funk-ladder index", () => {
+  // $F every tick, $E every other one, … $1 every fifteenth, $0 frozen.
+  assert.deepEqual([0, 1, 2, 8, 0xe, 0xf].map(modStepPeriod), [0, 15, 14, 8, 2, 1]);
+  for (let y = 1; y <= 0xf; y++) assert.equal(modStepPeriod(y), 16 - y);
 });
 
 test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
@@ -91,48 +142,164 @@ test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
   assert.deepEqual([0xb, 0xc, 0xf].map(isRndOp), [false, true, true]);
 });
 
+// ── the domain: everything is relative to the loop region (item 153) ─────────
+
+test("the domain is the loop region, and the whole sample when there is none", () => {
+  // No loop: $0F is the file.
+  const whole = geomOf(0x0f, { len: 1000 });
+  assert.deepEqual([whole.es, whole.ee, whole.ds, whole.dl], [0, 1000, 0, 1000]);
+  // A loop over [200, 600): the SAME argument now names those 400 bytes.
+  const looped = geomOf(0x0f, { len: 1000, ls: 200, le: 600 });
+  assert.deepEqual([looped.es, looped.ee, looped.ds, looped.dl], [200, 600, 200, 400]);
+  // …and every selector is cut against them, not against the file.
+  const third = geomOf(0x31, { len: 1000, ls: 200, le: 600 });
+  assert.deepEqual([third.es, third.ee], [333, 467], "the middle third OF THE LOOP");
+  assert.deepEqual([third.ds, third.dl], [333, 134], "…and that is what a rotate wraps in");
+});
+
+test("$00 and $0F resolve identically, loop or no loop", () => {
+  for (const geom of [{ len: 1000 }, { len: 1000, ls: 200, le: 600 }]) {
+    const a = geomOf(0x00, geom);
+    const b = geomOf(0x0f, geom);
+    assert.deepEqual([a.es, a.ee, a.dl], [b.es, b.ee, b.dl]);
+  }
+});
+
+test("notefx 2's wrap domain is the LOOP, not the file", () => {
+  // An inverted region reaches both ends of the domain — but never past it: `2`
+  // spares its region and modifies the rest of the LOOP.
+  const g = geomOf(0x31, { len: 1000, ls: 200, le: 600, invert: true });
+  assert.deepEqual([g.ds, g.dl], [200, 400], "the wrap domain is the loop region");
+  const hits = touchedOf(g, true);
+  assert.equal(hits[0], 200, "nothing before the loop is touched");
+  assert.equal(hits[hits.length - 1], 599, "…and nothing after it");
+  for (let i = 333; i < 467; i++) assert.ok(!modTouches(g, true, i), `byte ${i} is spared`);
+});
+
+test("a degenerate extent is not live and the read path skips it", () => {
+  assert.equal(geomOf(0x00, { len: 1, ls: 0, le: 0 }).live, false);
+  assert.equal(geomOf(0x88, { len: 8 }).live, false, "a sixteenth of 8 bytes is half a byte");
+  assert.equal(geomOf(0x88, { len: 1000 }).live, true);
+});
+
+// ── the comb ladders (items 153.3, 153.4) ────────────────────────────────────
+
+test("$F0 is the first half and $E0 the second", () => {
+  const even = geomOf(0xf0, { len: 1000 });
+  assert.equal(even.combN, 2);
+  assert.deepEqual([touchedOf(even, false)[0], touchedOf(even, false).length], [0, 500]);
+  const odd = geomOf(0xe0, { len: 1000 });
+  assert.equal(odd.combN, 2);
+  assert.deepEqual([touchedOf(odd, false)[0], touchedOf(odd, false).length], [500, 500]);
+});
+
+test("$F1 touches '1-3-' and $E1 touches '-2-4'", () => {
+  const quarters = (se) => {
+    const g = geomOf(se, { len: 1000 });
+    assert.equal(g.combN, 4);
+    return [0, 1, 2, 3].map((q) => modTouches(g, false, q * 250 + 10));
+  };
+  assert.deepEqual(quarters(0xf1), [true, false, true, false]);
+  assert.deepEqual(quarters(0xe1), [false, true, false, true]);
+});
+
+test("the comb divides the EXTENT, so it composes with a region", () => {
+  // 3 $311F then 3 $F21F — the middle third, combed into 8.
+  decodeSampleRegion(0x31, out);
+  const from = out[0], to = out[1];
+  decodeSampleRegion(0xf2, out);
+  const g = new ModGeom();
+  resolveModGeom(g, {
+    modFrom: from, modTo: to, modCombBits: out[2], modCombOdd: out[3] !== 0,
+    modInvert: false, modEpoch: 0,
+  }, 0, 0, 1000);
+  assert.deepEqual([g.es, g.ee, g.combN], [333, 667, 8]);
+  const hits = touchedOf(g, false);
+  assert.ok(hits[0] === 333, "the extent still starts where it did");
+  assert.ok(hits[hits.length - 1] < 667, "…and ends where it did");
+  // 8 chunks of ~41 bytes, alternating: about half the extent survives.
+  assert.ok(Math.abs(hits.length - 167) <= 2, `half the extent, chunked (${hits.length})`);
+});
+
+test("n-bristle: $Fn cuts the extent into 2^(n+1) chunks", () => {
+  for (const [se, n] of [[0xf0, 2], [0xf1, 4], [0xf2, 8], [0xf3, 16], [0xf7, 256]]) {
+    assert.equal(geomOf(se, { len: 4096 }).combN, n);
+  }
+  assert.equal(geomOf(0xfe, { len: 4096 }).combN, 32768, "$FE — 32768 bristles");
+  // Finer than the extent is not an error: the chunks fall below a byte, so the
+  // comb degrades into roughly-every-other-byte — half the extent, never more
+  // than two bytes together. That is where the ladder is meant to end up.
+  const hits = touchedOf(geomOf(0xfe, { len: 1000 }), false);
+  assert.ok(Math.abs(hits.length - 500) < 25, `about half the extent (${hits.length})`);
+  let run = 1, worst = 1;
+  for (let k = 1; k < hits.length; k++) {
+    run = hits[k] === hits[k - 1] + 1 ? run + 1 : 1;
+    worst = Math.max(worst, run);
+  }
+  assert.equal(worst, 2, "…in ones and twos, not in runs");
+});
+
+test("the comb is relative to the loop region too", () => {
+  const g = geomOf(0xf0, { len: 1000, ls: 200, le: 600 });
+  const hits = touchedOf(g, false);
+  assert.deepEqual([hits[0], hits[hits.length - 1], hits.length], [200, 399, 200],
+    "the first half OF THE LOOP");
+});
+
 // The JVM twin (tsvm devtests/webconf/SampleModTest.java) prints the same
 // checksum over the same sweep: rounding is the classic port hazard here
 // (Math.round on a .5 boundary, integer vs double division), so every argument
-// is decoded against a spread of sample lengths and reduced to ONE number the
-// two engines can be compared on.
-test("region decode: the whole $se space matches the JVM engine", () => {
-  const out = new Int32Array(3);
-  // FNV-1a 64, in BigInt so the multiply cannot lose the high bits.
+// is decoded AND resolved against a spread of geometries and reduced to ONE
+// number the two engines can be compared on.
+test("region decode + resolve: the whole $se space matches the JVM engine", () => {
   let h = 0xcbf29ce484222325n;
   const MASK = (1n << 64n) - 1n;
-  for (const len of [2, 3, 1000, 999, 4095, 65535, 1048577]) {
+  const bite = (v) => { h = ((h ^ (BigInt(v) & 0xffffffffn)) * 1099511628211n) & MASK; };
+  const g = new ModGeom();
+  const view = {
+    modFrom: 0, modTo: 1, modCombBits: -1, modCombOdd: false, modInvert: false, modEpoch: 0,
+  };
+  for (const [len, ls, le] of [
+    [2, 0, 0], [3, 0, 3], [1000, 0, 0], [1000, 100, 900], [999, 0, 999],
+    [4095, 1000, 3000], [65535, 0, 0], [1048577, 7, 1048577],
+  ]) {
     for (let se = 0; se < 256; se++) {
-      const code = decodeSampleRegion(se, len, 0, len, out);
-      for (const v of [code, out[0], out[1], out[2]]) {
-        h = ((h ^ (BigInt(v) & 0xffffffffn)) * 1099511628211n) & MASK;
+      for (const invert of [false, true]) {
+        const code = decodeSampleRegion(se, out);
+        bite(code);
+        if (code === REGION_NONE) continue;
+        // A comb keeps the standing extent; anything else replaces it solid.
+        view.modFrom = 0; view.modTo = 1;
+        view.modCombBits = -1; view.modCombOdd = false;
+        if (code === REGION_COMB) {
+          view.modCombBits = out[2]; view.modCombOdd = out[3] !== 0;
+        } else {
+          view.modFrom = out[0]; view.modTo = out[1];
+        }
+        view.modInvert = invert;
+        view.modEpoch++;
+        resolveModGeom(g, view, ls, le, len);
+        for (const v of [g.es, g.ee, g.combN, g.combOdd ? 1 : 0, g.live ? 1 : 0, g.ds, g.dl]) bite(v);
       }
     }
   }
-  assert.equal(h.toString(16), "43411e372b055f5d",
+  assert.equal(h.toString(16), "e53e629f4d780104",
     "region decode must agree with SampleModTest's REGION-DECODE-CHECKSUM");
-});
-
-test("comb runs alternate every 2^n bytes", () => {
-  assert.ok(inCombRun(0, -1) && inCombRun(9999, -1), "solid region has no gaps");
-  // $F0 — every other byte.
-  assert.deepEqual([0, 1, 2, 3].map((k) => inCombRun(k, 0)), [true, false, true, false]);
-  // $F3 — runs of eight.
-  assert.deepEqual([0, 7, 8, 15, 16].map((k) => inCombRun(k, 3)),
-    [true, true, false, false, true]);
 });
 
 // ── engine legs ──────────────────────────────────────────────────────────────
 
-/** Engine with a 1000-byte ramp sample in slot 1, looping over its whole length. */
-function makeEngine() {
+/** Engine with a 1000-byte ramp sample in slot 1, looping over `[ls, le)`
+ *  (whole-sample by default, so byte offsets read straight off the argument). */
+function makeEngine(ls = 0, le = 1000) {
   const eng = new TaudEngine();
   for (let i = 0; i < 1000; i++) eng.sampleBin[i] = i & 0xff;
   const rec = new Uint8Array(256);
   const w16 = (o, v) => { rec[o] = v & 0xff; rec[o + 1] = (v >> 8) & 0xff; };
   w16(4, 1000);   // sampleLength
   w16(6, 32000);  // samplingRate @C4
-  w16(12, 1000);  // loopEnd
+  w16(10, ls);    // loopStart
+  w16(12, le);    // loopEnd
   rec[14] = 1;    // forward loop
   rec[21] = 0x3f; // vol env node 0 = full
   rec[171] = 255;
@@ -178,25 +345,41 @@ function render(eng, samples) {
   for (let i = 0; i < Math.ceil(samples / TRACKER_CHUNK); i++) eng.renderChunk(0, buf);
 }
 
+/**
+ * Render `samples`, then one chunk more so the anti-click crossfade (item
+ * 153.5) has run out and a read is the new mapping alone. A tick lands on the
+ * LAST sample of a whole row, so without this every byte read after one is a
+ * blend of the mapping before it and the mapping after.
+ */
+function renderSettled(eng, samples) {
+  render(eng, samples);
+  render(eng, MOD_XFADE_SAMPLES);
+}
+
+/** The byte the mixer would read at `i`, back in U8. */
+const rawOf = (eng, voice, inst) => (i) =>
+  Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+
 test("notefx 3 confines its operation to the region it names", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x311f]]); // 3 $311F — middle third, FUNK, top speed
+  loadRows(eng, [[0x03, 0x311f]]); // 3 $311F — middle third, FUNK, every tick
   render(eng, ROW);
   const inst = eng.instruments[1];
-  assert.equal(inst.modStart, 333, "region start = a third in");
-  assert.equal(inst.modEnd, 667);
+  assert.equal(inst.modFrom, 1 / 3, "region start = a third in");
+  assert.equal(inst.modTo, 2 / 3);
   assert.equal(inst.modOp, 1, "operation 1 is funk repeat");
   assert.equal(inst.modInvert, false, "notefx 3 modifies the region it names");
   assert.ok(inst.modMask !== null, "the walk must have flipped something");
 
   const voice = eng.playheads[0].trackerState.voices[0];
-  const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+  assert.deepEqual([voice.modGeom.es, voice.modGeom.ee], [333, 667]);
+  const raw = rawOf(eng, voice, inst);
   for (const i of [0, 100, 332, 667, 999]) {
     assert.equal(raw(i), i & 0xff, `byte ${i} is outside the region and must be untouched`);
   }
   let flipped = 0;
   for (let i = 333; i < 667; i++) if (raw(i) !== (i & 0xff)) flipped++;
-  assert.ok(flipped > 0, "the region must carry the inversion");
+  assert.equal(flipped, 6, "one byte per tick, six ticks to the row");
 });
 
 test("notefx 2 is the same command with the region inverted", () => {
@@ -205,17 +388,35 @@ test("notefx 2 is the same command with the region inverted", () => {
   render(eng, ROW);
   const inst = eng.instruments[1];
   assert.equal(inst.modInvert, true);
-  assert.equal(inst.modStart, 333, "the region it names is the one it spares");
-  assert.equal(inst.modEnd, 667);
+  assert.equal(inst.modFrom, 1 / 3, "the region it names is the one it spares");
+  assert.equal(inst.modTo, 2 / 3);
 
   const voice = eng.playheads[0].trackerState.voices[0];
-  const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+  const raw = rawOf(eng, voice, inst);
   for (let i = 333; i < 667; i++) {
     assert.equal(raw(i), i & 0xff, `byte ${i} is inside the spared region`);
   }
   let flipped = 0;
   for (let i = 0; i < 1000; i++) if (raw(i) !== (i & 0xff)) flipped++;
   assert.ok(flipped > 0, "…and the rest of the sample carries the inversion");
+});
+
+test("the region follows the voice's own loop", () => {
+  // The same argument on a sample looping over [200, 600) names the middle
+  // third OF THE LOOP — item 153's whole point.
+  const eng = makeEngine(200, 600);
+  loadRows(eng, [[0x03, 0x311f]]);
+  render(eng, ROW);
+  const inst = eng.instruments[1];
+  const voice = eng.playheads[0].trackerState.voices[0];
+  assert.deepEqual([voice.modGeom.es, voice.modGeom.ee], [333, 467]);
+  const raw = rawOf(eng, voice, inst);
+  for (const i of [0, 199, 332, 467, 700, 999]) {
+    assert.equal(raw(i), i & 0xff, `byte ${i} is outside the region`);
+  }
+  let flipped = 0;
+  for (let i = 333; i < 467; i++) if (raw(i) !== (i & 0xff)) flipped++;
+  assert.equal(flipped, 6);
 });
 
 test("$x = 0 resets the modification, region and all", () => {
@@ -227,9 +428,11 @@ test("$x = 0 resets the modification, region and all", () => {
   const inst = eng.instruments[1];
   assert.equal(inst.modMask, null, "reset clears what the operation accumulated");
   assert.equal(inst.modOp, 0);
-  assert.equal(inst.modStart, -1, "…and hands the region back to the loop");
+  assert.equal(inst.modFrom, 0, "…and hands the region back to the whole domain");
+  assert.equal(inst.modTo, 1);
+  assert.equal(inst.modCombBits, -1);
   assert.equal(inst.modOn, false);
-  assert.equal(eng.playheads[0].trackerState.voices[0].modSpeed, 0);
+  assert.equal(eng.playheads[0].trackerState.voices[0].modPeriod, 0);
 });
 
 test("re-stating the same command does not restart the walk", () => {
@@ -244,27 +447,49 @@ test("re-stating the same command does not restart the walk", () => {
     "a repeated identical command must not reset the write position");
 });
 
-test("the funk speed comes from the ladder, not the nibble", () => {
+test("$y is a tick period: $F every tick, $8 every eighth, $1 every fifteenth", () => {
+  // FUNK flips one byte per step, so the mask's popcount IS the step count.
+  const bitsSet = (eng) => {
+    const mask = eng.instruments[1].modMask;
+    let n = 0;
+    if (mask) for (const b of mask) for (let k = 0; k < 8; k++) if ((b >> k) & 1) n++;
+    return n;
+  };
+  for (const [y, ticks] of [[0xf, 24], [0xe, 12], [0xc, 6], [0x8, 3], [0x1, 1]]) {
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0f10 | y]]);
+    render(eng, 4 * ROW); // 24 ticks
+    assert.equal(bitsSet(eng), ticks,
+      `$y = ${y.toString(16)} steps every ${16 - y} ticks`);
+    assert.equal(eng.playheads[0].trackerState.voices[0].modPeriod, 16 - y);
+  }
+});
+
+test("$y = 0 freezes the modification without discarding it", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x0f14]]); // $y = 4 → speed 8, not 4
-  render(eng, TICK);
-  assert.equal(eng.playheads[0].trackerState.voices[0].modSpeed, FUNK_SPEED_TABLE[4]);
-  assert.equal(FUNK_SPEED_TABLE[4], 8);
+  loadRows(eng, [[0x03, 0x0f5f], [0x03, 0x0f50]]); // ROL8 at speed, then frozen
+  render(eng, ROW); // row 0's six steps, then row 1 freezes the clock
+  const inst = eng.instruments[1];
+  const held = inst.modRot;
+  assert.equal(held, 48, "six ticks of eight bytes");
+  render(eng, 3 * ROW);
+  assert.equal(eng.playheads[0].trackerState.voices[0].modPeriod, 0);
+  assert.equal(inst.modRot, held, "frozen keeps what it had");
+  assert.equal(inst.modOn, true);
 });
 
 test("ROL rotates the region left by its own step, wrapping inside it", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x214f]]); // 3 $214F — last two thirds, ROL4, top speed
-  render(eng, ROW);
+  loadRows(eng, [[0x03, 0x214f]]); // 3 $214F — last two thirds, ROL4, every tick
+  renderSettled(eng, ROW);
   const inst = eng.instruments[1];
   assert.equal(inst.modOp, 4, "operation 4 is ROL4");
-  assert.equal(inst.modStart, 333);
-  assert.equal(inst.modEnd, 1000);
-  assert.equal(inst.modRot % 4, 0, "the offset moves in whole steps of 4 bytes");
-  assert.ok(inst.modRot > 0 && inst.modOn);
+  assert.equal(inst.modRot, 24, "six ticks of four bytes");
+  assert.ok(inst.modOn);
 
   const voice = eng.playheads[0].trackerState.voices[0];
-  const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+  assert.deepEqual([voice.modGeom.es, voice.modGeom.ee], [333, 1000]);
+  const raw = rawOf(eng, voice, inst);
   for (const i of [0, 100, 332]) {
     assert.equal(raw(i), i & 0xff, `byte ${i} sits outside the region`);
   }
@@ -275,15 +500,15 @@ test("ROL rotates the region left by its own step, wrapping inside it", () => {
 
 test("SUB slides the region's level, wrapping through zero", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x0f8f]]); // 3 $0F8F — whole sample, SUB32, top speed
-  render(eng, ROW);
+  loadRows(eng, [[0x03, 0x0f8f]]); // 3 $0F8F — whole sample, SUB32, every tick
+  renderSettled(eng, ROW);
   const inst = eng.instruments[1];
   assert.equal(inst.modOp, 8, "operation 8 is SUB32");
-  assert.equal(inst.modSub % 32, 0, "…and it moves 32 at a time");
-  assert.ok(inst.modSub !== 0 && inst.modOn, `something must have moved (${inst.modSub})`);
+  assert.equal(inst.modSub, (6 * 32) & 0xff, "…and it moves 32 a tick");
+  assert.ok(inst.modOn);
 
   const voice = eng.playheads[0].trackerState.voices[0];
-  const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+  const raw = rawOf(eng, voice, inst);
   for (const i of [0, 1, 300, 999]) {
     assert.equal(raw(i), ((i & 0xff) - inst.modSub) & 0xff,
       `byte ${i} is the sample byte less the running subtrahend, wrapped`);
@@ -292,17 +517,15 @@ test("SUB slides the region's level, wrapping through zero", () => {
 
 test("SUB wraps: 128 twice over is the sample back again", () => {
   const eng = makeEngine();
-  // $y = 8 is speed $10, so a step lands every 8th tick (5120 samples). The JVM
-  // twin (tsvm devtests/webconf/SampleModTest.java) drives the same argument
-  // over the same spans — its render granularity cannot straddle a step there.
-  loadRows(eng, [[0x03, 0x0f98]]); // whole sample, SUB128, speed $10
-  render(eng, 5632); // one step: past tick 8, before tick 16
+  // $y = 8 is a step every 8 ticks (5120 samples).
+  loadRows(eng, [[0x03, 0x0f98]]); // whole sample, SUB128, every 8th tick
+  renderSettled(eng, 5632); // one step: past tick 8, before tick 16
   const inst = eng.instruments[1];
   assert.equal(inst.modSub, 128);
   const voice = eng.playheads[0].trackerState.voices[0];
-  const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+  const raw = rawOf(eng, voice, inst);
   assert.equal(raw(10), (10 - 128) & 0xff);
-  render(eng, 5632); // …the second lands back on zero
+  renderSettled(eng, 5632); // …the second lands back on zero
   assert.equal(inst.modSub, 0);
   assert.equal(inst.modOn, false, "a modification that changes nothing costs nothing to read");
   assert.equal(raw(10), 10);
@@ -313,8 +536,8 @@ test("a reserved region is ignored whole — speed included", () => {
     const eng = makeEngine();
     loadRows(eng, [[0x03, arg]]);
     render(eng, ROW);
-    assert.equal(eng.playheads[0].trackerState.voices[0].modSpeed, 0,
-      `${name} must not arm the speed either`);
+    assert.equal(eng.playheads[0].trackerState.voices[0].modPeriod, 0,
+      `${name} must not arm the clock either`);
     assert.equal(eng.instruments[1].modOp, 0, `${name} must not select an operation`);
   }
 });
@@ -326,7 +549,7 @@ test("S $Fxxx is untouched by any of it", () => {
   const inst = eng.instruments[1];
   assert.ok(inst.funkMask !== null, "legacy funk repeat still walks the loop");
   assert.equal(inst.modOp, 0, "…and never touches the notefx 2/3 modification");
-  assert.equal(inst.modStart, -1);
+  assert.equal(inst.modCombBits, -1);
 });
 
 test("resetFunkState clears the modification and the legacy mask alike", () => {
@@ -339,22 +562,21 @@ test("resetFunkState clears the modification and the legacy mask alike", () => {
   assert.equal(inst.funkMask, null);
   assert.equal(inst.modMask, null);
   assert.equal(inst.modOp, 0);
-  assert.equal(inst.modStart, -1);
+  assert.equal(inst.modFrom, 0);
+  assert.equal(inst.modTo, 1);
   assert.equal(inst.modOn, false);
   const v = eng.playheads[0].trackerState.voices[0];
   assert.equal(v.funkSpeed, 0);
-  assert.equal(v.modSpeed, 0);
+  assert.equal(v.modPeriod, 0);
   assert.equal(v.modWritePos, 0);
+  assert.equal(v.modXfade, 0);
 });
 
-// ── the scatter ladder (item 152) ────────────────────────────────────────────
+// ── the scatter ladder (items 152, 153.2) ────────────────────────────────────
 //
 // $C..$F SHUFFLE: every byte of the region is displaced on its own, each by its
-// own draw within 12.5 / 25 / 50 / 100% of the wrap domain. Not the region
-// moved as a block — that is what $2..$5 are for.
-
-/** rot as a SIGNED displacement: the short way round the wrap domain. */
-const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
+// own GAUSSIAN draw whose three-sigma bound is 12.5 / 25 / 50 / 100% of the wrap
+// domain. Not the region moved as a block — that is what $2..$5 are for.
 
 /** How far byte `i` travelled, the short way round a domain of `dl`. */
 const travel = (i, src, dl) => {
@@ -362,7 +584,10 @@ const travel = (i, src, dl) => {
   return d > dl / 2 ? d - dl : d;
 };
 
-test("scatterReach: the fraction of the domain each byte may be thrown", () => {
+/** rot as a SIGNED displacement: the short way round the wrap domain. */
+const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
+
+test("scatterReach: the three-sigma bound, as a fraction of the domain", () => {
   assert.equal(scatterReach(0xc, 1000), 125);
   assert.equal(scatterReach(0xd, 1000), 250);
   assert.equal(scatterReach(0xe, 1000), 500);
@@ -388,9 +613,31 @@ test("scatterSource: every byte gets its OWN throw, inside the reach", () => {
       seen.add(d);
       if (d !== 0) moved++;
     }
-    assert.ok(seen.size > reach, `op $${op.toString(16)}: the throws differ per byte (${seen.size} distinct)`);
+    assert.ok(seen.size > reach / 2, `op $${op.toString(16)}: the throws differ per byte (${seen.size} distinct)`);
     assert.ok(moved > dl * 0.9, "nearly every byte moves — this is a shuffle, not a rotation");
   }
+});
+
+test("the throw is gaussian: three sigma at the reach, most of it near home", () => {
+  // $C on a big domain: a reach of an eighth means nothing folds round the
+  // wrap, so travel() measures the draw itself rather than its image.
+  const dl = 20000;
+  const reach = scatterReach(MOD_RND12, dl);
+  let sum = 0, sumsq = 0, far = 0;
+  for (let i = 0; i < dl; i++) {
+    const d = travel(i, scatterSource(i, 0, dl, reach, 0x5eed), dl);
+    sum += d;
+    sumsq += d * d;
+    if (Math.abs(d) > reach / 3) far++;
+  }
+  const mean = sum / dl;
+  const sd = Math.sqrt(sumsq / dl - mean * mean);
+  assert.ok(Math.abs(mean) < reach * 0.02, `the bell is centred on home (mean ${mean.toFixed(1)})`);
+  assert.ok(Math.abs(sd - reach / 3) < reach * 0.02,
+    `the reach is three sigma (sd ${sd.toFixed(1)} vs ${(reach / 3).toFixed(1)})`);
+  // A uniform draw would put 2/3 of the bytes outside ±reach/3; a normal one
+  // puts under a third there.
+  assert.ok(far / dl < 0.4, `most bytes stay within one sigma-ish (${(far / dl).toFixed(2)})`);
 });
 
 test("scatterSource is NOT a rotation: neighbours do not keep their spacing", () => {
@@ -445,12 +692,12 @@ test("notefx 3 $C..$F scramble the region byte by byte, and keep scrambling", ()
     setRandomSource(makeSeededRandom(7));
     for (const [op, frac] of [[0xc, 0.125], [0xd, 0.25], [0xe, 0.5], [0xf, 1]]) {
       const eng = makeEngine();
-      loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F — whole sample, top speed
+      loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F — whole sample, every tick
       const inst = eng.instruments[1];
       const reach = Math.round(1000 * frac);
       const seeds = new Set();
-      // 40 rows is ~240 steps at speed $F: nothing accumulates, so every byte
-      // is still measured from where it belongs at the end of it.
+      // 40 rows is 240 steps: nothing accumulates, so every byte is still
+      // measured from where it belongs at the end of it.
       for (let r = 0; r < 40; r++) {
         render(eng, ROW);
         assert.equal(inst.modOp, op);
@@ -474,14 +721,15 @@ test("a scatter really moves which byte is read, per byte", () => {
   try {
     setRandomSource(makeSeededRandom(99));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 50% scatter, top speed
-    render(eng, ROW);
+    loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 50% scatter, every tick
+    renderSettled(eng, ROW);
     const inst = eng.instruments[1];
     assert.ok(inst.modOn, "the scramble is live");
     assert.equal(inst.modSub, 0, "a scatter is an address transform, not a level one");
     assert.equal(inst.modMask, null, "…and keeps no inversion mask");
     const voice = eng.playheads[0].trackerState.voices[0];
-    const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+    assert.equal(voice.modXfade, 0, "the crossfade has run out");
+    const raw = rawOf(eng, voice, inst);
     let moved = 0;
     for (let i = 0; i < 1000; i++) {
       const src = scatterSource(i, 0, 1000, inst.modScatter, inst.modSeed);
@@ -499,12 +747,12 @@ test("notefx 2 scatters everything BUT the region it names", () => {
     setRandomSource(makeSeededRandom(11));
     const eng = makeEngine();
     loadRows(eng, [[0x02, 0x31ef]]); // 2 $31EF — spare the middle third, scatter the rest
-    render(eng, ROW);
+    renderSettled(eng, ROW);
     const inst = eng.instruments[1];
     assert.equal(inst.modInvert, true);
     assert.ok(inst.modScatter > 0);
     const voice = eng.playheads[0].trackerState.voices[0];
-    const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+    const raw = rawOf(eng, voice, inst);
     for (const i of [400, 500, 600]) assert.equal(raw(i), i & 0xff, `byte ${i} is spared`);
     let moved = 0;
     for (let i = 0; i < 333; i++) if (raw(i) !== (i & 0xff)) moved++;
@@ -527,6 +775,7 @@ test("switching from a rotate to a scatter discards the rotation", () => {
     render(eng, TICK + 1); // into row 1: the operation changes
     assert.equal(inst.modOp, 0xc);
     assert.equal(inst.modRot, 0, "the ROL's offset is gone, not scattered from");
+    assert.equal(inst.modPrevRot, 0, "…and there is nothing left to fade back to");
     render(eng, TICK); // …and the first scatter step lands
     assert.equal(inst.modScatter, 125);
   } finally {
@@ -556,7 +805,8 @@ test("$x = 0 clears the scatter with everything else", () => {
 //
 // The scatter ladder's other half: one draw moves the WHOLE region, so the
 // waveform survives intact and lands somewhere else. Same read transform the
-// ROLs use — a rotation whose step is thrown rather than fixed.
+// ROLs use — a rotation whose step is thrown rather than fixed. Uniform, not
+// gaussian: the bell belongs where it decides a texture.
 
 test("$A lands only on eighths of the domain, and on all eight of them", () => {
   const dl = 1000;
@@ -637,7 +887,7 @@ test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => 
     for (const op of [0xa, 0xb]) {
       const eng = makeEngine();
       loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F
-      render(eng, ROW);
+      renderSettled(eng, ROW);
       const inst = eng.instruments[1];
       assert.equal(inst.modOp, op);
       assert.equal(inst.modScatter, 0, "a jump is not a shuffle");
@@ -645,7 +895,7 @@ test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => 
       // the guard has to agree with the offset rather than assume it moved.
       assert.equal(inst.modOn, inst.modRot !== 0);
       const voice = eng.playheads[0].trackerState.voices[0];
-      const raw = (i) => Math.round(readSamplePoint(eng, voice, inst, i, 1000, 1 << 23) * 127.5 + 127.5);
+      const raw = rawOf(eng, voice, inst);
       // EVERY byte moves by the SAME offset — that is what keeps the sound.
       for (let i = 0; i < 1000; i++) {
         assert.equal(raw(i), (i + inst.modRot) % 1000 & 0xff,
@@ -657,11 +907,27 @@ test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => 
   }
 });
 
+test("$A quantises to eighths of the LOOP, not of the file", () => {
+  try {
+    setRandomSource(makeSeededRandom(0xa11));
+    const eng = makeEngine(200, 600); // a 400-byte loop: slices of 50
+    loadRows(eng, [[0x03, 0x0faf]]);
+    const inst = eng.instruments[1];
+    for (let r = 0; r < 20; r++) {
+      render(eng, ROW);
+      assert.equal(inst.modRot % 50, 0, `${inst.modRot} is a whole eighth of the loop`);
+      assert.ok(inst.modRot < 400);
+    }
+  } finally {
+    setRandomSource(null);
+  }
+});
+
 test("$A stays on the slice grid however long it runs", () => {
   try {
     setRandomSource(makeSeededRandom(4));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0faf]]); // 3 $0FAF — whole sample, sliced jump, top speed
+    loadRows(eng, [[0x03, 0x0faf]]); // 3 $0FAF — whole sample, sliced jump, every tick
     const inst = eng.instruments[1];
     const seen = new Set();
     for (let r = 0; r < 40; r++) {
@@ -693,4 +959,83 @@ test("a jump and a scatter replace each other cleanly", () => {
   } finally {
     setRandomSource(null);
   }
+});
+
+// ── the anti-click crossfade (item 153.5) ────────────────────────────────────
+
+test("a step crossfades out of the mapping it replaced", () => {
+  try {
+    setRandomSource(makeSeededRandom(0xc1c1));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0f5f]]); // ROL8 every tick — a known 8-byte step
+    render(eng, TICK);              // tick 1's step has just landed
+    const inst = eng.instruments[1];
+    const voice = eng.playheads[0].trackerState.voices[0];
+    assert.ok(voice.modXfade > 0, "the fade is armed by the step");
+    assert.equal(inst.modRot - inst.modPrevRot, 8, "…and it fades out of the previous offset");
+    // Mid-fade a read is a genuine BLEND of the two mappings, so it need not
+    // equal either byte.
+    const w = voice.modXfade / MOD_XFADE_SAMPLES;
+    const mixed = readSamplePoint(eng, voice, inst, 400, 1000, 1 << 23) * 127.5 + 127.5;
+    const now = (400 + inst.modRot) % 1000 & 0xff;
+    const then = (400 + inst.modPrevRot) % 1000 & 0xff;
+    assert.ok(Math.abs(mixed - (then * w + now * (1 - w))) < 1e-6,
+      `the read is the crossfade of both mappings (${mixed})`);
+    assert.ok(w > 0 && w < 1);
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("the crossfade runs on the output clock and is over in 2 ms", () => {
+  const eng = makeEngine();
+  loadRows(eng, [[0x03, 0x0f5f]]);
+  render(eng, TICK);
+  const voice = eng.playheads[0].trackerState.voices[0];
+  const armed = voice.modXfade;
+  assert.ok(armed > 0 && armed <= MOD_XFADE_SAMPLES);
+  render(eng, MOD_XFADE_SAMPLES * 2);
+  assert.equal(voice.modXfade, 0, "…and then the new mapping stands alone");
+  const inst = eng.instruments[1];
+  const raw = rawOf(eng, voice, inst);
+  assert.equal(raw(400), (400 + inst.modRot) % 1000 & 0xff);
+});
+
+test("the crossfade actually flattens the step a jump would otherwise cut", () => {
+  // The worst case: $B throws the whole region somewhere else every tick. Ask
+  // the same voice for the same byte over the fade and the answer must WALK
+  // from the old mapping to the new one rather than snap to it.
+  try {
+    setRandomSource(makeSeededRandom(0x9ee9));
+    const eng = makeEngine();
+    loadRows(eng, [[0x03, 0x0fbf]]);
+    render(eng, TICK);
+    const inst = eng.instruments[1];
+    const voice = eng.playheads[0].trackerState.voices[0];
+    const now = (400 + inst.modRot) % 1000 & 0xff;
+    const then = (400 + inst.modPrevRot) % 1000 & 0xff;
+    assert.notEqual(now, then, "the throw really did move this byte");
+    // Walk the countdown by hand: the chunk clock is 128 samples and the whole
+    // fade is 64, so rendering cannot sample it.
+    let prev = null;
+    for (let x = MOD_XFADE_SAMPLES; x >= 0; x--) {
+      voice.modXfade = x;
+      const v = readSamplePoint(eng, voice, inst, 400, 1000, 1 << 23) * 127.5 + 127.5;
+      if (prev !== null) {
+        assert.ok(Math.abs(v - now) <= Math.abs(prev - now) + 1e-9,
+          `sample ${x} moved away from the new mapping (${prev} → ${v}, target ${now})`);
+      }
+      prev = v;
+    }
+    assert.ok(Math.abs(prev - now) < 1e-9, "…and arrives at it exactly");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("FUNK steps do not arm a crossfade — one byte is not a discontinuity", () => {
+  const eng = makeEngine();
+  loadRows(eng, [[0x03, 0x0f1f]]);
+  render(eng, TICK + 1);
+  assert.equal(eng.playheads[0].trackerState.voices[0].modXfade, 0);
 });

@@ -11,7 +11,7 @@ import {
 import { computePlaybackRate } from "./sampler.js";
 import {
   decodeSampleRegion, regionScratch, REGION_NONE, REGION_COMB,
-  MOD_OFF, FUNK_SPEED_TABLE,
+  MOD_OFF, modStepPeriod,
 } from "./samplemod.js";
 import { patchAt } from "./inst.js";
 import { applyPastNoteAction } from "./trigger.js";
@@ -455,38 +455,36 @@ export function applySEffect(eng, ts, voice, vi, arg) {
  * names the region to LEAVE ALONE. Everything else is identical, and an
  * instrument carries ONE modification, so either opcode replaces it.
  *
- *   $se  region        $x  operation (0 = reset)      $y  funk-speed index
+ *   $se  region        $x  operation (0 = reset)      $y  step period in ticks
  *
  * The state splits the way S $Fxxx's does: the modification belongs to the
- * INSTRUMENT (every channel sounding it hears the same sample) and the speed
- * driving it to the CHANNEL. A reserved operation or a reserved region is
- * ignored WHOLE, speed and all, so a typo cannot drive a modification the
- * writer never named.
+ * INSTRUMENT (every channel sounding it hears the same sample) and the clock
+ * driving it to the CHANNEL. A reserved region is ignored WHOLE, speed and all,
+ * so a typo cannot drive a modification the writer never named.
  */
 export function applySampleModEffect(eng, voice, rawArg, invert) {
   const inst = eng.instruments[voice.instrumentId];
   const op = (rawArg >>> 4) & 0xf;
   if (op === MOD_OFF) {
     inst.resetMod();
-    voice.modSpeed = 0;
-    voice.modAccumulator = 0;
+    voice.modPeriod = 0;
+    voice.modTickCount = 0;
     voice.modWritePos = 0;
     return;
   }
-  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, voice.activeSampleLength,
-    voice.activeSampleLoopStart, voice.activeSampleLoopEnd, regionScratch);
+  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
   if (code === REGION_NONE) return;
   const moved = code === REGION_COMB
-    ? inst.setModComb(regionScratch[2])
-    : inst.setModRegion(regionScratch[0], regionScratch[1], regionScratch[2]);
+    ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
+    : inst.setModRegion(regionScratch[0], regionScratch[1]);
   const swapped = inst.setModOp(op, invert);
   // A changed region or operation restarts the walk; re-stating the SAME
   // command row after row must not, or it would never get past its first step.
   if (moved || swapped) {
-    voice.modAccumulator = 0;
+    voice.modTickCount = 0;
     voice.modWritePos = 0;
   }
-  voice.modSpeed = FUNK_SPEED_TABLE[rawArg & 0xf];
+  voice.modPeriod = modStepPeriod(rawArg & 0xf);
 }
 
 /** Apply an env toggle to the foreground voice + (for a meta) its layer children. */

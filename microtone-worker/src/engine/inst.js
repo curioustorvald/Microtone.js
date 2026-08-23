@@ -343,21 +343,32 @@ export class TaudInst {
     // Funk repeat (S$Fx00) XOR bit-mask over the loop region.
     this.funkMask = null;
 
-    // Sample modification (item 130, notefx 2 / 3) — ONE per instrument: the
-    // opcodes are the same command, `2` inverting which side of the region is
-    // touched. Start -1 = "the sounding voice's loop region"; combShift -1 =
-    // solid. Only the ACTIVE operation's accumulator is ever non-zero.
+    // Sample modification (items 130, 152, 153, notefx 2 / 3) — ONE per
+    // instrument: the opcodes are the same command, `2` inverting which side of
+    // the region is touched. The extent is a FRACTION of the sounding voice's
+    // loop region (item 153), so it means the same thing whatever is loaded and
+    // wherever an Ixmp patch moves the loop; combBits -1 = solid. Only the
+    // ACTIVE operation's accumulator is ever non-zero.
     this.modOp = 0;               // MOD_OFF
     this.modInvert = false;       // notefx 2: the region is what is NOT touched
-    this.modStart = -1;
-    this.modEnd = -1;
-    this.modComb = -1;
+    this.modFrom = 0;             // extent, as a fraction of the domain
+    this.modTo = 1;
+    this.modCombBits = -1;        // comb: the extent cut into 2^(n+1) chunks
+    this.modCombOdd = false;      // ...keeping the odd ones ($Ex) or the even ($Fx)
     this.modMask = null;          // MOD_FUNK: one bit per sample byte
-    this.modRot = 0;              // MOD_ROL*: byte displacement
+    this.modRot = 0;              // MOD_ROL*/MOD_JUMP*: byte displacement
     this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
     this.modScatter = 0;          // MOD_RND*: per-byte throw, in bytes (0 = off)
     this.modSeed = 0;             // MOD_RND*: this step's scramble
     this.modOn = false;           // hot-path guard: does it change any byte yet?
+    this.modEpoch = 0;            // bumped whenever the GEOMETRY moves, so a
+                                  // voice's resolved view knows to rebuild
+    // The state the last step replaced, for the anti-click crossfade (item
+    // 153.5): for MOD_XFADE_SAMPLES output samples a voice reads both mappings.
+    this.modPrevRot = 0;
+    this.modPrevSub = 0;
+    this.modPrevScatter = 0;
+    this.modPrevSeed = 0;
   }
 
   get sampleLoopSustain() { return (this.loopMode & 0x04) !== 0; }
@@ -498,24 +509,30 @@ export class TaudInst {
   }
 
   /**
-   * Point the modification at a new region (item 130). Its accumulated state is
-   * indexed against that region, so a move invalidates it. Returns whether
-   * anything MOVED, which is what tells the caller to restart the walk: writing
-   * the same region every row must not keep resetting it.
+   * Point the modification at a new extent (item 130), as a fraction of the
+   * sounding voice's domain. Its accumulated state is indexed against that
+   * region, so a move invalidates it, and a fresh extent is always solid — the
+   * comb is the other half of the same argument and is written after it.
+   * Returns whether anything MOVED, which is what tells the caller to restart
+   * the walk: writing the same region every row must not keep resetting it.
    */
-  setModRegion(start, end, combShift) {
-    if (this.modStart === start && this.modEnd === end && this.modComb === combShift) return false;
-    this.modStart = start;
-    this.modEnd = end;
-    this.modComb = combShift;
+  setModRegion(from, to) {
+    if (this.modFrom === from && this.modTo === to && this.modCombBits === -1) return false;
+    this.modFrom = from;
+    this.modTo = to;
+    this.modCombBits = -1;
+    this.modCombOdd = false;
+    this.modEpoch++;
     this.clearModState();
     return true;
   }
 
-  /** Comb the region without moving its ends ($Fn). */
-  setModComb(combShift) {
-    if (this.modComb === combShift) return false;
-    this.modComb = combShift;
+  /** Comb the extent without moving its ends ($Fn even bristles, $En odd). */
+  setModComb(bits, odd) {
+    if (this.modCombBits === bits && this.modCombOdd === odd) return false;
+    this.modCombBits = bits;
+    this.modCombOdd = odd;
+    this.modEpoch++;
     this.clearModState();
     return true;
   }
@@ -527,6 +544,7 @@ export class TaudInst {
     if (this.modOp === op && this.modInvert === invert) return false;
     this.modOp = op;
     this.modInvert = invert;
+    this.modEpoch++;   // the inversion decides the wrap domain, so it is geometry
     this.clearModState();
     return true;
   }
@@ -539,15 +557,30 @@ export class TaudInst {
     this.modScatter = 0;
     this.modSeed = 0;
     this.modOn = false;
+    this.modPrevRot = 0;
+    this.modPrevSub = 0;
+    this.modPrevScatter = 0;
+    this.modPrevSeed = 0;
+  }
+
+  /** Remember what the next step is replacing, for the crossfade that covers
+   *  it (item 153.5). Called immediately BEFORE the step lands. */
+  snapshotModState() {
+    this.modPrevRot = this.modRot;
+    this.modPrevSub = this.modSub;
+    this.modPrevScatter = this.modScatter;
+    this.modPrevSeed = this.modSeed;
   }
 
   /** $x = 0 — the modification, region and all. */
   resetMod() {
     this.modOp = 0;
     this.modInvert = false;
-    this.modStart = -1;
-    this.modEnd = -1;
-    this.modComb = -1;
+    this.modFrom = 0;
+    this.modTo = 1;
+    this.modCombBits = -1;
+    this.modCombOdd = false;
+    this.modEpoch++;
     this.clearModState();
   }
 

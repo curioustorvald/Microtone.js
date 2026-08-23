@@ -777,7 +777,7 @@ The `else` branch is where a row without `Y` puts the voice back on its base pan
 | --- | --- |
 | `$s $e` | the region — see *The region argument* below |
 | `$x` | the operation (below); `$0` switches the modification off |
-| `$y` | speed, as an index into ProTracker's funk-speed table |
+| `$y` | the step period in **ticks**: `$F` every tick, `$1` every fifteenth, `$0` frozen |
 
 Operations:
 
@@ -787,72 +787,82 @@ Operations:
 | `$1` | invert loop — invert one more byte of the region per step |
 | `$2` `$3` `$4` `$5` | rotate the region's bytes **left** by 1 / 2 / 4 / 8 bytes per step |
 | `$6` `$7` `$8` `$9` | subtract 2 / 8 / 32 / 128 from every byte of the region per step, wrapping through zero |
-| `$A` `$B` | **jump**: move the whole region to a new random offset each step, drawn from the whole wrap domain — `$A` lands only on a whole **eighth** of it, `$B` anywhere |
-| `$C` `$D` `$E` `$F` | **scatter**: shuffle the region, throwing every byte its own way, within 12.5% / 25% / 50% / 100% of the wrap domain |
+| `$A` `$B` `C` | **jump**: move the whole region to a new random offset each step, drawn uniformly from the whole domain — `$A` lands on a whole **eighth** of it, `$B` lands on a **sixteenth**, `$C` anywhere |
+| `$D` `$E` `$F` | **scatter**: shuffle the region, throwing every byte its own way, within 1/512th / 1/64th / 1/8th of the wrap domain |
 
 There is no rotate-right: rotating left by `n` and right by `span − n` are the same picture, and the ladder buys more spent on step sizes.
 
-`$A`…`$F` are the same address transform driven by chance instead of by a step, and they split on **what the throw applies to**. A **jump** (`$A` `$B`) draws ONE offset and moves the whole region by it, so the waveform arrives intact somewhere else — the sound survives, its place in the sample does not. A **scatter** (`$C`…`$F`) draws a separate offset **for every byte**, so the region is shuffled rather than moved and `$F`, whose reach is the whole domain, leaves nothing where it was.
+**Everything is measured against the loop region.** The command's **domain** is the sounding voice's loop when it has one and the whole sample when it does not, and every selector, every comb, every wrap and every jump quantum is a fraction of THAT — never a raw byte count, never the base record's loop. So one argument means the same musical thing on every instrument it is pointed at, an Ixmp-patched voice follows its own loop, and `$A`'s eighths are eighths of the bar the loop holds rather than of the file that contains it. The domain test is [§8.4](#8-4-invert-loop)'s: an instrument whose loop points are empty has the whole sample as its domain, which is also why `$00` and `$0F` name the same span.
 
-The jump pair both reach the whole domain and differ in **grain**: `$A` quantises its throw to eighths of the domain, `$B` does not. On a loop cut to the bar that is the difference between a beat repeat and a glitch — an eighth is a musical distance, so `$A` lands where a hit starts and the loop comes back re-ordered but still in time, while `$B` lands mid-transient as readily as on one. Nothing accumulates in either family: every step measures from the sample's real position, which is what stops `$C` from drifting into `$F` after a few seconds. The speed index reads the same table `S $Fxxx` and ProTracker's `EFx` are built on:
+`$A`…`$F` are the same address transform driven by chance instead of by a step, and they split on **what the throw applies to**. A **jump** (`$A`…`$C`) draws ONE offset and moves the whole region by it, so the waveform arrives intact somewhere else — the sound survives, its place in the sample does not. A **scatter** (`$D`…`$F`) draws a separate offset **for every byte**, so the region is shuffled rather than moved.
 
-```
-funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
-```
+The jump triplet both reach the whole domain and differ in **grain**: `$A` and `$B` quantises its throw to eighths/sixteenths of the domain, `$C` does not. On a loop cut to the bar that is the difference between a beat repeat and a glitch — an eighth is a musical distance, so `$A` and `$B` lands where a hit starts and the loop comes back re-ordered but still in time, while `$C` lands mid-transient as readily as on one. The scatter ladder splits instead on **spread**, `$D` roughens the waveform, `$F` forgets it, `$E` is genuinely between. Nothing accumulates in either family: every step measures from the sample's real position, which is what stops `$D` from drifting into `$F` after a few seconds.
 
-`$y = 0` is speed zero: the modification **freezes** where it is and keeps everything it has accumulated. `$x = 0` is the reset — the operation, the region and the accumulated state all go.
+`$y` is a **period in ticks**, not a divisor: `16 − $y`, so `$F` steps every tick, `$E` every other one, `$8` every eighth and `$1` every fifteenth. `$y = 0` **freezes** the modification where it is and keeps everything it has accumulated. `$x = 0` is the reset — the operation, the region and the accumulated state all go.
+
+ProTracker's funk-speed ladder does **not** apply here. That table is an accumulator divisor: `EFx` had to fit its timing into a running sum, which buys an uneven ladder whose steps land where the arithmetic puts them rather than where the bar does. Nothing in this command needs that compromise, and `$A` is worth little without exact timing — a randomised drum loop has to re-deal itself ON the tick grid or it is not in time. `S $Fxxx` keeps the historical ladder, because it is ProTracker's effect.
 
 **Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $Fxxx` remains the ProTracker-compatible invert loop and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
 
-**Implementation.** An instrument carries **one** modification — writing either opcode replaces it — and the state splits the way `S $Fxxx`'s does: the modification belongs to the **instrument** (every channel sounding it hears the same sample) and the speed driving it to the **channel**. Nothing is ever written to the sample pool; the operation is applied as bytes are read.
+**Implementation.** An instrument carries **one** modification — writing either opcode replaces it — and the state splits the way `S $Fxxx`'s does: the modification belongs to the **instrument** (every channel sounding it hears the same sample) and the clock driving it to the **channel**. Nothing is ever written to the sample pool; the operation is applied as bytes are read.
 
 ```
-on every tick (when $y's speed != 0 and an operation is selected):
-    mod_accumulator += mod_speed
-    if mod_accumulator >= $80:                    # hard reset, as invert loop
-        mod_accumulator = 0
+the domain, per sounding voice:
+    if loop_end > loop_start:  domain = [loop_start, loop_end)
+    else:                      domain = [0, sample_length)
+    extent = domain_start + round(domain_length × from) …
+             domain_start + round(domain_length × to)     # from/to are $se
+    wrap   = the extent for effect 3, the whole domain for effect 2
+
+on every tick (when an operation is selected and $y != 0):
+    if ++mod_tick_count >= 16 - $y:
+        mod_tick_count = 0
         step the operation once (below)
 
 on sample byte read at position i:
-    if the modification TOUCHES i (region, comb and $2's inversion):
-        ROL/JUMP: read from  domain_start + ((i - domain_start + rot) mod domain_length)
-        SCATTER:  read from  domain_start + ((i - domain_start + throw(i)) mod domain_length)
-                  where throw(i) is i's OWN offset, uniform over ±reach
+    if the modification TOUCHES i (extent, comb and $2's inversion):
+        ROL/JUMP: read from  wrap_start + ((i - wrap_start + rot) mod wrap_length)
+        SCATTER:  read from  wrap_start + ((i - wrap_start + throw(i)) mod wrap_length)
+                  where throw(i) is i's OWN offset, gaussian about 0
         FUNK: invert the byte when mod_mask[i] is set
         SUB:  byte = (byte - sub) AND $FF
 ```
 
-- **FUNK** keeps a bit-mask one bit per **sample** byte (not per region byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole sample, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
-- **ROL** accumulates a byte displacement. The wrap domain is the region for `3` and the **whole sample** for `2`, whose touched set reaches both ends.
+- **FUNK** keeps a bit-mask one bit per **sample** byte (not per domain byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole domain, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
+- **ROL** accumulates a byte displacement. Its step is an absolute byte count, the one thing in the command that is not a fraction — it is a grain size, not a place.
 - **SUB** accumulates a subtrahend modulo 256, so `$9` (128) inverts the level on odd steps and restores it on even ones, while `$6` (2) crawls.
-- **JUMP** is ROL with a thrown step: one offset for the whole region, drawn uniformly over the domain and wrapped into it. `$A` **MUST** quantise the draw to a whole multiple of `round(domain_length ÷ 8)` — eight outcomes, `0` (stay home) among them — while `$B` draws any byte position. Rounding rather than truncating the slice matters: on a domain of 1000 the slice is 125 and the eighth boundary is where it should be, where `⌊1000 ÷ 8⌋` would put every slice a little short of it and the error would grow across the domain. It **MUST NOT** accumulate — each step's offset is measured from the region's real position, not added to the last one. Every byte moves together, so the waveform is intact when it lands; this is a randomised `O $xxyy`, once a step, and it is the one random operation that leaves the instrument recognisable.
-- **SCATTER** shuffles. Every byte of the region **MUST** be displaced *independently*, each by its own offset uniform over `±round(domain_length × fraction)` and wrapped into the domain — moving the region as a block is the rotation, not this. The offsets **MUST NOT** accumulate: each step measures from the byte's ORIGINAL position, which is what keeps `$C` inside its eighth of the domain however long the effect runs, and what keeps the four operations four operations rather than the same random walk arriving at different speeds.
+- **JUMP** is ROL with a thrown step: one offset for the whole region, drawn **uniformly** over the domain and wrapped into it. `$A` and `$B` **MUST** quantise the draw to a whole multiple of `round(domain_length ÷ {8,16})` — eight/sixteen outcomes, `0` (stay home) among them — while `$C` draws any byte position. Rounding rather than truncating the slice matters: on a domain of 1000 the slice is 125 and the eighth boundary is where it should be, where `⌊1000 ÷ 8⌋` would put every slice a little short of it and the error would grow across the domain. It **MUST NOT** accumulate — each step's offset is measured from the region's real position, not added to the last one. Every byte moves together, so the waveform is intact when it lands; this is a randomised `O $xxyy`, once a step, and it is the one random operation that leaves the instrument recognisable.
+- **SCATTER** shuffles. Every byte of the region **MUST** be displaced *independently*, each by its own offset uniform over `±round(domain_length × fraction)` and wrapped into the domain — moving the region as a block is the rotation, not this. The offsets MUST NOT accumulate: each step measures from the byte's ORIGINAL position, which is what keeps `$D` inside its domain however long the effect runs, and what keeps the four operations four operations rather than the same random walk arriving at different speeds.
 - A scatter's offset **MUST** be a pure **function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolator tap and through both channels of a stereo sample, and a fresh draw per read would smear every setting into the same white noise. The reference engine therefore draws ONE 32-bit seed per step and hashes it with the byte index (a murmur3-style finaliser); the seed comes from the same RNG as volume and pan swing, so a scatter is the one modification a replay does not reproduce byte-for-byte. A **permutation is not required** — a byte may be drawn twice and another not at all. Requiring one would mean shuffling an index table the size of the sample on every step, and it is not audible at this grain.
 - A scatter is read back through the **normal interpolator**, exactly as if the shuffled bytes had been written into the pool. Where the reach is small next to the sample's own period the neighbouring reads stay correlated and the result is the same note with a rougher waveform; where it is large they do not, the interpolator averages uncorrelated bytes, and the result is band-limited noise several decibels quieter than the source. Both are correct; neither is to be compensated for in the engine.
+- **A step is crossfaded, not cut.** Replacing an address or level mapping in one sample is a discontinuity, and at `$y = $F` that is one per tick — which is what the clicking is. An engine **SHOULD** ease each step in: the reference engine reads both mappings for **64 output samples** (2 ms at 32 kHz) and mixes them on a linear weight, which costs one extra pool read per tap over that window and leaves the effect its bite. FUNK is exempt — one flipped byte is not a discontinuity. **Changing or clearing** the command is not covered either, and is not meant to be: that is a deliberate edit, like a note cut.
 - Changing the operation, the region or the inversion **MUST** discard whatever the previous operation accumulated and restart the walk — a rotation offset means nothing to a subtract. Re-stating the **same** command row after row **MUST NOT** restart anything, or a command repeated down a pattern would never get past its first step.
-- Every `$x` nibble now carries an operation, but a reserved REGION is still ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
+- Every `$x` nibble carries an operation, but a reserved REGION is still ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
 - The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the funk mask.
 
 ### The region argument ($se, effects 2 and 3)
 
-The region byte's two nibbles are read as a **from/to pair covering the whole sample** while `s <= e`, and as a **selector** when `s > e`:
+The region byte's two nibbles are read as a **from/to pair covering the whole domain** while `s <= e`, and as a **selector** when `s > e`. Every row of this table is a fraction of the domain, never of the file:
 
 | `$se` | region |
 | --- | --- |
-| `$00` | the loop region — as `S $Fxxx` has always meant it, so an instrument that does not loop has no region and neither effect does anything (reach for `$0F`) |
-| `$se`, `s <= e` | from `s/16` to `(e+1)/16` of the sample — so `$0F` is the whole sample and `$4B` the middle half |
+| `$00` | the whole loop region — the same span as `$0F`, and the spelling to write when the loop is the point |
+| `$se`, `s <= e` | from `s/16` to `(e+1)/16` of the domain — so `$0F` is all of it and `$4B` the middle half |
 | `$10` | the middle half |
 | `$20` / `$21` | the first two thirds / the last two thirds |
 | `$30` / `$31` / `$32` | the first / middle / last third |
-| `$F0`…`$FE` | **comb**: keep the current extent, but alternate in and out of it every 2^n bytes — `$F0` every other byte, `$F3` runs of 8, `$FE` runs of 16384 |
-| `$40`…`$ED` where `s > e` | reserved |
+| `$F0`…`$FE` | **comb, even bristles**: cut the extent into `2^(n+1)` equal chunks and keep the 0th, 2nd, 4th… — `$F0` is the first half, `$F1` touches `1-3-` of four, `$FE` is 32768 bristles |
+| `$E0`…`$ED` | **comb, odd bristles**: the same cut keeping the 1st, 3rd, 5th… — `$E0` is the second half, `$E1` touches `-2-4` |
+| `$40`…`$DD` where `s > e` | reserved |
 
 Notes an engine **MUST** honour:
 
-- Region ends are **rounded** to the nearest byte.
-- `$00` is the loop region **as the sounding voice sees it**: an Ixmp patch brings its own loop points, and the region follows them rather than the base record's.
-- A comb selector leaves the extent alone, so `3 $311F` followed by `3 $F21F` combs the middle third. The extent and the comb are independent halves of one region.
-- The inversion of effect `2` applies to the region **and** its comb: `2 $F01F` is every OTHER byte of whatever extent is standing.
+- Region ends are **rounded** to the nearest byte, from the fraction — an engine that stores byte offsets instead of fractions will disagree the moment an Ixmp patch moves the loop under a sounding voice.
+- `$00` is the loop region **as the sounding voice sees it**: an Ixmp patch brings its own loop points, and the region follows them rather than the base record's. So does everything else in the table.
+- The two comb ladders stop where they do because `$FF`, `$EE` and `$EF` have `s <= e` and are already ordinary extents (the last sixteenth, the fifteenth, the last eighth). That is why the odd ladder is one rung shorter than the even one.
+- A comb selector leaves the extent alone, so `3 $311F` followed by `3 $F21F` combs the middle third into eight. The extent and the comb are independent halves of one region, and the comb divides **the extent**, not the domain. Writing a new extent clears the comb: a region written from scratch is written solid.
+- A comb finer than its extent is not an error. The chunks fall below a byte and the ladder ends where it began historically — every other byte, give or take.
+- The inversion of effect `2` applies to the region **and** its comb: `2 $F01F` is the second half of whatever extent is standing. It does **not** reach outside the domain: `2` spares its region and modifies the rest of the LOOP, not the rest of the file.
 
 ### Why sample mods and why more of them
 
@@ -866,17 +876,23 @@ This technique has historical precedent in Konami's MSX-era sound design, where 
 
 **Sample Jump** is the one to reach for first, because it is the one that keeps the instrument. Every step the whole region moves to a new random offset — measured from where it really sits, never added to the last throw — and because every byte moves *together*, what arrives is the sample intact, playing from somewhere else. A looped instrument becomes a machine that re-deals which part of itself it is looping, on the beat, without ever ceasing to sound like itself.
 
-That is **Paula**, and it is the oldest trick on the machine. Paula had no playback engine to speak of — a start pointer, a length, and DMA that fetched words until the loop came round — so everything the Amiga's composers did to a note already sounding was done by writing those registers underneath it. ProTracker's `9xx` — the effect this format spells `O $xxyy` — is exactly that: a read-head jump handed to the effect column, and one of the most productive commands in the tradition, because a sample cut at a different place is a different instrument for free. Jump is `9xx` given a die and a clock, and the two spellings are the die's faces. `$B` rolls anywhere in the sample. `$A` rolls one of **eight**, quantised to whole eighths of the region — which is the difference between a beat repeat and a glitch, and the reason the pair is worth two opcodes rather than one.
+That is **Paula**, and it is the oldest trick on the machine. Paula had no playback engine to speak of — a start pointer, a length, and DMA that fetched words until the loop came round — so everything the Amiga's composers did to a note already sounding was done by writing those registers underneath it. ProTracker's `9xx` — the effect this format spells `O $xxyy` — is exactly that: a read-head jump handed to the effect column, and one of the most productive commands in the tradition, because a sample cut at a different place is a different instrument for free. Jump is `9xx` given a die and a clock, and the two spellings are the die's faces. `$C` rolls anywhere in the sample. `$A` rolls one of **eight**, quantised to whole eighths of the region — which is the difference between a beat repeat and a glitch, and the reason the pair is worth two opcodes rather than one.
 
-A drum loop is written to a bar. Cut that bar into eight and every boundary is where a hit starts, so `$A` on a one-bar loop can only ever land on a hit: what comes back is the loop with its slices re-dealt, still in time, still playing the same drums — a beat repeat that never repeats the same way twice, and one you can leave running under a whole section because it cannot drift out of the grid. `$B` on the same loop lands mid-transient as readily as on one, and that is its own instrument: the loop coming apart rather than being re-ordered. Point either at something sustained instead of struck and the grid stops mattering — there the choice is just how coarse you want the re-seating to be.
+A drum loop is written to a bar. Cut that bar into eight and every boundary is where a hit starts, so `$A` on a one-bar loop can only ever land on a hit: what comes back is the loop with its slices re-dealt, still in time, still playing the same drums — a beat repeat that never repeats the same way twice, and one you can leave running under a whole section because it cannot drift out of the grid. `$C` on the same loop lands mid-transient as readily as on one, and that is its own instrument: the loop coming apart rather than being re-ordered. Point either at something sustained instead of struck and the grid stops mattering — there the choice is just how coarse you want the re-seating to be.
 
-**Sample Scatter** is the same idea refusing to stop. Every byte of the region is thrown its *own* way, by its own draw, and thrown again from where it belongs on the next step: `$C` keeps each within an eighth of the domain of home, and `$F` keeps it nowhere at all — which is why the ladder ends there rather than at some tidier number. Nothing accumulates here either, so it is not a slow slide into chaos but a chosen amount of it, held for as long as the command stands.
+**Sample Scatter** is the same idea refusing to stop. Every byte of the region is thrown its *own* way, by its own draw, and thrown again from where it belongs on the next step: `$D` keeps each within an 512th of the domain of home, and `$F` keeps it eighth — higher displacements turns them into an essentially a white noise, thus the ladder ends there rather than at some tidier number. Nothing accumulates here either, so it is not a slow slide into chaos but a chosen amount of it, held for as long as the command stands.
 
-What that *sounds* like is decided by the reach against the sample's own period, and both ends are worth knowing before reaching for it. Throw a byte a short way on material whose waveform is slow next to the throw — a single-cycle wave, a low sustained tone — and the bytes it lands among are its near neighbours: the note keeps its pitch and its level and comes back with a rougher, dirtier waveform. Throw it across many cycles of the source and the bytes it lands among have nothing to do with it: what comes back is noise, several decibels quieter than the source, because the interpolator is averaging things that no longer agree. The four settings are the walk between those.
+What that *sounds* like is decided by the throw against the sample's own period, and both ends are worth knowing before reaching for it. Throw a byte a short way on material whose waveform is slow next to the throw — a single-cycle wave, a low sustained tone — and the bytes it lands among are its near neighbours: the note keeps its pitch and its level and comes back with a rougher, dirtier waveform. Throw it across many cycles of the source and the bytes it lands among have nothing to do with it: what comes back is noise, several decibels quieter than the source, because the interpolator is averaging things that no longer agree. The four settings are the walk between those.
 
 The far end is **granular synthesis**, taken to the grain size this hardware actually has. A granular engine cuts a sample into grains and sprays their read positions around a playhead; the spray is the control that decides whether the result thickens the source or forgets it. Scatter is that control with the grain shrunk to a single byte — no windows, no envelopes, nothing to tune but how far — so what it sprays is not a cloud of recognisable fragments but the sample's own material re-dealt. `$F` is the honest name for the end of that: the sample's statistics survive and nothing else does. (A jump, by the same measure, is a granular engine with exactly one grain — which is why it stays musical where scatter goes to noise.)
 
 The near end is **wavetable manipulation**, and it is the same idea Sample Subtraction is built on. Konami's SCC work rewrote the 32-byte table under a sounding note to make the timbre move; Subtraction does that to the table's *levels*, sliding every point down together. Scatter does it to the table's *order* — the cycle keeps its length, so the note keeps its pitch, and only the shape inside it is disturbed. Point `3 $0FCy` at a single-cycle waveform and that is exactly what you get: the same note, breaking up.
+
+**The comb** is how a region stops being one place and becomes a *rate*. Every selector above cuts the sample somewhere; the comb cuts the cut, into `2` then `4` then `8` equal chunks and on down to 32768, and keeps every other one. At the coarse end that is an edit — `$F0` is the first half of the loop, `$E0` the second, and a pair of rows can hand a modification from one half of a bar to the other without touching the extent. Two or three rungs down, the chunks are shorter than a note and the alternation is heard as a texture rather than a place. At the fine end the chunks fall under a byte and the comb is the ProTracker artefact the ladder started from — every other byte, ring-modulating the sample against the sampling rate.
+
+Because the ladder is written in **bristles** rather than in bytes, it means the same thing on every instrument: `$F2` is eight chunks of the loop whether the loop is 400 bytes or 40000, so a comb written against a drum loop keeps working when it is pointed at a pad. The even and odd spellings are the same comb read from the other side, which is what makes the pair worth having — `3 $F1xy` and `3 $E1xy` on two rows are the two halves of one gesture, and `2` inverts either.
+
+**Clicks**, finally, are the tax on all of this, and they are paid at the step. Replacing an address mapping between one output sample and the next is a discontinuity by construction: a jump teleports the waveform, a scatter re-deals it, `$9` inverts its polarity. At `$y = $F` that happens every tick, which is what "sample mods click" has always meant. The engine crossfades each step over two milliseconds instead of cutting to it — long enough that the edge is gone, short enough that a beat repeat still lands on the beat. What remains is the effect's own seam, where the region wraps: that one is the modification, not an artefact of it, and it is left alone.
 
 It may look strange compared with conventional effects such as chorus or phaser, but sample-domain manipulation is very much in the tradition of tracker and programmable-sound synthesis: the waveform itself becomes part of the instrument's performance. Between them the operations perform the three things a sample has — its **content** (Invert Loop flips the bytes), its **level** (Subtraction slides them) and its **order** (the rotations step it, Jump throws it whole, Scatter shuffles it apart) — with nothing written to the pool and nothing to undo when the song stops.
 

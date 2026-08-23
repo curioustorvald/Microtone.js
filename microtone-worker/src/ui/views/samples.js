@@ -13,7 +13,9 @@ import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
-import { scatterSource } from "../../engine/samplemod.js";
+import {
+  ModGeom, resolveModGeom, modTouches, modAddress,
+} from "../../engine/samplemod.js";
 import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
@@ -333,19 +335,16 @@ export class SamplesView {
       }
       for (const inst of s.users) {
         const g = audio.getSampleMod(inst);
-        if (g && g.on) { mod = g; modMask = audio.getModMask(inst); break; }
+        if (g && g.modOn) { mod = g; modMask = audio.getModMask(inst); break; }
       }
     }
-    // A region of -1 means "the sample's own loop" — the sentinel S$Fx has
-    // always implied and notefx 2/3 keep for their $00 argument.
-    const modStart = mod ? (mod.start >= 0 ? mod.start : s.loopStart) : 0;
-    const modEnd = mod ? (mod.start >= 0 ? mod.end : s.loopEnd) : 0;
-    const modLive = mod !== null && modEnd > modStart;
-    const inRun = (k, comb) => comb < 0 || ((k >>> comb) & 1) === 0;
-    const touches = (p) => {
-      const inside = p >= modStart && p < modEnd && inRun(p - modStart, mod.comb);
-      return mod.invert ? !inside : inside;
-    };
+    // The region is a FRACTION of the sample's loop region (item 153), resolved
+    // here through the engine's own geometry — the snapshot carries the
+    // instrument's field names precisely so this cannot drift from playback.
+    const modGeom = new ModGeom();
+    if (mod) resolveModGeom(modGeom, mod, s.loopStart, s.loopEnd, s.len);
+    const modLive = mod !== null && modGeom.live;
+    const touches = (p) => modTouches(modGeom, mod.modInvert, p);
     // A mask sized for a shorter sample than the one on screen (the engine
     // grows it lazily) stops where the bits do.
     const funkEnd = funkMask
@@ -353,17 +352,9 @@ export class SamplesView {
     const byteAt = (p, base = s.ptr) => {
       let src = p;
       const hit = modLive && touches(p);
-      if (hit && (mod.scatter > 0 || mod.rot)) {
-        const ds = mod.invert ? 0 : modStart;
-        const dl = mod.invert ? s.len : modEnd - modStart;
-        if (dl > 1) {
-          // The scatter throws every byte its own way, so the picture has to be
-          // drawn through the engine's own mapping rather than one offset.
-          src = mod.scatter > 0
-            ? scatterSource(p, ds, dl, mod.scatter, mod.seed)
-            : ds + (((p - ds + mod.rot) % dl) + dl) % dl;
-        }
-      }
+      // The scatter throws every byte its own way, so the picture has to be
+      // drawn through the engine's own mapping rather than one offset.
+      if (hit) src = modAddress(modGeom, p, mod.modRot, mod.modScatter, mod.modSeed);
       let v = bin[base + src];
       let flipped = src !== p;
       // The legacy mask is tested against the byte actually READ, exactly as
@@ -375,7 +366,7 @@ export class SamplesView {
       if (hit) {
         if (modMask && modMask.length) {
           if ((modMask[src >>> 3] >>> (src & 7)) & 1) { v ^= 0xff; flipped = true; }
-        } else if (mod.sub) { v = (v - mod.sub) & 0xff; flipped = true; }
+        } else if (mod.modSub) { v = (v - mod.modSub) & 0xff; flipped = true; }
       }
       return { v, flipped };
     };

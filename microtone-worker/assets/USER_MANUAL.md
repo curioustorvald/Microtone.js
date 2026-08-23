@@ -1474,7 +1474,7 @@ sidebar (also at [Note Effects](#effects)).
 |---|---|---|
 | 1 | Global flags | `$ff00` — tone-slide mode and interpolation bits |
 | 2 | Sample mod (outside) | `$sexy` — as 3, but `se` is the region left alone |
-| 3 | Sample mod (region) | `$sexy` — region, operation, speed |
+| 3 | Sample mod (region) | `$sexy` — region (of the loop), operation, step period in ticks |
 | 5 | Filter cutoff | IT: `$xx00` · SF2: `$xxxx` absolute cents · `$FFFF` reset |
 | 6 | Filter resonance | IT: `$xx00` · SF2: `$xxxx` centibels · `$FFFF` reset |
 | 7 | Pattern ditto | `$llrr` — repeat the last `ll` rows `rr` times |
