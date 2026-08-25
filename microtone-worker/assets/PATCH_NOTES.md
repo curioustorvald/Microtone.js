@@ -6,6 +6,9 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-08-26
 
+- **Microtone ships with a demo song now, and the welcome screen hands it to you.** *When the heavens fall* — Purple Motion's 1994 tracker piece, rebuilt here as a four-song ambisonic project — is one click from the welcome screen, or from **Demo songs…** in the File view once you already have something open. It is a whole project, samples and all: play it, pull it apart, and read the composer's own note on the piece in the Project tab's Message. Monitor it on headphones, or export it to ambisonic and let your own decoder place it.
+  - Included with the permission of Jonne Valtonen, who wrote it — on the condition that the tracker stays free. So it stays too.
+  - Loading a demo replaces what is open, exactly as opening a file would, and nothing reaches your browser storage unless you save it yourself.
 - **Every value control in the app is now a pair of pushbuttons round the value.** Spinners read `– 123 +`, dropdowns read `◄ abc ►`, and both are drawn like the buttons beside them instead of by the operating system — so the panels look the same on every machine rather than three different ways. The value in the middle is still the real thing: type in it, use ↑ / ↓, and a dropdown still opens its full list when clicked. Hold a `–` or `+` and it repeats, accelerating.
   - **The value sits centred, and slides left only when it does not fit** — a long preset name or a big number is cut off at its end rather than at both ends.
   - **Fixed: the Chord maker showed leftover spinner buttons for the modes it was hiding.** A voice row hides three of its four value fields to show the fourth, and the new button frames stayed behind when the field inside them went. Hiding a value control now takes its buttons with it, wherever it is.

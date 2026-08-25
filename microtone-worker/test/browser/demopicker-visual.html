@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>demo picker — visual</title>
+<style>html,body{margin:0;padding:0;overflow:hidden;background:#2f3134}iframe{display:block;border:0;width:100vw;height:100vh}</style></head>
+<body>
+  <!-- Item 163: the File tab's "Demo songs…" picker, held open for a grab.
+       python3 tools/test-server.py, then
+       chromium --headless=new --window-size=1100,620 --timeout=9000 \
+         --screenshot=/tmp/demopicker.png \
+         http://localhost:8932/test/browser/demopicker-visual.html -->
+  <img src="/hang" hidden alt="" />
+  <script type="module">
+    const p = new URLSearchParams(location.search);
+    const f = document.createElement("iframe");
+    f.src = `../../index.html?theme=${p.get("theme") ?? "dim"}`;
+    document.body.appendChild(f);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    await new Promise((r) => { const i = setInterval(() => {
+      if (f.contentWindow?.__microtone) { clearInterval(i); r(); } }, 100); });
+    await sleep(400);
+    const d = f.contentDocument;
+    d.querySelector('#tabs button[data-view="files"]').click();
+    await sleep(300);
+    [...d.querySelectorAll("#filesHost .files-bar button")]
+      .find((b) => /Demo songs/.test(b.textContent))?.click();
+  </script>
+</body>
+</html>

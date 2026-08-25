@@ -1,13 +1,17 @@
 // Welcome screen (item 104) — what the Timeline tab shows before a project is
 // loaded, in place of the one-line "drop a file here" empty state.
 //
-// Four panels:
+// Five panels:
 //   Start           new project / open / import MIDI, plus the drop hint and
 //                   the documentation links.
 //   Recent projects the OPFS listing, most recently touched first. "Touched"
 //                   is max(file mtime, last opened) — opening a project does
 //                   not rewrite it, so the mtime alone would keep a file you
 //                   worked on all afternoon below one you saved last week.
+//   Demo songs      the bundled projects (item 163), listed from
+//                   assets/demo_projects/demos.json. The one panel here that
+//                   has something to show on a first run, which is why it sits
+//                   above the fold rather than inside the File tab alone.
 //   What's new      the newest dated section of assets/PATCH_NOTES.md, read
 //                   live so it can never drift from the changelog.
 //   Support         the banner that retired the topbar's Donate/Sponsor
@@ -17,6 +21,7 @@
 
 import * as opfs from "../../storage/opfs.js";
 import { renderMarkdown, firstSection, topLevelBullets } from "../markdown.js";
+import { fillDemos } from "../demos.js";
 import { t, currentLang, onLangChange } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 
@@ -32,7 +37,7 @@ export class WelcomeView {
   /**
    * @param host container element (#welcomeHost)
    * @param callbacks { newProject(), open(), importMidi(), openRecent(name),
-   *                    browseFiles(), help() }
+   *                    browseFiles(), help(), openDemo(entry) }
    */
   constructor(store, host, callbacks = {}) {
     this.store = store;
@@ -70,12 +75,14 @@ export class WelcomeView {
     const token = ++this._token;
     const grid = document.createElement("div");
     grid.className = "wc-grid";
-    grid.append(this.startPanel(), this.recentPanel(), this.newsPanel(), this.banner());
+    grid.append(this.startPanel(), this.recentPanel(), this.demoPanel(),
+                this.newsPanel(), this.banner());
     const inner = document.createElement("div");
     inner.className = "wc-inner";
     inner.append(this.hero(), grid);
     this.root.replaceChildren(inner);
     this.fillRecent(token);
+    this.fillDemos(token);
     this.fillNews(token);
   }
 
@@ -173,6 +180,23 @@ export class WelcomeView {
       b.addEventListener("click", () => this.cb.openRecent?.(e.name));
       body.appendChild(b);
     }
+  }
+
+  // ── Demo songs ──
+
+  demoPanel() {
+    const p = panel("wc-demos", t("welcome.demos"));
+    this.demoBody = document.createElement("div");
+    this.demoBody.className = "wc-demo-body";
+    this.demoBody.appendChild(note(t("welcome.loading")));
+    p.appendChild(this.demoBody);
+    return p;
+  }
+
+  /** The manifest fetch is shared with the File tab's picker — see demos.js. */
+  fillDemos(token) {
+    return fillDemos(this.demoBody, (entry) => this.cb.openDemo?.(entry),
+      () => token === this._token);
   }
 
   // ── What's new ──

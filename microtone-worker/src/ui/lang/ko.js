@@ -209,6 +209,7 @@ export default {
   "welcome.recentNone": "아직 아무것도 없습니다 — 저장한 프로젝트가 이곳에 실립니다.",
   "welcome.recentUnavailable": "브라우저 저장소를 쓸 수 없습니다(비공개 모드?). 이곳에는 아무것도 남지 않으니 작업물을 내보내서 보관하세요.",
   "welcome.allProjects": "전체 프로젝트 (F7) →",
+  "welcome.demos": "데모 곡",
   "welcome.news": "새로운 기능",
   "welcome.newsAll": "패치 노트 전체 보기 →",
   "welcome.newsFail": "패치 노트를 불러오지 못했습니다.",
@@ -216,6 +217,21 @@ export default {
   "welcome.support": "광고도, 계정도, 유료 등급도 없습니다. 한 사람이 여유 시간에 만들고 있습니다. 도움이 되셨다면 후원을 부탁드립니다.",
   "welcome.kofi": "커피 한 잔 사주기",
   "welcome.sponsor": "스폰서 되기",
+
+  // ── 데모 프로젝트 ──
+  "demos.by": "{composer} 작곡",
+  "demos.song": "{n}곡",
+  "demos.songs": "{n}곡",
+  "demos.stereo": "스테레오",
+  "demos.surround": "서라운드",
+  "demos.ambisonic": "앰비소닉",
+  "demos.permission": "작곡가의 허락을 받아 수록했으며, Microtone 자체의 라이선스가 적용되지 않습니다.",
+  "demos.none": "이 빌드에는 데모 곡이 들어 있지 않습니다.",
+  "demos.listFail": "데모 목록을 불러오지 못했습니다.",
+  "demos.loading": "{title} 불러오는 중…",
+  "demos.loadFail": "{title}을(를) 불러오지 못했습니다.",
+  "demos.pickTitle": "데모 곡",
+  "demos.pickBody": "열어서 재생하고 뜯어볼 수 있는 수록 프로젝트입니다. 파일을 여는 것과 똑같이, 하나를 불러오면 지금 열려 있는 프로젝트를 대체합니다.",
 
   // ── common ──
   "common.ok": "확인",
@@ -254,6 +270,7 @@ export default {
   "files.saveAs": "다른 이름으로 저장…",
   "files.import": "Taud/모듈 가져오기…",
   "files.importMidi": "MIDI 가져오기…",
+  "files.demos": "데모 곡…",
   "files.export": "내보내기",
   "files.exportWav": "오디오 내보내기…",
   "files.opfsWarn": "OPFS를 사용할 수 없습니다(사생활 보호 모드?) — 브라우저에 아무것도 저장되지 않으니 내보내기로 작업물을 보관하세요.",

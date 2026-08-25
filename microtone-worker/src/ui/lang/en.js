@@ -212,6 +212,7 @@ export default {
   "welcome.recentNone": "Nothing here yet — your projects will be listed as you save them.",
   "welcome.recentUnavailable": "In-browser storage is unavailable (private mode?), so nothing persists here. Export your work to keep it.",
   "welcome.allProjects": "All projects (F7) →",
+  "welcome.demos": "Demo songs",
   "welcome.news": "What's new",
   "welcome.newsAll": "Read all patch notes →",
   "welcome.newsFail": "The patch notes could not be loaded.",
@@ -219,6 +220,21 @@ export default {
   "welcome.support": "No ads, no accounts, no paid tier — one person writes it in their spare time. If it is useful to you, please consider chipping in.",
   "welcome.kofi": "Buy me a coffee",
   "welcome.sponsor": "Become a sponsor",
+
+  // ── demo projects (item 163) ──
+  "demos.by": "by {composer}",
+  "demos.song": "{n} song",
+  "demos.songs": "{n} songs",
+  "demos.stereo": "Stereo",
+  "demos.surround": "Surround",
+  "demos.ambisonic": "Ambisonic",
+  "demos.permission": "Included with the composer's permission, and not covered by Microtone's own licence.",
+  "demos.none": "No demo songs are bundled with this build.",
+  "demos.listFail": "The demo list could not be loaded.",
+  "demos.loading": "Loading {title}…",
+  "demos.loadFail": "{title} could not be loaded.",
+  "demos.pickTitle": "Demo songs",
+  "demos.pickBody": "Bundled projects you can open, play and take apart. Loading one replaces what is open, exactly as opening a file would.",
 
   // ── common ──
   "common.ok": "OK",
@@ -261,6 +277,7 @@ export default {
   "files.saveAs": "Save As…",
   "files.import": "Import Taud/Module…",
   "files.importMidi": "Import MIDI…",
+  "files.demos": "Demo songs…",
   "files.export": "Export",
   "files.exportWav": "Export audio…",
   "files.opfsWarn": "OPFS unavailable (private mode?) — nothing persists in-browser; use Export to keep your work.",

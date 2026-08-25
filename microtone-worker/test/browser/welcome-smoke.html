@@ -11,6 +11,9 @@
        the way again. -->
   <iframe id="app" src="../../index.html" style="width:1200px;height:800px"></iframe>
   <iframe id="app2" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:800px"></iframe>
+  <!-- Item 163. Also no ?load=: this frame starts on the welcome screen so the
+       Demo songs panel can be CLICKED, which is what takes the screen away. -->
+  <iframe id="app3" src="../../index.html" style="width:1200px;height:800px"></iframe>
   <script type="module">
     const out = [];
     const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
@@ -34,7 +37,7 @@
         const host = doc.getElementById("welcomeHost");
         const shellOk = !host.hidden && win.__microtone.store.view === "timeline" &&
           doc.getElementById("timeline").hidden &&
-          host.querySelectorAll(".wc-panel").length === 3 &&
+          host.querySelectorAll(".wc-panel").length === 4 &&
           !!host.querySelector(".wc-banner");
         log(`welcome screen up on boot, timeline canvas away: ${shellOk ? "ok" : "FAIL"}`);
 
@@ -64,6 +67,18 @@
           ? [...rows].every((r) => r.querySelector(".wc-file-name")?.textContent.trim())
           : !!recent.querySelector(".wc-note");
         log(`Recent projects (${rows.length} row(s)): ${recentOk ? "ok" : "FAIL"}`);
+
+        // ── Demo songs (item 163): the manifest, drawn as rows that load ──
+        const manifest = await (await fetch("../../assets/demo_projects/demos.json")).json();
+        const demoRows = [...host.querySelectorAll(".wc-demos .demo-row")];
+        const demosOk = demoRows.length === manifest.demos.length &&
+          demoRows.every((r, i) => r.querySelector(".wc-file-name")
+            .textContent.includes(manifest.demos[i].title)) &&
+          demoRows.every((r) => r.querySelector(".btn-ico")) &&
+          // a permitted demo says so, once, under the list
+          (!manifest.demos.some((d) => d.permission) ||
+            host.querySelectorAll(".wc-demos .demo-foot").length === 1);
+        log(`Demo songs (${demoRows.length} row(s)): ${demosOk ? "ok" : "FAIL"}`);
 
         // ── What's new: the newest PATCH_NOTES.md section, live ──
         const notesMd = await (await fetch("../../assets/PATCH_NOTES.md")).text();
@@ -144,6 +159,46 @@
         const mru = JSON.parse(win2.localStorage.getItem("microtone-recent") ?? "{}");
         const mruOk = typeof mru["WHEN.taud"] === "number";
         log(`open recorded in the recent-projects MRU: ${mruOk ? "ok" : "FAIL"}`);
+
+        // ── item 163: a demo row really loads, in a frame of its own (the
+        // first one has to stay document-free for the legs above) ──
+        const win3 = await boot("app3");
+        const doc3 = win3.document;
+        await sleep(400);
+        const first = manifest.demos[0];
+        doc3.querySelector("#welcomeHost .wc-demos .demo-row").click();
+        for (let i = 0; i < 300 && !win3.__microtone.store.doc; i++) await sleep(100);
+        const loaded = win3.__microtone.store.doc;
+        const loadOk = !!loaded && loaded.songs.length === first.songs &&
+          win3.__microtone.store.fileName === first.file &&
+          loaded.meta.projectName === first.title &&
+          !loaded.dirty &&                              // opened, not imported
+          doc3.getElementById("welcomeHost").hidden &&  // welcome got out of the way
+          win3.__microtone.store.view === "timeline";
+        log(`demo row loads "${first.title}" (${loaded?.songs.length} songs, ` +
+            `"${loaded?.meta.projectName}"): ${loadOk ? "ok" : "FAIL"}`);
+
+        // …and it is NOT copied into OPFS behind the user's back — a demo is
+        // read from assets/ every time; only a Save they ask for keeps one.
+        const opfsMod = await win3.eval('import("/src/storage/opfs.js")');
+        const inOpfs = (await opfsMod.list()).some((f) => f.name === first.file);
+        log(`demo left out of OPFS until saved: ${!inOpfs ? "ok" : "FAIL"}`);
+
+        // The File tab's picker is the way back once the welcome screen is gone.
+        doc3.querySelector('#tabs button[data-view="files"]').click();
+        await sleep(250);
+        const demoBtn = [...doc3.querySelectorAll("#filesHost .files-bar button")]
+          .find((b) => b.textContent.trim() === t("files.demos"));
+        demoBtn?.click();
+        await sleep(400);
+        const picker = doc3.querySelector("dialog.demo-modal");
+        const pickRows = picker?.querySelectorAll(".demo-row").length ?? 0;
+        const pickerOk = !!picker?.open && pickRows === manifest.demos.length;
+        picker?.querySelector(".modal-buttons button").click();
+        await sleep(100);
+        const closedOk = !doc3.querySelector("dialog.demo-modal");
+        log(`File tab "${t("files.demos")}" picker (${pickRows} row(s)), cancels clean: ` +
+            `${pickerOk && closedOk ? "ok" : "FAIL"}`);
 
         log("DONE");
       } catch (err) {

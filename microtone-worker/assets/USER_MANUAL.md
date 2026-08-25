@@ -74,6 +74,21 @@ and the editor snaps entry, display and stepping to that table's degrees. See
 
 A new project has no samples. Add instruments later from the Instruments view.
 
+### Demo songs
+
+The welcome screen (the Timeline tab before anything is loaded) lists the
+**demo songs** bundled with Microtone, and **Demo songs…** in the File view
+reaches the same list once you have a project open. Loading one replaces what
+is open, exactly as opening a file would; nothing is written to browser storage
+unless you save it yourself.
+
+A demo is a whole project, samples and all — open it, play it, and take it
+apart. The composer's own note on the piece is usually in the project
+**Message**, in the [Project](#project-f6) view.
+
+Demo songs are included with the permission of their composers and keep their
+own copyright; they are not covered by Microtone's licence.
+
 The app warns before discarding unsaved changes, and autosaves your work — see
 [Saving and autosave](#saving-and-autosave).
 
@@ -1331,6 +1346,7 @@ should use **Export** to keep your work.
 
 - **Import Taud/Module…** — bring a file from your real disk into OPFS.
 - **Import MIDI…** — convert a MIDI file and save the result straight into OPFS.
+- **Demo songs…** — open one of the bundled projects; see [Demo songs](#demo-songs).
 - **Export ⬇** — download the project as a `.taud` file.
 - **Export audio…** — render the current song offline through the same engine. Pick a target from the pictures, a sample rate and a maximum length (songs that never HALT stop at the cap). Every target is the same song re-rendered, not a downmix stage bolted on the end:
   - **Stereo** — 16-bit, the ordinary file. For a surround song you also choose how it comes down to two channels: **Fold** (the safe choice for speakers) or **Binaural** (keeps height and front/back, for headphones).

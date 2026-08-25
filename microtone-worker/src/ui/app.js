@@ -34,6 +34,8 @@ import * as opfs from "../storage/opfs.js";
 import { pickFile } from "../storage/import-export.js";
 import { convertToTaud, converterFor, CONVERT_ACCEPT } from "../convert/convert.js";
 import { showImportProgress } from "./popups/importlog.js";
+import { showProgress } from "./popups/progress.js";
+import { fetchDemo } from "./demos.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange, THEMES } from "./theme.js";
@@ -602,6 +604,29 @@ async function saveProjectCopyAs(name) {
   updateStatus();
 }
 
+/**
+ * Load one of the bundled demo songs (item 163). Half a megabyte over the
+ * network, so it gets a real progress bar rather than a silent pause; the
+ * bytes then go through the ordinary load path, which means the
+ * discard-unsaved-work prompt applies exactly as it does to any other open.
+ *
+ * Nothing is written to OPFS: a demo is fetched from assets/ every time, and
+ * only a Save the user asks for makes a local copy.
+ */
+async function loadDemo(entry) {
+  const progress = showProgress(t("demos.loading", { title: entry.title ?? entry.file }));
+  let bytes;
+  try {
+    bytes = await fetchDemo(entry, (f) => progress.set(f));
+  } catch (err) {
+    progress.fail(t("demos.loadFail", { title: entry.title ?? entry.file }));
+    console.error(`DEMO: ${entry.file} failed`, err);
+    return;
+  }
+  progress.done();
+  await loadBytes(entry.file, bytes);
+}
+
 /** Welcome screen (item 104) — the Timeline tab's content before a project is
  *  loaded. Everything it offers is an existing entry point, wired here rather
  *  than re-implemented. */
@@ -612,6 +637,7 @@ const WELCOME_HOOKS = {
   openRecent: async (name) => loadBytes(name, await opfs.read(name)),
   browseFiles: () => showView("files"),
   help: () => showHelp(),
+  openDemo: (entry) => loadDemo(entry),
 };
 
 /**
@@ -657,6 +683,7 @@ const VIEW_SPEC = {
       songIndex: () => store.songIndex,
       importMidi: () => importMidiInteractive({ toOpfs: true }),
       editSong: (i) => editSongInteractive(i),
+      openDemo: (entry) => loadDemo(entry),
     }),
   },
 };

@@ -622,11 +622,13 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   grid-template-columns: minmax(0, 19rem) minmax(0, 1fr);
   grid-template-areas:
     "start  recent"
+    "demos  demos"
     "news   news"
     "banner banner";
 }
 .wc-start { grid-area: start; }
 .wc-recent { grid-area: recent; }
+.wc-demos { grid-area: demos; }
 .wc-news { grid-area: news; }
 .wc-banner { grid-area: banner; }
 
@@ -731,6 +733,25 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
 .wc-file-meta { color: var(--dim); font-size: 0.78rem; white-space: nowrap; }
 .wc-file-size { min-width: 5ch; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* Demo songs (item 163) — full-width rows, so one bundled demo does not read
+   as a mostly-empty card grid and a later half-dozen still stack tidily. The
+   row itself is a .wc-file, which is what the Recent list uses. */
+.wc-demo-body { display: flex; flex-direction: column; gap: 1px; }
+.demo-row { gap: 0.5rem; }
+.demo-row .btn-ico { flex: none; opacity: 0.75; }
+.demo-row:hover .btn-ico { opacity: 1; color: var(--accent); }
+.demo-row .wc-file-name { white-space: normal; }
+.demo-by { color: var(--dim); }
+.demo-foot {
+  margin: 0.5rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+/* …and the same rows inside the File tab's picker (demos.js). */
+.demo-modal .demo-list { display: flex; flex-direction: column; gap: 1px; margin: 0.6rem 0 0.2rem; }
+.demo-modal .demo-row { border-color: var(--border); background: var(--panel-2); }
+
 .wc-note { margin: 0.2rem 0; color: var(--dim); font-size: 0.85rem; }
 .wc-warn { color: var(--err-fg); }
 .wc-more {
@@ -788,7 +809,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 @media (max-width: 760px) {
   .wc-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "start" "recent" "news" "banner";
+    grid-template-areas: "start" "recent" "demos" "news" "banner";
   }
   .wc-brand { font-size: 2.1rem; }
   .welcome-view { padding: 1.1rem 0.8rem 1.6rem; }

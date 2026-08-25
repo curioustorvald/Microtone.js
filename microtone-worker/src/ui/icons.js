@@ -258,6 +258,11 @@ export const BTN_ICON = {
   book: line('<path d="M12 6.5V20"/>' +
     '<path d="M12 6.5C10.6 5.2 8.6 4.5 6 4.5H3.5v13H6c2.6 0 4.6.7 6 2 1.4-1.3 3.4-2 6-2' +
     'h2.5v-13H18c-2.6 0-4.6.7-6 2z"/>'),
+  /** A bundled demo song (item 163) — a disc with a play mark cut into it, so
+   *  it reads as "a recording to listen to" rather than as the transport's
+   *  own Play button. */
+  demo: line('<circle cx="12" cy="12" r="8.5"/>' +
+    '<path d="M10 8.8 16 12l-6 3.2z" fill="currentColor" stroke-width="1.2"/>'),
   /** Buy the author a coffee — a cup with steam. */
   coffee: line('<path d="M4 9.5h13v6a4.5 4.5 0 0 1-4.5 4.5h-4A4.5 4.5 0 0 1 4 15.5z"/>' +
     '<path d="M17 11h1.8a2.6 2.6 0 0 1 0 5.2H17"/>' +

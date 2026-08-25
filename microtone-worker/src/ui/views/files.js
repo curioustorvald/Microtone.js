@@ -13,6 +13,7 @@ import {
 } from "../../audio/stem-export.js";
 import { showProgress } from "../popups/progress.js";
 import { unescapeName } from "../names.js";
+import { showDemoPicker } from "../demos.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 
@@ -20,7 +21,7 @@ export class FilesView {
   /**
    * @param host container element
    * @param callbacks { openBytes(name, bytes), currentDoc() → {doc, fileName},
-   *                    songIndex(), importMidi(), editSong(index) }
+   *                    songIndex(), importMidi(), editSong(index), openDemo(entry) }
    */
   constructor(store, host, callbacks) {
     this.store = store;
@@ -45,13 +46,16 @@ export class FilesView {
       await this.cb.importMidi();
       this.refresh();
     });
+    // Demos are reachable from the welcome screen too, but that screen is gone
+    // the moment anything is loaded — this is the way back to them (item 163).
+    const demoBtn = mkBtn(t("files.demos"), () => this.demos());
     const exportBtn = mkBtn("", () => this.export());
     setIconLabel(exportBtn, "download", t("files.export"), { after: true });
     const wavBtn = mkBtn(t("files.exportWav"), () => this.exportWav());
     const stemsBtn = mkBtn(t("files.exportStems"), () => this.exportStems());
     // doc-scoped actions grey out until something is loaded
     for (const b of [saveBtn, saveAsBtn, exportBtn, wavBtn, stemsBtn]) b.disabled = !doc;
-    bar.append(saveBtn, saveAsBtn, importBtn, importMidiBtn, exportBtn, wavBtn, stemsBtn);
+    bar.append(saveBtn, saveAsBtn, importBtn, importMidiBtn, demoBtn, exportBtn, wavBtn, stemsBtn);
     this.root.appendChild(bar);
 
     if (!ok) {
@@ -163,6 +167,16 @@ export class FilesView {
     // only native containers land in OPFS verbatim.
     if (!converterFor(file.name) && await opfs.available()) await opfs.write(file.name, bytes);
     await this.cb.openBytes(file.name, bytes);
+    this.refresh();
+  }
+
+  /** Pick one of the bundled demo songs and load it (item 163). Nothing lands
+   *  in OPFS — a demo is read from assets/ every time, and only a Save the user
+   *  asks for makes a local copy of it. */
+  async demos() {
+    const entry = await showDemoPicker();
+    if (!entry) return;
+    await this.cb.openDemo?.(entry);
     this.refresh();
   }
 
