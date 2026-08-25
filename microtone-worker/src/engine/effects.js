@@ -1,5 +1,5 @@
 // Effect-column dispatch — port of AudioAdapter.kt resolveArg (3214),
-// applyEffectRow (3216), applySEffect (3538), forEachEnvTarget (3633),
+// applyEffectRow (3216), applySEffect (3538), forEachLayerTarget (3633),
 // applyFilterParamEffect (3650), applyRetrigVolMod (4090).
 // Behavioural contract: TAUD_NOTE_EFFECTS.md; implementation truth: the Kotlin.
 
@@ -39,38 +39,46 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       break;
     }
     // 2 spares the region it names; 3 modifies it. Same command otherwise.
-    case EffectOp.OP_2: applySampleModEffect(eng, voice, rawArg, true); break;
-    case EffectOp.OP_3: applySampleModEffect(eng, voice, rawArg, false); break;
+    case EffectOp.OP_2: applySampleModEffect(eng, ts, voice, vi, rawArg, true); break;
+    case EffectOp.OP_3: applySampleModEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_5: applyFilterParamEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_6: applyFilterParamEffect(eng, ts, voice, vi, rawArg, true); break;
     case EffectOp.OP_8: {
       // 8 $xyzz — Bitcrusher: x = clip mode, y = bit depth, zz = sample-skip.
+      // The crusher is the CHANNEL's colouring, so it lands on every voice the
+      // channel is sounding — a metainstrument's layer children included, or
+      // only its first layer would be crushed (item 154).
       const x = (rawArg >>> 12) & 0xf;
       const y = (rawArg >>> 8) & 0xf;
       const z = rawArg & 0xff;
-      voice.clipMode = x & 3;
-      if (rawArg === 0) {
-        voice.bitcrusherDepth = 0;
-        voice.bitcrusherSkip = 0;
-        voice.bitcrusherCounter = 0;
-        voice.right.bitcrusherCounter = 0;
-      } else if (y === 0 && z === 0) {
-        // x000 — clip mode only.
-      } else {
-        voice.bitcrusherDepth = y;
-        voice.bitcrusherSkip = z;
-        voice.bitcrusherCounter = 0;
-        voice.right.bitcrusherCounter = 0;
-      }
+      forEachLayerTarget(ts, voice, vi, (v) => {
+        v.clipMode = x & 3;
+        if (rawArg === 0) {
+          v.bitcrusherDepth = 0;
+          v.bitcrusherSkip = 0;
+          v.bitcrusherCounter = 0;
+          v.right.bitcrusherCounter = 0;
+        } else if (y === 0 && z === 0) {
+          // x000 — clip mode only.
+        } else {
+          v.bitcrusherDepth = y;
+          v.bitcrusherSkip = z;
+          v.bitcrusherCounter = 0;
+          v.right.bitcrusherCounter = 0;
+        }
+      });
       break;
     }
     case EffectOp.OP_9: {
-      // 9 $x0zz — Overdrive: x = clip mode, zz = amplification index.
+      // 9 $x0zz — Overdrive: x = clip mode, zz = amplification index. Fans out
+      // across a metainstrument exactly as the bitcrusher does (item 154).
       const x = (rawArg >>> 12) & 0xf;
       const z = rawArg & 0xff;
-      voice.clipMode = x & 3;
-      if (rawArg === 0) voice.overdriveAmp = 0;
-      else if (z !== 0) voice.overdriveAmp = z;
+      forEachLayerTarget(ts, voice, vi, (v) => {
+        v.clipMode = x & 3;
+        if (rawArg === 0) v.overdriveAmp = 0;
+        else if (z !== 0) v.overdriveAmp = z;
+      });
       break;
     }
     case EffectOp.OP_A: {
@@ -385,7 +393,7 @@ export function applySEffect(eng, ts, voice, vi, arg) {
     case 0x6: ts.finePatternDelayExtra += x; break;
     case 0x7: {
       // S$7x — Note/Instrument actions. $0..$6 are no-ops on a metainstrument;
-      // $7..$E fan out across the meta's constituents (forEachEnvTarget).
+      // $7..$E fan out across the meta's constituents (forEachLayerTarget).
       const isMeta = voice.metaForeground;
       switch (x) {
         case 0x0: if (!isMeta) applyPastNoteAction(eng, ts, vi, 0); break;
@@ -395,19 +403,19 @@ export function applySEffect(eng, ts, voice, vi, arg) {
         case 0x4: if (!isMeta) voice.nnaOverride = 2; break; // NNA Note Continue
         case 0x5: if (!isMeta) voice.nnaOverride = 0; break; // NNA Note Off
         case 0x6: if (!isMeta) voice.nnaOverride = 3; break; // NNA Note Fade
-        case 0x7: forEachEnvTarget(ts, voice, vi, (v) => { v.volEnvOn = false; }); break;
-        case 0x8: forEachEnvTarget(ts, voice, vi, (v) => { v.volEnvOn = true; }); break;
-        case 0x9: forEachEnvTarget(ts, voice, vi, (v) => { v.panEnvOn = false; }); break;
-        case 0xa: forEachEnvTarget(ts, voice, vi, (v) => { v.panEnvOn = true; }); break;
+        case 0x7: forEachLayerTarget(ts, voice, vi, (v) => { v.volEnvOn = false; }); break;
+        case 0x8: forEachLayerTarget(ts, voice, vi, (v) => { v.volEnvOn = true; }); break;
+        case 0x9: forEachLayerTarget(ts, voice, vi, (v) => { v.panEnvOn = false; }); break;
+        case 0xa: forEachLayerTarget(ts, voice, vi, (v) => { v.panEnvOn = true; }); break;
         // $B/$C: pitch env when defined, else filter env (IT "pitch or filter").
-        case 0xb: forEachEnvTarget(ts, voice, vi, (v) => {
+        case 0xb: forEachLayerTarget(ts, voice, vi, (v) => {
           if (v.hasPitchEnv) v.pitchEnvOn = false; else if (v.hasFilterEnv) v.filterEnvOn = false;
         }); break;
-        case 0xc: forEachEnvTarget(ts, voice, vi, (v) => {
+        case 0xc: forEachLayerTarget(ts, voice, vi, (v) => {
           if (v.hasPitchEnv) v.pitchEnvOn = true; else if (v.hasFilterEnv) v.filterEnvOn = true;
         }); break;
-        case 0xd: forEachEnvTarget(ts, voice, vi, (v) => { v.filterEnvOn = false; }); break;
-        case 0xe: forEachEnvTarget(ts, voice, vi, (v) => { v.filterEnvOn = true; }); break;
+        case 0xd: forEachLayerTarget(ts, voice, vi, (v) => { v.filterEnvOn = false; }); break;
+        case 0xe: forEachLayerTarget(ts, voice, vi, (v) => { v.filterEnvOn = true; }); break;
       }
       break;
     }
@@ -462,33 +470,52 @@ export function applySEffect(eng, ts, voice, vi, arg) {
  * driving it to the CHANNEL. A reserved region is ignored WHOLE, speed and all,
  * so a typo cannot drive a modification the writer never named.
  */
-export function applySampleModEffect(eng, voice, rawArg, invert) {
-  const inst = eng.instruments[voice.instrumentId];
+export function applySampleModEffect(eng, ts, voice, vi, rawArg, invert) {
   const op = (rawArg >>> 4) & 0xf;
-  if (op === MOD_OFF) {
-    inst.resetMod();
-    voice.modPeriod = 0;
-    voice.modTickCount = 0;
-    voice.modWritePos = 0;
-    return;
-  }
-  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
-  if (code === REGION_NONE) return;
-  const moved = code === REGION_COMB
-    ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
-    : inst.setModRegion(regionScratch[0], regionScratch[1]);
-  const swapped = inst.setModOp(op, invert);
-  // A changed region or operation restarts the walk; re-stating the SAME
-  // command row after row must not, or it would never get past its first step.
-  if (moved || swapped) {
-    voice.modTickCount = 0;
-    voice.modWritePos = 0;
-  }
-  voice.modPeriod = modStepPeriod(rawArg & 0xf);
+  // A metainstrument is one note made of several instruments, so the command
+  // reaches all of them — otherwise only layer 0's sample would ever be
+  // modified (item 154). One CLOCK per instrument per channel, though: two
+  // layers sounding the same instrument must not step it twice a tick, which is
+  // what the `seen` set below is for. Non-meta channels have one target and
+  // behave exactly as before.
+  const seen = new Set();
+  forEachLayerTarget(ts, voice, vi, (v) => {
+    const inst = eng.instruments[v.instrumentId];
+    const dup = seen.has(v.instrumentId);
+    seen.add(v.instrumentId);
+    if (op === MOD_OFF) {
+      if (!dup) inst.resetMod();
+      v.modPeriod = 0;
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+      return;
+    }
+    const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
+    if (code === REGION_NONE) return;
+    if (dup) { v.modPeriod = 0; return; }
+    const moved = code === REGION_COMB
+      ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
+      : inst.setModRegion(regionScratch[0], regionScratch[1]);
+    const swapped = inst.setModOp(op, invert);
+    // A changed region or operation restarts the walk; re-stating the SAME
+    // command row after row must not, or it would never get past its first step.
+    if (moved || swapped) {
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+    }
+    v.modPeriod = modStepPeriod(rawArg & 0xf);
+  });
 }
 
-/** Apply an env toggle to the foreground voice + (for a meta) its layer children. */
-export function forEachEnvTarget(ts, voice, vi, action) {
+/**
+ * Every voice channel `vi` is sounding as ONE note: the foreground voice plus —
+ * for a metainstrument — its layer children. Anything the pattern says about
+ * the note as a whole goes through here (env toggles S $77..$7E, the bitcrusher
+ * and overdrive, the sample-modification command), or it would reach layer 0
+ * alone and leave the rest of the kit untouched (item 154). An ordinary
+ * instrument has no layer children, so only the foreground voice is visited.
+ */
+export function forEachLayerTarget(ts, voice, vi, action) {
   action(voice);
   for (const bg of ts.backgroundVoices) {
     if (bg.isLayerChild && bg.sourceChannel === vi) action(bg);

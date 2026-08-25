@@ -26,6 +26,7 @@ import { TOTAL_VOICES } from "../../engine/constants.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
+import { mapSpinner } from "../widgets/spinner.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, rangeToStr } from "../notenames.js";
 import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
@@ -35,6 +36,7 @@ import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import {
   annHex2, annFilter, annFadeout, annSfCutoff, annSfReso, azimuthLabel, elevationLabel,
+  SEG_MINIFLOAT_MAP,
 } from "../units.js";
 import { SURROUND_STEREO, SURROUND_SPATIAL } from "../../engine/spatial.js";
 import { t } from "../i18n.js";
@@ -989,6 +991,17 @@ export class InstrumentsView {
       l.appendChild(inp);
       return l;
     };
+    /** …and one whose stored units are not the ones on screen (item 156.2). */
+    const spinMapped = (label, map, raw, onChange) => {
+      const l = document.createElement("label");
+      l.className = "env-ctl";
+      l.append(document.createTextNode(label));
+      const inp = document.createElement("input");
+      mapSpinner(inp, map, raw);
+      inp.addEventListener("change", () => onChange(inp.rawValue));
+      l.appendChild(inp);
+      return l;
+    };
     const chk = (label, checked, onChange) => {
       const l = document.createElement("label");
       l.className = "env-ctl chk";
@@ -1015,9 +1028,9 @@ export class InstrumentsView {
       spin(t("env.value"), node.value, 0, max, 1, (v) =>
         this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
           { value: Math.min(Math.max(parseInt(v, 10) || 0, 0), max) }))),
-      spin(t("env.seg"), minifloatToDouble(node.offset).toFixed(3), 0, 10, 0.01, (v) =>
+      spinMapped(t("env.seg"), SEG_MINIFLOAT_MAP, node.offset, (code) =>
         this.store.undo.apply(setEnvPointOp(this.selected, tabDef.key, sel,
-          { offset: minifloatFromDouble(Math.max(parseFloat(v) || 0, 0)) }))),
+          { offset: code }))),
       btn(t("env.addNode"), t("adv.addNodeTitle"),
         () => this.addEnvNode(tabDef, env, sel, max), active >= 25),
       btn(t("env.removeNode"), t("adv.removeNodeTitle"),
@@ -1422,44 +1435,57 @@ export class InstrumentsView {
         nameCell.append(badge);
       }
 
-      // Mix: raw PSO octet (0..255, 159 = 0 dB) + a live dB readout.
+      // Mix. The record stores a raw PSO octet (0..255, 159 = 0 dB) and nobody
+      // mixes in those — so the box reads DECIBELS while − and + still walk one
+      // octet at a time, which is item 156.2's mapping in its plainest form.
+      // The octet itself stays visible beside it, because it is what the file
+      // holds and what a bug report has to quote.
+      const mixIn = document.createElement("input");
+      mixIn.className = "meta-num";
+      mixIn.title = t("meta.mixTitle");
+      // mapSpinner FIRST: its own change handler is what settles `rawValue`
+      // from a hand-typed decibel figure, and the commit below reads that.
+      mapSpinner(mixIn, MIX_DB_MAP, l.mixOctet);
+      mixIn.addEventListener("change", () =>
+        commit(patchLayer(layers, i, { mixOctet: mixIn.rawValue })));
       tr.querySelector(".mixCell").append(
-        numIn(l.mixOctet, 0, 255, (v) => commit(patchLayer(layers, i, { mixOctet: v }))),
+        mixIn,
         Object.assign(document.createElement("span"),
-          { className: "dim meta-db", textContent: mixDbLabel(l.mixOctet) }));
+          { className: "dim meta-db", textContent: annHex2(l.mixOctet) }));
 
       // Detune. The record stores signed 4096-TET units — a major third is 1365
       // and a chorus detune is 6 — which nobody thinks in, so the field is CENTS
-      // and ◂ ▸ step whole degrees of the song's own pitch table
+      // while − and + step whole degrees of the song's own pitch table
       // (stepNoteInTable, so unequal tables step to real degrees, not by 341).
+      // That is the same one-control shape as every other value in the app
+      // (item 156): the pair of arrows this cell used to carry beside the box
+      // ARE the spinner's buttons now, with the mapping doing the units.
       const detCell = tr.querySelector(".detCell");
-      const stepDeg = (dir) => {
-        const note = clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff);
-        commit(patchLayer(layers, i,
-          { detune: clampDetune(stepNoteInTable(note, preset, dir) - ANCHOR_NOTE) }));
-      };
       const centsIn = document.createElement("input");
-      centsIn.type = "number"; centsIn.className = "meta-num";
-      centsIn.value = centsOfUnits(l.detune).toFixed(1);
+      centsIn.className = "meta-num";
       centsIn.title = t("meta.detuneTitle");
-      centsIn.addEventListener("change", () => {
-        const c = Number(centsIn.value);
-        commit(patchLayer(layers, i,
-          { detune: clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0) }));
-      });
+      centsIn.dataset.mtDecTitle = t("meta.detuneDownTitle");
+      centsIn.dataset.mtIncTitle = t("meta.detuneUpTitle");
+      mapSpinner(centsIn, {
+        toDisplay: (units) => `${centsOfUnits(units).toFixed(1)} ¢`,
+        fromDisplay: (text) => {
+          const c = Number.parseFloat(String(text).replace("−", "-"));
+          return clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0);
+        },
+        step: (units, dir) => clampDetune(
+          stepNoteInTable(clampN(ANCHOR_NOTE + units, 0x20, 0xffff), preset, dir) - ANCHOR_NOTE),
+      }, l.detune);
+      centsIn.addEventListener("change", () =>
+        commit(patchLayer(layers, i, { detune: centsIn.rawValue })));
       // The note the detune lands on, painted in the SONG's notation (the
-      // grids' own glyph painter) rather than spelled in 12-EDO — the ◂ ▸
+      // grids' own glyph painter) rather than spelled in 12-EDO — the − +
       // buttons already step degrees of this table, so the readout has to agree
       // with them. The raw 4096-TET units stay as text beside the glyph.
       const detAnn = Object.assign(document.createElement("span"), { className: "dim meta-det-ann" });
       detAnn.append(
         noteGlyphCanvas(clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff), preset),
         ` · ${l.detune}`);
-      detCell.append(
-        iconBtn(null, "◂", t("meta.detuneDownTitle"), () => stepDeg(-1)),
-        centsIn,
-        iconBtn(null, "▸", t("meta.detuneUpTitle"), () => stepDeg(+1)),
-        detAnn);
+      detCell.append(centsIn, detAnn);
 
       // Gating rectangle. The new-meta hint has always told people to "narrow
       // them on the Layers tab"; until item 113 there was nothing here to narrow.
@@ -1542,6 +1568,29 @@ function mixDbLabel(octet) {
   const db = 20 * Math.log10(g);
   return (db >= 0 ? "+" : "−") + Math.abs(db).toFixed(1) + " dB";
 }
+
+/** …and back: the octet whose gain is nearest the decibels someone typed. */
+function mixOctetOfDb(text) {
+  const str = String(text).replace("−", "-").trim();
+  if (str === "" || /-\s*(∞|inf)/i.test(str)) return 0;
+  const db = parseFloat(str);
+  if (!Number.isFinite(db)) return 0;
+  const want = 10 ** (db / 20);
+  let best = 0, bestErr = Infinity;
+  for (let o = 0; o < 256; o++) {
+    const err = Math.abs(META_MIX_GAIN[o] - want);
+    if (err < bestErr) { bestErr = err; best = o; }
+  }
+  return best;
+}
+
+/** The mix field's spinner mapping (item 156.2): decibels on screen, one raw
+ *  PSO octet per press of − / +. */
+const MIX_DB_MAP = {
+  toDisplay: mixDbLabel,
+  fromDisplay: mixOctetOfDb,
+  step: (octet, dir) => Math.min(Math.max((octet | 0) + dir, 0), 255),
+};
 const annHex4 = (v) => "$" + (v & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 const annHex6 = (v) => "$" + (v & 0xffffff).toString(16).toUpperCase().padStart(6, "0");
 

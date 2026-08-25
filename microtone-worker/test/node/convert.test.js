@@ -350,6 +350,26 @@ test("midi2taud with GeneralUser-GS → parseable document (skips without the SF
       "a concert declaration must be the exact-identity tuning");
   });
 
+// Item 159 — pattern $0000 is the index an editor hands out for a newly-added
+// channel or cue, so a converted song must not have real music sitting there.
+test("midi2taud reserves pattern $0000 for silence (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    for (const opts of [{}, { keepDuplicatePatterns: true }]) {
+      const song = parseTaud(convert("M_E1M1.mid", opts)).songs[0];
+      const p0 = song.patterns[0];
+      let sounding = 0;
+      for (let r = 0; r < 64; r++) {
+        const o = r * 8;
+        // note / instrument / effect opcode — the vol+pan bytes are 0xC0 no-ops
+        // in a filler cell, so they say nothing about whether it sounds.
+        if (p0[o] || p0[o + 1] || p0[o + 2] || p0[o + 5]) sounding++;
+      }
+      assert.equal(sounding, 0,
+        `pattern $0000 must be silent (${sounding} rows carry something)`);
+    }
+  });
+
 test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; skips without the SF2)",
   { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
   () => {

@@ -58,7 +58,7 @@ window.addEventListener("error", (e) => log("ERROR: " + e.message));
   check("octave chip selected on the seed", !!octChip);
 
   // ── name it ──
-  const nameIn = dlg.querySelector(".nota-ed-head input[type=text]");
+  const nameIn = dlg.querySelector(".nota-ed-head input[data-k=name]");
   nameIn.value = "Smoke 19";
   nameIn.dispatchEvent(new Event("change"));
   await sleep(20);

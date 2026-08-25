@@ -457,10 +457,90 @@ export function voiceAzimuth(voice) {
   return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias + voice.panbrelloOffset);
 }
 
+/**
+ * Effective STEREO pan of a voice: the channel and note axes, the pan
+ * envelope's offset, the instrument's random pan swing and the panbrello LFO,
+ * clamped to the byte the equal-energy law takes. The twin of voiceAzimuth
+ * above, and the ONE place that sum is written — the meters used to keep their
+ * own copy of it and quietly lost the pan swing (item 155).
+ */
+export function voicePanByte(voice) {
+  let pan;
+  if (voice.hasPanEnv && voice.panEnvOn) {
+    let envPanRaw = Math.round(voice.envPan * 255.0);
+    envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+    pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+      voice.panbrelloOffset;
+  } else {
+    pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
+  }
+  return pan < 0 ? 0 : pan > 255 ? 255 : pan;
+}
+
 /** Effective elevation: the channel's height plus the note's own offset. */
 export function voiceElevation(voice) {
   return voice.panElevation + voice.noteElevation;
 }
+
+// ── Where a channel SOUNDS, for the meters ────────────────────────────────
+// Everything above answers for ONE voice. A metainstrument is several at once,
+// and the foreground voice is only its layer 0 — so a kit whose layers pan
+// apart was being drawn at the first layer's position rather than at the
+// note's (item 155.1). The displayed position is the mix-weighted MEAN of the
+// constituents: for a plain instrument that is the voice's own value unchanged,
+// and for a kit whose layers agree on panning it is still that value.
+
+/** A voice's share of the channel's output, as the mixer weights it. */
+function displayWeight(v) {
+  const env = v.volEnvOn ? v.envVolMix : 1.0;
+  return env * v.fadeoutVolume * v.currentMixVolume * v.layerMixGain *
+    ((255 - v.fader) / 255.0);
+}
+
+/** Every voice channel `vi` is sounding — the foreground plus its layer
+ *  children — visited with its display weight. */
+function forEachSoundingLayer(ts, vi, voice, fn) {
+  fn(voice, displayWeight(voice));
+  if (!voice.metaForeground) return;
+  for (const bg of ts.backgroundVoices) {
+    if (bg.active && bg.isLayerChild && bg.sourceChannel === vi) fn(bg, displayWeight(bg));
+  }
+}
+
+/** The stereo pan the METERS show for channel `vi` (item 155.1). */
+export function displayPanByte(ts, vi, voice) {
+  let sum = 0.0, wsum = 0.0;
+  forEachSoundingLayer(ts, vi, voice, (v, w) => { sum += voicePanByte(v) * w; wsum += w; });
+  // A kit whose every layer has faded to nothing still has to be drawn
+  // somewhere: fall back to the foreground voice's own position.
+  return wsum > 1e-9 ? sum / wsum : voicePanByte(voice);
+}
+
+/** …and the same for a surround song, as [azimuth, elevation] into `out`.
+ *  Angles are averaged as DIRECTIONS, so two layers either side of front
+ *  average to front rather than to the back of the room. */
+export function displayAngles(ts, vi, voice, out) {
+  let x = 0.0, y = 0.0, z = 0.0, wsum = 0.0;
+  forEachSoundingLayer(ts, vi, voice, (v, w) => {
+    directionFromAngles(voiceAzimuth(v), voiceElevation(v), dirScratch);
+    x += dirScratch[0] * w; y += dirScratch[1] * w; z += dirScratch[2] * w;
+    wsum += w;
+  });
+  // Weightless, or layers exactly opposite each other (whose directions cancel):
+  // neither has a mean direction, so the foreground voice speaks for the note.
+  const len = Math.sqrt(x * x + y * y + z * z);
+  if (wsum <= 1e-9 || len < 1e-6) {
+    out[0] = voiceAzimuth(voice);
+    out[1] = voiceElevation(voice);
+    return out;
+  }
+  // The mean of unit vectors is shorter than one; anglesFromDirection reads the
+  // z component as a sine, so it has to be put back on the sphere first.
+  anglesFromDirection(x / len, y / len, z / len, out);
+  return out;
+}
+
+const dirScratch = new Float64Array(3);
 
 const angleScratch = new Float64Array(2);
 

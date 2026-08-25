@@ -430,7 +430,7 @@ export function openSampleLab(store, { data, rate, name = "", sourceLabel = "", 
       if (playing) {
         const pos = playPos();
         if (pos !== null) {
-          ctx.fillStyle = C.playCursor || C.accent;
+          ctx.fillStyle = C.waveCursor || C.playCursor || C.accent;
           ctx.fillRect(xOf(pos) - 0.5, 0, 1.5, WAVE_H);
         }
       }

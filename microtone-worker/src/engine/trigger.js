@@ -188,6 +188,10 @@ export function releaseLayerChildren(eng, ts, vi) {
   for (const bg of ts.backgroundVoices) {
     if (!bg.isLayerChild || bg.sourceChannel !== vi) continue;
     bg.isLayerChild = false;
+    // A detached child runs no effects any more, so it drops back to its own
+    // note rather than freezing mid-bend — the same rule the plain NNA ghost
+    // follows (ghostVoice keeps no pitch overlay either).
+    bg.layerPitchMod = 0;
     switch (eng.instruments[bg.instrumentId].newNoteAction) {
       case 0:
         if (!bg.keyOff) { bg.keyOff = true; applyKeyLift(bg, eng.instruments[bg.instrumentId]); }
@@ -281,6 +285,13 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     child.panbrelloOffset = chanPanbrello;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
+    // …and the channel's DSP colouring, which outlives the note that armed it:
+    // a crusher already running when the meta is struck has to be running on
+    // every layer of it, not just layer 0 (item 154).
+    child.clipMode = voice.clipMode;
+    child.bitcrusherDepth = voice.bitcrusherDepth;
+    child.bitcrusherSkip = voice.bitcrusherSkip;
+    child.overdriveAmp = voice.overdriveAmp;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;

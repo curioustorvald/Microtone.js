@@ -169,6 +169,35 @@
         // textarea could insert its newline.
         log(`message box keeps Enter (newline typeable): ${area && !ev.defaultPrevented ? "ok" : "FAIL"}`);
 
+        // ── item 157: the message box survives a rebuild under the caret ──
+        // `refresh()` throws the pane away and builds it again, and it runs on
+        // things the typist never did — a "doc" event, the other split pane
+        // taking focus. Before this, whatever had been typed since the last
+        // blur went with it, because `change` had not fired yet.
+        const undosBefore = store.undo.undoStack.length;
+        const typed = "half a sentence";
+        area.focus();
+        area.value = typed;
+        area.setSelectionRange(4, 4);
+        area.dispatchEvent(new win.Event("input", { bubbles: true }));
+        const dirtyOnType = store.doc.dirty === true;
+        pv.show(); // what a tab switch / the other pane taking focus does
+        const area2 = win.document.querySelector("textarea.proj-message-text");
+        const kept = area2?.value === typed &&
+          store.doc.projectString("PMsg") === typed;
+        const caretKept = win.document.activeElement === area2 &&
+          area2.selectionStart === 4;
+        // …and the whole burst is ONE undo step, not one per keystroke.
+        area2.value = typed + " more";
+        area2.dispatchEvent(new win.Event("input", { bubbles: true }));
+        const oneStep = store.undo.undoStack.length === undosBefore + 1;
+        area2.dispatchEvent(new win.Event("blur", { bubbles: true }));
+        store.undo.undo();
+        const undoneWhole = store.doc.projectString("PMsg") === "line one\nline two — Ø";
+        log(`message survives a rebuild (dirty=${dirtyOnType} kept=${kept} caret=${caretKept} ` +
+          `oneUndoStep=${oneStep} undoneWhole=${undoneWhole}): ` +
+          `${dirtyOnType && kept && caretKept && oneStep && undoneWhole ? "ok" : "FAIL"}`);
+
         // (item 60 Project housekeeping is covered by test/browser/cleanup-smoke.html
         //  — it needs real-time + a stubbed alert(), so it lives in its own page.)
 
@@ -267,7 +296,11 @@
           const loopBefore = doc.instruments[slot].sampleLoopStart;
           closed = openInstSampleEditor(store, slot);
           dlg = win.document.querySelector("dialog.sample-editor");
-          const spin = dlg.querySelectorAll(".smp-fields input[type=number]");
+          // The step-button groups are built on a microtask after the dialog is
+          // inserted (item 156), so give the enhancer its turn before looking
+          // for one.
+          await new Promise((r) => setTimeout(r, 20));
+          const spin = dlg.querySelectorAll(".smp-fields .mt-spin input");
           const openOk = !!dlg && spin.length === 3 && !!dlg.querySelector(".smp-canvas");
           spin[1].value = "9";
           spin[1].dispatchEvent(new win.Event("change", { bubbles: true }));

@@ -27,6 +27,7 @@ const VAR_KEYS = {
   // canvas: samples / instruments
   wave: "--cv-wave", waveLoop: "--cv-wave-loop", waveMid: "--cv-wave-mid",
   waveFunk: "--cv-wave-funk", playCursor: "--cv-play-cursor",
+  waveCursor: "--cv-wave-cursor",
   envLine: "--cv-env-line", envNode: "--cv-env-node", envSus: "--cv-env-sus",
   envLoop: "--cv-env-loop", live: "--cv-live",
 };

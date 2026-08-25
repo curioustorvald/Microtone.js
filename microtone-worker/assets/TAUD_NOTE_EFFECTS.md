@@ -659,6 +659,8 @@ Multiplicative cases **MUST** use integer arithmetic: `vol × 2 / 3` is `(vol ×
 
 A note previously silenced by a cut (`^^^` or `SCx` earlier in the row) **MUST NOT** be retriggered, matching ST3's `kST3RetrigAfterNoteCut` rule.
 
+**Metainstruments.** A metainstrument is ONE note, so it retriggers whole: every layer-child voice on the channel **MUST** restart with the foreground voice — sample position, all four envelope playheads, fadeout and filter history — on the same tick. The volume modifier `$x` belongs to the channel and is applied **once**, on the foreground voice; the per-tick parent sync then carries the new `note_vol` to the children. Restarting layer 0 alone leaves it stuttering over a remainder that sustains, which is not a retrigger of anything a listener can hear as one sound.
+
 ## R $xxyy — Tremolo with speed $xx and depth $yy
 
 **Plain.** Modulates volume with an LFO, symmetrically with H's pitch modulation. `$xx` is LFO speed, `$yy` depth; the waveform is selected by S $4x.
@@ -809,6 +811,8 @@ ProTracker's funk-speed ladder does **not** apply here. That table is an accumul
 **Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $F0xx` remains the ProTracker-compatible invert loop and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
 
 **Implementation.** An instrument carries **one** modification — writing either opcode replaces it — and the state splits the way `S $F0xx`'s does: the modification belongs to the **instrument** (every channel sounding it hears the same sample) and the clock driving it to the **channel**. Nothing is ever written to the sample pool; the operation is applied as bytes are read.
+
+**Metainstruments.** A metainstrument is one note made of several instruments, so the command **MUST** be written to all of them: the foreground layer's instrument plus every layer child's. The clock stays one per channel per DISTINCT instrument — two layers of a kit that sound the *same* instrument **MUST NOT** step it twice a tick, or a stacked unison walks the modification at double speed while a plain note of the same instrument walks it at the written one.
 
 ```
 the domain, per sounding voice:
@@ -1062,6 +1066,8 @@ clip(x, mode):
 
 The voice-FX state is preserved verbatim by the NNA-ghost copier, so the post-NNA tail of a note keeps the same timbre as the foreground voice that spawned it.
 
+**Metainstruments.** The crusher is the CHANNEL's colouring, not one voice's, so it **MUST** reach every voice the channel is sounding: the foreground layer plus every layer-child voice on it. A crusher already in force when a metainstrument is struck **MUST** likewise be inherited by the layer children the trigger spawns — otherwise only the first layer of a kit is ever crushed, and the rest of it plays through clean.
+
 ## 9 $x0zz — Overdrive
 
 **Plain.** Amplifies the voice's post-filter signal and routes it through the shared clipper. With `x = 0` (clamp) the effect is a hard-knee soft-clipping distortion; with `x = 1` (fold) it becomes a wave-folder; with `x = 2` (wrap) it produces aggressive aliased fuzz with sawtooth-style discontinuities at the rails. Volume **MUST NOT** be re-normalised after clipping — `9 $00FF` clamp-clipped plays at roughly the same loudness as the dry voice once everything saturates. The middle nibble is reserved and **MUST** be zero.
@@ -1097,6 +1103,8 @@ on output sample (per voice):
 ```
 
 When both effects 8 and 9 are active on the same voice the chain is **filter → overdrive (×gain → clip) → bitcrusher (bit-depth quantise → sample-skip hold)**. Because the clipper is shared, changing `clipMode` from either effect propagates to the other on the next sample — there is one mode per voice, not one per stage.
+
+**Metainstruments.** As with effect 8: the amplification and the clip mode **MUST** be written to every voice the channel is sounding, and a layer child spawned while an overdrive is in force **MUST** start out driven.
 
 # The S subcommand family
 

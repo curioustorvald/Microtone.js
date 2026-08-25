@@ -752,6 +752,7 @@ export default {
   "meta.foregroundTitle": "전경 레이어. 트리거를 포함하는 첫 레이어가 채널 자체에서 울리고 나머지는 배경 보이스로 생성되므로, 이 순서가 곧 우선순위입니다.",
   "meta.linked": "연결 ×{n}",
   "meta.linkedTitle": "{n}개의 레이어가 이 하위 악기를 공유합니다 — 편집하면 모두 바뀝니다. 연결 해제하면 이 레이어만의 사본이 생깁니다.",
+  "meta.mixTitle": "레이어 믹스 레벨(데시벨). \u2212 와 + 는 파일이 저장하는 단위인 원시 믹스 옥텟을 한 칸씩 옮깁니다.",
   "meta.detuneTitle": "레이어 디튠(센트). 100 ¢가 12-TET 반음이고, 몇 센트면 코러스 정도입니다.",
   "meta.detuneDownTitle": "곡 기보법의 한 음도 아래로",
   "meta.detuneUpTitle": "곡 기보법의 한 음도 위로",

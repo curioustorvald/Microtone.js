@@ -5,6 +5,21 @@
 // engine (AudioAdapter.refreshVoiceFilter).
 
 import { t } from "./i18n.js";
+import { minifloatToDouble, minifloatFromDouble } from "../engine/minifloat.js";
+
+/**
+ * Envelope segment length, as a spinner mapping (item 156.2). The record stores
+ * a 3.5-minifloat CODE and a person reads seconds, so − and + walk ONE code —
+ * every value the format can hold, in order, none of them skipped and none of
+ * them unreachable — while the box shows what that code actually lasts. A plain
+ * "step by 0.01 s" could do neither: most of its stops do not exist in the
+ * format and the ones near the top are hundreds of codes apart.
+ */
+export const SEG_MINIFLOAT_MAP = {
+  toDisplay: (code) => `${minifloatToDouble(code).toFixed(3)} s`,
+  fromDisplay: (text) => minifloatFromDouble(Math.max(parseFloat(text) || 0, 0)),
+  step: (code, dir) => Math.min(Math.max((code | 0) + dir, 0), 255),
+};
 
 export const annHex2 = (v) => "$" + (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
 

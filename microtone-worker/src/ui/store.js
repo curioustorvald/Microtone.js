@@ -1,6 +1,10 @@
 // App state + tiny event emitter. Topics: "doc" (loaded/replaced),
 // "edit" (dirty tags), "view", "cursor", "transport", "mutes", "fx2".
 
+import {
+  SharedSlot, encodeBlock, decodeBlock, encodeCueBlock, decodeCueBlock,
+} from "./clipshare.js";
+
 /** Panes the Patterns view can hold — the fx2 flags are kept per pane INDEX so
  *  they survive the pane churn a viewport resize causes (pattern.js MAX_PANES).
  *  Twice that, because a split screen can hold TWO Patterns views (item 148.1)
@@ -31,8 +35,21 @@ export class Store {
     // screen. View state, not document state — nothing here is saved.
     this.fx2Chans = new Array(64).fill(false);
     this.fx2Panes = new Array(FX2_PANES).fill(false);
+    // The two block clipboards (item 17 cells, item 128 cue words) live in
+    // shared slots rather than plain fields, so a copy made in one browser tab
+    // pastes in another (item 158). They behave like ordinary properties.
+    this._clip = new SharedSlot("microtone.clipboard", encodeBlock, decodeBlock);
+    this._cueClip = new SharedSlot("microtone.cueClipboard", encodeCueBlock, decodeCueBlock);
     this._subs = new Map();
   }
+
+  /** Pattern-cell block clipboard — shared across tabs. */
+  get clipboard() { return this._clip.get(); }
+  set clipboard(b) { this._clip.set(b ?? null); }
+
+  /** Cue-word block clipboard (Cues view) — likewise. */
+  get cueClipboard() { return this._cueClip.get(); }
+  set cueClipboard(b) { this._cueClip.set(b ?? null); }
 
   /** Is `name` on screen in ANY pane? Fixtures that belong to a view rather
    *  than to the keyboard (the master strip, the instrument lookup) ask this

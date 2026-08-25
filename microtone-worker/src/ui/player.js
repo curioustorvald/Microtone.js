@@ -6,10 +6,12 @@ import { parseTaud } from "../format/taud-parse.js";
 import { AudioSystem } from "../audio/audio-system.js";
 import { SAMPLING_RATE } from "../engine/constants.js";
 import { applyIcons } from "./icons.js";
+import { startControlEnhancer } from "./widgets/spinner.js";
 
 const $ = (id) => document.getElementById(id);
 
 applyIcons(document); // vector transport symbols (item 107)
+startControlEnhancer(); // …and the song chooser as a step-button group (item 156)
 
 const audio = new AudioSystem();
 let audioReady = false;

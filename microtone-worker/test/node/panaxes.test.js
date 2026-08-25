@@ -26,6 +26,7 @@ import {
   SNAP_HEADER_SIZE, SNAP_VOICE_STRIDE, SNAP_V_EFF_PAN, SNAP_V_AZIMUTH,
 } from "../../src/worklet/protocol.js";
 import { MAX_VOICES } from "../../src/engine/constants.js";
+import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
 
 setSamplingRate(32000);
 
@@ -429,6 +430,71 @@ test("the snapshot's pan follows the panbrello LFO", () => {
     "the slider's value carries the swing");
   assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_AZIMUTH], 0xa0 + off,
     "and so does the blob's angle, which mirrors it in a stereo song");
+});
+
+// Item 155: the meters used to sum pan themselves, and their copy of the sum
+// had never grown the instrument's random pan swing — so a kit panned by its
+// swing sat dead centre on the slider and the blobs while sounding off-centre.
+// Both now read the mixer's own voicePanByte.
+
+test("the snapshot's pan carries the instrument's pan swing", () => {
+  const eng = makeEngine();
+  eng.instruments[1].panSwing = 40; // ±40 units of random placement per note
+  loadSong(eng, [{ row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x8080 }]);
+  const snap = new Float64Array(SNAP_HEADER_SIZE + MAX_VOICES * SNAP_VOICE_STRIDE);
+  setRandomSource(makeSeededRandom(7)); // a throw that is not centre
+  render(eng, 2);
+  setRandomSource(null);
+  const bias = voice0(eng).randomPanBias;
+  assert.notEqual(bias, 0, "premise: this note was thrown off centre");
+  fillSnapshotInto(eng, 0, snap);
+  assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_EFF_PAN], 0x80 + bias,
+    "the slider shows where the note actually sounds");
+  assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_AZIMUTH], 0x80 + bias);
+});
+
+// Item 155.1: a metainstrument is several voices at once and the foreground
+// voice is only its layer 0, so a kit whose layers pan apart was drawn at the
+// FIRST layer's position. The meters show the mix-weighted mean instead.
+test("a metainstrument's meters show the kit's position, not layer 0's", () => {
+  const eng = makeEngine();
+  // Two sub-instruments that bring their own default pan: hard left and hard
+  // right of the channel. Bit 7 of the pan LOOP word is "use default pan".
+  for (const [slot, pan] of [[3, 0x20], [4, 0xe0]]) {
+    const r = new Uint8Array(256);
+    const w16 = (o, v) => { r[o] = v & 0xff; r[o + 1] = (v >> 8) & 0xff; };
+    w16(4, 1000); w16(6, 32000); w16(12, 1000);
+    r[14] = 1; r[21] = 0x3f; r[171] = 255; r[196] = 255;
+    r[177] = pan; r[17] = 0x80; // default pan + the 'p' flag that enables it
+    eng.uploadInstrument(slot, r);
+  }
+  eng.uploadInstrument(5, buildMetaRecord([
+    makeMetaLayer(3, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(4, 159, 0, 0x0000, 0xffff, 0, 63),
+  ]));
+  loadSong(eng, [{ row: 0, note: 0x5000, inst: 5 }]);
+  const snap = new Float64Array(SNAP_HEADER_SIZE + MAX_VOICES * SNAP_VOICE_STRIDE);
+  render(eng, 2);
+  const ts = eng.playheads[0].trackerState;
+  const child = ts.backgroundVoices.find((v) => v.active && v.isLayerChild);
+  assert.ok(child, "premise: the second layer is sounding");
+  assert.equal(voice0(eng).notePan, 0x20 - 0x80, "premise: layer 0 sits hard left");
+  assert.equal(child.notePan, 0xe0 - 0x80, "premise: layer 1 sits hard right");
+
+  fillSnapshotInto(eng, 0, snap);
+  const shown = snap[SNAP_HEADER_SIZE + SNAP_V_EFF_PAN];
+  assert.ok(Math.abs(shown - 0x80) < 1,
+    `two layers either side of centre read as centre, got ${shown}`);
+});
+
+test("a plain instrument's meters are its own voice, mean or no mean", () => {
+  const eng = loadSong(makeEngine(), [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_S, arg: 0x8030 },
+  ]);
+  const snap = new Float64Array(SNAP_HEADER_SIZE + MAX_VOICES * SNAP_VOICE_STRIDE);
+  render(eng, 2);
+  fillSnapshotInto(eng, 0, snap);
+  assert.equal(snap[SNAP_HEADER_SIZE + SNAP_V_EFF_PAN], 0x30);
 });
 
 // ── the phase scale is the nibble-repeat's own factor ────────────────────

@@ -1042,10 +1042,90 @@ function voiceAzimuth(voice) {
   return wrapAzimuth(voice.panAzimuth + voice.notePan + voice.randomPanBias + voice.panbrelloOffset);
 }
 
+/**
+ * Effective STEREO pan of a voice: the channel and note axes, the pan
+ * envelope's offset, the instrument's random pan swing and the panbrello LFO,
+ * clamped to the byte the equal-energy law takes. The twin of voiceAzimuth
+ * above, and the ONE place that sum is written — the meters used to keep their
+ * own copy of it and quietly lost the pan swing (item 155).
+ */
+function voicePanByte(voice) {
+  let pan;
+  if (voice.hasPanEnv && voice.panEnvOn) {
+    let envPanRaw = Math.round(voice.envPan * 255.0);
+    envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
+    pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
+      voice.panbrelloOffset;
+  } else {
+    pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
+  }
+  return pan < 0 ? 0 : pan > 255 ? 255 : pan;
+}
+
 /** Effective elevation: the channel's height plus the note's own offset. */
 function voiceElevation(voice) {
   return voice.panElevation + voice.noteElevation;
 }
+
+// ── Where a channel SOUNDS, for the meters ────────────────────────────────
+// Everything above answers for ONE voice. A metainstrument is several at once,
+// and the foreground voice is only its layer 0 — so a kit whose layers pan
+// apart was being drawn at the first layer's position rather than at the
+// note's (item 155.1). The displayed position is the mix-weighted MEAN of the
+// constituents: for a plain instrument that is the voice's own value unchanged,
+// and for a kit whose layers agree on panning it is still that value.
+
+/** A voice's share of the channel's output, as the mixer weights it. */
+function displayWeight(v) {
+  const env = v.volEnvOn ? v.envVolMix : 1.0;
+  return env * v.fadeoutVolume * v.currentMixVolume * v.layerMixGain *
+    ((255 - v.fader) / 255.0);
+}
+
+/** Every voice channel `vi` is sounding — the foreground plus its layer
+ *  children — visited with its display weight. */
+function forEachSoundingLayer(ts, vi, voice, fn) {
+  fn(voice, displayWeight(voice));
+  if (!voice.metaForeground) return;
+  for (const bg of ts.backgroundVoices) {
+    if (bg.active && bg.isLayerChild && bg.sourceChannel === vi) fn(bg, displayWeight(bg));
+  }
+}
+
+/** The stereo pan the METERS show for channel `vi` (item 155.1). */
+function displayPanByte(ts, vi, voice) {
+  let sum = 0.0, wsum = 0.0;
+  forEachSoundingLayer(ts, vi, voice, (v, w) => { sum += voicePanByte(v) * w; wsum += w; });
+  // A kit whose every layer has faded to nothing still has to be drawn
+  // somewhere: fall back to the foreground voice's own position.
+  return wsum > 1e-9 ? sum / wsum : voicePanByte(voice);
+}
+
+/** …and the same for a surround song, as [azimuth, elevation] into `out`.
+ *  Angles are averaged as DIRECTIONS, so two layers either side of front
+ *  average to front rather than to the back of the room. */
+function displayAngles(ts, vi, voice, out) {
+  let x = 0.0, y = 0.0, z = 0.0, wsum = 0.0;
+  forEachSoundingLayer(ts, vi, voice, (v, w) => {
+    directionFromAngles(voiceAzimuth(v), voiceElevation(v), dirScratch);
+    x += dirScratch[0] * w; y += dirScratch[1] * w; z += dirScratch[2] * w;
+    wsum += w;
+  });
+  // Weightless, or layers exactly opposite each other (whose directions cancel):
+  // neither has a mean direction, so the foreground voice speaks for the note.
+  const len = Math.sqrt(x * x + y * y + z * z);
+  if (wsum <= 1e-9 || len < 1e-6) {
+    out[0] = voiceAzimuth(voice);
+    out[1] = voiceElevation(voice);
+    return out;
+  }
+  // The mean of unit vectors is shorter than one; anglesFromDirection reads the
+  // z component as a sine, so it has to be put back on the sphere first.
+  anglesFromDirection(x / len, y / len, z / len, out);
+  return out;
+}
+
+const dirScratch = new Float64Array(3);
 
 const angleScratch = new Float64Array(2);
 
@@ -3419,6 +3499,10 @@ class Voice {
     this.layerRelPan = 0;
     this.layerRelElevation = 0;
     this.layerMixGain = 1.0;
+    // The parent channel's per-tick pitch overlay (vibrato / glissando /
+    // arpeggio), copied down by the per-tick sync so an effect that bends the
+    // note bends the WHOLE metainstrument and not just layer 0 (item 154).
+    this.layerPitchMod = 0;
     this.nnaOverride = -1;
     // Per-voice envelope gates (S $77..$7E).
     this.volEnvOn = true;
@@ -3593,6 +3677,10 @@ class Voice {
     // Timeline header can show what the voice is ACTUALLY playing per tick, not
     // just the row-triggered noteVal. Never read by the DSP.
     this.renderPitch = 0x0000;
+    // This tick's pitch OVERLAY — vibrato / glissando / arpeggio, as a signed
+    // delta on noteVal. A metainstrument's layer children read it off their
+    // parent so the bend reaches every layer (item 154; layerPitchMod).
+    this.pitchModDelta = 0;
 
     // Per-row effect state.
     this.rowEffect = 0;
@@ -4245,6 +4333,7 @@ class Playhead {
       it.noteFading = false;
       it.layerMixGain = 1.0; it.isLayerChild = false; it.layerRelDetune = 0;
       it.layerRelPan = 0; it.layerRelElevation = 0;
+      it.layerPitchMod = 0; it.pitchModDelta = 0;
       // "What's playing" state — cleared alongside the volume reset so a stale
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
@@ -5331,6 +5420,10 @@ function releaseLayerChildren(eng, ts, vi) {
   for (const bg of ts.backgroundVoices) {
     if (!bg.isLayerChild || bg.sourceChannel !== vi) continue;
     bg.isLayerChild = false;
+    // A detached child runs no effects any more, so it drops back to its own
+    // note rather than freezing mid-bend — the same rule the plain NNA ghost
+    // follows (ghostVoice keeps no pitch overlay either).
+    bg.layerPitchMod = 0;
     switch (eng.instruments[bg.instrumentId].newNoteAction) {
       case 0:
         if (!bg.keyOff) { bg.keyOff = true; applyKeyLift(bg, eng.instruments[bg.instrumentId]); }
@@ -5424,6 +5517,13 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.panbrelloOffset = chanPanbrello;
     child.panAzimuth = chanAzimuth;
     child.panElevation = chanElevation;
+    // …and the channel's DSP colouring, which outlives the note that armed it:
+    // a crusher already running when the meta is struck has to be running on
+    // every layer of it, not just layer 0 (item 154).
+    child.clipMode = voice.clipMode;
+    child.bitcrusherDepth = voice.bitcrusherDepth;
+    child.bitcrusherSkip = voice.bitcrusherSkip;
+    child.overdriveAmp = voice.overdriveAmp;
     triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
@@ -5975,7 +6075,7 @@ function rowSlidesSpatially(row) {
 
 // ══ src/engine/effects.js ══
 // Effect-column dispatch — port of AudioAdapter.kt resolveArg (3214),
-// applyEffectRow (3216), applySEffect (3538), forEachEnvTarget (3633),
+// applyEffectRow (3216), applySEffect (3538), forEachLayerTarget (3633),
 // applyFilterParamEffect (3650), applyRetrigVolMod (4090).
 // Behavioural contract: TAUD_NOTE_EFFECTS.md; implementation truth: the Kotlin.
 
@@ -6005,38 +6105,46 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       break;
     }
     // 2 spares the region it names; 3 modifies it. Same command otherwise.
-    case EffectOp.OP_2: applySampleModEffect(eng, voice, rawArg, true); break;
-    case EffectOp.OP_3: applySampleModEffect(eng, voice, rawArg, false); break;
+    case EffectOp.OP_2: applySampleModEffect(eng, ts, voice, vi, rawArg, true); break;
+    case EffectOp.OP_3: applySampleModEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_5: applyFilterParamEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_6: applyFilterParamEffect(eng, ts, voice, vi, rawArg, true); break;
     case EffectOp.OP_8: {
       // 8 $xyzz — Bitcrusher: x = clip mode, y = bit depth, zz = sample-skip.
+      // The crusher is the CHANNEL's colouring, so it lands on every voice the
+      // channel is sounding — a metainstrument's layer children included, or
+      // only its first layer would be crushed (item 154).
       const x = (rawArg >>> 12) & 0xf;
       const y = (rawArg >>> 8) & 0xf;
       const z = rawArg & 0xff;
-      voice.clipMode = x & 3;
-      if (rawArg === 0) {
-        voice.bitcrusherDepth = 0;
-        voice.bitcrusherSkip = 0;
-        voice.bitcrusherCounter = 0;
-        voice.right.bitcrusherCounter = 0;
-      } else if (y === 0 && z === 0) {
-        // x000 — clip mode only.
-      } else {
-        voice.bitcrusherDepth = y;
-        voice.bitcrusherSkip = z;
-        voice.bitcrusherCounter = 0;
-        voice.right.bitcrusherCounter = 0;
-      }
+      forEachLayerTarget(ts, voice, vi, (v) => {
+        v.clipMode = x & 3;
+        if (rawArg === 0) {
+          v.bitcrusherDepth = 0;
+          v.bitcrusherSkip = 0;
+          v.bitcrusherCounter = 0;
+          v.right.bitcrusherCounter = 0;
+        } else if (y === 0 && z === 0) {
+          // x000 — clip mode only.
+        } else {
+          v.bitcrusherDepth = y;
+          v.bitcrusherSkip = z;
+          v.bitcrusherCounter = 0;
+          v.right.bitcrusherCounter = 0;
+        }
+      });
       break;
     }
     case EffectOp.OP_9: {
-      // 9 $x0zz — Overdrive: x = clip mode, zz = amplification index.
+      // 9 $x0zz — Overdrive: x = clip mode, zz = amplification index. Fans out
+      // across a metainstrument exactly as the bitcrusher does (item 154).
       const x = (rawArg >>> 12) & 0xf;
       const z = rawArg & 0xff;
-      voice.clipMode = x & 3;
-      if (rawArg === 0) voice.overdriveAmp = 0;
-      else if (z !== 0) voice.overdriveAmp = z;
+      forEachLayerTarget(ts, voice, vi, (v) => {
+        v.clipMode = x & 3;
+        if (rawArg === 0) v.overdriveAmp = 0;
+        else if (z !== 0) v.overdriveAmp = z;
+      });
       break;
     }
     case EffectOp.OP_A: {
@@ -6351,7 +6459,7 @@ function applySEffect(eng, ts, voice, vi, arg) {
     case 0x6: ts.finePatternDelayExtra += x; break;
     case 0x7: {
       // S$7x — Note/Instrument actions. $0..$6 are no-ops on a metainstrument;
-      // $7..$E fan out across the meta's constituents (forEachEnvTarget).
+      // $7..$E fan out across the meta's constituents (forEachLayerTarget).
       const isMeta = voice.metaForeground;
       switch (x) {
         case 0x0: if (!isMeta) applyPastNoteAction(eng, ts, vi, 0); break;
@@ -6361,19 +6469,19 @@ function applySEffect(eng, ts, voice, vi, arg) {
         case 0x4: if (!isMeta) voice.nnaOverride = 2; break; // NNA Note Continue
         case 0x5: if (!isMeta) voice.nnaOverride = 0; break; // NNA Note Off
         case 0x6: if (!isMeta) voice.nnaOverride = 3; break; // NNA Note Fade
-        case 0x7: forEachEnvTarget(ts, voice, vi, (v) => { v.volEnvOn = false; }); break;
-        case 0x8: forEachEnvTarget(ts, voice, vi, (v) => { v.volEnvOn = true; }); break;
-        case 0x9: forEachEnvTarget(ts, voice, vi, (v) => { v.panEnvOn = false; }); break;
-        case 0xa: forEachEnvTarget(ts, voice, vi, (v) => { v.panEnvOn = true; }); break;
+        case 0x7: forEachLayerTarget(ts, voice, vi, (v) => { v.volEnvOn = false; }); break;
+        case 0x8: forEachLayerTarget(ts, voice, vi, (v) => { v.volEnvOn = true; }); break;
+        case 0x9: forEachLayerTarget(ts, voice, vi, (v) => { v.panEnvOn = false; }); break;
+        case 0xa: forEachLayerTarget(ts, voice, vi, (v) => { v.panEnvOn = true; }); break;
         // $B/$C: pitch env when defined, else filter env (IT "pitch or filter").
-        case 0xb: forEachEnvTarget(ts, voice, vi, (v) => {
+        case 0xb: forEachLayerTarget(ts, voice, vi, (v) => {
           if (v.hasPitchEnv) v.pitchEnvOn = false; else if (v.hasFilterEnv) v.filterEnvOn = false;
         }); break;
-        case 0xc: forEachEnvTarget(ts, voice, vi, (v) => {
+        case 0xc: forEachLayerTarget(ts, voice, vi, (v) => {
           if (v.hasPitchEnv) v.pitchEnvOn = true; else if (v.hasFilterEnv) v.filterEnvOn = true;
         }); break;
-        case 0xd: forEachEnvTarget(ts, voice, vi, (v) => { v.filterEnvOn = false; }); break;
-        case 0xe: forEachEnvTarget(ts, voice, vi, (v) => { v.filterEnvOn = true; }); break;
+        case 0xd: forEachLayerTarget(ts, voice, vi, (v) => { v.filterEnvOn = false; }); break;
+        case 0xe: forEachLayerTarget(ts, voice, vi, (v) => { v.filterEnvOn = true; }); break;
       }
       break;
     }
@@ -6428,33 +6536,52 @@ function applySEffect(eng, ts, voice, vi, arg) {
  * driving it to the CHANNEL. A reserved region is ignored WHOLE, speed and all,
  * so a typo cannot drive a modification the writer never named.
  */
-function applySampleModEffect(eng, voice, rawArg, invert) {
-  const inst = eng.instruments[voice.instrumentId];
+function applySampleModEffect(eng, ts, voice, vi, rawArg, invert) {
   const op = (rawArg >>> 4) & 0xf;
-  if (op === MOD_OFF) {
-    inst.resetMod();
-    voice.modPeriod = 0;
-    voice.modTickCount = 0;
-    voice.modWritePos = 0;
-    return;
-  }
-  const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
-  if (code === REGION_NONE) return;
-  const moved = code === REGION_COMB
-    ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
-    : inst.setModRegion(regionScratch[0], regionScratch[1]);
-  const swapped = inst.setModOp(op, invert);
-  // A changed region or operation restarts the walk; re-stating the SAME
-  // command row after row must not, or it would never get past its first step.
-  if (moved || swapped) {
-    voice.modTickCount = 0;
-    voice.modWritePos = 0;
-  }
-  voice.modPeriod = modStepPeriod(rawArg & 0xf);
+  // A metainstrument is one note made of several instruments, so the command
+  // reaches all of them — otherwise only layer 0's sample would ever be
+  // modified (item 154). One CLOCK per instrument per channel, though: two
+  // layers sounding the same instrument must not step it twice a tick, which is
+  // what the `seen` set below is for. Non-meta channels have one target and
+  // behave exactly as before.
+  const seen = new Set();
+  forEachLayerTarget(ts, voice, vi, (v) => {
+    const inst = eng.instruments[v.instrumentId];
+    const dup = seen.has(v.instrumentId);
+    seen.add(v.instrumentId);
+    if (op === MOD_OFF) {
+      if (!dup) inst.resetMod();
+      v.modPeriod = 0;
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+      return;
+    }
+    const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
+    if (code === REGION_NONE) return;
+    if (dup) { v.modPeriod = 0; return; }
+    const moved = code === REGION_COMB
+      ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
+      : inst.setModRegion(regionScratch[0], regionScratch[1]);
+    const swapped = inst.setModOp(op, invert);
+    // A changed region or operation restarts the walk; re-stating the SAME
+    // command row after row must not, or it would never get past its first step.
+    if (moved || swapped) {
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+    }
+    v.modPeriod = modStepPeriod(rawArg & 0xf);
+  });
 }
 
-/** Apply an env toggle to the foreground voice + (for a meta) its layer children. */
-function forEachEnvTarget(ts, voice, vi, action) {
+/**
+ * Every voice channel `vi` is sounding as ONE note: the foreground voice plus —
+ * for a metainstrument — its layer children. Anything the pattern says about
+ * the note as a whole goes through here (env toggles S $77..$7E, the bitcrusher
+ * and overdrive, the sample-modification command), or it would reach layer 0
+ * alone and leave the rest of the kit untouched (item 154). An ordinary
+ * instrument has no layer children, so only the foreground voice is visited.
+ */
+function forEachLayerTarget(ts, voice, vi, action) {
   action(voice);
   for (const bg of ts.backgroundVoices) {
     if (bg.isLayerChild && bg.sourceChannel === vi) action(bg);
@@ -7214,40 +7341,29 @@ function applyTrackerTick(eng, ts, playhead) {
       voice.lastArpVoice = voiceIdx;
     }
 
-    // Q retrigger.
+    // Q retrigger. A metainstrument retriggers WHOLE — every layer restarts
+    // together, or the kit would fall apart into layer 0 stuttering over a
+    // sustained remainder (item 154). The volume modifier is the channel's, so
+    // it is applied once, on the foreground voice the children sync from.
     if (voice.retrigActive && !voice.noteWasCut) {
       voice.retrigCounter++;
       if (voice.retrigCounter >= voice.retrigInterval) {
         voice.retrigCounter = 0;
-        voice.samplePos = voice.activeSamplePlayStart; // patch-aware
-        voice.keyOff = false;
-        voice.envIndex = 0; voice.envTimeSec = 0.0;
-        voice.envPanIndex = 0; voice.envPanTimeSec = 0.0;
-        voice.envPan = voice.activePanEnv[0].value / 255.0;
-        // Re-seed pf-envs past leading zero-duration nodes (as at fresh trigger).
-        if (voice.hasPitchEnv) {
-          voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
-            voice.activePitchEnvSustain);
-          voice.envPitchIndex = pfIdxBox[0]; voice.envPitchTimeSec = pfTimeBox[0];
-        } else {
-          voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+        restartVoice(voice);
+        for (const bg of ts.backgroundVoices) {
+          if (bg.isLayerChild && bg.sourceChannel === vi) restartVoice(bg);
         }
-        if (voice.hasFilterEnv) {
-          voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
-            voice.activeFilterEnvSustain);
-          voice.envFilterIndex = pfIdxBox[0]; voice.envFilterTimeSec = pfTimeBox[0];
-        } else {
-          voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
-        }
-        voice.fadeoutVolume = 1.0;
-        voice.autoVibPhase = 0;
-        voice.autoVibTicksSinceTrigger = 0;
-        voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
-        voice.right.reset();
         voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod, ts.volStep, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
     }
+
+    // What the row's effects did to the pitch this tick, as a delta — the
+    // layer children of a metainstrument re-add it below so a vibrato, a
+    // glissando or an arpeggio bends the whole kit (item 154). Auto-vibrato and
+    // the pitch envelope are NOT in it: those are the instrument's own, and
+    // each layer already runs its own copy.
+    voice.pitchModDelta = pitchToMixer - voice.noteVal;
 
     // Auto-vibrato — added on top of pitchToMixer.
     const autoVibDelta = advanceAutoVibrato(voice, inst);
@@ -7329,57 +7445,13 @@ function applyTrackerTick(eng, ts, playhead) {
   // Sample modification (notefx 2 / 3) — one step of the instrument's live
   // operation every $y ticks (item 153.1: $F every tick, $1 every fifteenth),
   // counted per channel because the clock is the channel's and the operation
-  // the instrument's.
-  for (const voice of ts.voices) {
-    if (voice.modPeriod === 0 || !voice.active) continue;
-    const inst = eng.instruments[voice.instrumentId];
-    if (inst.modOp === MOD_OFF) continue;
-    const sampleLen = Math.max(voice.activeSampleLength, 1);
-    const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
-      voice.activeSampleLoopEnd, sampleLen);
-    if (!g.live) continue;
-    if (++voice.modTickCount < voice.modPeriod) continue;
-    voice.modTickCount = 0;
-    const step = MOD_STEP[inst.modOp];
-    if (inst.modOp === MOD_FUNK) {
-      // Walk to the next byte the region actually touches and flip it. An
-      // inverted region can exclude a long stretch, so the scan is bounded —
-      // past MOD_WALK_SCAN misses this step simply does not land. One byte is
-      // not a discontinuity, so this is the one operation with no crossfade.
-      for (let n = 0; n < MOD_WALK_SCAN; n++) {
-        voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
-        const i = g.ds + voice.modWritePos;
-        if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
-      }
-      continue;
-    }
-    // Everything else replaces a mapping wholesale, so the voices sounding this
-    // instrument crossfade out of the old one rather than cutting to the new
-    // (item 153.5).
-    inst.snapshotModState();
-    if (isRolOp(inst.modOp)) {
-      inst.modRot = (inst.modRot + step) % g.dl;
-      inst.modOn = inst.modRot !== 0;
-    } else if (isJumpOp(inst.modOp)) {
-      // Jump (item 152): the ROL displacement, thrown instead of stepped. One
-      // offset for the whole region, measured from home rather than from the
-      // last throw, so $A paces around it instead of wandering off.
-      inst.modRot = jumpRot(inst.modOp, g.dl);
-      inst.modOn = inst.modRot !== 0;
-    } else if (isRndOp(inst.modOp)) {
-      // Scatter (item 152): one new scramble of the whole region per step. The
-      // per-byte throws live in the seed, so a step is a single draw however
-      // many bytes it rearranges, and each is measured from where its byte
-      // really belongs — nothing accumulates, so $D stays within its 1/512 of
-      // the domain however long the effect runs.
-      inst.modScatter = scatterReach(inst.modOp, g.dl);
-      inst.modSeed = scatterSeed();
-      inst.modOn = inst.modScatter > 0;
-    } else {
-      inst.modSub = (inst.modSub + step) & 0xff;
-      inst.modOn = inst.modSub !== 0;
-    }
-    armModXfade(ts, voice.instrumentId);
+  // the instrument's. A metainstrument's layer children carry a clock too
+  // (item 154), one per distinct instrument — applySampleModEffect zeroes the
+  // duplicates' modPeriod, so a kit whose layers share a sample still steps it
+  // once a tick.
+  for (const voice of ts.voices) advanceSampleMod(eng, ts, voice);
+  for (const bg of ts.backgroundVoices) {
+    if (bg.isLayerChild) advanceSampleMod(eng, ts, bg);
   }
 
   // Background (NNA-ghost) voices: passive maintenance only.
@@ -7403,8 +7475,10 @@ function applyTrackerTick(eng, ts, playhead) {
           }
         }
         bg.isLayerChild = false;
+        bg.layerPitchMod = 0;
       } else {
         bg.noteVal = clamp(parent.noteVal + bg.layerRelDetune, 0x20, 0xffff);
+        bg.layerPitchMod = parent.pitchModDelta;
         bg.basePitch = bg.noteVal;
         bg.amigaPeriod = -1.0;
         bg.linearFreq = -1.0;
@@ -7447,7 +7521,8 @@ function applyTrackerTick(eng, ts, playhead) {
     const pitchEnvDelta = bg.hasPitchEnv && bg.pitchEnvOn
       ? Math.trunc(((bg.envPitchValue - 0.5) * 2.0 * 16.0 * 4096.0) / 12.0)
       : 0;
-    const finalPitch = clamp(bg.noteVal + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
+    const finalPitch = clamp(bg.noteVal + bg.layerPitchMod + autoVibDelta + pitchEnvDelta,
+      0x20, 0xffff);
     bg.playbackRate = computePlaybackRate(bg, finalPitch, ts.tuningRatio);
     bg.renderPitch = finalPitch; // display tap (per-tick pitch)
     // Filter envelope — MUST branch on SF mode too (cents vs IT byte range).
@@ -7467,6 +7542,98 @@ function applyTrackerTick(eng, ts, playhead) {
       ts.backgroundVoices.splice(i, 1);
     }
   }
+}
+
+/**
+ * One tick of channel-clocked sample modification (notefx 2 / 3) for `voice`:
+ * step the instrument's live operation when this voice's period elapses. Split
+ * out of the tick loop because a metainstrument's layer children run it too
+ * (item 154) — the clock is the voice's, the operation the instrument's.
+ */
+function advanceSampleMod(eng, ts, voice) {
+  if (voice.modPeriod === 0 || !voice.active) return;
+  const inst = eng.instruments[voice.instrumentId];
+  if (inst.modOp === MOD_OFF) return;
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
+    voice.activeSampleLoopEnd, sampleLen);
+  if (!g.live) return;
+  if (++voice.modTickCount < voice.modPeriod) return;
+  voice.modTickCount = 0;
+  const step = MOD_STEP[inst.modOp];
+  if (inst.modOp === MOD_FUNK) {
+    // Walk to the next byte the region actually touches and flip it. An
+    // inverted region can exclude a long stretch, so the scan is bounded —
+    // past MOD_WALK_SCAN misses this step simply does not land. One byte is
+    // not a discontinuity, so this is the one operation with no crossfade.
+    for (let n = 0; n < MOD_WALK_SCAN; n++) {
+      voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
+      const i = g.ds + voice.modWritePos;
+      if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
+    }
+    return;
+  }
+  // Everything else replaces a mapping wholesale, so the voices sounding this
+  // instrument crossfade out of the old one rather than cutting to the new
+  // (item 153.5).
+  inst.snapshotModState();
+  if (isRolOp(inst.modOp)) {
+    inst.modRot = (inst.modRot + step) % g.dl;
+    inst.modOn = inst.modRot !== 0;
+  } else if (isJumpOp(inst.modOp)) {
+    // Jump (item 152): the ROL displacement, thrown instead of stepped. One
+    // offset for the whole region, measured from home rather than from the
+    // last throw, so $A paces around it instead of wandering off.
+    inst.modRot = jumpRot(inst.modOp, g.dl);
+    inst.modOn = inst.modRot !== 0;
+  } else if (isRndOp(inst.modOp)) {
+    // Scatter (item 152): one new scramble of the whole region per step. The
+    // per-byte throws live in the seed, so a step is a single draw however
+    // many bytes it rearranges, and each is measured from where its byte
+    // really belongs — nothing accumulates, so $D stays within its 1/512 of
+    // the domain however long the effect runs.
+    inst.modScatter = scatterReach(inst.modOp, g.dl);
+    inst.modSeed = scatterSeed();
+    inst.modOn = inst.modScatter > 0;
+  } else {
+    inst.modSub = (inst.modSub + step) & 0xff;
+    inst.modOn = inst.modSub !== 0;
+  }
+  armModXfade(ts, voice.instrumentId);
+}
+
+/**
+ * Restart one voice's note without re-resolving the instrument: sample back to
+ * the start, all four envelope playheads re-seeded, fade and filter history
+ * cleared. What Q's retrigger does to a voice — and, since a metainstrument is
+ * one note, to each of its layer children as well (item 154).
+ */
+function restartVoice(v) {
+  v.samplePos = v.activeSamplePlayStart; // patch-aware
+  v.keyOff = false;
+  v.envIndex = 0; v.envTimeSec = 0.0;
+  v.envPanIndex = 0; v.envPanTimeSec = 0.0;
+  v.envPan = v.activePanEnv[0].value / 255.0;
+  // Re-seed pf-envs past leading zero-duration nodes (as at fresh trigger).
+  if (v.hasPitchEnv) {
+    v.envPitchValue = seedPfRole(v.activePitchEnv, v.activePitchEnvLoop,
+      v.activePitchEnvSustain);
+    v.envPitchIndex = pfIdxBox[0]; v.envPitchTimeSec = pfTimeBox[0];
+  } else {
+    v.envPitchValue = 0.5; v.envPitchIndex = 0; v.envPitchTimeSec = 0.0;
+  }
+  if (v.hasFilterEnv) {
+    v.envFilterValue = seedPfRole(v.activeFilterEnv, v.activeFilterEnvLoop,
+      v.activeFilterEnvSustain);
+    v.envFilterIndex = pfIdxBox[0]; v.envFilterTimeSec = pfTimeBox[0];
+  } else {
+    v.envFilterValue = 0.5; v.envFilterIndex = 0; v.envFilterTimeSec = 0.0;
+  }
+  v.fadeoutVolume = 1.0;
+  v.autoVibPhase = 0;
+  v.autoVibTicksSinceTrigger = 0;
+  v.filterY1 = 0.0; v.filterY2 = 0.0; v.filterX1 = 0.0; v.filterX2 = 0.0;
+  v.right.reset();
 }
 
 // ══ src/engine/mixer.js ══
@@ -7676,17 +7843,7 @@ function generateTrackerAudio(eng, playhead, out) {
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
-        let pan;
-        if (voice.hasPanEnv && voice.panEnvOn) {
-          let envPanRaw = Math.round(voice.envPan * 255.0);
-          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
-            voice.panbrelloOffset;
-        } else {
-          pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
-        }
-        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        pan = advancePanRamp(voice, pan);
+        const pan = advancePanRamp(voice, voicePanByte(voice));
         // equal-energy pan law
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
@@ -7758,17 +7915,7 @@ function generateTrackerAudio(eng, playhead, out) {
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
-        let pan;
-        if (bg.hasPanEnv && bg.panEnvOn) {
-          let envPanRaw = Math.round(bg.envPan * 255.0);
-          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias +
-            bg.panbrelloOffset;
-        } else {
-          pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
-        }
-        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        pan = advancePanRamp(bg, pan);
+        const pan = advancePanRamp(bg, voicePanByte(bg));
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
       } else {
@@ -8961,6 +9108,8 @@ class StreamResampler {
 
 /** Reused drain target — the snapshot path never allocates. */
 const analysisReadout = makeAnalysisReadout();
+/** …and the scratch [azimuth, elevation] the position readout writes into. */
+const angleBox = new Float64Array(2);
 
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
@@ -9055,23 +9204,18 @@ function fillSnapshotInto(eng, playhead, f) {
       const faderGain = (255 - v.fader) / 255.0;
       let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
       f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
-      let pan;
-      if (v.hasPanEnv && v.panEnvOn) {
-        let envPanRaw = Math.trunc(v.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset;
-      } else {
-        pan = v.channelPan + v.notePan + v.panbrelloOffset;
-      }
-      f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+      // Where the channel SOUNDS — the same sum the mixer pans by (pan swing
+      // included, item 155), and for a metainstrument the mix-weighted mean of
+      // its layers rather than layer 0's own position (item 155.1).
+      f[o + SNAP_V_EFF_PAN] = displayPanByte(ts, vi, v);
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
       // value — in a surround song that is where the monitor downmix puts the
       // voice, which is what those meters are drawing.
       if (ts.surroundModel !== SURROUND_STEREO) {
-        const az = voiceAzimuth(v);
-        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
-        f[o + SNAP_V_AZIMUTH] = az;
-        f[o + SNAP_V_ELEVATION] = voiceElevation(v);
+        displayAngles(ts, vi, v, angleBox);
+        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(angleBox[0]));
+        f[o + SNAP_V_AZIMUTH] = angleBox[0];
+        f[o + SNAP_V_ELEVATION] = angleBox[1];
       } else {
         f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
         f[o + SNAP_V_ELEVATION] = 0;

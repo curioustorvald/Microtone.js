@@ -40,6 +40,7 @@ import { initTheme, toggleTheme, onThemeChange, THEMES } from "./theme.js";
 import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
 import { escapeNonAscii, unescapeName } from "./names.js";
 import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
+import { startControlEnhancer } from "./widgets/spinner.js";
 
 initTheme(); // before any canvas paints (saved choice ?? OS preference)
 await initI18n(); // strings before any UI is built
@@ -1483,5 +1484,11 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Every number field and dropdown in the app becomes a step-button group
+// (item 156). Started here rather than called per view: the panes, the
+// popups and the modals all build their own controls, and a watcher is the
+// only way none of them can be forgotten.
+startControlEnhancer();
 
 window.__splash?.done(); // app shell ready — fade out the boot splash (item 67)

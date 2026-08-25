@@ -33,7 +33,9 @@ window.addEventListener("error", (e) => log("ERROR: " + e.message));
 
   // ── the fields are EDITABLE, not a dim readout (the point of item 77) ──
   const selects = [...pv.root.querySelectorAll("select")];
-  const numbers = [...pv.root.querySelectorAll('input[type=number]')];
+  // Item 156: a spinner's field is a TEXT input (it has to be able to hold a
+  // typed "$FF"), so the group class is what finds one now, not its type.
+  const numbers = [...pv.root.querySelectorAll(".mt-spin input")];
   const presetSel = selects.find((s) =>
     [...s.options].some((o) => o.textContent.includes("ISO standard")));
   check("a Tuning preset dropdown exists with the spec's standard tunings", !!presetSel);
@@ -69,7 +71,7 @@ window.addEventListener("error", (e) => log("ERROR: " + e.message));
     !!ann2 && ann2.includes("440.00") && ann2.includes("concert"));
 
   // ── a hand-typed frequency: the user's own motivating example ──
-  const freq2 = [...pv.root.querySelectorAll('input[type=number]')]
+  const freq2 = [...pv.root.querySelectorAll(".mt-spin input")]
     .find((i) => Math.abs(+i.value - 440) < 1e-3);
   freq2.value = "412";
   freq2.dispatchEvent(new win.Event("change"));

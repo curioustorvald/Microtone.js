@@ -20,7 +20,9 @@ import {
 } from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
 import { CHAN_MODE_MATRIX } from "./inst.js";
-import { spatialVoiceGains, analysisVoiceGains, voiceAzimuth } from "./spatial.js";
+import {
+  spatialVoiceGains, analysisVoiceGains, voiceAzimuth, voicePanByte,
+} from "./spatial.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
 import { applyTrackerTick } from "./tick.js";
 
@@ -214,17 +216,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
-        let pan;
-        if (voice.hasPanEnv && voice.panEnvOn) {
-          let envPanRaw = Math.round(voice.envPan * 255.0);
-          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = voice.channelPan + voice.notePan + envPanRaw - 128 + voice.randomPanBias +
-            voice.panbrelloOffset;
-        } else {
-          pan = voice.channelPan + voice.notePan + voice.randomPanBias + voice.panbrelloOffset;
-        }
-        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        pan = advancePanRamp(voice, pan);
+        const pan = advancePanRamp(voice, voicePanByte(voice));
         // equal-energy pan law
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
@@ -296,17 +288,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       let lGain = 0.0;
       let rGain = 0.0;
       if (spatial === null) {
-        let pan;
-        if (bg.hasPanEnv && bg.panEnvOn) {
-          let envPanRaw = Math.round(bg.envPan * 255.0);
-          envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-          pan = bg.channelPan + bg.notePan + envPanRaw - 128 + bg.randomPanBias +
-            bg.panbrelloOffset;
-        } else {
-          pan = bg.channelPan + bg.notePan + bg.randomPanBias + bg.panbrelloOffset;
-        }
-        pan = pan < 0 ? 0 : pan > 255 ? 255 : pan;
-        pan = advancePanRamp(bg, pan);
+        const pan = advancePanRamp(bg, voicePanByte(bg));
         lGain = Math.cos((Math.PI * pan) / 512.0);
         rGain = Math.sin((Math.PI * pan) / 512.0);
       } else {

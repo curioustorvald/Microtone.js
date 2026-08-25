@@ -54,7 +54,10 @@
   --cv-wave-loop: #26314a;   /* loop-region shading */
   --cv-wave-mid: #4a5266;    /* waveform centre baseline */
   --cv-wave-funk: #f5a623;   /* loop bytes live-inverted by funk repeat (S$Fx) */
-  --cv-play-cursor: #f5a623; /* live play-position bars, envelope nodes */
+  --cv-play-cursor: #f5a623; /* envelope nodes, live envelope markers */
+  --cv-wave-cursor: #ff5ec4; /* live play-position hairline over a waveform —
+                                a colour NEITHER the trace nor a modified byte
+                                can wear, or it vanishes into them (item 160) */
   --cv-env-line: #4aa3ff;    /* envelope polyline, zone strokes */
   --cv-env-node: #f5a623;    /* envelope node dots */
   --cv-env-sus: #2a3a2e;     /* sustain-region shading */
@@ -113,6 +116,7 @@
   --cv-wave-mid: #5d636e;
   --cv-wave-funk: #f5a623;
   --cv-play-cursor: #f5a623;
+  --cv-wave-cursor: #ff5ec4;
   --cv-env-line: #4aa3ff;
   --cv-env-node: #f5a623;
   --cv-env-sus: #3a4b3e;
@@ -168,6 +172,7 @@
   --cv-wave-mid: #b3bcc9;
   --cv-wave-funk: #c07a10;
   --cv-play-cursor: #af6f10;
+  --cv-wave-cursor: #c1006f;
   --cv-env-line: #1d66b8;
   --cv-env-node: #af6f10;
   --cv-env-sus: #d7e7d9;
@@ -1312,7 +1317,7 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 }
 .slider-row {
   display: grid;
-  grid-template-columns: 10rem 5rem minmax(4.5rem, 1fr) 12rem;
+  grid-template-columns: 10rem 8rem minmax(4.5rem, 1fr) 11rem;
   align-items: center;
   gap: 0.5rem;
   color: var(--dim);
@@ -1335,10 +1340,10 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .slider-row .sl-check input { accent-color: var(--accent); }
 .slider-row input.sl-num.wide { width: 100%; }
 .slider-row input.sl-range { width: 100%; accent-color: var(--accent); }
-.slider-row.noslider { grid-template-columns: 10rem 6rem minmax(4.5rem, 1fr); }
+.slider-row.noslider { grid-template-columns: 10rem 9rem minmax(4.5rem, 1fr); }
 /* WIDE detune slider: spinner + readout on the first line, full-width slider below. */
 .slider-row.wide {
-  grid-template-columns: 10rem 6rem 1fr;
+  grid-template-columns: 10rem 9rem 1fr;
   grid-template-areas: "label num ann" "range range range";
   row-gap: 0.3rem;
 }
@@ -1917,3 +1922,136 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   .splash-ph, .splash-spin { animation: none; }
 }
+
+/* ── VALUE CONTROLS (item 156) ─────────────────────────────────────────
+ * Every number field and dropdown in the app is a button GROUP: the control
+ * itself is the middle segment, flanked by step buttons, with one continuous
+ * border round the three. Built by src/ui/widgets/spinner.js, which wraps the
+ * NATIVE element rather than replacing it — so the platform still does the
+ * typing, the validation and the option list, and this file only has to take
+ * its chrome off and re-draw the frame.
+ *
+ * These rules sit at the END of the stylesheet on purpose: the per-panel width
+ * rules above them are equally specific, and it is source order that lets the
+ * group take the space its bare control used to occupy. */
+.mt-spin, .mt-pick {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+  /* In a flex row the group keeps the width it was given: it is three things
+   * in a fixed frame, and letting the flexbox squeeze it crushes the value
+   * between the two buttons rather than the buttons with it. */
+  flex: 0 0 auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.mt-spin:focus-within, .mt-pick:focus-within { border-color: var(--accent); }
+/* An author `display` beats the UA sheet's `[hidden] { display: none }`, so a
+ * hidden group would otherwise stay on screen — see spinner.js, which mirrors
+ * the control's own `hidden` onto the group. */
+.mt-spin[hidden], .mt-pick[hidden] { display: none; }
+/* A default width for the SPINNER only. `width: auto` on a text input is its
+ * intrinsic ~20-character size, not its content, so a group with no width of
+ * its own would come out absurdly wide; the per-panel widths below override
+ * this. A PICKER wants exactly that intrinsic behaviour — a select is as wide
+ * as its widest option, which is where the plain dropdown sat. */
+.mt-spin { width: 7rem; }
+
+/* The step buttons: square-cornered, flush against the value, no border of
+ * their own except the hairline that separates them from it. */
+.mt-spin > .mt-step, .mt-pick > .mt-step {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--dim);
+  padding: 0 0.45rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  min-width: 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.mt-spin > .mt-step:hover, .mt-pick > .mt-step:hover {
+  background: var(--panel);
+  color: var(--fg);
+  border-color: transparent;
+}
+.mt-spin > .mt-step:active, .mt-pick > .mt-step:active { background: var(--border); }
+.mt-spin > .mt-step:disabled, .mt-pick > .mt-step:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: var(--panel-2);
+  color: var(--dim);
+}
+.mt-spin > .mt-step:first-child { border-right: 1px solid var(--border); }
+.mt-spin > .mt-step:last-child { border-left: 1px solid var(--border); }
+.mt-pick > .mt-step:first-child { border-right: 1px solid var(--border); }
+.mt-pick > .mt-step:last-child { border-left: 1px solid var(--border); }
+
+/* The value itself. Its own width is handed to the GROUP (below), so here it
+ * only has to fill what is left over after the two buttons. */
+.mt-spin > input[data-mt], .mt-pick > select[data-mt] {
+  flex: 1 1 auto;
+  min-width: 2.2em;
+  width: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  border-radius: 0;
+  outline: none;
+  padding: 0.15rem 0.35rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+/* The field is a TEXT input once upgraded (spinner.js: a number input cannot
+ * hold a `$FF`), so there is no native spin pair left to hide — only the
+ * digits, which want to be the same width whatever they are. */
+.mt-spin > input[data-mt] { font-variant-numeric: tabular-nums; }
+/* The value sits CENTRED between its two buttons — that is where the eye looks
+ * in a three-segment control — and falls back to the left only when it does not
+ * fit, so a clipped value is clipped at its END. `.mt-clip` is set by
+ * spinner.js's fitAlign, because no CSS reaches inside a form control to say
+ * "centre until it overflows". */
+.mt-spin > input[data-mt], .mt-pick > select[data-mt] { text-align: center; }
+.mt-spin > input[data-mt].mt-clip, .mt-pick > select[data-mt].mt-clip { text-align: left; }
+.mt-pick > select[data-mt] { cursor: pointer; }
+.mt-pick > select[data-mt]:disabled, .mt-spin > input[data-mt]:disabled { color: var(--dim); }
+/* The dropdown list is the platform's, and it is painted on the platform's own
+ * ground — give it ink that reads there whatever the app theme is doing. */
+.mt-pick > select option { background: var(--panel-2); color: var(--fg); }
+
+/* Where the bare control used to carry the width, the group carries it now. */
+.inst-field .mt-spin, .inst-field .mt-pick { width: 9.5rem; }
+.slider-row .mt-spin { width: 100%; }
+.env-ctl .mt-spin { width: 7rem; }
+.meta-table .mt-spin { width: 8.5em; }
+.meta-table .detCell .mt-spin { width: 9.5em; }
+.meta-table .rngCell .mt-spin { width: 8.5em; margin-right: 0.25rem; }
+.meta-table .velCell .mt-spin { width: 7em; margin-right: 0.25rem; }
+/* The step buttons run in the table's own smaller type, so they need less air
+ * round the glyph than the ones in a panel. */
+.meta-table .mt-step { min-width: 1.2rem; padding: 0 0.3rem; }
+.np-freq .mt-spin { width: 9rem; }
+.nota-field .mt-spin { width: 9rem; }
+.nota-degrees .mt-spin { width: 100%; }
+.wavepaint-modal .mt-spin { width: 8.5rem; }
+.panner-fields .mt-spin { width: 7.5rem; }
+.lab-row .mt-spin { width: 8.5rem; }
+.chord-voice .mt-spin { width: 6.2rem; }
+
+/* Item 156.1 — tiny pushbuttons that sit in a row need air between them. The
+ * groups above are the exception: their segments are meant to touch. */
+.sl-buttons button:not(:last-child),
+.subtabs button:not(:last-child),
+.env-row button:not(:last-child),
+.adv-head button:not(:last-child),
+.nota-tools button:not(:last-child),
+.wave-shapes button:not(:last-child) { margin-right: 3px; }

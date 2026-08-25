@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>value controls — visual</title>
+  <link rel="stylesheet" href="../../css/microtone.css" />
+  <style>
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+    body { padding: 1.2rem; font-family: system-ui, sans-serif; }
+    h2 { font-size: 0.95rem; color: var(--dim); margin: 1.2rem 0 0.5rem; font-weight: 600; }
+    .demo-rows { max-width: 560px; }
+    .demo-free { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <!-- Item 156, seen rather than asserted: the same three shapes side by side —
+       a plain spinner, a mapped one (stored units under the buttons, prose in
+       the box) and a dropdown — in the layouts they actually appear in, plus a
+       row of values too long for their box, which is what "centred unless it
+       overflows" has to get right. Open with ?theme=dark|dim|light to check
+       each palette. -->
+  <script type="module">
+    import { startControlEnhancer, mapSpinner } from "../../src/ui/widgets/spinner.js";
+    import { SEG_MINIFLOAT_MAP } from "../../src/ui/units.js";
+
+    const params = new URLSearchParams(location.search);
+    if (params.get("theme")) document.documentElement.dataset.theme = params.get("theme");
+
+    const h = (tag, cls, ...kids) => {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      el.append(...kids);
+      return el;
+    };
+    const number = (value, min, max, step = 1) => {
+      const i = document.createElement("input");
+      i.type = "number";
+      i.value = value; i.min = min; i.max = max; i.step = step;
+      return i;
+    };
+    const dropdown = (...labels) => {
+      const s = document.createElement("select");
+      for (const l of labels) {
+        const o = document.createElement("option");
+        o.textContent = l;
+        s.appendChild(o);
+      }
+      return s;
+    };
+
+    document.body.append(h("h2", null, "Instrument field rows (.inst-field)"));
+    const grid = h("div", "inst-grid");
+    grid.append(
+      h("label", "inst-field", "Base note ", dropdown("C4", "A4", "C9")),
+      h("label", "inst-field", "Frequency ", number(440, 1, 22050)),
+      h("label", "inst-field", "Tuning ", dropdown("Tracker default", "ISO 440 Hz", "French 435 Hz")),
+    );
+    document.body.append(grid);
+
+    document.body.append(h("h2", null, "Slider rows (.slider-row) — spinner · annotation · slider"));
+    const rows = h("div", "inst-rows demo-rows");
+    for (const [label, value, ann] of [["Global volume", 255, "$FF"], ["Default note vol", 128, "$80"]]) {
+      const row = h("div", "slider-row");
+      const range = document.createElement("input");
+      range.type = "range"; range.className = "sl-range";
+      range.min = 0; range.max = 255; range.value = value;
+      const num = number(value, 0, 255);
+      num.className = "sl-num";
+      row.append(h("span", "sl-label", label), num, h("span", "sl-ann", ann), range);
+      rows.appendChild(row);
+    }
+    document.body.append(rows);
+
+    document.body.append(h("h2", null, "Envelope controls (.env-ctl) — the mapped spinner is 'Seg'"));
+    const envRow = h("div", "env-row");
+    const seg = document.createElement("input");
+    const node = number(3, 0, 24);
+    const val = number(48, 0, 63);
+    envRow.append(
+      h("label", "env-ctl", "Node ", node),
+      h("label", "env-ctl", "Value ", val),
+      h("label", "env-ctl", "Seg ", seg),
+      Object.assign(document.createElement("button"), { textContent: "＋" }),
+      Object.assign(document.createElement("button"), { textContent: "－" }),
+    );
+    document.body.append(h("div", "env-controls", envRow));
+
+    document.body.append(h("h2", null, "Loose in a toolbar"));
+    const free = h("div", "demo-free");
+    free.append(
+      Object.assign(document.createElement("button"), { textContent: "Play" }),
+      number(125, 25, 535),
+      dropdown("Stereo", "Planar surround", "Spatial surround"),
+      Object.assign(document.createElement("button"), { textContent: "Export…" }),
+    );
+    document.body.append(free);
+
+    // Values too long for their box — what "centred unless it overflows" has to
+    // get right. The narrow class is only here, to force the case.
+    document.body.append(h("h2", null, "Values that do not fit"));
+    const tight = h("div", "demo-free demo-tight");
+    const longNum = number(0, -100000, 100000);
+    longNum.value = "-98765.4321";
+    const longSel = dropdown("Tracker default (C9 @ 8363.42 Hz)", "ISO 440 Hz", "x");
+    tight.append(longNum, longSel);
+    document.body.append(tight);
+    const style = document.createElement("style");
+    style.textContent = ".demo-tight .mt-spin, .demo-tight .mt-pick { width: 8rem; }";
+    document.head.appendChild(style);
+
+    startControlEnhancer();
+    mapSpinner(seg, SEG_MINIFLOAT_MAP, 60);
+
+    // Panels that never got a `.mt-spin { width }` rule. A text input's
+    // `width: auto` is its intrinsic ~20-character size, so without the group's
+    // own default these come out absurdly wide — this is the row that shows it.
+    // (The containers here are unconstrained, so they exaggerate; the real
+    // dialogs sit in grids. That is the point of having the case on screen.)
+    document.body.append(h("h2", null, "Panels with no width rule of their own (the 7rem default)"));
+    for (const cls of ["smp-fields", "lab-eqband", "export-opts", "adv-num", "np-field"]) {
+      const box = h("div", cls);
+      box.style.marginBottom = "0.4rem";
+      const lab = h("label", "modal-field", `${cls} `, number(1234, 0, 65535));
+      box.append(lab, dropdown("one", "another rather longer one"));
+      document.body.append(box);
+    }
+
+    // Which of them ended up clipped, for the eye and for a grep. Deferred a
+    // whole task, not a microtask: the enhancer's own batch has to land first.
+    setTimeout(() => {
+      const report = (el, label) =>
+        `${label}: ${el.classList.contains("mt-clip") ? "clipped (left)" : "centred"}` +
+        ` — ${el.scrollWidth} in ${el.clientWidth}`;
+      const pre = document.createElement("pre");
+      pre.id = "probe";
+      pre.style.color = "var(--dim)";
+      const box = (sel, label) => {
+        const el = document.querySelector(sel);
+        const g = el?.closest(".mt-spin, .mt-pick");
+        return `${label}: group ${g ? Math.round(g.offsetWidth) : "-"}px, field ${el ? Math.round(el.offsetWidth) : "-"}px`;
+      };
+      pre.textContent = [
+        report(node, "short number"),
+        report(longNum, "long number"),
+        report(longSel, "long dropdown"),
+        box(".inst-field input", "inst-field (has a group width)"),
+        box(".smp-fields input", "smp-fields (none)"),
+        box(".np-field input", "np-field (none)"),
+        box(".export-opts input", "export-opts (none)"),
+      ].join("\n");
+      document.body.appendChild(pre);
+    });
+  </script>
+</body>
+</html>

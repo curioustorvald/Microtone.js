@@ -46,8 +46,11 @@ function painted(cv) {
   check(masterStrip.panelCount() === 2 && !!masterStrip.meterCanvas,
     "two scope panels + one meter panel", String(masterStrip.panelCount()));
   // Item 98 note 4: the metering chooser lives on the meter panel, at its foot.
-  check(masterStrip.targetSel.parentElement === masterStrip.meterBox &&
-    masterStrip.meterBox.lastElementChild === masterStrip.targetSel,
+  // Item 156 wraps every dropdown in a step-button group, so what sits in the
+  // meter box is the GROUP the chooser lives in.
+  const chooser = masterStrip.targetSel.closest(".mt-pick") ?? masterStrip.targetSel;
+  check(chooser.parentElement === masterStrip.meterBox &&
+    masterStrip.meterBox.lastElementChild === chooser,
     "the meters chooser sits at the bottom of the meter panel");
   // It must take width off the grid, not cover it.
   const stage = doc.getElementById("viewStage");

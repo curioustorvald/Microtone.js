@@ -115,6 +115,19 @@ From top to bottom:
 | **F6** | Project | Song properties, tuning, song list |
 | **F7** | File | Browser storage, import/export |
 
+### Value controls
+
+Every number field and dropdown in the panels is a value between two buttons:
+
+    ┌─┬───┬─┐        ┌─┬───┬─┐
+    │–│123│+│        │◄│abc│►│
+    └─┴───┴─┘        └─┴───┴─┘
+
+- **`–` / `+`** step the number, **`◄` / `►`** move through a list; hold either and it repeats, faster the longer you hold. An arrow greys out at the end of its list.
+- **The middle is a real field.** Click it and type, or use **↑ / ↓** on a number; click a dropdown and its full list opens. The value sits centred between the two buttons, and shuffles left only when it is too long for the box — so what gets cut off is the end of it, never the start.
+- **Hex is understood everywhere a number is.** Type `$FF` or `0xFF` into any spinner and it becomes 255 — handy when the annotation beside the field, the effect argument you are matching, or the pattern you are reading it off is written in hex. The box settles on the decimal it landed on, and `–` / `+` step from a hex value just as readily. A sign goes in front of either spelling (`-$10`). Anything that is not a number at all leaves the field as it was rather than quietly becoming zero.
+- **Some fields read in one unit and step in another**, because the file stores something else. An envelope segment shows **seconds** and steps one storable length at a time; a metainstrument layer's mix shows **decibels** and steps one mix level, with the raw byte beside it; a layer's detune shows **cents** and steps a whole degree of the song's own notation. Typing works in whatever the box shows, and the value settles on the nearest one the file can hold.
+
 ### Two views at once
 
 **F8** (or the **⊞** button at the end of the tab strip) splits the screen in
@@ -700,6 +713,7 @@ Timeline and Patterns support rectangular selections:
 - **Ctrl+C / Ctrl+X / Ctrl+V** copy, cut and paste. A paste lands on the **start of the selection** when there is one — the corner you began the drag from, not the cursor, which sits wherever the drag ended — and on the cursor when there is not. Pasting across views clips to what fits; a column-limited block overwrites only its columns.
 - **Right-click** for the same three as buttons: *Copy* and *Cut* while a block is selected, *Paste* on any cell that can take one. See [the right-click menu](#the-right-click-menu); the Cues view carries the same clipboard cells over its cue words.
 - **Delete / Backspace** blanks the selection, **Esc** clears it.
+- **The clipboard is shared between browser tabs.** Copy in one tab of Microtone and paste in another, so two songs open side by side can pass material between them; the copy outlives the tab that made it. The cue clipboard travels the same way.
 
 ## Cues (F2)
 
@@ -1086,8 +1100,11 @@ The tab opens with the **project's** own three strings — **Project name**,
 **Author** and **Copyright** — followed by a **Message** box for whatever the
 project wants to say to whoever opens it: liner notes, greetings, a track list.
 The message travels with the file, and importing an ImpulseTracker module brings
-its song message in here. These describe the whole project; each song has its
-own name, composer and copyright, which the songs table at the bottom edits.
+its song message in here. All four are written as you type — the file reads as
+unsaved straight away, and switching tabs or clicking into the other pane cannot
+take a half-typed message with it — while a whole burst of typing is still one
+Ctrl+Z. These describe the whole project; each song has its own name, composer
+and copyright, which the songs table at the bottom edits.
 
 Then the per-song properties, applied live to playback:
 

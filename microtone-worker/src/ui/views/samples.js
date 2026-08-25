@@ -428,10 +428,12 @@ export class SamplesView {
       }
     });
 
-    // live play-position cursors — vertical bars, matching the envelope
-    // graph's playback cursor style
+    // Live play-position cursors — vertical bars in the waveform's OWN cursor
+    // colour, which no part of the trace can wear: the old one was the same
+    // orange as a byte the sample-modification command has inverted, so the
+    // hairline disappeared into exactly the picture it was measuring (item 160).
     if (audio) {
-      ctx.fillStyle = C.playCursor;
+      ctx.fillStyle = C.waveCursor ?? C.playCursor;
       for (let vi = 0; vi < TOTAL_VOICES; vi++) {
         if (!audio.getVoiceActive(vi)) continue;
         if (audio.getVoiceSamplePtr(vi) !== s.ptr) continue;

@@ -50,6 +50,10 @@ export class ProjectView {
     this.host = host;
     this.cb = cb; // { editSong(index) } — the app's per-song metadata modal
     this.visible = false;
+    // Undo-coalescing key for a burst of typing in a project-string field
+    // (item 157): held while the field has focus, so "everything I typed in
+    // this box" is one Ctrl+Z rather than one per character.
+    this.typingGesture = null;
     this.root = document.createElement("div");
     this.root.className = "project-view";
     host.appendChild(this.root);
@@ -114,7 +118,8 @@ export class ProjectView {
     input.value = decodeProjectString(fourcc, this.store.doc.projectString(fourcc));
     input.placeholder = placeholder;
     input.spellcheck = false;
-    input.addEventListener("change", () => this.changeProjectString(fourcc, input.value));
+    input.addEventListener("input", () => this.typeProjectString(fourcc, input.value));
+    input.addEventListener("blur", () => this.endTypingBurst());
     row.appendChild(input);
     return row;
   }
@@ -134,7 +139,11 @@ export class ProjectView {
     area.spellcheck = false;
     area.placeholder = t("proj.projectMessagePlaceholder");
     area.value = decodeProjectString("PMsg", this.store.doc.projectString("PMsg"));
-    area.addEventListener("change", () => this.changeProjectString("PMsg", area.value));
+    // Every keystroke, not `change` (item 157): `change` only fires on blur,
+    // and the pane is routinely thrown away and rebuilt without one — switching
+    // tabs, clicking into the other split pane — which lost the whole message.
+    area.addEventListener("input", () => this.typeProjectString("PMsg", area.value));
+    area.addEventListener("blur", () => this.endTypingBurst());
     const hint = document.createElement("p");
     hint.className = "dim";
     hint.style.margin = "0.1rem 0 0.4rem";
@@ -214,6 +223,7 @@ export class ProjectView {
 
   refresh() {
     const doc = this.store.doc;
+    const keep = this.captureFieldFocus();
     this.root.innerHTML = "";
     if (!doc) return;
     const song = this.store.song;
@@ -443,6 +453,8 @@ export class ProjectView {
     globNote.className = "dim";
     globNote.textContent = t("glob.songScopeNote", { song: this.store.songIndex });
     this.root.appendChild(globNote);
+
+    this.restoreFieldFocus(keep);
   }
 
   /** Percussion slots (their pitch selects the drum, so note edits skip them) —
@@ -584,18 +596,62 @@ export class ProjectView {
     this.refresh();
   }
 
-  /** Write one of the four project strings (§9.2 — PNam / PCom / PCpr / PMsg)
-   *  as one undo step. Emptying a field REMOVES its section rather than storing
-   *  a lone NUL, so a project that says nothing carries nothing. */
-  changeProjectString(fourcc, raw) {
+  /**
+   * Write one of the four project strings (§9.2 — PNam / PCom / PCpr / PMsg).
+   * Emptying a field REMOVES its section rather than storing a lone NUL, so a
+   * project that says nothing carries nothing.
+   *
+   * `live` is the keystroke path (item 157): the document is written on every
+   * keystroke, so nothing a rebuild does can lose what has been typed and the
+   * file reads as unsaved the moment it changes — but the view is NOT rebuilt
+   * under the caret, and the whole burst collapses into ONE undo step through
+   * the gesture id the field holds while it has focus.
+   */
+  changeProjectString(fourcc, raw, live = false) {
     const store = this.store;
     const current = decodeProjectString(fourcc, store.doc.projectString(fourcc));
     const text = fourcc === "PMsg" ? String(raw).replace(/\r\n?/g, "\n") : String(raw);
     if (current === text) return;
     store.undo.apply(setProjectStringOp(
-      fourcc, text === "" ? null : encodeProjectString(fourcc, text)));
+      fourcc, text === "" ? null : encodeProjectString(fourcc, text),
+      live ? this.typingGesture : null));
     if (fourcc === "PNam") store.emit("status"); // topbar file line shows the name
-    this.refresh();
+    if (!live) this.refresh();
+  }
+
+  /** One keystroke in a project-string field. */
+  typeProjectString(fourcc, value) {
+    if (this.typingGesture === null) this.typingGesture = `pstr:${Date.now()}`;
+    this.changeProjectString(fourcc, value, true);
+  }
+
+  /** …and the end of that burst: the next one is its own undo step. */
+  endTypingBurst() { this.typingGesture = null; }
+
+  /**
+   * Keep the caret where it was across a rebuild. `refresh()` throws the whole
+   * pane away and builds it again, and it runs on things that have nothing to
+   * do with the field being typed into — a "doc" event, the other split pane
+   * taking focus (which re-shows this view). Before item 157 that silently
+   * dropped the message being written; now the text is already in the document
+   * and only the caret has to be put back.
+   */
+  captureFieldFocus() {
+    const el = document.activeElement;
+    if (!el || !this.root.contains(el) || !el.dataset?.section) return null;
+    return {
+      section: el.dataset.section,
+      start: el.selectionStart, end: el.selectionEnd, scrollTop: el.scrollTop,
+    };
+  }
+
+  restoreFieldFocus(keep) {
+    if (!keep) return;
+    const el = this.root.querySelector(`[data-section="${keep.section}"]`);
+    if (!el) return;
+    el.focus();
+    try { el.setSelectionRange(keep.start, keep.end); } catch { /* not a text field */ }
+    el.scrollTop = keep.scrollTop;
   }
 
   /** Write song `index`'s own sMet strings — name, composer, copyright — from

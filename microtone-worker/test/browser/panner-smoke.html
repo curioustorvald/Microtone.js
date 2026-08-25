@@ -86,7 +86,7 @@ const check = (ok, name, extra = "") => { if (!ok) fails++; log(`${ok ? "PASS" :
   pd("pointerdown", r.width / 2 + 80, r.height / 2); // due right of centre
   pd("pointerup", r.width / 2 + 80, r.height / 2);
   await sleep(40);
-  const azField = dlg.querySelector(".panner-fields input[type=number]");
+  const azField = dlg.querySelector(".panner-fields .mt-spin input");
   check(Math.abs(parseFloat(azField.value) - 256) < 2, "dragging right of centre = azimuth 256 (right)",
     azField.value);
   api.place();

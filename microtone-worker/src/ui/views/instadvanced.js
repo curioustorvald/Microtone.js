@@ -22,7 +22,10 @@ import { META_MIX_GAIN } from "../../engine/tables.js";
 import { noteToStr, rangeToStr, hex4 } from "../notenames.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
-import { annFadeout, annFilter, annSfCutoff, annSfReso } from "../units.js";
+import {
+  annFadeout, annFilter, annSfCutoff, annSfReso, SEG_MINIFLOAT_MAP,
+} from "../units.js";
+import { mapSpinner } from "../widgets/spinner.js";
 import { t } from "../i18n.js";
 
 // Fraction of the env plot width the time axis uses (item 37 headroom rule,
@@ -781,12 +784,13 @@ export class AdvancedZoneEditor {
       this.num(t("env.value"), node.value, 0, kind.max,
         (v) => editEnv((q, e) => { e[selN].value = v; })),
       (() => {
-        const l = this.num(t("env.seg"), minifloatToDouble(node.offset).toFixed(3), 0, 10,
-          () => {});
+        // Seconds on screen, one minifloat CODE per press (item 156.2) — the
+        // General tab's segment field works the same way, from the same map.
+        const l = this.num(t("env.seg"), 0, 0, 255, () => {});
         const inp = l.querySelector("input");
-        inp.step = 0.01;
+        mapSpinner(inp, SEG_MINIFLOAT_MAP, node.offset);
         inp.addEventListener("change", () => editEnv((q, e) => {
-          e[selN].offset = minifloatFromDouble(Math.max(parseFloat(inp.value) || 0, 0));
+          e[selN].offset = inp.rawValue;
         }));
         return l;
       })(),

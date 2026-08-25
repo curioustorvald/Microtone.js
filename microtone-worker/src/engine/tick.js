@@ -273,40 +273,29 @@ export function applyTrackerTick(eng, ts, playhead) {
       voice.lastArpVoice = voiceIdx;
     }
 
-    // Q retrigger.
+    // Q retrigger. A metainstrument retriggers WHOLE — every layer restarts
+    // together, or the kit would fall apart into layer 0 stuttering over a
+    // sustained remainder (item 154). The volume modifier is the channel's, so
+    // it is applied once, on the foreground voice the children sync from.
     if (voice.retrigActive && !voice.noteWasCut) {
       voice.retrigCounter++;
       if (voice.retrigCounter >= voice.retrigInterval) {
         voice.retrigCounter = 0;
-        voice.samplePos = voice.activeSamplePlayStart; // patch-aware
-        voice.keyOff = false;
-        voice.envIndex = 0; voice.envTimeSec = 0.0;
-        voice.envPanIndex = 0; voice.envPanTimeSec = 0.0;
-        voice.envPan = voice.activePanEnv[0].value / 255.0;
-        // Re-seed pf-envs past leading zero-duration nodes (as at fresh trigger).
-        if (voice.hasPitchEnv) {
-          voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
-            voice.activePitchEnvSustain);
-          voice.envPitchIndex = pfIdxBox[0]; voice.envPitchTimeSec = pfTimeBox[0];
-        } else {
-          voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+        restartVoice(voice);
+        for (const bg of ts.backgroundVoices) {
+          if (bg.isLayerChild && bg.sourceChannel === vi) restartVoice(bg);
         }
-        if (voice.hasFilterEnv) {
-          voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
-            voice.activeFilterEnvSustain);
-          voice.envFilterIndex = pfIdxBox[0]; voice.envFilterTimeSec = pfTimeBox[0];
-        } else {
-          voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
-        }
-        voice.fadeoutVolume = 1.0;
-        voice.autoVibPhase = 0;
-        voice.autoVibTicksSinceTrigger = 0;
-        voice.filterY1 = 0.0; voice.filterY2 = 0.0; voice.filterX1 = 0.0; voice.filterX2 = 0.0;
-        voice.right.reset();
         voice.noteVolume = applyRetrigVolMod(voice.noteVolume, voice.retrigVolMod, ts.volStep, ts.volMax);
         voice.rowVolume = voice.noteVolume;
       }
     }
+
+    // What the row's effects did to the pitch this tick, as a delta — the
+    // layer children of a metainstrument re-add it below so a vibrato, a
+    // glissando or an arpeggio bends the whole kit (item 154). Auto-vibrato and
+    // the pitch envelope are NOT in it: those are the instrument's own, and
+    // each layer already runs its own copy.
+    voice.pitchModDelta = pitchToMixer - voice.noteVal;
 
     // Auto-vibrato — added on top of pitchToMixer.
     const autoVibDelta = advanceAutoVibrato(voice, inst);
@@ -388,57 +377,13 @@ export function applyTrackerTick(eng, ts, playhead) {
   // Sample modification (notefx 2 / 3) — one step of the instrument's live
   // operation every $y ticks (item 153.1: $F every tick, $1 every fifteenth),
   // counted per channel because the clock is the channel's and the operation
-  // the instrument's.
-  for (const voice of ts.voices) {
-    if (voice.modPeriod === 0 || !voice.active) continue;
-    const inst = eng.instruments[voice.instrumentId];
-    if (inst.modOp === MOD_OFF) continue;
-    const sampleLen = Math.max(voice.activeSampleLength, 1);
-    const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
-      voice.activeSampleLoopEnd, sampleLen);
-    if (!g.live) continue;
-    if (++voice.modTickCount < voice.modPeriod) continue;
-    voice.modTickCount = 0;
-    const step = MOD_STEP[inst.modOp];
-    if (inst.modOp === MOD_FUNK) {
-      // Walk to the next byte the region actually touches and flip it. An
-      // inverted region can exclude a long stretch, so the scan is bounded —
-      // past MOD_WALK_SCAN misses this step simply does not land. One byte is
-      // not a discontinuity, so this is the one operation with no crossfade.
-      for (let n = 0; n < MOD_WALK_SCAN; n++) {
-        voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
-        const i = g.ds + voice.modWritePos;
-        if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
-      }
-      continue;
-    }
-    // Everything else replaces a mapping wholesale, so the voices sounding this
-    // instrument crossfade out of the old one rather than cutting to the new
-    // (item 153.5).
-    inst.snapshotModState();
-    if (isRolOp(inst.modOp)) {
-      inst.modRot = (inst.modRot + step) % g.dl;
-      inst.modOn = inst.modRot !== 0;
-    } else if (isJumpOp(inst.modOp)) {
-      // Jump (item 152): the ROL displacement, thrown instead of stepped. One
-      // offset for the whole region, measured from home rather than from the
-      // last throw, so $A paces around it instead of wandering off.
-      inst.modRot = jumpRot(inst.modOp, g.dl);
-      inst.modOn = inst.modRot !== 0;
-    } else if (isRndOp(inst.modOp)) {
-      // Scatter (item 152): one new scramble of the whole region per step. The
-      // per-byte throws live in the seed, so a step is a single draw however
-      // many bytes it rearranges, and each is measured from where its byte
-      // really belongs — nothing accumulates, so $D stays within its 1/512 of
-      // the domain however long the effect runs.
-      inst.modScatter = scatterReach(inst.modOp, g.dl);
-      inst.modSeed = scatterSeed();
-      inst.modOn = inst.modScatter > 0;
-    } else {
-      inst.modSub = (inst.modSub + step) & 0xff;
-      inst.modOn = inst.modSub !== 0;
-    }
-    armModXfade(ts, voice.instrumentId);
+  // the instrument's. A metainstrument's layer children carry a clock too
+  // (item 154), one per distinct instrument — applySampleModEffect zeroes the
+  // duplicates' modPeriod, so a kit whose layers share a sample still steps it
+  // once a tick.
+  for (const voice of ts.voices) advanceSampleMod(eng, ts, voice);
+  for (const bg of ts.backgroundVoices) {
+    if (bg.isLayerChild) advanceSampleMod(eng, ts, bg);
   }
 
   // Background (NNA-ghost) voices: passive maintenance only.
@@ -462,8 +407,10 @@ export function applyTrackerTick(eng, ts, playhead) {
           }
         }
         bg.isLayerChild = false;
+        bg.layerPitchMod = 0;
       } else {
         bg.noteVal = clamp(parent.noteVal + bg.layerRelDetune, 0x20, 0xffff);
+        bg.layerPitchMod = parent.pitchModDelta;
         bg.basePitch = bg.noteVal;
         bg.amigaPeriod = -1.0;
         bg.linearFreq = -1.0;
@@ -506,7 +453,8 @@ export function applyTrackerTick(eng, ts, playhead) {
     const pitchEnvDelta = bg.hasPitchEnv && bg.pitchEnvOn
       ? Math.trunc(((bg.envPitchValue - 0.5) * 2.0 * 16.0 * 4096.0) / 12.0)
       : 0;
-    const finalPitch = clamp(bg.noteVal + autoVibDelta + pitchEnvDelta, 0x20, 0xffff);
+    const finalPitch = clamp(bg.noteVal + bg.layerPitchMod + autoVibDelta + pitchEnvDelta,
+      0x20, 0xffff);
     bg.playbackRate = computePlaybackRate(bg, finalPitch, ts.tuningRatio);
     bg.renderPitch = finalPitch; // display tap (per-tick pitch)
     // Filter envelope — MUST branch on SF mode too (cents vs IT byte range).
@@ -526,4 +474,96 @@ export function applyTrackerTick(eng, ts, playhead) {
       ts.backgroundVoices.splice(i, 1);
     }
   }
+}
+
+/**
+ * One tick of channel-clocked sample modification (notefx 2 / 3) for `voice`:
+ * step the instrument's live operation when this voice's period elapses. Split
+ * out of the tick loop because a metainstrument's layer children run it too
+ * (item 154) — the clock is the voice's, the operation the instrument's.
+ */
+function advanceSampleMod(eng, ts, voice) {
+  if (voice.modPeriod === 0 || !voice.active) return;
+  const inst = eng.instruments[voice.instrumentId];
+  if (inst.modOp === MOD_OFF) return;
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
+    voice.activeSampleLoopEnd, sampleLen);
+  if (!g.live) return;
+  if (++voice.modTickCount < voice.modPeriod) return;
+  voice.modTickCount = 0;
+  const step = MOD_STEP[inst.modOp];
+  if (inst.modOp === MOD_FUNK) {
+    // Walk to the next byte the region actually touches and flip it. An
+    // inverted region can exclude a long stretch, so the scan is bounded —
+    // past MOD_WALK_SCAN misses this step simply does not land. One byte is
+    // not a discontinuity, so this is the one operation with no crossfade.
+    for (let n = 0; n < MOD_WALK_SCAN; n++) {
+      voice.modWritePos = (voice.modWritePos + 1) % Math.max(g.dl, 1);
+      const i = g.ds + voice.modWritePos;
+      if (modTouches(g, inst.modInvert, i)) { inst.toggleModBit(i, sampleLen); break; }
+    }
+    return;
+  }
+  // Everything else replaces a mapping wholesale, so the voices sounding this
+  // instrument crossfade out of the old one rather than cutting to the new
+  // (item 153.5).
+  inst.snapshotModState();
+  if (isRolOp(inst.modOp)) {
+    inst.modRot = (inst.modRot + step) % g.dl;
+    inst.modOn = inst.modRot !== 0;
+  } else if (isJumpOp(inst.modOp)) {
+    // Jump (item 152): the ROL displacement, thrown instead of stepped. One
+    // offset for the whole region, measured from home rather than from the
+    // last throw, so $A paces around it instead of wandering off.
+    inst.modRot = jumpRot(inst.modOp, g.dl);
+    inst.modOn = inst.modRot !== 0;
+  } else if (isRndOp(inst.modOp)) {
+    // Scatter (item 152): one new scramble of the whole region per step. The
+    // per-byte throws live in the seed, so a step is a single draw however
+    // many bytes it rearranges, and each is measured from where its byte
+    // really belongs — nothing accumulates, so $D stays within its 1/512 of
+    // the domain however long the effect runs.
+    inst.modScatter = scatterReach(inst.modOp, g.dl);
+    inst.modSeed = scatterSeed();
+    inst.modOn = inst.modScatter > 0;
+  } else {
+    inst.modSub = (inst.modSub + step) & 0xff;
+    inst.modOn = inst.modSub !== 0;
+  }
+  armModXfade(ts, voice.instrumentId);
+}
+
+/**
+ * Restart one voice's note without re-resolving the instrument: sample back to
+ * the start, all four envelope playheads re-seeded, fade and filter history
+ * cleared. What Q's retrigger does to a voice — and, since a metainstrument is
+ * one note, to each of its layer children as well (item 154).
+ */
+function restartVoice(v) {
+  v.samplePos = v.activeSamplePlayStart; // patch-aware
+  v.keyOff = false;
+  v.envIndex = 0; v.envTimeSec = 0.0;
+  v.envPanIndex = 0; v.envPanTimeSec = 0.0;
+  v.envPan = v.activePanEnv[0].value / 255.0;
+  // Re-seed pf-envs past leading zero-duration nodes (as at fresh trigger).
+  if (v.hasPitchEnv) {
+    v.envPitchValue = seedPfRole(v.activePitchEnv, v.activePitchEnvLoop,
+      v.activePitchEnvSustain);
+    v.envPitchIndex = pfIdxBox[0]; v.envPitchTimeSec = pfTimeBox[0];
+  } else {
+    v.envPitchValue = 0.5; v.envPitchIndex = 0; v.envPitchTimeSec = 0.0;
+  }
+  if (v.hasFilterEnv) {
+    v.envFilterValue = seedPfRole(v.activeFilterEnv, v.activeFilterEnvLoop,
+      v.activeFilterEnvSustain);
+    v.envFilterIndex = pfIdxBox[0]; v.envFilterTimeSec = pfTimeBox[0];
+  } else {
+    v.envFilterValue = 0.5; v.envFilterIndex = 0; v.envFilterTimeSec = 0.0;
+  }
+  v.fadeoutVolume = 1.0;
+  v.autoVibPhase = 0;
+  v.autoVibTicksSinceTrigger = 0;
+  v.filterY1 = 0.0; v.filterY2 = 0.0; v.filterX1 = 0.0; v.filterX2 = 0.0;
+  v.right.reset();
 }

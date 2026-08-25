@@ -22,12 +22,14 @@ import {
   SNAP_SCOPE_BASE,
 } from "./protocol.js";
 import {
-  SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth, voiceElevation,
+  SURROUND_STEREO, foldAzimuthToPan, displayPanByte, displayAngles,
 } from "../engine/spatial.js";
 import { ANALYSIS_MAX_METERS, makeAnalysisReadout } from "../engine/analysis.js";
 
 /** Reused drain target — the snapshot path never allocates. */
 const analysisReadout = makeAnalysisReadout();
+/** …and the scratch [azimuth, elevation] the position readout writes into. */
+const angleBox = new Float64Array(2);
 
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
@@ -122,23 +124,18 @@ export function fillSnapshotInto(eng, playhead, f) {
       const faderGain = (255 - v.fader) / 255.0;
       let ev = effEnvVol * v.fadeoutVolume * v.currentMixVolume * faderGain;
       f[o + SNAP_V_EFF_VOL] = ev < 0 ? 0 : ev > 1 ? 1 : ev;
-      let pan;
-      if (v.hasPanEnv && v.panEnvOn) {
-        let envPanRaw = Math.trunc(v.envPan * 255.0);
-        envPanRaw = envPanRaw < 0 ? 0 : envPanRaw > 255 ? 255 : envPanRaw;
-        pan = v.channelPan + v.notePan + envPanRaw - 128 + v.panbrelloOffset;
-      } else {
-        pan = v.channelPan + v.notePan + v.panbrelloOffset;
-      }
-      f[o + SNAP_V_EFF_PAN] = pan < 0 ? 0 : pan > 255 ? 255 : pan;
+      // Where the channel SOUNDS — the same sum the mixer pans by (pan swing
+      // included, item 155), and for a metainstrument the mix-weighted mean of
+      // its layers rather than layer 0's own position (item 155.1).
+      f[o + SNAP_V_EFF_PAN] = displayPanByte(ts, vi, v);
       // Spatial position (#998). EFF_PAN above stays the stereo meters' 0..255
       // value — in a surround song that is where the monitor downmix puts the
       // voice, which is what those meters are drawing.
       if (ts.surroundModel !== SURROUND_STEREO) {
-        const az = voiceAzimuth(v);
-        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(az));
-        f[o + SNAP_V_AZIMUTH] = az;
-        f[o + SNAP_V_ELEVATION] = voiceElevation(v);
+        displayAngles(ts, vi, v, angleBox);
+        f[o + SNAP_V_EFF_PAN] = Math.round(foldAzimuthToPan(angleBox[0]));
+        f[o + SNAP_V_AZIMUTH] = angleBox[0];
+        f[o + SNAP_V_ELEVATION] = angleBox[1];
       } else {
         f[o + SNAP_V_AZIMUTH] = f[o + SNAP_V_EFF_PAN];
         f[o + SNAP_V_ELEVATION] = 0;

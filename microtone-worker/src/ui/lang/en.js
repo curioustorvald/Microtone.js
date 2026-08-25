@@ -761,6 +761,7 @@ export default {
   "meta.foregroundTitle": "Foreground layer. The first layer that covers a trigger plays on the channel itself; the others spawn background voices, so the order here is priority.",
   "meta.linked": "linked ×{n}",
   "meta.linkedTitle": "{n} layers share this sub-instrument — editing it changes all of them. Unlink gives this layer its own copy.",
+  "meta.mixTitle": "Layer mix level in decibels. \u2212 and + step one raw mix octet, the unit the file stores.",
   "meta.detuneTitle": "Layer detune in cents. 100 ¢ is a 12-TET semitone; a few cents is a chorus spread.",
   "meta.detuneDownTitle": "Down one degree of the song's notation",
   "meta.detuneUpTitle": "Up one degree of the song's notation",

@@ -58,26 +58,43 @@
         const blank = acts(0).filter((b) => !b.textContent.trim() && !b.querySelector("svg"));
         check(`all ${acts(0).length} action buttons carry a glyph`, blank.length === 0);
 
-        // ── item 28: mix, still the first .meta-num ──
-        const mixBefore = layers()[0].mixOctet;
-        const newMix = mixBefore === 200 ? 120 : 200;
-        nums(0)[0].value = String(newMix);
+        // ── item 28: mix, still the first .meta-num — but it reads DECIBELS
+        //    now (item 156.2): the box is what a person mixes in, while − and +
+        //    still walk the raw octet the file stores, one at a time. ──
+        nums(0)[0].value = "-6.0";
         fire(nums(0)[0]);
         await sleep(20);
-        check("mix edit applies", layers()[0].mixOctet === newMix);
+        const dbOctet = layers()[0].mixOctet;
+        const { META_MIX_GAIN } = await win.eval('import("/src/engine/tables.js")');
+        const landedDb = 20 * Math.log10(META_MIX_GAIN[dbOctet]);
+        check(`typing −6 dB lands on the nearest octet ($${dbOctet.toString(16)} = ${landedDb.toFixed(1)} dB)`,
+          Math.abs(landedDb + 6) < 0.6);
+        check("…and the box settles on the value that landed",
+          /-?\d+\.\d\s*dB/.test(nums(0)[0].value) || /∞/.test(nums(0)[0].value));
+
+        // + steps ONE octet, whatever the decibels round to
+        const stepFrom = layers()[0].mixOctet;
+        const plus = nums(0)[0].closest(".mt-spin").querySelector(".mt-step:last-child");
+        plus.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+        plus.dispatchEvent(new win.PointerEvent("pointerup", { bubbles: true, button: 0 }));
+        await sleep(20);
+        check("+ steps exactly one mix octet", layers()[0].mixOctet === stepFrom + 1);
 
         // ── item 113: detune is now CENTS, not raw 4096-TET units ──
-        nums(0)[1].value = "-100";           // one 12-TET semitone down
+        nums(0)[1].value = "-100";           // one 12-TET semitone down (in ¢)
         fire(nums(0)[1]);
         await sleep(20);
         const det = layers()[0].detune;
         check(`detune reads cents (−100 ¢ → ${det} units)`, det === -341);
 
-        // the ◂ ▸ buttons step a whole degree of the song's notation
+        // the spinner's + steps a whole degree of the song's notation — the
+        // cell's own ◂ ▸ pair became the group's buttons (item 156)
         const beforeStep = layers()[0].detune;
-        acts(0).find((b) => b.textContent === "▸").click();
+        const detPlus = nums(0)[1].closest(".mt-spin").querySelector(".mt-step:last-child");
+        detPlus.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+        detPlus.dispatchEvent(new win.PointerEvent("pointerup", { bubbles: true, button: 0 }));
         await sleep(20);
-        check("▸ steps up a degree", layers()[0].detune > beforeStep);
+        check("+ steps up a degree", layers()[0].detune > beforeStep);
 
         // ── the note readouts are PAINTED in the song's own notation ──
         // Not "is there a canvas": the SAME note painted against two different

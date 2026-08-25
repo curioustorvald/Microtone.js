@@ -126,6 +126,10 @@ export class Voice {
     this.layerRelPan = 0;
     this.layerRelElevation = 0;
     this.layerMixGain = 1.0;
+    // The parent channel's per-tick pitch overlay (vibrato / glissando /
+    // arpeggio), copied down by the per-tick sync so an effect that bends the
+    // note bends the WHOLE metainstrument and not just layer 0 (item 154).
+    this.layerPitchMod = 0;
     this.nnaOverride = -1;
     // Per-voice envelope gates (S $77..$7E).
     this.volEnvOn = true;
@@ -300,6 +304,10 @@ export class Voice {
     // Timeline header can show what the voice is ACTUALLY playing per tick, not
     // just the row-triggered noteVal. Never read by the DSP.
     this.renderPitch = 0x0000;
+    // This tick's pitch OVERLAY — vibrato / glissando / arpeggio, as a signed
+    // delta on noteVal. A metainstrument's layer children read it off their
+    // parent so the bend reaches every layer (item 154; layerPitchMod).
+    this.pitchModDelta = 0;
 
     // Per-row effect state.
     this.rowEffect = 0;

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>value-control smoke</title></head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 156 — every number field and dropdown in the app is a step-button
+    // group. What this pins: the enhancer reaches controls it never heard of
+    // (including ones built after it started), the native element survives
+    // inside the group so existing call sites keep working, the buttons step
+    // and fire the events a hand edit would, the end-of-list arrows go dead,
+    // and a MAPPED spinner walks stored units while showing something else.
+    const out = [];
+    const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const doc = win.document;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        // The enhancer batches on an animation frame, so anything added has to
+        // be given one before it is asked about.
+        const settle = async () => { await sleep(60); };
+
+        // ── the static chrome was upgraded at boot ──
+        const songSel = doc.getElementById("songSel");
+        const songGroup = songSel?.closest(".mt-pick");
+        log(`boot-time dropdown upgraded: ${songGroup ? "ok" : "FAIL"}`);
+
+        // ── a control built LATER is upgraded too ──
+        const host = doc.createElement("div");
+        host.style.position = "absolute";
+        host.style.left = "-9999px";
+        doc.body.appendChild(host);
+        const num = doc.createElement("input");
+        num.type = "number";
+        num.min = "0"; num.max = "3"; num.step = "1"; num.value = "1";
+        const sel = doc.createElement("select");
+        for (const [v, txt] of [["a", "Alpha"], ["b", "Beta"], ["c", "Gamma"]]) {
+          const o = doc.createElement("option");
+          o.value = v; o.textContent = txt;
+          sel.appendChild(o);
+        }
+        host.append(num, sel);
+        await settle();
+
+        const numGroup = num.closest(".mt-spin");
+        const selGroup = sel.closest(".mt-pick");
+        const shapeOk = !!numGroup && !!selGroup &&
+          numGroup.children.length === 3 &&
+          numGroup.children[0].classList.contains("mt-step") &&
+          numGroup.children[1] === num &&
+          numGroup.children[2].classList.contains("mt-step") &&
+          selGroup.children[1] === sel;
+        log(`late controls upgraded, native element kept: ${shapeOk ? "ok" : "FAIL"}`);
+
+        // ── the buttons step, and fire what a typed edit fires ──
+        let changes = 0;
+        num.addEventListener("change", () => changes++);
+        const press = (group, i) => {
+          const b = group.children[i];
+          b.dispatchEvent(new win.PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+          b.dispatchEvent(new win.PointerEvent("pointerup", { bubbles: true, button: 0 }));
+        };
+        press(numGroup, 2); // +
+        const up = num.value;
+        press(numGroup, 0); // –
+        press(numGroup, 0);
+        const stepOk = up === "2" && num.value === "0" && changes === 3;
+        log(`− / + step and announce: ${stepOk ? "ok" : `FAIL (${up} → ${num.value}, ${changes} changes)`}`);
+
+        // min/max still hold, and the arrow that cannot move goes nowhere
+        press(numGroup, 0);
+        const clampOk = num.value === "0";
+        log(`the field's own min still holds: ${clampOk ? "ok" : `FAIL (${num.value})`}`);
+
+        // ── ◄ ► walk the option list and go dead at its ends ──
+        let selChanges = 0;
+        sel.addEventListener("change", () => selChanges++);
+        await settle();
+        const startDead = selGroup.children[0].disabled && !selGroup.children[2].disabled;
+        press(selGroup, 2);
+        press(selGroup, 2);
+        await settle();
+        const endOk = sel.value === "c" && selGroup.children[2].disabled &&
+          !selGroup.children[0].disabled && selChanges === 2;
+        log(`◄ ► walk the list, ends disable: ${startDead && endOk ? "ok" : `FAIL (${sel.value})`}`);
+
+        // ── options replaced under it: the arrows re-read on the next frame ──
+        sel.replaceChildren();
+        const only = doc.createElement("option");
+        only.value = "z"; only.textContent = "Zeta";
+        sel.appendChild(only);
+        await settle();
+        const reOk = selGroup.children[0].disabled && selGroup.children[2].disabled;
+        log(`a rebuilt option list re-syncs the arrows: ${reOk ? "ok" : "FAIL"}`);
+
+        // ── mapped spinner: stored units under the buttons, prose in the box ──
+        const { mapSpinner } = await win.eval('import("/src/ui/widgets/spinner.js")');
+        const { SEG_MINIFLOAT_MAP } = await win.eval('import("/src/ui/units.js")');
+        const { minifloatToDouble } = await win.eval('import("/src/engine/minifloat.js")');
+        const mapped = doc.createElement("input");
+        host.appendChild(mapped);
+        mapSpinner(mapped, SEG_MINIFLOAT_MAP, 60);
+        await settle();
+        const mapGroup = mapped.closest(".mt-spin");
+        const shownAt60 = mapped.value;
+        press(mapGroup, 2);
+        const rawAfter = mapped.rawValue;
+        const shownAfter = mapped.value;
+        // One press = one minifloat CODE, and the box shows what that lasts.
+        const mapOk = !!mapGroup && rawAfter === 61 &&
+          shownAt60 === `${minifloatToDouble(60).toFixed(3)} s` &&
+          shownAfter === `${minifloatToDouble(61).toFixed(3)} s`;
+        log(`mapped spinner steps stored units: ${mapOk ? "ok" : `FAIL (${shownAt60} → ${shownAfter}, raw ${rawAfter})`}`);
+
+        // …and typing a display value maps back to the nearest stored one
+        mapped.value = "1.000";
+        mapped.dispatchEvent(new win.Event("change", { bubbles: true }));
+        const typedRaw = mapped.rawValue;
+        const typedOk = Math.abs(minifloatToDouble(typedRaw) - 1) < 0.02 &&
+          mapped.value === `${minifloatToDouble(typedRaw).toFixed(3)} s`;
+        log(`typing maps back and settles: ${typedOk ? "ok" : `FAIL (raw ${typedRaw}, ${mapped.value})`}`);
+
+        // ── hex entry: $FF and 0xFF are 255, and the call site never sees ──
+        // ── either spelling, only the number it named                     ──
+        const hexIn = doc.createElement("input");
+        hexIn.type = "number";
+        hexIn.min = "0"; hexIn.max = "65535"; hexIn.step = "1"; hexIn.value = "0";
+        host.appendChild(hexIn);
+        await settle();
+        // What the call site sees is what its own listener reads on `change` —
+        // and it is bound BEFORE the widget's, exactly as a real one would be.
+        const seen = [];
+        hexIn.addEventListener("change", () => seen.push(hexIn.value));
+        const type = (text) => {
+          hexIn.value = text;
+          hexIn.dispatchEvent(new win.Event("change", { bubbles: true }));
+        };
+        type("$FF");
+        type("0x3600");
+        type("-$10");
+        type("440");
+        const hexOk = seen.join(",") === "255,13824,-16,440";
+        log(`hex entry reaches the call site as a number: ${hexOk ? "ok" : `FAIL (${seen.join(",")})`}`);
+
+        // …and the box itself shows the decimal it settled on
+        const shownDecimal = hexIn.value === "440";
+        // junk puts the last good value back rather than letting a NaN through
+        type("wat");
+        const revertOk = hexIn.value === "440" && seen[seen.length - 1] === "440";
+        log(`junk reverts, box reads decimal: ${shownDecimal && revertOk ? "ok" : `FAIL (${hexIn.value})`}`);
+
+        // stepping still walks the step grid and stops at the ends
+        hexIn.value = "10";
+        const stepGroup = hexIn.closest(".mt-spin");
+        press(stepGroup, 2);
+        const upFrom10 = hexIn.value;
+        hexIn.value = "$10"; // hex is understood by the BUTTONS too
+        press(stepGroup, 0);
+        const downFromHex = hexIn.value;
+        const gridOk = upFrom10 === "11" && downFromHex === "15";
+        log(`− / + read hex and stay on the step grid: ${gridOk ? "ok" : `FAIL (${upFrom10}, ${downFromHex})`}`);
+
+        // ── the value is centred, and anchors left only when it overflows ──
+        const fitNum = doc.createElement("input");
+        fitNum.type = "number";
+        fitNum.style.width = "3rem"; // the group takes it, so the box is tight
+        fitNum.value = "1";
+        host.appendChild(fitNum);
+        await settle();
+        const fitsCentred = !fitNum.classList.contains("mt-clip");
+        fitNum.value = "-1234567890123";
+        fitNum.dispatchEvent(new win.Event("input", { bubbles: true }));
+        const clipped = fitNum.classList.contains("mt-clip");
+        fitNum.value = "2";
+        fitNum.dispatchEvent(new win.Event("input", { bubbles: true }));
+        const backCentred = !fitNum.classList.contains("mt-clip");
+        log(`value centred, left only on overflow: ` +
+          `${fitsCentred && clipped && backCentred ? "ok" : `FAIL (${fitsCentred}/${clipped}/${backCentred})`}`);
+
+        // …and a dropdown does the same on the SELECTED option, not the widest
+        const fitSel = doc.createElement("select");
+        for (const l of ["ab", "a very long option name indeed"]) {
+          const o = doc.createElement("option");
+          o.textContent = l;
+          fitSel.appendChild(o);
+        }
+        fitSel.style.width = "4rem";
+        host.appendChild(fitSel);
+        await settle();
+        const shortCentred = !fitSel.classList.contains("mt-clip");
+        fitSel.selectedIndex = 1;
+        fitSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+        const longClipped = fitSel.classList.contains("mt-clip");
+        log(`dropdown follows its selected option: ` +
+          `${shortCentred && longClipped ? "ok" : `FAIL (${shortCentred}/${longClipped})`}`);
+
+        // ── hiding the CONTROL hides the whole group ──
+        // A caller has no idea its field got wrapped: `el.hidden = true` has to
+        // keep meaning what it always meant. (The chord maker hides three of
+        // its four value fields to show the fourth.) The computed-style check
+        // is the real trap: an author `display: inline-flex` beats the UA
+        // sheet's `[hidden] { display: none }`, so the group would stay on
+        // screen with only its buttons showing.
+        num.hidden = true;
+        sel.hidden = true;
+        await settle();
+        const gone = numGroup.hidden && selGroup.hidden &&
+          win.getComputedStyle(numGroup).display === "none" &&
+          win.getComputedStyle(selGroup).display === "none";
+        num.hidden = false;
+        sel.hidden = false;
+        await settle();
+        const back = !numGroup.hidden &&
+          win.getComputedStyle(numGroup).display !== "none";
+        log(`hiding the control hides its group: ${gone && back ? "ok" : `FAIL (${gone}/${back})`}`);
+
+        // ── opt-out is honoured ──
+        const optOut = doc.createElement("input");
+        optOut.type = "number";
+        optOut.dataset.mt = "off";
+        host.appendChild(optOut);
+        await settle();
+        log(`data-mt="off" is left alone: ${optOut.closest(".mt-spin") ? "FAIL" : "ok"}`);
+
+        // ── the real views' controls got the treatment ──
+        doc.querySelector('#tabs button[data-view="project"]').click();
+        await sleep(200);
+        const projHost = doc.getElementById("projectHost");
+        const bare = [...projHost.querySelectorAll('input[type="number"], select')]
+          .filter((el) => !el.closest(".mt-spin") && !el.closest(".mt-pick"));
+        log(`Project tab has no bare controls left: ${bare.length === 0 ? "ok" : `FAIL (${bare.length})`}`);
+
+        // …and the busiest panel in the app, whose rows are spinner + slider
+        doc.querySelector('#tabs button[data-view="instruments"]').click();
+        const iv = win.__microtone.instrumentsView;
+        iv.selected = win.__microtone.store.doc.usedInstrumentSlots()[0];
+        iv.refresh();
+        await sleep(200);
+        const instHost = doc.getElementById("instrumentsHost");
+        const bareInst = [...instHost.querySelectorAll('input[type="number"], select')]
+          .filter((el) => !el.closest(".mt-spin") && !el.closest(".mt-pick"));
+        const groups = instHost.querySelectorAll(".mt-spin, .mt-pick").length;
+        log(`Instruments tab: ${groups} groups, no bare controls: ` +
+          `${bareInst.length === 0 && groups > 0 ? "ok" : `FAIL (${bareInst.length} bare)`}`);
+
+        // ── and end to end, on a real field: hex reaches the DOCUMENT ──
+        const slot = win.__microtone.store.doc.usedInstrumentSlots()[0];
+        const volRow = [...instHost.querySelectorAll(".slider-row")]
+          .find((r) => r.querySelector(".sl-label")?.textContent.startsWith("Global"));
+        const volIn = volRow?.querySelector("input.sl-num");
+        if (volIn) {
+          volIn.value = "$C0";
+          volIn.dispatchEvent(new win.Event("change", { bubbles: true }));
+          await sleep(50);
+        }
+        const gv = win.__microtone.store.doc.instruments[slot].instGlobalVolume;
+        log(`"$C0" typed into a real instrument field stores 192: ` +
+          `${gv === 192 ? "ok" : `FAIL (${gv})`}`);
+
+        host.remove();
+        log(out.some((l) => l.includes("FAIL")) ? "RESULT: FAIL" : "RESULT: ALL OK");
+      } catch (err) {
+        log(`EXCEPTION ${err && err.stack ? err.stack : err}`);
+        log("RESULT: FAIL");
+      }
+    })();
+  </script>
+</body>
+</html>
