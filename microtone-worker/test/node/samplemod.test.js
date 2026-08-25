@@ -17,7 +17,8 @@ import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import {
   decodeSampleRegion, MOD_STEP, MOD_MAX, MOD_COMB_MAX, MOD_COMB_ODD_MAX,
-  MOD_SCATTER_FRAC, MOD_JUMP_SLICES, MOD_JUMP8, MOD_JUMP_ALL, MOD_RND12, MOD_RND_ALL,
+  MOD_SCATTER_FRAC, MOD_JUMP_SLICES, MOD_JUMP8, MOD_JUMP16, MOD_JUMP_ALL,
+  MOD_RND512, MOD_RND8,
   MOD_XFADE_SAMPLES, modStepPeriod, isJumpOp, isRndOp, jumpRot, scatterReach,
   scatterSource, ModGeom, resolveModGeom, modTouches, modAddress,
   REGION_NONE, REGION_SET, REGION_COMB,
@@ -133,13 +134,14 @@ test("the speed nibble is a period in TICKS, not a funk-ladder index", () => {
 test("operation steps: rotate by 1/2/4/8 bytes, subtract 2/8/32/128", () => {
   assert.deepEqual([...MOD_STEP].slice(0, 10), [0, 0, 1, 2, 4, 8, 2, 8, 32, 128]);
   assert.equal(MOD_STEP.length, 16, "one entry per $x nibble");
-  // Item 152 spent $A..$F on the two random families: $A/$B throw the region,
-  // $C..$F throw its bytes. No operation nibble is reserved any more.
+  // $A..$F are the two random families: $A/$B/$C throw the whole region,
+  // $D/$E/$F throw its bytes. No operation nibble is reserved any more.
   assert.equal(MOD_MAX, 0xf);
-  assert.equal(MOD_JUMP_SLICES, 8);
-  assert.deepEqual([...MOD_SCATTER_FRAC], [0.125, 0.25, 0.5, 1]);
-  assert.deepEqual([0x9, 0xa, 0xb, 0xc].map(isJumpOp), [false, true, true, false]);
-  assert.deepEqual([0xb, 0xc, 0xf].map(isRndOp), [false, true, true]);
+  assert.deepEqual([...MOD_JUMP_SLICES], [8, 16], "$A eighths, $B sixteenths");
+  assert.deepEqual([...MOD_SCATTER_FRAC], [1 / 512, 1 / 64, 1 / 8]);
+  assert.deepEqual([0x9, 0xa, 0xb, 0xc, 0xd].map(isJumpOp),
+    [false, true, true, true, false]);
+  assert.deepEqual([0xc, 0xd, 0xe, 0xf].map(isRndOp), [false, true, true, true]);
 });
 
 // ── the domain: everything is relative to the loop region (item 153) ─────────
@@ -572,11 +574,11 @@ test("resetFunkState clears the modification and the legacy mask alike", () => {
   assert.equal(v.modXfade, 0);
 });
 
-// ── the scatter ladder (items 152, 153.2) ────────────────────────────────────
+// ── the scatter ladder ($D $E $F) ────────────────────────────────────────────
 //
-// $C..$F SHUFFLE: every byte of the region is displaced on its own, each by its
-// own GAUSSIAN draw whose three-sigma bound is 12.5 / 25 / 50 / 100% of the wrap
-// domain. Not the region moved as a block — that is what $2..$5 are for.
+// SHUFFLE: every byte of the region is displaced on its own, each by its own
+// UNIFORM draw within 1/512, 1/64 or 1/8 of the wrap domain. Not the region
+// moved as a block — that is what $2..$5 and the jumps are for.
 
 /** How far byte `i` travelled, the short way round a domain of `dl`. */
 const travel = (i, src, dl) => {
@@ -587,21 +589,24 @@ const travel = (i, src, dl) => {
 /** rot as a SIGNED displacement: the short way round the wrap domain. */
 const signedRot = (rot, dl) => (rot > dl / 2 ? rot - dl : rot);
 
-test("scatterReach: the three-sigma bound, as a fraction of the domain", () => {
-  assert.equal(scatterReach(0xc, 1000), 125);
-  assert.equal(scatterReach(0xd, 1000), 250);
-  assert.equal(scatterReach(0xe, 1000), 500);
-  assert.equal(scatterReach(0xf, 1000), 1000, "$F reaches the whole domain");
+test("scatterReach: the fraction of the domain each byte may be thrown", () => {
+  assert.equal(scatterReach(0xd, 1000), 2, "$D — a 512th, rounded");
+  assert.equal(scatterReach(0xe, 1000), 16);
+  assert.equal(scatterReach(0xf, 1000), 125, "$F — an eighth, the widest there is");
+  assert.deepEqual([0xd, 0xe, 0xf].map((op) => scatterReach(op, 65536)), [128, 1024, 8192]);
+  // A reach never rounds down to nothing: the narrowest setting on the shortest
+  // domain still moves a byte.
+  assert.equal(scatterReach(0xd, 100), 1);
   // Degenerate domains cannot displace anything.
   for (const dl of [0, 1]) {
-    for (let op = MOD_RND12; op <= MOD_RND_ALL; op++) assert.equal(scatterReach(op, dl), 0);
+    for (let op = MOD_RND512; op <= MOD_RND8; op++) assert.equal(scatterReach(op, dl), 0);
   }
 });
 
 test("scatterSource: every byte gets its OWN throw, inside the reach", () => {
-  const dl = 1000;
+  const dl = 4096;
   const seed = 0x12345678;
-  for (const op of [0xc, 0xd, 0xe]) {
+  for (const op of [0xd, 0xe, 0xf]) {
     const reach = scatterReach(op, dl);
     const seen = new Set();
     let moved = 0;
@@ -613,16 +618,23 @@ test("scatterSource: every byte gets its OWN throw, inside the reach", () => {
       seen.add(d);
       if (d !== 0) moved++;
     }
-    assert.ok(seen.size > reach / 2, `op $${op.toString(16)}: the throws differ per byte (${seen.size} distinct)`);
-    assert.ok(moved > dl * 0.9, "nearly every byte moves — this is a shuffle, not a rotation");
+    assert.ok(seen.size >= Math.min(2 * reach + 1, 64),
+      `op $${op.toString(16)}: the throws differ per byte (${seen.size} distinct)`);
+    // Every byte draws its own offset out of 2·reach+1, so only the 1-in-that
+    // many that draw zero stay put.
+    assert.ok(moved > dl * (1 - 1.5 / (2 * reach + 1)),
+      `op $${op.toString(16)}: nearly every byte moves — a shuffle, not a rotation (${moved})`);
   }
 });
 
-test("the throw is gaussian: three sigma at the reach, most of it near home", () => {
-  // $C on a big domain: a reach of an eighth means nothing folds round the
-  // wrap, so travel() measures the draw itself rather than its image.
+test("the throw is UNIFORM: every distance inside the reach is as likely", () => {
+  // $F on a big domain — the widest reach there is, and still only an eighth of
+  // it, so nothing folds round the wrap and travel() measures the draw itself.
+  // A bell was tried here (item 153.2) and reverted: leaving most bytes at home
+  // and flinging a few reads as noise under the sample, not as the sample
+  // breaking up (item 153.10).
   const dl = 20000;
-  const reach = scatterReach(MOD_RND12, dl);
+  const reach = scatterReach(MOD_RND8, dl);
   let sum = 0, sumsq = 0, far = 0;
   for (let i = 0; i < dl; i++) {
     const d = travel(i, scatterSource(i, 0, dl, reach, 0x5eed), dl);
@@ -632,16 +644,18 @@ test("the throw is gaussian: three sigma at the reach, most of it near home", ()
   }
   const mean = sum / dl;
   const sd = Math.sqrt(sumsq / dl - mean * mean);
-  assert.ok(Math.abs(mean) < reach * 0.02, `the bell is centred on home (mean ${mean.toFixed(1)})`);
-  assert.ok(Math.abs(sd - reach / 3) < reach * 0.02,
-    `the reach is three sigma (sd ${sd.toFixed(1)} vs ${(reach / 3).toFixed(1)})`);
-  // A uniform draw would put 2/3 of the bytes outside ±reach/3; a normal one
-  // puts under a third there.
-  assert.ok(far / dl < 0.4, `most bytes stay within one sigma-ish (${(far / dl).toFixed(2)})`);
+  const flat = reach / Math.sqrt(3);   // sd of a flat draw over ±reach
+  assert.ok(Math.abs(mean) < reach * 0.02, `the draw is centred on home (mean ${mean.toFixed(1)})`);
+  assert.ok(Math.abs(sd - flat) < reach * 0.03,
+    `flat, not belled (sd ${sd.toFixed(1)} vs ${flat.toFixed(1)}; a 3-sigma bell would read ${(reach / 3).toFixed(1)})`);
+  // Two bytes in three land past a third of the reach — the flat draw's answer.
+  // A bell would put well under half of them there.
+  assert.ok(far / dl > 0.6 && far / dl < 0.72,
+    `two thirds of the bytes are past reach/3 (${(far / dl).toFixed(2)})`);
 });
 
 test("scatterSource is NOT a rotation: neighbours do not keep their spacing", () => {
-  const dl = 1000, reach = scatterReach(0xd, dl), seed = 99;
+  const dl = 1000, reach = scatterReach(0xf, dl), seed = 99;
   let sameDelta = 0;
   let prev = travel(0, scatterSource(0, 0, dl, reach, seed), dl);
   for (let i = 1; i < dl; i++) {
@@ -653,7 +667,7 @@ test("scatterSource is NOT a rotation: neighbours do not keep their spacing", ()
 });
 
 test("scatterSource is stable within a step and different across steps", () => {
-  const dl = 1000, reach = scatterReach(0xe, dl);
+  const dl = 1000, reach = scatterReach(0xf, dl);
   // Stable: an output sample reads the same position through every sinc tap.
   for (let i = 0; i < 50; i++) {
     assert.equal(scatterSource(i, 0, dl, reach, 7), scatterSource(i, 0, dl, reach, 7));
@@ -673,7 +687,7 @@ test("scatterSource wraps inside a region rather than leaving it", () => {
   }
 });
 
-test("$F spreads over the whole domain, $C stays local", () => {
+test("$F reaches an eighth of the domain, $D barely leaves home", () => {
   const dl = 4096;
   const spread = (op) => {
     let far = 0;
@@ -683,14 +697,14 @@ test("$F spreads over the whole domain, $C stays local", () => {
     }
     return far;
   };
-  assert.ok(spread(0xc) <= Math.round(dl * 0.125));
-  assert.ok(spread(0xf) > dl * 0.45, "$F leaves nothing where it was");
+  assert.equal(spread(0xd), 8, "$D — a 512th of 4096, and it uses all of it");
+  assert.equal(spread(0xf), 512, "$F — an eighth, the end of the ladder");
 });
 
-test("notefx 3 $C..$F scramble the region byte by byte, and keep scrambling", () => {
+test("notefx 3 $D..$F scramble the region byte by byte, and keep scrambling", () => {
   try {
     setRandomSource(makeSeededRandom(7));
-    for (const [op, frac] of [[0xc, 0.125], [0xd, 0.25], [0xe, 0.5], [0xf, 1]]) {
+    for (const [op, frac] of [[0xd, 1 / 512], [0xe, 1 / 64], [0xf, 1 / 8]]) {
       const eng = makeEngine();
       loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F — whole sample, every tick
       const inst = eng.instruments[1];
@@ -721,7 +735,7 @@ test("a scatter really moves which byte is read, per byte", () => {
   try {
     setRandomSource(makeSeededRandom(99));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 50% scatter, every tick
+    loadRows(eng, [[0x03, 0x0fef]]); // 3 $0FEF — whole sample, 1/64 scatter, every tick
     renderSettled(eng, ROW);
     const inst = eng.instruments[1];
     assert.ok(inst.modOn, "the scramble is live");
@@ -766,18 +780,18 @@ test("switching from a rotate to a scatter discards the rotation", () => {
   try {
     setRandomSource(makeSeededRandom(3));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0f5f], [0x03, 0x0fcf]]); // ROL8 for a row, then scatter
+    loadRows(eng, [[0x03, 0x0f5f], [0x03, 0x0fdf]]); // ROL8 for a row, then scatter
     render(eng, ROW - TICK);
     const inst = eng.instruments[1];
     assert.equal(inst.modOp, 5);
     assert.ok(inst.modRot > 0, "the rotate accumulated");
     assert.equal(inst.modScatter, 0);
     render(eng, TICK + 1); // into row 1: the operation changes
-    assert.equal(inst.modOp, 0xc);
+    assert.equal(inst.modOp, 0xd);
     assert.equal(inst.modRot, 0, "the ROL's offset is gone, not scattered from");
     assert.equal(inst.modPrevRot, 0, "…and there is nothing left to fade back to");
     render(eng, TICK); // …and the first scatter step lands
-    assert.equal(inst.modScatter, 125);
+    assert.equal(inst.modScatter, 2, "$D throws each byte a 512th of the domain");
   } finally {
     setRandomSource(null);
   }
@@ -801,16 +815,16 @@ test("$x = 0 clears the scatter with everything else", () => {
   }
 });
 
-// ── the jump pair (item 152, $A and $B) ──────────────────────────────────────
+// ── the jump family ($A $B $C) ───────────────────────────────────────────────
 //
 // The scatter ladder's other half: one draw moves the WHOLE region, so the
 // waveform survives intact and lands somewhere else. Same read transform the
-// ROLs use — a rotation whose step is thrown rather than fixed. Uniform, not
-// gaussian: the bell belongs where it decides a texture.
+// ROLs use — a rotation whose step is thrown rather than fixed. $A and $B
+// quantise the throw to eighths and sixteenths of the domain; $C is free.
 
 test("$A lands only on eighths of the domain, and on all eight of them", () => {
   const dl = 1000;
-  const slice = dl / MOD_JUMP_SLICES;
+  const slice = dl / MOD_JUMP_SLICES[0];
   try {
     setRandomSource(makeSeededRandom(0xbeef));
     const seen = new Set();
@@ -821,6 +835,26 @@ test("$A lands only on eighths of the domain, and on all eight of them", () => {
     }
     assert.deepEqual([...seen].sort((a, b) => a - b),
       [0, 125, 250, 375, 500, 625, 750, 875], "every slice is reachable, home included");
+  } finally {
+    setRandomSource(null);
+  }
+});
+
+test("$B is the same throw at sixteenths — the finer grid, same reach", () => {
+  const dl = 1024;
+  try {
+    setRandomSource(makeSeededRandom(0xb16));
+    const seen = new Set();
+    for (let n = 0; n < 6000; n++) {
+      const d = jumpRot(MOD_JUMP16, dl);
+      assert.equal(d % 64, 0, `$B: ${d} is not a whole sixteenth of ${dl}`);
+      seen.add(d);
+    }
+    assert.equal(seen.size, 16, "all sixteen slices are reachable, home included");
+    assert.equal(Math.max(...seen), 960, "…up to the last one");
+    // The two spellings differ ONLY in grain: every eighth is also a
+    // sixteenth, so $A's outcomes are a subset of $B's.
+    for (let n = 0; n < 2000; n++) assert.equal(jumpRot(MOD_JUMP8, dl) % 128, 0);
   } finally {
     setRandomSource(null);
   }
@@ -838,9 +872,9 @@ test("$A reaches the whole domain — it is quantised, not narrowed", () => {
   }
 });
 
-test("$B is the free throw: anywhere, off the slice grid", () => {
+test("$C is the free throw: anywhere, off both slice grids", () => {
   const dl = 1000;
-  const slice = dl / MOD_JUMP_SLICES;
+  const slice = dl / MOD_JUMP_SLICES[1];
   try {
     setRandomSource(makeSeededRandom(0xf00d));
     let far = 0, offGrid = 0;
@@ -849,8 +883,8 @@ test("$B is the free throw: anywhere, off the slice grid", () => {
       far = Math.max(far, Math.abs(signedRot(d, dl)));
       if (d % slice !== 0) offGrid++;
     }
-    assert.ok(far > dl * 0.45, "$B draws from the whole domain");
-    assert.ok(offGrid > 3900, "…and is not on the eighth grid");
+    assert.ok(far > dl * 0.45, "$C draws from the whole domain");
+    assert.ok(offGrid > 3700, "…and is not even on the sixteenth grid");
   } finally {
     setRandomSource(null);
   }
@@ -877,14 +911,14 @@ test("$A slices a domain that does not divide by eight without drifting", () => 
 
 test("jumpRot is safe on a domain too short to displace", () => {
   for (const dl of [0, 1]) {
-    for (const op of [MOD_JUMP8, MOD_JUMP_ALL]) assert.equal(jumpRot(op, dl), 0);
+    for (const op of [MOD_JUMP8, MOD_JUMP16, MOD_JUMP_ALL]) assert.equal(jumpRot(op, dl), 0);
   }
 });
 
-test("notefx 3 $A/$B move the whole region, leaving the waveform intact", () => {
+test("notefx 3 $A/$B/$C move the whole region, leaving the waveform intact", () => {
   try {
     setRandomSource(makeSeededRandom(21));
-    for (const op of [0xa, 0xb]) {
+    for (const op of [0xa, 0xb, 0xc]) {
       const eng = makeEngine();
       loadRows(eng, [[0x03, 0x0f00 | (op << 4) | 0xf]]); // 3 $0F{op}F
       renderSettled(eng, ROW);
@@ -946,16 +980,16 @@ test("a jump and a scatter replace each other cleanly", () => {
   try {
     setRandomSource(makeSeededRandom(6));
     const eng = makeEngine();
-    loadRows(eng, [[0x03, 0x0fbf], [0x03, 0x0fff]]); // $B then $F
+    loadRows(eng, [[0x03, 0x0fcf], [0x03, 0x0fff]]); // $C then $F
     render(eng, ROW - TICK);
     const inst = eng.instruments[1];
-    assert.equal(inst.modOp, 0xb);
+    assert.equal(inst.modOp, 0xc);
     assert.equal(inst.modScatter, 0);
     render(eng, TICK + 1);
     assert.equal(inst.modOp, 0xf);
     assert.equal(inst.modRot, 0, "the jump's offset is discarded");
     render(eng, TICK);
-    assert.equal(inst.modScatter, 1000, "…and the scatter takes over");
+    assert.equal(inst.modScatter, 125, "…and the scatter takes over");
   } finally {
     setRandomSource(null);
   }

@@ -55,17 +55,24 @@ export const REGION_COMB = 2;
 // subtracts from each byte's U8 value, wrapping through zero, by 2/8/32/128 per
 // step — a running level slide that folds rather than clips.
 //
-// Item 152 added the two random families, which share the ROL ladder's address
-// transform and differ in what they apply it to. JUMP ($A $B) throws the WHOLE
-// region to a new offset each step — the waveform arrives intact, somewhere
-// else, a randomised `O $xxyy`, one draw a step. Both reach the whole domain
-// and they differ in GRAIN: $A lands only on eighths of it, so a one-bar drum
-// loop is re-dealt a slice at a time and every throw lands where a hit starts;
-// $B lands anywhere, mid-transient included. SCATTER ($C..$F) throws EVERY BYTE
-// its own way, GAUSSIAN about where it belongs (item 153), out to 12.5 / 25 /
-// 50 / 100% of the domain at three sigma: the region is shuffled rather than
-// moved, and the bell is what keeps the narrow settings sounding like the
-// sample they came from instead of like a quieter version of $F.
+// The rest of the nibble is two random families that share the ROL ladder's
+// address transform and differ in what they apply it to. Every draw in both is
+// UNIFORM (item 153.10).
+//
+// JUMP ($A $B $C) throws the WHOLE region to a new offset each step — the
+// waveform arrives intact, somewhere else, a randomised `O $xxyy`, one draw a
+// step. All three reach the whole domain and they differ in GRAIN: $A lands
+// only on eighths of it and $B only on sixteenths, so a one-bar drum loop is
+// re-dealt a slice at a time and every throw lands where a hit starts; $C lands
+// anywhere, mid-transient included.
+//
+// SCATTER ($D $E $F) throws EVERY BYTE its own way, within 1/512, 1/64 or 1/8
+// of the domain: the region is shuffled rather than moved. The ladder stops at
+// an eighth on purpose — wider than that, the bytes a throw lands among have
+// nothing to do with the ones it left, the interpolator averages strangers, and
+// every setting past it arrives at the same quiet white noise. Kept near home
+// the throw is a glitch in the waveform rather than a replacement for it, which
+// is the sound this family is for.
 export const MOD_OFF = 0x0;
 export const MOD_FUNK = 0x1;
 export const MOD_ROL1 = 0x2;
@@ -75,24 +82,25 @@ export const MOD_SUB128 = 0x9;
 export const MOD_JUMP8 = 0xa;
 export const MOD_JUMP16 = 0xb;
 export const MOD_JUMP_ALL = 0xc;
-export const MOD_RND12 = 0xd;
-export const MOD_RND_ALL = 0xf;
+export const MOD_RND512 = 0xd;
+export const MOD_RND8 = 0xf;
 /** Highest operation; every $x nibble is assigned since item 152's second half. */
-export const MOD_MAX = MOD_RND_ALL;
+export const MOD_MAX = MOD_RND8;
 
 /** Step size per operation — bytes for the ROLs, U8 levels for the SUBs. The
  *  random operations take their reach from their own tables, so they read 0. */
 export const MOD_STEP = Object.freeze(
   [0, 0, 1, 2, 4, 8, 2, 8, 32, 128, 0, 0, 0, 0, 0, 0]);
 
-/** How many equal slices $A and $B quantises its throw to. Eight is a bar of eighths,
- *  which is what makes the throw land where a drum loop's hits start. */
+/** How many equal slices a quantised jump throws to, by op − MOD_JUMP8. Eight
+ *  is a bar of eighths and sixteen a bar of sixteenths, which is what makes the
+ *  throw land where a drum loop's hits start. */
 export const MOD_JUMP_SLICES = Object.freeze([8, 16]);
 
-/** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND12. This is
- *  the THREE-SIGMA bound of the per-byte gaussian, and its hard limit: no byte
- *  is ever thrown further, and most land far closer to home. */
-export const MOD_SCATTER_FRAC = Object.freeze([1.0/512.0, 1.0/64.0, 1.0/8.0]);
+/** SCATTER reach as a fraction of the wrap domain, by op − MOD_RND512. Each
+ *  BYTE is thrown up to this far, uniformly and independently of its
+ *  neighbours, so the fraction is a hard bound rather than a typical throw. */
+export const MOD_SCATTER_FRAC = Object.freeze([1 / 512, 1 / 64, 1 / 8]);
 
 /** Largest comb exponent: $FE cuts the extent into 2^15 = 32768 bristles. The
  *  odd-bristle ladder stops at $ED (16384) because $EE and $EF already read as
@@ -123,7 +131,7 @@ export const MOD_XFADE_SAMPLES = 64;
 export const isRolOp = (op) => op >= MOD_ROL1 && op <= MOD_ROL8;
 export const isSubOp = (op) => op >= MOD_SUB2 && op <= MOD_SUB128;
 export const isJumpOp = (op) => op >= MOD_JUMP8 && op <= MOD_JUMP_ALL;
-export const isRndOp = (op) => op >= MOD_RND12 && op <= MOD_RND_ALL;
+export const isRndOp = (op) => op >= MOD_RND512 && op <= MOD_RND8;
 
 /**
  * The step period in TICKS for speed nibble $y (item 153.1): $F every tick, $E
@@ -144,29 +152,29 @@ export function modStepPeriod(y) {
 /**
  * One JUMP step's displacement ($A $B $C): a single offset for the whole region,
  * drawn afresh from its ORIGINAL position every step rather than added to the
- * last one — a random WALK would have made the two the same effect arriving at
- * different speeds. Both draw from the whole domain UNIFORMLY (the bell belongs
- * to scatter, where it decides a texture; here it would only make the throw
- * timid); the difference is where they are allowed to land.
+ * last one — a random WALK would have made the three the same effect arriving
+ * at different speeds. All three draw from the whole domain uniformly; the
+ * difference is where they are allowed to LAND.
  *
- * `$A` QUANTISES to eighths of the domain. That is the difference between a
- * beat repeat and a glitch: a one-bar loop cut into eight lands every throw on
- * a hit rather than in the middle of one, so what comes back is the loop
- * re-ordered, still in time. `$B` is the free throw — anywhere, transients
- * included.
+ * `$A` and `$B` QUANTISE, to eighths and to sixteenths of the domain. That is
+ * the difference between a beat repeat and a glitch: a one-bar loop cut into
+ * eight lands every throw on a hit rather than in the middle of one, so what
+ * comes back is the loop re-ordered, still in time; sixteenths halve the grain
+ * for anything busier than a backbeat. `$C` is the free throw — anywhere,
+ * transients included.
  *
  * Read back through the same transform ROL uses (the region moves as one
  * piece), so what comes out is the sample intact and re-seated — which is the
- * whole difference between this pair and the scatter below.
+ * whole difference between this family and the scatter below.
  */
 export function jumpRot(op, domainLen) {
   if (domainLen < 2) return 0;
   if (op === MOD_JUMP8 || op === MOD_JUMP16) {
     // Round the slice, don't truncate it: a 1000-byte domain slices at 125, and
-    // the 8th slice would otherwise drift a byte further from home each time.
-    const jumpslice = MOD_JUMP_SLICES[op - MOD_JUMP8]
-    const slice = Math.max(1, Math.round(domainLen / jumpslice));
-    return (Math.min(Math.floor(random() * jumpslice), jumpslice - 1) * slice) % domainLen;
+    // the last slice would otherwise drift a byte further from home each time.
+    const slices = MOD_JUMP_SLICES[op - MOD_JUMP8];
+    const slice = Math.max(1, Math.round(domainLen / slices));
+    return (Math.min(Math.floor(random() * slices), slices - 1) * slice) % domainLen;
   }
   if (op !== MOD_JUMP_ALL) return 0;
   return Math.min(Math.floor(random() * domainLen), domainLen - 1);
@@ -174,10 +182,11 @@ export function jumpRot(op, domainLen) {
 
 /**
  * How far one scatter step may throw a byte, in bytes (0 = it cannot) — the
- * gaussian's three-sigma bound, so the typical throw is a third of it.
+ * hard bound of a uniform draw, so a byte is as likely to land at the edge of
+ * it as next door.
  */
 export function scatterReach(op, domainLen) {
-  const frac = MOD_SCATTER_FRAC[op - MOD_RND12];
+  const frac = MOD_SCATTER_FRAC[op - MOD_RND512];
   if (frac === undefined || domainLen < 2) return 0;
   return Math.max(1, Math.min(Math.round(domainLen * frac), domainLen));
 }
@@ -203,25 +212,19 @@ function scatterHash(seed, i) {
   return h >>> 0;
 }
 
-/** Irwin–Hall n = 3: three 10-bit fields of one hash summed. Its span, so the
- *  draw below can be centred and scaled without a second constant. */
-const GAUSS_SPAN = 3 * 0x3ff;
-
 /**
  * Where sample byte `i` is READ FROM under a live scatter (items 152, 153): its
- * own position displaced by its own random amount, wrapped into
+ * own position displaced by its own random amount within ±`reach`, wrapped into
  * [domainStart, domainStart + domainLen). Every byte draws separately, so this
  * shuffles the region rather than moving it.
  *
- * The draw is GAUSSIAN (item 153.2), not uniform: three 10-bit slices of the
- * one hash summed (Irwin–Hall n = 3, which is within a few percent of a normal
- * curve and costs three ANDs), centred, and scaled so `reach` is exactly three
- * standard deviations. A uniform draw made the four settings sound alike — every
- * distance equally likely means even $C decorrelates its neighbours, so all four
- * arrived at the same band-limited noise and only the loudness differed. Under
- * the bell most bytes barely move and a few fly, which is what a granular spray
- * actually does: $C roughens the waveform, $F forgets it, and $D and $E are
- * genuinely between them.
+ * The draw is UNIFORM over that range (item 153.10). A bell was tried, on the
+ * reasoning that it would keep the narrow settings recognisable; what it
+ * actually did was leave most bytes at home and fling a few, which reads as
+ * white noise mixed under the sample rather than as the sample breaking up.
+ * The glitch is in every byte moving a little, so the flat draw is the one that
+ * sounds like the effect — and the ladder gets its range from `reach` instead,
+ * which is why it now stops at an eighth of the domain.
  *
  * The mapping is not a permutation: a source byte may be drawn twice and
  * another not at all. Wanting one would mean shuffling an index table the size
@@ -231,11 +234,6 @@ const GAUSS_SPAN = 3 * 0x3ff;
  */
 export function scatterSource(i, domainStart, domainLen, reach, seed) {
   if (reach <= 0 || domainLen < 2) return i;
-  // const h = scatterHash(seed, i);
-  // const t = (h & 0x3ff) + ((h >>> 10) & 0x3ff) + ((h >>> 20) & 0x3ff);
-  // const d = Math.round((reach * (2 * t - GAUSS_SPAN)) / GAUSS_SPAN);
-
-  //// reverting Gaussian: it just sounds like a white noise, not a glitchy sound
   const span = 2 * reach + 1;
   // Map the hash onto [0, span) by multiply-shift: no modulo, and the product
   // stays exact in a double (2^32 × 2^17 well under 2^53).

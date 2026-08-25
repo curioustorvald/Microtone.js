@@ -24,7 +24,7 @@ rate the engine is running at, so a song plays and sounds the same on both.)
 > Looking for the specifications rather than the manual? The sidebar also
 > carries the three Taud reference documents: **Engine Spec** (how playback
 > works — timing, envelopes, voices, filters, mixing), **File Format** (the
-> `.taud`, `.tsii` and `.tpif` byte layouts) and **Conversion Notes** (how
+> `.taud`) and **Conversion Notes** (how
 > MOD, S3M, XM, IT, MON and MIDI files map onto Taud, and where they lose
 > something on the way).
 
@@ -62,7 +62,7 @@ and the editor snaps entry, display and stepping to that table's degrees. See
 
 ### Opening and creating projects
 
-- **Drop a file anywhere** on the window, or use **Open…** in the top bar. Native formats: `.taud` (full project), `.tsii` (sample+instrument bank), `.tpif` (pattern file that loads over a bank). Tracker modules (`.mod`, `.s3m`, `.xm`, `.it`, `.mon`) are converted on the fly.
+- **Drop a file anywhere** on the window, or use **Open…** in the top bar. `.taud` (full project) is the native format of the Microtone. Tracker modules (`.mod`, `.s3m`, `.xm`, `.it`, `.mon`) are converted on the fly.
 - **Import MIDI…** converts a `.mid` file through a SoundFont — see [Importing music](#importing-music).
 - **New…** opens the New Project wizard, which collects every song setting before the blank project is built:
   - **Tempo** — BPM (25–535) and speed (ticks per row, 1–127), with a live *blinkenlights* strip previewing the feel of that tempo.
@@ -72,7 +72,7 @@ and the editor snaps entry, display and stepping to that table's degrees. See
   - **Layout** — 32 or 64 channels.
   - **Notation** — the display pitch table (12-TET, 24-TET, 31-TET, Bohlen-Pierce…), defaulting to **24-TET**. You can change it later in the Project view.
 
-A new project has no samples — seed it by opening a `.tsii` bank first, or add instruments later from the Instruments view.
+A new project has no samples. Add instruments later from the Instruments view.
 
 The app warns before discarding unsaved changes, and autosaves your work — see
 [Saving and autosave](#saving-and-autosave).
@@ -635,7 +635,7 @@ you are writing saves a lot of head-scratching:
 The short version: **the mini-lanes are about the note, the effect column is
 about the channel.** A note volume is how hard *this note* was struck; the
 channel volume is how loud that part sits in the mix, and it stays put however
-many notes go by. `M $2000` after a quiet note leaves the note quiet — it has not
+many notes go by. `M $2000` after a quiet note leaves the note quiet — it has not
 turned anything up, it has set the fader for the channel.
 
 Panning works the same way, and this is what makes zone-panned instruments
@@ -643,7 +643,7 @@ behave. If an instrument pans by pitch — a piano laid out across the stereo
 image, a drum kit with the toms spread out, most things imported from a
 SoundFont — that spread lives on the **note** side. So:
 
-- **S $80xx** *rotates* the whole spread. `S $8040` swings that piano to the left as one instrument; the low keys stay left of the high keys.
+- **S $80xx** *rotates* the whole spread. `S $8040` swings that piano to the left as one instrument; the low keys stay left of the high keys.
 - The **panning column** places one note outright, ignoring where its zone would have put it. Use it when you want *this* note somewhere specific.
 
 Both can appear on the same row and both apply — they are not fighting over one
@@ -672,7 +672,7 @@ amber, running lighter left to right. Two extras fall out of that: the
 sub-command digit of a multiplexed command keeps the opcode's own darker ink, so
 `S8` and `SD` read as the two-character commands they are; and digits the engine
 *reserves* go dim, which is how you can tell at a glance that the `00` at the end
-of `D 4000` is not a value you can use.
+of `D 4000` is not a value you can use.
 
 ### Mouse-wheel editing
 
@@ -863,7 +863,7 @@ patches alike) with its name, length and rate. The waveform display shades
 loop regions and shows live play-position cursors while audio runs. Piano keys
 audition the selected sample's instrument.
 
-If a voice using the sample is running funk repeat (`S$Fx`) or one of the
+If a voice using the sample is running funk repeat (`S $Fx`) or one of the
 sample-modification effects (`2` and `3`), the waveform display shows the
 result live: bytes the invert mask has flipped are XORed, bytes a rotation has
 moved are drawn where they are being read from, a level slide is drawn at the
@@ -996,7 +996,7 @@ The left list shows every defined instrument slot; rows light up while an
 instrument plays. Above it:
 
 - **Add…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
-- **Import…** — merge instruments (with their samples and patches) from a `.taud`, `.tsii` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
+- **Import…** — merge instruments (with their samples and patches) from a `.taud` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
 - **New from sample…** — build instruments from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded to mono and opens in the [Sample Lab](#the-sample-lab) for cropping, EQ and chopping before it is committed to the engine's 8-bit format.
 - **Paint sample…** — draw a waveform by hand and add it as an instrument.
 - **Record sample…** — record from the microphone; the take opens in the Sample Lab.
@@ -1074,7 +1074,7 @@ An instrument may carry a list of **Ixmp patches**: per-zone sample bindings ove
 - **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
 - **Zone map** — the patches as rectangles over pitch (x) × velocity (y), with live blobs at each sounding note's pitch/velocity and lit rectangles for zones currently playing. Click a rectangle to select its patch.
 - **Detail form** — the selected patch's rectangle, sample binding (pick any pooled sample — rate and loop follow), play/loop points, rate, detune, loop mode/sustain; pan / note-volume / vibrato-waveform overrides (unchecked = inherit from the base instrument); and the *extra block*: per-patch fadeout, filter cutoff/resonance (IT or SF2 units) and SF2 initial attenuation.
-  - **Pan** — the override is a *note* pan, so a bank whose zones pan apart keeps its spread wherever the channel is pointed, and `S $80xx` rotates the lot ([note vs channel panning](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
+  - **Pan** — the override is a *note* pan, so a bank whose zones pan apart keeps its spread wherever the channel is pointed, and `S $80xx` rotates the lot ([note vs channel panning](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
   - **Stereo** — makes the patch play a [stereo pair](#stereo-samples): **Ch 2** picks the pooled sample that supplies the second channel (only same-length samples can pair up, since one set of loop points serves both), and **Mode** chooses `L/R` (the channels *are* left and right) or `M/S` (mid/side, decoded to L = M+S, R = M−S at mix time). Binding the patch to a stereo sample sets all of this for you.
 - **Vol / Pan / Filter / Pitch** sub-tabs — per-patch envelope overrides. Ticking *Patch overrides the … envelope* copies the base instrument's envelope as a starting point; the graph then edits exactly like the base envelope tabs (drag nodes, add/remove, sustain/loop ranges, log timescale). **Wave** shows the bound sample with live play positions.
 
@@ -1116,7 +1116,7 @@ song rather than to playback:
 - **Planar (360°)** — sources pan all the way round you, on the horizon.
 - **Spatial (sphere)** — sources can also go above and below.
 
-In a surround song `S $8xxx` carries a **9-bit angle** instead of a pan byte:
+In a surround song `S $8xxx` carries a **9-bit angle** instead of a pan byte:
 `$000` left, `$080` front, `$100` right, `$180` behind, running clockwise as
 seen from above. The low byte is the pan value you already know, so every
 ordinary pan lands on the front half of the circle and a song that uses nothing
@@ -1124,8 +1124,8 @@ but ordinary pan sounds exactly as it did. Pan slides (P and the pan column)
 wrap round the circle instead of stopping at the ends.
 
 Three commands are yours only in a surround song. `X` writes the very same
-**channel axis** `S $8xxx` does — not a third register — so it places the
-*part*, exactly like `S $80xx` in a stereo song; a zone-panned instrument's
+**channel axis** `S $8xxx` does — not a third register — so it places the
+*part*, exactly like `S $80xx` in a stereo song; a zone-panned instrument's
 spread still rotates under it rather than collapsing to one point (see
 [note pan vs channel pan](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
 It only trades the single byte for a sphere:
@@ -1134,7 +1134,7 @@ It only trades the single byte for a sphere:
 |---|---|
 | **X** `$eeaa` | Place the source: `$aa` azimuth over the full turn (`$00` left, `$40` front, `$80` right, `$C0` behind), `$ee` signed elevation (`$00` ear level, `$40` = +45°, `$C0` = −45°). |
 | **4** `$eeaa` | Aim: where a slide should travel to, same argument format. It stays set until you change it. |
-| **Z** `$0xxx` | Slide there at `$xxx`/16 azimuth units per tick, along the shortest way round. Like every other slide it runs on the row that carries it, so repeat it while you want the source moving; `Z $0000` recalls the last speed. |
+| **Z** `$0xxx` | Slide there at `$xxx`/16 azimuth units per tick, along the shortest way round. Like every other slide it runs on the row that carries it, so repeat it while you want the source moving; `Z $0000` recalls the last speed. |
 
 A **stereo sample** in a surround song is placed as a pair of sources 30° either
 side of where the voice points — the ITU listening triangle — and the pair turns
@@ -1356,11 +1356,6 @@ drop them. An `.it` whose samples are stereo keeps them as
 [stereo samples](#stereo-samples) — the other formats have no stereo samples to
 begin with.
 
-### Banks and pattern files
-
-- Opening a **`.tsii`** over a loaded project replaces its samples and instruments (with confirmation); opened standalone it seeds a new project.
-- Opening a **`.tpif`** (patterns only) combines it with the current project's bank, or prompts for the companion `.tsii`.
-
 ## Microtonality in depth
 
 ### Pitch-table presets
@@ -1475,6 +1470,7 @@ sidebar (also at [Note Effects](#effects)).
 | 1 | Global flags | `$ff00` — tone-slide mode and interpolation bits |
 | 2 | Sample mod (outside) | `$sexy` — as 3, but `se` is the region left alone |
 | 3 | Sample mod (region) | `$sexy` — region (of the loop), operation, step period in ticks |
+| 4 | Spatial slide target | `$eeaa` — elevation, azimuth |
 | 5 | Filter cutoff | IT: `$xx00` · SF2: `$xxxx` absolute cents · `$FFFF` reset |
 | 6 | Filter resonance | IT: `$xx00` · SF2: `$xxxx` centibels · `$FFFF` reset |
 | 7 | Pattern ditto | `$llrr` — repeat the last `ll` rows `rr` times |
@@ -1498,12 +1494,14 @@ sidebar (also at [Note Effects](#effects)).
 | P | Pan slide | `$xy00` — left/right |
 | Q | Retrigger | `$xy00` — every y ticks, x = volume modifier |
 | R | Tremolo | `$xy00` — speed, depth |
-| S | Special | delays, cuts, loops, waveforms, NNA overrides, funk… |
+| S | Special | delays, cuts, loops, waveforms, NNA overrides, invert loop… |
 | T | Tempo | `$xx00` set · `$FFxx` extended · `$000y/$001y` slide |
 | U | Fine vibrato | `$xy00` |
 | V | Global volume | `$xx00` (00–FF) |
 | W | Global vol slide | `$xy00` |
+| X | Spatial panning | `$eeaa` — elevation, azimuth |
 | Y | Panbrello | `$xxyy` — speed, depth |
+| Z | Special 2 | spatial/orbital effects, funk… |
 
 ### Ditto ghosts
 
@@ -1515,7 +1513,7 @@ being repeated.
 
 Grey means "not really here": ghosts only ever fill sub-columns the row leaves
 blank, and anything you type wins immediately and returns to its own colour.
-The row carrying the `7$llrr` command keeps showing that command, even though
+The row carrying the `7 $llrr` command keeps showing that command, even though
 the engine plays the repeated row's effect there instead.
 
 Starting playback **from a ghost row** sounds it: seeking into the middle of a

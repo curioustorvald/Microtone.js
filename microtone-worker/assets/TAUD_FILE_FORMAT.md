@@ -142,7 +142,7 @@ Present in `.taud` and `.tpif`; the entry count is the header's song count. Each
 | 28 | `U8` | Immutable song flags (below) |
 | 29 | `Byte[3]` | **RESERVED** |
 
-The BPM field is split across two bytes, giving a 9-bit range of 25…535. Values above 280 are reachable only from the file or from the extended set-tempo effect; note that the effect form `T $FFxx` cannot express `0x1FF`.
+The BPM field is split across two bytes, giving a 9-bit range of 25…535. Values above 280 are reachable only from the file or from the extended set-tempo effect; note that the effect form `T $FFxx` cannot express `0x1FF`.
 
 The cue count at offset 26 exists so a loader can size the cue image without deriving it from the decompressed length. When it is 0 (a version-1 file, or a version-2 writer that omitted it), a reader **MUST** fall back to `decompressed_length ÷ cue_size`.
 
@@ -238,7 +238,7 @@ A FINE selector with a value of 0 is therefore a **no-op**, and that is the cano
 
 Both columns address the **per-note** axis of their quantity, never the per-channel one: the volume column writes `note_vol` and the panning column writes `note_pan`, while `channel_vol` belongs to M / N and `channel_pan` to S $80xx / P / X / 4 / Z (TAUD_NOTE_EFFECTS.md §3, §3a). A pan column SET therefore places the note within the channel rather than moving the channel, and composes with a set-pan effect on the same row instead of losing to it.
 
-The panning column's SET is a front-arc value even in a surround song — six bits cannot express a full turn. Effects `S $8xxx` and `X` are the commands that place a source anywhere on the circle or the sphere. Format version 3 lifts that limit; see below.
+The panning column's SET is a front-arc value even in a surround song — six bits cannot express a full turn. Effects `S $8xxx` and `X` are the commands that place a source anywhere on the circle or the sphere. Format version 3 lifts that limit; see below.
 
 ### 5.5 Format version 3 — the wide cell
 
@@ -285,11 +285,11 @@ The value is a plain byte, 0…255. Note volume, row volume and channel volume a
 
 A FINE selector with a value of 0 remains the **no-op**, and remains the canonical "this column is empty" encoding: a fine slide by zero is meaningless at any width. An untouched v3 cell therefore has selector byte `0x33` — FINE in both columns — with its value, azimuth and elevation bytes zero.
 
-**What stays six bits.** Volume-envelope node values and an Ixmp patch's velocity rectangle live in the *instrument* record, which version 3 does not change: a bank is format-neutral, and the same `.tsii` loads into a v2 or a v3 project. A v3 engine scales those 0…63 values by 4 when it reads or compares them. Effect-column volume slides (`D`, `K`, `L`, `N`, the retrigger volume modifiers) are nibble-packed and keep their version-2 arguments; a v3 engine multiplies their per-tick step by 4, so `D $01` moves at the rate it always did. Effects that set an absolute volume LEVEL from a byte — channel volume `M` — use the full 0…255 range.
+**What stays six bits.** Volume-envelope node values and an Ixmp patch's velocity rectangle live in the *instrument* record, which version 3 does not change: a bank is format-neutral, and the same `.tsii` loads into a v2 or a v3 project. A v3 engine scales those 0…63 values by 4 when it reads or compares them. Effect-column volume slides (`D`, `K`, `L`, `N`, the retrigger volume modifiers) are nibble-packed and keep their version-2 arguments; a v3 engine multiplies their per-tick step by 4, so `D $01` moves at the rate it always did. Effects that set an absolute volume LEVEL from a byte — channel volume `M` — use the full 0…255 range.
 
 #### Panning column
 
-The azimuth is nine bits: byte 4 plus the `A` bit, in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind, clockwise). The elevation is byte 9, signed, in effect `X`'s units (128 = 90°). Together they place a source anywhere on the sphere from the column alone.
+The azimuth is nine bits: byte 4 plus the `A` bit, in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind, clockwise). The elevation is byte 9, signed, in effect `X`'s units (128 = 90°). Together they place a source anywhere on the sphere from the column alone.
 
 As in version 2 the column is the **per-note** axis — the wide cell is the same two lanes at higher resolution, exactly as its volume column is still `note_vol` with a whole byte instead of six bits — so the pair it writes is a direction OFFSET from wherever the channel is pointing. With the channel at its front default the two coincide, and the column places the source exactly where it says.
 
@@ -300,7 +300,7 @@ As in version 2 the column is the **per-note** axis — the wide cell is the sam
 One interaction carries over from version 2, and one version-2 rule is gone:
 
 - A **`Z` slide on the same row** turns a pan column SET into the slide's TARGET rather than an immediate jump — the column then says the same thing effect `4` would have, and the source travels there instead of appearing there. A target is an absolute direction for the CHANNEL to travel to, so on those rows, and only those, the column speaks for the channel axis. If the row carries both `4` and a pan SET, the column wins, being the more specific statement.
-- `S $8xxx` on the same row **no longer suppresses** a pan column SET. The two write different registers (the channel's direction and the note's offset within it), so both apply and the mixer adds them. Version-2 songs are unaffected in the common case: with the channel left at centre, a column SET lands exactly where it always did.
+- `S $8xxx` on the same row **no longer suppresses** a pan column SET. The two write different registers (the channel's direction and the note's offset within it), so both apply and the mixer adds them. Version-2 songs are unaffected in the common case: with the channel left at centre, a column SET lands exactly where it always did.
 
 #### Effect 2
 
@@ -443,11 +443,11 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 | 254 | `S8` | Panning elevation, ignored in stereo mode |
 | 255 | `Byte` | **RESERVED** |
 
-**The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
+**The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
 
 A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch overrides them**: a patch that carries a pan (its own `0xFF` sentinel being the only gate — **not** `p`, see [§9.10](#9-10-ixmp-patch-records)) is the more specific statement of the same thing, so it wins and the base record's fields do not also apply. A patch record has no elevation field, so a patch override moves the azimuth alone and the instrument's elevation stands.
 
-**The instrument's default position is a `note_pan` offset, not a channel pan** (TAUD_NOTE_EFFECTS.md §3a): the position it names is measured from wherever the channel is pointing, so it lands exactly where it says when the channel sits at its `$80` / front default, and it ROTATES with the channel when `S $80xx`, `P`, `X` or `Z` has moved it. An instrument never writes the channel's own position. The pan ENVELOPE offsets the azimuth on top of both and leaves the elevation alone.
+**The instrument's default position is a `note_pan` offset, not a channel pan** (TAUD_NOTE_EFFECTS.md §3a): the position it names is measured from wherever the channel is pointing, so it lands exactly where it says when the channel sits at its `$80` / front default, and it ROTATES with the channel when `S $80xx`, `P`, `X` or `Z` has moved it. An instrument never writes the channel's own position. The pan ENVELOPE offsets the azimuth on top of both and leaves the elevation alone.
 
 #### Byte 14 — instrument / sample flags
 
@@ -470,8 +470,8 @@ A planar song forces the elevation to zero, as it does for every other source of
 
 `ffff` is the high nibble of the 12-bit volume fadeout (combined with byte 172). `m` selects how the filter fields are read:
 
-- `m = 0` — **ImpulseTracker units.** Cutoff is byte 182 alone and resonance is byte 183 alone, each 0…254 (255 = off). The IT range 0…127 maps to 0…254 here.
-- `m = 1` — **SoundFont units.** Cutoff is `(byte 182 << 8) | byte 252` in absolute cents; resonance is `(byte 183 << 8) | byte 253` in centibels above the DC gain.
+- `m = 0` — **ImpulseTracker units.** Cutoff is byte 182 alone and resonance is byte 183 alone, each 0…254 (255 = off). The IT range 0…127 maps to 0…254 here.
+- `m = 1` — **SoundFont units.** Cutoff is `(byte 182 << 8) | byte 252` in absolute cents; resonance is `(byte 183 << 8) | byte 253` in centibels above the DC gain.
 
 #### Volume fadeout (bytes 172–173)
 
@@ -525,7 +525,7 @@ Files written before 2026-05-09 folded the source's per-sample volume into byte 
 
 Every envelope is 25 nodes. Each node is two bytes: a **value** and an **offset** — the time until the next node, encoded as a 3.5 unsigned minifloat (3-bit exponent, 5-bit mantissa) covering 0…15.75 s with a smallest non-zero step of 1/256 s ≈ 3.91 ms. That step was chosen so a single tracker tick resolves at every supported tempo. **An offset of 0 means "hold at this node indefinitely"** — it is the terminator.
 
-Given a minifloat index *i*, with `e = i >> 5` and `m = i & 31`:
+Given a minifloat index *i*, with `e = i >> 5` and `m = i & 31`:
 
 ```
 seconds = (e == 0) ? m / 256                      (denormal)
@@ -568,7 +568,7 @@ Wrap priority, evaluated every tick:
 
 A single-point sustain (the FT2 idiom) is encoded as `sus_start == sus_end`. A sustain *loop* (the IT idiom) uses `sus_start <= sus_end`. There is no separate "release loop": once sustain releases, the LOOP region — if any — captures the playhead when it walks into that range.
 
-The **`P` bit is the sole presence signal.** A converter **MUST** set `P = 1` whenever it emits envelope nodes, regardless of whether the source enables any wrap. `P = 0` means the source had no envelope of this kind at all: the node array is **IGNORED**, and the engine reads pan from the channel value and cutoff/pitch from the sample defaults. `P = 1` means the envelope is evaluated every tick even when neither wrap is enabled — that is the IT idiom for envelope-driven decay tails and shaped attacks. Files written before 2026-05-06 predate the `P` bit and will not have their pan or pitch/filter envelopes evaluated; they need re-converting from source.
+The **`P` bit is the sole presence signal.** A converter **MUST** set `P = 1` whenever it emits envelope nodes, regardless of whether the source enables any wrap. `P = 0` means the source had no envelope of this kind at all: the node array is **IGNORED**, and the engine reads pan from the channel value and cutoff/pitch from the sample defaults. `P = 1` means the envelope is evaluated every tick even when neither wrap is enabled — that is the IT idiom for envelope-driven decay tails and shaped attacks. Files written before 2026-05-06 predate the `P` bit and will not have their pan or pitch/filter envelopes evaluated; they need re-converting from source.
 
 The two pitch/filter slots (bytes 19/121/193 and 197/201/199) are distinguished by their own `m` bits. A record whose two slots claim the same role is **INVALID**. IT and XM instruments fill one slot and leave the other absent; SoundFont instruments, whose single modulation envelope drives pitch *and* filter simultaneously, use both.
 
@@ -849,7 +849,7 @@ The IT and XM formats do not define a velocity axis; those converters leave the 
 
 **The sentinels are the only gate.** A `default pan` other than `0xFF` is applied at every trigger the patch wins, whether or not the base record's pan envelope carries its `p` bit; likewise a non-zero `default note volume` and an auto-vibrato waveform other than `0xFF`. A patch may bring its own pan envelope, whose LOOP word replaces the base record's, so a producer **MUST NOT** rely on `p` to enable or suppress a patch's pan — set `0xFF` to defer instead.
 
-**A zone pan is a `note_pan` offset** (TAUD_NOTE_EFFECTS.md §3a), as the base record's default pan is. This is what makes a per-zone pan usable as an ARRANGEMENT: an instrument that pans by pitch — the ordinary shape of an SF2 import — keeps its spread when the pattern places the channel somewhere, because `S $80xx` rotates the whole keyboard instead of collapsing it onto one spot. A producer wanting one note somewhere else writes the panning column on that row, which replaces the zone's seed for that note only.
+**A zone pan is a `note_pan` offset** (TAUD_NOTE_EFFECTS.md §3a), as the base record's default pan is. This is what makes a per-zone pan usable as an ARRANGEMENT: an instrument that pans by pitch — the ordinary shape of an SF2 import — keeps its spread when the pattern places the channel somewhere, because `S $80xx` rotates the whole keyboard instead of collapsing it onto one spot. A producer wanting one note somewhere else writes the panning column on that row, which replaces the zone's seed for that note only.
 
 **Block order on the wire is always `x`, `v`, `p`, `f`, `P`, `s`**, regardless of bit numbering. A decoder walks them in that order and skips any whose flag is clear. A version byte with only bit 0 set yields the legacy 31-byte record — byte-identical to pre-2026-06-13 patches.
 
@@ -893,7 +893,7 @@ Every channel is a separate pool span, and the record's length, play start, loop
 
 A base instrument record cannot express a stereo sample, so **any stereo instrument necessarily carries an Ixmp patch**, even one whose rectangle covers the whole keyboard.
 
-Stereo (`cccc` = 1) is the only case implemented today. In discrete mode with ordinary stereo output, each channel is fed through the engine's equal-energy pan law on its own side, which means a stereo sample whose channels are identical renders bit-for-bit like the mono sample it was made from, and the pan column behaves as a mixer balance. In matrix mode the pair is mid/side and decodes to `L = M + S`, `R = M − S` first. Surround and spatial output define their own placement rules; see the Engine Specification.
+Stereo (`cccc` = 1) is the only case implemented today. In discrete mode with ordinary stereo output, each channel is fed through the engine's equal-energy pan law on its own side, which means a stereo sample whose channels are identical renders bit-for-bit like the mono sample it was made from, and the pan column behaves as a mixer balance. In matrix mode the pair is mid/side and decodes to `L = M + S`, `R = M − S` first. Surround and spatial output define their own placement rules; see the Engine Specification.
 
 Readers other than the reference web engine currently *skip* the `s` block rather than play it; a stereo sample then sounds as its first channel.
 
@@ -910,7 +910,7 @@ A writer producing a file that any conforming reader will accept must satisfy al
 - No pattern number in a cue exceeds `0x7FFE` except the `0x7FFF` sentinel.
 - Every `Ixmp` entry names a distinct instrument, and no two patches of one instrument have overlapping rectangles.
 - Every Metainstrument layer index resolves to an ordinary instrument in `0x001`…`0x3FF`.
-- Envelopes carrying nodes have `P = 1` in their LOOP word.
+- Envelopes carrying nodes have `P = 1` in their LOOP word.
 - The two pitch/filter slots of one record do not claim the same role.
 
 ## 11. Version history

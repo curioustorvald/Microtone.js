@@ -429,8 +429,8 @@ export function applyTrackerTick(eng, ts, playhead) {
       // Scatter (item 152): one new scramble of the whole region per step. The
       // per-byte throws live in the seed, so a step is a single draw however
       // many bytes it rearranges, and each is measured from where its byte
-      // really belongs — nothing accumulates, so $C stays within its 12.5%
-      // however long the effect runs.
+      // really belongs — nothing accumulates, so $D stays within its 1/512 of
+      // the domain however long the effect runs.
       inst.modScatter = scatterReach(inst.modOp, g.dl);
       inst.modSeed = scatterSeed();
       inst.modOn = inst.modScatter > 0;

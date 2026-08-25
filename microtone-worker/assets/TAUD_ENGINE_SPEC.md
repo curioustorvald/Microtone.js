@@ -8,7 +8,7 @@ Taud is a ScreamTracker 3-lineage tracker extended with 16-bit effect arguments 
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **NOT RECOMMENDED**, **MAY** and **OPTIONAL** are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) when, and only when, they appear in all capitals and bold. Lowercase uses carry their ordinary English meaning.
 
-Arithmetic notation: `⌊x⌋` truncates toward zero, `round(x)` is round-half-away-from-zero, `x >> n` is an arithmetic right shift on a 32-bit signed integer, and `clamp(x, lo, hi)` saturates. Unless a rule says otherwise, intermediate arithmetic is IEEE 754 **binary64**; the two places where binary32 is mandatory are called out in [§12](#12-output-stage).
+Arithmetic notation: `⌊x⌋` truncates toward zero, `round(x)` is round-half-away-from-zero, `x >> n` is an arithmetic right shift on a 32-bit signed integer, and `clamp(x, lo, hi)` saturates. Unless a rule says otherwise, intermediate arithmetic is IEEE 754 **binary64**; the two places where binary32 is mandatory are called out in [§12](#12-output-stage).
 
 ## 1. Model
 
@@ -90,16 +90,16 @@ At the very start of playback the engine runs one row pass before any frames, so
 
 On advancing a row, in order:
 
-1. If a **pattern delay** (`S $Ex`) is outstanding, decrement it and re-run the *same* row's row pass. Notes do not re-trigger across repetitions, but every tick-0 event does.
+1. If a **pattern delay** (`S $Ex`) is outstanding, decrement it and re-run the *same* row's row pass. Notes do not re-trigger across repetitions, but every tick-0 event does.
 2. Otherwise, consume the pending jump state latched during the row:
    - A pending **order jump** (`B`) sets the cue position, sets the row to any pending row jump or 0, and resets per-pattern loop state.
-   - A pending **local row jump** (`S $Bx` pattern loop) rewinds the row within the current cue, leaving the cue position alone.
+   - A pending **local row jump** (`S $Bx` pattern loop) rewinds the row within the current cue, leaving the cue position alone.
    - A pending **row jump** (`C` pattern break) advances the cue, then sets the row, and resets per-pattern loop state.
 3. Otherwise increment the row. If the row reaches the cue's effective row limit — 64, or fewer under a LEN or HALT-AT instruction — reset to row 0 and advance the cue.
 
 Advancing the cue reads the cue's flow instruction: BAK moves back, FWD moves forward, JMP goes to an absolute cue, and anything else moves to the next cue. A cue carrying HALT or HALT-AT stops playback instead.
 
-Per-pattern loop state — the `S $Bx` loop counters and the Pattern-Ditto arm state — is cleared on every cue advance.
+Per-pattern loop state — the `S $Bx` loop counters and the Pattern-Ditto arm state — is cleared on every cue advance.
 
 ## 3. Pitch
 
@@ -107,7 +107,7 @@ Per-pattern loop state — the `S $Bx` loop counters and the Pattern-Ditto arm s
 
 A note word is an unsigned 16-bit value on a grid of **4096 steps per octave**. `0x5000` is C4 (middle C) and each `0x1000` is an octave, so `0x1000` is C0 and `0xF000` is C14. Values `0x0000`…`0x001F` are sentinels ([§5.2](#5-2-note-events)); the playable range is `0x0020`…`0xFFFF`, and the engine **MUST** clamp every computed pitch into it.
 
-One 12-TET semitone is `4096 ÷ 12` ≈ 341.33 units, and one cent is `4096 ÷ 1200` ≈ 3.41 units. Note words are not required to land on any particular grid — that is the entire point of the format — so an engine **MUST NOT** quantise them except where a command says so (glissando, `S $1x`).
+One 12-TET semitone is `4096 ÷ 12` ≈ 341.33 units, and one cent is `4096 ÷ 1200` ≈ 3.41 units. Note words are not required to land on any particular grid — that is the entire point of the format — so an engine **MUST NOT** quantise them except where a command says so (glissando, `S $1x`).
 
 ### 3.2 Playback rate
 
@@ -274,7 +274,7 @@ Triggering a note **MUST**:
 - Apply the instrument's default position and pitch-pan separation, if the row carried an instrument byte ([§5.3.1](#5-3-1-the-default-position)).
 - Reset the filter to the active defaults and clear its delay lines.
 - Seed the note volume: from the volume column's SET if present, otherwise from the instrument's default note volume if the row carried an instrument byte, otherwise leave it — a note-only retrigger inherits the channel's current note volume.
-- Clear the per-note overrides (`S $73`…`S $7E` NNA and envelope toggles).
+- Clear the per-note overrides (`S $73`…`S $7E` NNA and envelope toggles).
 - Reset the vibrato, tremolo and panbrello LFO phases if their respective retrigger flags are set.
 
 Channel volume is **not** reset by a trigger. It belongs to the channel, not the note.
@@ -286,7 +286,7 @@ A trigger takes its default position from one of two places, and either is enoug
 - **The resolved patch's `default pan`**, whenever that is not the `0xFF` sentinel. A patch override needs no further permission — see below.
 - **The base record**, but only when the pan envelope's LOOP word carries the `p` bit ("use default pan").
 
-Whichever applies, it is written to the **note-pan axis** — an offset from the channel's own direction, not a channel position (TAUD_NOTE_EFFECTS.md §3a). An instrument never writes `channel_pan`, exactly as it never writes `channel_vol`: the channel says where the part sits, the instrument says where the note sits within it. With the channel at its `$80` / front default the two coincide, which is why a file that predates the split sounds unchanged; once the pattern has moved the channel with `S $80xx`, `P`, `X` or `Z`, the instrument's whole arrangement rotates with it instead of collapsing onto the commanded point.
+Whichever applies, it is written to the **note-pan axis** — an offset from the channel's own direction, not a channel position (TAUD_NOTE_EFFECTS.md §3a). An instrument never writes `channel_pan`, exactly as it never writes `channel_vol`: the channel says where the part sits, the instrument says where the note sits within it. With the channel at its `$80` / front default the two coincide, which is why a file that predates the split sounds unchanged; once the pattern has moved the channel with `S $80xx`, `P`, `X` or `Z`, the instrument's whole arrangement rotates with it instead of collapsing onto the commanded point.
 
 The two sources are mutually **exclusive** — they are the same statement at two levels of specificity, so when both are available the patch wins and the base record's fields do not also apply. What the winner means depends on the song's surround model:
 
@@ -321,7 +321,7 @@ Otherwise the first surviving layer sounds on the foreground voice and every fur
 
 The order matters: the child inherits that channel context *before* it is triggered, so its own trigger can still move it to its own default position ([§5.3.1](#5-3-1-the-default-position)). Inheriting the parent's pan afterwards would flatten every layer onto the first one's position — audible as a SoundFont kit whose layers are meant to pan apart collapsing to a point.
 
-Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune), key-off, note-fading, channel volume, note volume, row volume, channel pan (azimuth and elevation included), and note pan **plus its own relative offset**. The two relative quantities are handled identically, and for the same reason: the pattern stays in command of the meta as a whole — a panning column or an `S $80xx` written on its channel reaches every layer — while the arrangement the instrument describes survives inside it. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
+Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune), key-off, note-fading, channel volume, note volume, row volume, channel pan (azimuth and elevation included), and note pan **plus its own relative offset**. The two relative quantities are handled identically, and for the same reason: the pattern stays in command of the meta as a whole — a panning column or an `S $80xx` written on its channel reaches every layer — while the arrangement the instrument describes survives inside it. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
 
 Layer indices are 10 bits, so layers **MAY** live in the auxiliary instrument bin, which a pattern cell cannot reach. A layer index pointing at another Metainstrument, or at instrument 0, is skipped.
 
@@ -346,7 +346,7 @@ The values consulted belong to the **existing** voice's instrument, not the inco
 
 ### 5.7 New Note Actions
 
-When a fresh note arrives on a channel whose voice is still sounding, the old voice is copied into the background pool and the copy is treated per the New Note Action — the instrument's own, unless a per-note override (`S $73`…`S $76`) is in force.
+When a fresh note arrives on a channel whose voice is still sounding, the old voice is copied into the background pool and the copy is treated per the New Note Action — the instrument's own, unless a per-note override (`S $73`…`S $76`) is in force.
 
 | NNA | Behaviour |
 |---|---|
@@ -357,7 +357,7 @@ When a fresh note arrives on a channel whose voice is still sounding, the old vo
 
 The ghost copy **MUST** carry the full playback state: both active views, both filter topologies' coefficients *and* delay lines, all four envelope playheads, the fadeout multiplier, the swing biases, the auto-vibrato phase, the spatial position and the stereo channel's own DSP history. A partial copy produces a click or a wrong-sounding tail at every NNA event; copying the filter but not its history is the classic instance.
 
-Past-note actions (`S $70`…`S $72`) act on *all* background voices a channel spawned: cut removes them outright, off releases them with key lift, fade starts their fadeout.
+Past-note actions (`S $70`…`S $72`) act on *all* background voices a channel spawned: cut removes them outright, off releases them with key lift, fade starts their fadeout.
 
 ### 5.8 Volume and panning columns
 
@@ -366,16 +366,16 @@ The columns are applied after the note event and before the effect column.
 - **Volume SET** writes the note volume (and rebases the row volume onto it).
 - **Volume slide up/down** arms a per-tick slide for ticks after the first.
 - **Volume fine** applies a one-shot delta at tick 0 — bit 5 of the value is the direction, bits 0…4 the magnitude. A value of 0 is the canonical no-op.
-- **Pan SET** writes the **note** pan, scaled from six bits to eight as `(v << 2) | (v >> 4)` and taken as an offset from centre. It replaces whatever the instrument seeded, so it is how a composer pans one note of a zone-panned instrument by hand. An `S $80xx` on the same row addresses the other axis and both apply.
+- **Pan SET** writes the **note** pan, scaled from six bits to eight as `(v << 2) | (v >> 4)` and taken as an offset from centre. It replaces whatever the instrument seeded, so it is how a composer pans one note of a zone-panned instrument by hand. An `S $80xx` on the same row addresses the other axis and both apply.
 - **Pan slides** behave like the volume slides but move the note pan, and in a surround song they **wrap** the azimuth where the stereo model clamps. They keep their own per-tick accumulator, separate from effect `P`'s, so a `P` and a column slide on one row move the two axes independently.
 
-Both columns write the per-note axis of their quantity and neither can reach the per-channel one (TAUD_NOTE_EFFECTS.md §3, §3a); `M` / `N` and `S $80xx` / `P` / `X` / `4` / `Z` are the commands that can.
+Both columns write the per-note axis of their quantity and neither can reach the per-channel one (TAUD_NOTE_EFFECTS.md §3, §3a); `M` / `N` and `S $80xx` / `P` / `X` / `4` / `Z` are the commands that can.
 
-The pan column's SET keeps its front-arc meaning in every surround model — six bits cannot express a full turn, and `S $8xxx` and `X` are the commands that can.
+The pan column's SET keeps its front-arc meaning in every surround model — six bits cannot express a full turn, and `S $8xxx` and `X` are the commands that can.
 
 ### 5.9 Pattern Ditto
 
-Effect `7` arms a row-time repeat region on its channel: `7 $LLRR` repeats the preceding `LL` rows `RR` times, starting from the arming row. Within the region, each row is composed from the *source* row it echoes, overlaid by whatever the destination cell actually carries — a non-zero note, a non-zero instrument, a volume or pan column that is not the FINE-0 no-op, and a non-zero effect all override the echo. An echoed `7` in the source is not re-armed.
+Effect `7` arms a row-time repeat region on its channel: `7 $LLRR` repeats the preceding `LL` rows `RR` times, starting from the arming row. Within the region, each row is composed from the *source* row it echoes, overlaid by whatever the destination cell actually carries — a non-zero note, a non-zero instrument, a volume or pan column that is not the FINE-0 no-op, and a non-zero effect all override the echo. An echoed `7` in the source is not re-armed.
 
 Because the region is derived at play time from the arming row, an engine that supports starting playback mid-pattern **MUST** reconstruct the arm state by replaying the raw rows from row 0 up to the start row; otherwise ghost rows are silent when seeking into a region.
 
@@ -383,9 +383,9 @@ Because the region is derived at play time from the arming row, an engine that s
 
 The tick pass runs once per tick, per voice, and is where everything continuous happens. For each foreground voice, in order:
 
-1. **Scheduled note cut** (`S $Cx`): if this is the scheduled tick, zero the note and row volume — leaving channel volume alone — and mark the note cut.
-2. **Note delay** (`S $Dx`): if this is the scheduled tick, perform the deferred event. For a pitch, that means the full trigger sequence of [§5.3](#5-3-trigger-sequence). **The instrument binding MUST be re-read afterwards** — the trigger may have swapped the voice's instrument, and the rest of this tick must see the instrument that just fired.
-3. **Scheduled follow-up action** (`S $Dxny`): if this is the scheduled tick, apply note off, note cut, continue, note fade or forced key lift. Forced key lift bypasses the instrument's own key-lift flag, exactly as `S $73`…`S $76` bypass its NNA.
+1. **Scheduled note cut** (`S $Cx`): if this is the scheduled tick, zero the note and row volume — leaving channel volume alone — and mark the note cut.
+2. **Note delay** (`S $Dx`): if this is the scheduled tick, perform the deferred event. For a pitch, that means the full trigger sequence of [§5.3](#5-3-trigger-sequence). **The instrument binding MUST be re-read afterwards** — the trigger may have swapped the voice's instrument, and the rest of this tick must see the instrument that just fired.
+3. **Scheduled follow-up action** (`S $Dxny`): if this is the scheduled tick, apply note off, note cut, continue, note fade or forced key lift. Forced key lift bypasses the instrument's own key-lift flag, exactly as `S $73`…`S $76` bypass its NNA.
 4. If the voice is inactive, advance its volume envelope anyway and move on — an inactive voice still needs its envelope walked so that a re-trigger or a scheduled event sees a coherent state.
 5. **Pitch slides** (`E`, `F` coarse) on ticks after the first, in the current tone mode.
 6. **Tone portamento** on ticks after the first: step toward the target and stop exactly on it, in note space or Hz space per the tone mode.
@@ -394,7 +394,7 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 9. **Spatial slide** (`Z`) on ticks after the first ([§11.5](#11-5-the-z-slide)).
 10. **Tremor** (`I`): advance the on/off phase counter; while off, force the row volume to 0.
 11. **Vibrato** (`H`, `U`): `delta = (lfo × depth) >> shift`, where the shift is 6 for `H` and 8 for `U` — the finer of the two. The result overlays the note for this tick only; the underlying note word is untouched. Phase advances by `speed`, modulo 1088.
-12. **Glissando** (`S $1x`): snap the *sounding* pitch to the nearest 12-TET semitone while leaving the note word smooth.
+12. **Glissando** (`S $1x`): snap the *sounding* pitch to the nearest 12-TET semitone while leaving the note word smooth.
 13. **Tremolo** (`R`): `row_volume = clamp(note_volume + ((lfo × depth) >> 9), 0, 63)`.
 14. **Panbrello** (`Y`): `panbrello_offset = (lfo × depth) >> 7`. This is a signed offset the mixer sums with the two pan axes ([§10.3](#10-3-panning)), **not** a write to either of them — so the LFO swings around wherever the channel and the note have put the voice, without consuming the instrument's own pan seed, and the same offset steers the surround models ([§11](#11-the-spatial-model)). On a tick where `Y` is not active the same step sets it to 0, so a row without `Y` puts the voice back on its base pan. That zero **MUST** be written here and not in the row reset ([§5.1](#5-1-per-row-reset)): a row boundary runs the row pass *after* this one, so a value the row pass clears is still cleared while the new row's first tick renders — one tick of dead centre in the middle of a sweep that spans several rows.
 15. **Arpeggio** (`J`): the tick index modulo 3 selects offset 0, the first argument byte or the second, each shifted left 8 bits (one argument byte is 256 units ≈ 0.75 semitones). This *overrides* the sounding pitch for the tick.
@@ -537,13 +537,13 @@ The interpolation mode comes from the global behaviour flags and applies to ever
 | 4 — SNES | The SPC700's 4-tap Gaussian, run over the DSP's signed **15-bit** sample domain (`-0x4000`…`+0x3FFF`) as the hardware does. Its partial overflow handling is preserved: of the three tap additions the second is allowed to wrap and only the third saturates, so the ROM table's bugged `0x801` phases still "chirp" exactly where the hardware does — a run of max-negative samples reads back as `+0x3FF8`. Promoting the samples to 16 bits instead makes the mid-sum wrap on *all* content past half scale, which folds loud waveforms inside out and doubles everything else |
 | 5 — NES DPCM | A 1-bit sigma-delta simulation: a 7-bit counter slews ±2 toward the target level per output sample |
 
-The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225, toggled by `S $00` / `S $01` and applied to the **stereo mix**, not per voice. It is available only in the two Amiga modes.
+The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225, toggled by `S $00` / `S $01` and applied to the **stereo mix**, not per voice. It is available only in the two Amiga modes.
 
 SNES and NES DPCM modes carry per-voice state (the DPCM counter), and a stereo voice keeps a separate counter per channel.
 
 ### 8.4 Invert loop
 
-`S $Fx` engages ProTracker's "invert loop": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
+`S $Fx` engages ProTracker's "invert loop": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
 
 The loop the mask covers is the **active** one — an Ixmp patch replaces the base record's loop points, and the mask is sized and indexed against whichever loop the voice is actually sounding.
 
@@ -551,7 +551,7 @@ The mask is instrument-scope runtime state and **MUST** be cleared on a transpor
 
 ### 8.5 Sample modifications
 
-Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modification to part of a sample. The argument encoding, the region selectors and the operation ladder belong to the **Note Effects** reference; what the sampler owes them is the read-time contract below. `3` names the region to modify and `2` names the region to spare — the inversion is the only difference between the opcodes, and it applies to the region *and* its comb.
+Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modification to part of a sample. The argument encoding, the region selectors and the operation ladder belong to the **Note Effects** reference; what the sampler owes them is the read-time contract below. `3` names the region to modify and `2` names the region to spare — the inversion is the only difference between the opcodes, and it applies to the region *and* its comb.
 
 **State.** An instrument carries **one** modification: an operation, a region (extent plus optional comb), and whatever that operation has accumulated. Writing either opcode replaces it, and changing the operation, the region or the inversion **MUST** discard the accumulated state — a rotation offset means nothing to a subtract. Re-stating the *same* command **MUST NOT** discard anything, or a command repeated down a pattern would never get past its first step. The **clock** driving the modification is per voice, so the state is shared but the clock is not: N voices sounding one instrument step its modification N times per tick.
 
@@ -566,31 +566,33 @@ Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modificati
 1. Clamp `i` into the sample.
 2. If the modification is live and touches `i`, apply its **address** transform, wrapping the result into the domain below. `i` now names a different byte.
 3. Read the pool byte at `i`.
-4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
+4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
 5. If the touch test of step 2 passed, apply the modification's **value** transform.
 6. If a step is being crossfaded (below), repeat steps 2–5 with the **previous** transform state and mix.
 7. Convert to `(b − 127.5) ÷ 127.5`.
 
-Two positions are in play and an engine **MUST NOT** confuse them: the **touch test** is evaluated at the byte's *original* position, because that is where the region and comb are defined, while the pool read and the `S $Fx` mask use the position the address transform *moved to*. The modification's own address and value transforms never both fire — one operation is live at a time.
+Two positions are in play and an engine **MUST NOT** confuse them: the **touch test** is evaluated at the byte's *original* position, because that is where the region and comb are defined, while the pool read and the `S $Fx` mask use the position the address transform *moved to*. The modification's own address and value transforms never both fire — one operation is live at a time.
 
 **The wrap domain** is the extent for effect `3` and the whole **domain** for effect `2`, whose touched set reaches both of its ends.
 
 | Kind | Operations | Transform |
 |---|---|---|
-| Address, uniform | rotate, jump | Every touched byte moves by the *same* offset. One jump spelling quantises that offset to a whole eighth of the domain, so a loop cut to the bar is re-dealt a slice at a time |
-| Address, per byte | scatter | Every touched byte moves by its *own* offset |
+| Address, uniform | rotate, jump | Every touched byte moves by the *same* offset. Two of the three jump spellings quantise that offset to a whole eighth or sixteenth of the domain, so a loop cut to the bar is re-dealt a slice at a time |
+| Address, per byte | scatter | Every touched byte moves by its *own* offset, drawn uniformly within the setting's fraction of the domain |
 | Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
-| Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
+| Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
 
 **Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh draw over the whole domain, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
 
-Where a jump spelling **quantises** its draw, the quantum is `round(domain_length ÷ n)` — **rounded**, not truncated, so the last slice boundary sits where the fraction says it does instead of a little short of it, and the error does not accumulate across the domain.
+Where a jump spelling **quantises** its draw, the quantum is `round(domain_length ÷ n)` for `n` slices — **rounded**, not truncated, so the last slice boundary sits where the fraction says it does instead of a little short of it, and the error does not accumulate across the domain. The quantised spellings' outcomes therefore nest: every eighth is also a sixteenth, so the pair differ in grain and in nothing else.
 
 **Scatter's per-byte offset MUST be a pure function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolation tap and through both channels of a stereo sample; an engine that draws afresh per read smears every setting into the same white noise. The reference engine draws one 32-bit seed per step and hashes it with the index. The mapping need not be a permutation: a source byte may be read twice and another not at all.
 
+The draw **MUST** be **uniform** over ±reach. A normal draw was tried and reverted: leaving most bytes near home and flinging a few reads as noise mixed *under* the sample rather than as the sample breaking up, which is the opposite of what the operation is for. The ladder gets its range from the reach instead, and stops at an eighth of the domain — past that the bytes a throw lands among are uncorrelated with the ones it left, and every wider setting is the same band-limited noise.
+
 **A step is crossfaded, not cut.** Installing a new address or value mapping between one output sample and the next is a discontinuity, and at the fastest clock that is one per tick — audibly, a stream of clicks. An engine **SHOULD** run each step in over a short window: the reference engine keeps the state the step replaced, reads **both** mappings for 64 output samples (2 ms at the reference rate) and mixes them on a linear weight that runs on the **output** clock — one weight per output sample, shared by every interpolation tap and both channels, so the crossfade of the two mappings is exactly the crossfade of the two interpolated signals. The window costs one extra pool read per tap while it runs and nothing at all afterwards. The invert-loop operation is exempt (one flipped byte is not a discontinuity), and so is changing or clearing the command, which is a deliberate edit rather than a step.
 
-**Interpolation is unchanged.** Every tap of [§8.3](#8-3-interpolation) goes through the read order above, so the modification is heard through the same kernel the unmodified sample would be — as if the transformed bytes had been written into the pool. A scatter whose reach is wide next to the sample's own period therefore reads back band-limited and several decibels quieter, because the kernel is averaging bytes that no longer correlate. That is the correct result and an engine **MUST NOT** compensate for it.
+**Interpolation is unchanged.** Every tap of [§8.3](#8-3-interpolation) goes through the read order above, so the modification is heard through the same kernel the unmodified sample would be — as if the transformed bytes had been written into the pool. A scatter whose reach approaches the sample's own period therefore reads back band-limited and quieter, because the kernel is averaging bytes that no longer correlate. That is the correct result and an engine **MUST NOT** compensate for it.
 
 **Nothing is ever written to the pool.** The modification is instrument-scope runtime state: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on a transport reset alongside the invert-loop mask, or a replay begins from a scrambled sample.
 
@@ -606,7 +608,7 @@ A fresh trigger arms a countdown that feeds the same per-voice `ramp_gain` the s
 ramp_gain = 0.5 − 0.5 × cos(π × i ÷ n)
 ```
 
-`n` is the ramp's length — **~⅔ ms**, 21 samples at the 32 kHz reference rate — and `i` counts the output samples emitted since the trigger, `0` on the very first. The curve is exactly 0 at `i = 0`; every sample once `i` reaches `n` reads a flat `ramp_gain = 1.0`. A hard jump straight to full gain reproduces, on a loud or DC-offset sample, exactly the click the sample-end ramp exists to remove — the half-cosine shape is what the ear reads as smooth rather than merely fast, at a length short enough that a genuine percussive transient still lands inside the ramp's first sample or two.
+`n` is the ramp's length — **~⅔ ms**, 21 samples at the 32 kHz reference rate — and `i` counts the output samples emitted since the trigger, `0` on the very first. The curve is exactly 0 at `i = 0`; every sample once `i` reaches `n` reads a flat `ramp_gain = 1.0`. A hard jump straight to full gain reproduces, on a loud or DC-offset sample, exactly the click the sample-end ramp exists to remove — the half-cosine shape is what the ear reads as smooth rather than merely fast, at a length short enough that a genuine percussive transient still lands inside the ramp's first sample or two.
 
 A fresh trigger always re-arms the ramp at length `n`, even when the previous note's own attack ramp on that voice was still counting down — a trigger is a hard restart, so there is no "already ramping" case to no-op against, unlike the sample-end ramp. An NNA ghost spawned while its source voice's attack ramp is still running **MUST** inherit the remaining count rather than restart it or skip straight to unity gain: either alternative reproduces, at the hand-off, the exact click this ramp exists to prevent.
 
@@ -776,7 +778,7 @@ with the same addends as the stereo law, wrapping where that one clamps.
 
 ### 11.2 Angles
 
-**Azimuth** is the 9-bit angle of the extended `S $8xxx` command: 512 units to a full turn, 0 = left, 128 = front, 256 = right, 384 = behind, increasing **clockwise** seen from above. Its low 8 bits are exactly the legacy pan byte, so pan `$00` / `$80` / `$FF` still mean left / centre / right and every ordinary pan write lands on the front arc.
+**Azimuth** is the 9-bit angle of the extended `S $8xxx` command: 512 units to a full turn, 0 = left, 128 = front, 256 = right, 384 = behind, increasing **clockwise** seen from above. Its low 8 bits are exactly the legacy pan byte, so pan `$00` / `$80` / `$FF` still mean left / centre / right and every ordinary pan write lands on the front arc.
 
 **Elevation** is effect `X`'s signed byte: 128 units to 90°, −128 below, +127 ≈ above.
 
@@ -811,7 +813,7 @@ A multi-channel sample is **not** a set of speaker feeds. Each channel is placed
 
 Only mono and stereo are reachable today, since the sampler plays at most two pool spans; the placement *rule* is what this section pins down.
 
-In the **stereo** model, multi-channel samples take a simpler path: each channel goes through the equal-energy pan law on its own side, so a stereo sample whose channels are identical renders bit-for-bit like the mono sample it was made from, and the pan column behaves as a mixer balance — hard left silences the right channel. A matrix-mode (mid/side) pair decodes to `L = M + S`, `R = M − S` **before** the filter and the voice effects, so those act on speaker feeds.
+In the **stereo** model, multi-channel samples take a simpler path: each channel goes through the equal-energy pan law on its own side, so a stereo sample whose channels are identical renders bit-for-bit like the mono sample it was made from, and the pan column behaves as a mixer balance — hard left silences the right channel. A matrix-mode (mid/side) pair decodes to `L = M + S`, `R = M − S` **before** the filter and the voice effects, so those act on speaker feeds.
 
 ### 11.5 The `Z` slide
 
@@ -825,7 +827,7 @@ The reference ambisonic renderer encodes to real spherical harmonics up to order
 
 That variant is an internal scene basis, **not** a file layout: a written AmbiX file **MUST** carry the complete `(order + 1)²` set, encoded from the full basis. Zero-filling the channels the planar variant drops would be a different scene, because a horizontal song still excites the zonal harmonics — ACN 6 is `(3z² − 1) ÷ 2 = −½` at ear level, not zero.
 
-Its stereo monitor decode is the classic coincident cardioid pair at ±90°: `L = (W + Y) ÷ 2`, `R = (W − Y) ÷ 2`.
+Its stereo monitor decode is the classic coincident cardioid pair at ±90°: `L = (W + Y) ÷ 2`, `R = (W − Y) ÷ 2`.
 
 ### 11.7 Other render targets
 
@@ -835,9 +837,9 @@ Everything below is a render *target* in the sense of §11: the same song, the s
 
 **Binaural monitoring.** An implementation **MAY** monitor a surround song through a head model so that elevation and front/back are audible on headphones — without it, composing a height is composing something the composer cannot hear. It is a *monitor*, not a rendering rule: the stereo output an implementation writes or plays by default is still the fold of §11.3, and nothing about a file depends on the head model chosen.
 
-The reference implementation encodes the objects into an order-3 ambisonic scene — the same SN3D/ACN basis as §11.6, so the monitor bus *is* a B-format scene — and decodes that scene to two ears with a **measured spherical-harmonic HRIR set**: one FIR per ambisonic channel, and both ears out of one pass, because mirroring a listener left↔right negates every harmonic with `m < 0` and leaves the rest alone. So `L = Σ_{m ≥ 0} + Σ_{m < 0}` and `R = Σ_{m ≥ 0} − Σ_{m < 0}`, over the per-channel convolutions. The set used is GoogleVR/SADIE's (16 channels × 256 taps at 48 kHz, Apache-2.0), rate-converted if the engine is not running at 48 kHz. Interaural delay, head shadow and the pinna's spectral cues arrive with the measurements; there is no parametric head model, and no per-source filtering at all.
+The reference implementation encodes the objects into an order-3 ambisonic scene — the same SN3D/ACN basis as §11.6, so the monitor bus *is* a B-format scene — and decodes that scene to two ears with a **measured spherical-harmonic HRIR set**: one FIR per ambisonic channel, and both ears out of one pass, because mirroring a listener left↔right negates every harmonic with `m < 0` and leaves the rest alone. So `L = Σ_{m ≥ 0} + Σ_{m < 0}` and `R = Σ_{m ≥ 0} − Σ_{m < 0}`, over the per-channel convolutions. The set used is GoogleVR/SADIE's (16 channels × 256 taps at 48 kHz, Apache-2.0), rate-converted if the engine is not running at 48 kHz. Interaural delay, head shadow and the pinna's spectral cues arrive with the measurements; there is no parametric head model, and no per-source filtering at all.
 
-A planar song decodes only the harmonics that survive on the horizon (`l − |m|` even — 10 of the 16 at order 3). Unlike §11.6's sectoral variant that is not an approximation: the six dropped harmonics are identically zero for every source a planar song can place, so the decode is sample-for-sample the spatial one.
+A planar song decodes only the harmonics that survive on the horizon (`l − |m|` even — 10 of the 16 at order 3). Unlike §11.6's sectoral variant that is not an approximation: the six dropped harmonics are identically zero for every source a planar song can place, so the decode is sample-for-sample the spatial one.
 
 One scalar calibrates the set so that a source dead ahead leaves the head carrying exactly the power the pan law of §11.3 gives it. Every other direction keeps whatever level the measurements say — a real head is a few dB quieter behind and below, and that difference is itself a direction cue, not an artefact to flatten.
 
@@ -890,7 +892,7 @@ A **full reset** sets BPM 125, tick rate 6, global and mixing volume `0x80`, cle
 
 A **play-from-row** reset is narrower and deliberately so: it resets row, tick and jump state, deactivates every voice, **empties the background pool**, clears the per-channel pattern-loop and Ditto state, reconstructs the Ditto arm state for the starting row, and returns every channel to its song-start position and volume — but leaves the playhead's tempo and volumes alone, because a replay must keep the song's tempo.
 
-Returning the CHANNELS is not the same thing as leaving the playhead's tempo alone, and both halves matter. Channel volume and every panning axis (channel position and elevation, the note axis, the spherical slide target), glissando and the `S $7x` per-note overrides are all written by the song's own effects and reset by nothing else — a trigger deliberately leaves them, since they belong to the channel rather than the note — so a play that does not clear them starts wherever the last one finished. What a reset **MUST NOT** touch is the host's own mixer: per-channel mute and fader levels belong to whoever is listening, not to the song, and a replay that silently unmutes a channel is its own bug.
+Returning the CHANNELS is not the same thing as leaving the playhead's tempo alone, and both halves matter. Channel volume and every panning axis (channel position and elevation, the note axis, the spherical slide target), glissando and the `S $7x` per-note overrides are all written by the song's own effects and reset by nothing else — a trigger deliberately leaves them, since they belong to the channel rather than the note — so a play that does not clear them starts wherever the last one finished. What a reset **MUST NOT** touch is the host's own mixer: per-channel mute and fader levels belong to whoever is listening, not to the song, and a replay that silently unmutes a channel is its own bug.
 
 Emptying the background pool is the part that is easy to omit and audible when omitted: a stop leaves ghosts active, and a replay resumes them.
 
