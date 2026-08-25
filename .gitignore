@@ -2,6 +2,7 @@ node_modules/
 *.pcm
 *.wav
 microtone-worker/test/reference/
+microtone-worker/test/corpus/
 .DS_Store
 CLAUDE.*
 microtone-worker/vendor/converters/__pycache__
