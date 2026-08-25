@@ -23,7 +23,7 @@ fails if the manifest and the container ever disagree, so the copy cannot rot.
 - **Permission:** granted by the composer, 2026, in these terms — *"as long as
   the tracker is free, so is the demo song."*
 
-Because the grant is conditional on Microtone staying free software, a fork or
-a repackaging that is **not** free software must remove this file. The
+Because the grant is conditional on Microtone staying *software gratis*, a fork or
+a repackaging that is **not** *software gratis* must remove this file. The
 arranger's note on the piece travels with it, in the project's Message
 (`PMsg`) — open the Project tab after loading it.
