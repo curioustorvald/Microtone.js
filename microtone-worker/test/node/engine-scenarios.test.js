@@ -1297,17 +1297,17 @@ test("item 116: clearing the cutoff override returns a patched voice to its patc
   assert.equal(v2.activeDefaultCutoff, 0xff, "no patch: the base record stands");
 });
 
-// Funk repeat (S$Fx) inverts bytes inside the LOOP. The mask was sized and
+// The invert loop (S $F0xx) inverts bytes inside the LOOP. The mask was sized and
 // indexed off the base record's loop, so on a patched voice — whose loop is the
 // patch's — the inversion landed on the wrong bytes.
-test("item 116: funk repeat follows the patch's loop, not the base record's", () => {
+test("item 116: the invert loop follows the patch's loop, not the base record's", () => {
   const eng = makeTestEngine(); // base inst: loop 0..1000
   eng.uploadInstrumentPatches(1, writePatchesBlob([makeInstPatch({
     pitchStart: 0x0000, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
     samplePtr: 1000, sampleLength: 600, samplingRate: 32000,
     loopStart: 100, loopEnd: 400, loopMode: 1, // a DIFFERENT loop
   })]));
-  // The funk walker lives in the per-tick advance, which only runs on a PLAYING
+  // The invert walker lives in the per-tick advance, which only runs on a PLAYING
   // playhead — so this drives a real pattern rather than jamNote.
   const pat = new Uint8Array(512);
   for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
@@ -1327,13 +1327,13 @@ test("item 116: funk repeat follows the patch's loop, not the base record's", ()
   assert.equal(v.activeSampleLoopStart, 100);
   assert.equal(v.activeSampleLoopEnd, 400);
 
-  v.funkSpeed = 0x40; // arm funk repeat on this voice
+  v.invertSpeed = 0x40; // arm the invert loop on this voice
   renderSamples(eng, TRACKER_CHUNK * 8);
 
   const inst = eng.instruments[1];
-  assert.notEqual(inst.funkMask, null, "the mask was allocated");
+  assert.notEqual(inst.invertMask, null, "the mask was allocated");
   const patchLoopLen = 400 - 100;
-  assert.equal(inst.funkMask.length, (patchLoopLen + 7) >> 3,
+  assert.equal(inst.invertMask.length, (patchLoopLen + 7) >> 3,
     "sized to the PATCH's 300-byte loop, not the base record's 1000");
-  assert.ok(v.funkWritePos < patchLoopLen, "the write head wraps on the patch's loop");
+  assert.ok(v.invertWritePos < patchLoopLen, "the write head wraps on the patch's loop");
 });

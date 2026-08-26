@@ -340,8 +340,8 @@ export class TaudInst {
     this.metaRaw = null;          // verbatim 256-byte record for lossless capture
     this.metaStrict = false;
 
-    // Funk repeat (S$Fx00) XOR bit-mask over the loop region.
-    this.funkMask = null;
+    // Invert loop (S $F0xx) XOR bit-mask over the loop region.
+    this.invertMask = null;
 
     // Sample modification (items 130, 152, 153, notefx 2 / 3) — ONE per
     // instrument: the opcodes are the same command, `2` inverting which side of
@@ -355,7 +355,7 @@ export class TaudInst {
     this.modTo = 1;
     this.modCombBits = -1;        // comb: the extent cut into 2^(n+1) chunks
     this.modCombOdd = false;      // ...keeping the odd ones ($Ex) or the even ($Fx)
-    this.modMask = null;          // MOD_FUNK: one bit per sample byte
+    this.modMask = null;          // MOD_INVERT: one bit per sample byte
     this.modRot = 0;              // MOD_ROL*/MOD_JUMP*: byte displacement
     this.modSub = 0;              // MOD_SUB*: running subtrahend, 0..255
     this.modScatter = 0;          // MOD_RND*: per-byte throw, in bytes (0 = off)
@@ -482,28 +482,28 @@ export class TaudInst {
     }
   }
 
-  // Funk repeat mask — sized for the loop length; stale masks are discarded.
+  // Invert-loop mask — sized for the loop length; stale masks are discarded.
   // `loopLen` is the SOUNDING voice's active loop length — an Ixmp patch brings
   // its own loop points, so sizing the mask off the base record would index a
   // patched voice's inversion into the wrong bytes (item 116). Defaults to the
   // base record's loop for a voice with no patch.
-  toggleFunkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
+  toggleInvertBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
     const len = Math.max(loopLen, 1);
     const expectedSize = (len + 7) >> 3;
-    let mask = this.funkMask;
+    let mask = this.invertMask;
     if (mask === null || mask.length !== expectedSize) {
       mask = new Uint8Array(expectedSize);
-      this.funkMask = mask;
+      this.invertMask = mask;
     }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     mask[idx >> 3] ^= 1 << (idx & 7);
   }
 
-  funkBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
-    const mask = this.funkMask;
+  invertBit(loopOffset, loopLen = this.sampleLoopEnd - this.sampleLoopStart) {
+    const mask = this.invertMask;
     if (mask === null) return false;
     const len = Math.max(loopLen, 1);
-    if (mask.length !== (len + 7) >> 3) { this.funkMask = null; return false; }
+    if (mask.length !== (len + 7) >> 3) { this.invertMask = null; return false; }
     const idx = Math.min(Math.max(loopOffset, 0), len - 1);
     return ((mask[idx >> 3] >>> (idx & 7)) & 1) !== 0;
   }
@@ -584,7 +584,7 @@ export class TaudInst {
     this.clearModState();
   }
 
-  /** Flip the modification's inversion bit for sample byte `i` (MOD_FUNK). The
+  /** Flip the modification's inversion bit for sample byte `i` (MOD_INVERT). The
    *  mask spans the whole SAMPLE — an inverted region's touched set is not a
    *  contiguous span, so there is no smaller origin to index from. */
   toggleModBit(i, sampleLen) {

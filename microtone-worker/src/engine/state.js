@@ -509,9 +509,13 @@ export class Playhead {
       it.dittoSourceStart = 0;
       it.dittoLength = 0;
       it.dittoEndRow = 0;
+      it.invertSpeed = 0;
+      it.invertAccumulator = 0;
+      it.invertWritePos = 0;
       it.funkSpeed = 0;
       it.funkAccumulator = 0;
-      it.funkWritePos = 0;
+      it.funkPos = -1;
+      it.funkWindow = -1;
       it.modPeriod = 0;
       it.modTickCount = 0;
       it.modWritePos = 0;
@@ -555,26 +559,31 @@ export class Playhead {
       it.activeChanCount = 1; it.activeChanMode = 0; it.activeChanPtr2 = 0;
     }
     ts.backgroundVoices.length = 0;
-    // Sample modifications (funk masks + notefx 2/3 regions) and notefx 5/6
+    // Sample modifications (invert masks + notefx 2/3 regions) and notefx 5/6
     // overrides are per-instrument runtime state — clear so a replay (or song
     // loop) starts from the file defaults.
     for (const inst of this.parent.instruments) {
-      inst.funkMask = null;
+      inst.invertMask = null;
       inst.resetMod();
       inst.cutoffOverride = -1;
       inst.resonanceOverride = -1;
     }
   }
 
-  /** Clear sample-modification state only (per-voice speeds + per-instrument
-   *  masks, regions and rotations). */
-  resetFunkState() {
+  /** Clear the sample-effect state only: the invert loop's per-voice speeds
+   *  and per-instrument masks, funk repeat's per-voice loop windows, and the
+   *  notefx 2/3 modifications (regions and rotations). */
+  resetSampleFxState() {
     const ts = this.trackerState;
     if (ts !== null) {
       for (const it of ts.voices) {
+        it.invertSpeed = 0;
+        it.invertAccumulator = 0;
+        it.invertWritePos = 0;
         it.funkSpeed = 0;
         it.funkAccumulator = 0;
-        it.funkWritePos = 0;
+        it.funkPos = -1;
+        it.funkWindow = -1;
         it.modPeriod = 0;
         it.modTickCount = 0;
         it.modWritePos = 0;
@@ -582,7 +591,7 @@ export class Playhead {
       }
     }
     for (const inst of this.parent.instruments) {
-      inst.funkMask = null;
+      inst.invertMask = null;
       inst.resetMod();
     }
   }

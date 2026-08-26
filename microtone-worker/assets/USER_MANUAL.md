@@ -892,13 +892,17 @@ patches alike) with its name, length and rate. The waveform display shades
 loop regions and shows live play-position cursors while audio runs. Piano keys
 audition the selected sample's instrument.
 
-If a voice using the sample is running funk repeat (`S $Fx`) or one of the
-sample-modification effects (`2` and `3`), the waveform display shows the
+If a voice using the sample is running the invert loop (`S $F0xx`) or one of
+the sample-modification effects (`2` and `3`), the waveform display shows the
 result live: bytes the invert mask has flipped are XORed, bytes a rotation has
 moved are drawn where they are being read from, a level slide is drawn at the
 level it is playing, and everything the modification touches is drawn in the
-funk colour. You see the waveform actually being played back, not the sample's
-original bytes.
+invert colour. You see the waveform actually being played back, not the
+sample's original bytes.
+
+Funk repeat (`Z $F0xx`) leaves the bytes alone and moves the loop instead, so
+what you see there is the play cursor: it walks out past the loop shading and
+on through the sample, which is exactly where the note has got to.
 
 **Edit…** opens the selected sample in the [Sample Lab](#the-sample-lab) — the
 one sample editor. Crop, EQ, chop, normalise, fade, chord: everything the Lab
@@ -1534,7 +1538,7 @@ sidebar (also at [Note Effects](#effects)).
 | W | Global vol slide | `$xy00` |
 | X | Spatial panning | `$eeaa` — elevation, azimuth |
 | Y | Panbrello | `$xxyy` — speed, depth |
-| Z | Special 2 | spatial/orbital effects, funk… |
+| Z | Special 2 | `$0xxx` spatial slide · `$F0xx` funk repeat: walk the loop through the sample |
 
 ### Ditto ghosts
 

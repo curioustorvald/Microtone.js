@@ -366,7 +366,7 @@ export class TaudEngine {
   getSongMixingVolume(ph) { return this.playheads[ph].mixingVolume; }
 
   resetParams(ph) { this.playheads[ph].resetParams(); }
-  resetFunkState(ph) { this.playheads[ph].resetFunkState(); }
+  resetSampleFxState(ph) { this.playheads[ph].resetSampleFxState(); }
 
   getFreePlayhead(fallback) {
     for (let i = 0; i < this.playheads.length; i++) {
@@ -577,13 +577,13 @@ export class TaudEngine {
     return counts;
   }
 
-  getVoiceFunkSpeed(ph, vi) {
+  getVoiceInvertSpeed(ph, vi) {
     const v = this._voice(ph, vi);
-    return v.active ? v.funkSpeed : 0;
+    return v.active ? v.invertSpeed : 0;
   }
 
-  getInstrumentFunkMask(slot) {
-    const mask = this.instruments[slot & 0x3ff].funkMask;
+  getInstrumentInvertMask(slot) {
+    const mask = this.instruments[slot & 0x3ff].invertMask;
     return mask === null ? new Uint8Array(0) : mask.slice();
   }
 
@@ -591,7 +591,7 @@ export class TaudEngine {
    * The instrument's live sample modification (item 130), for the sample view's
    * overlay: the operation, which side of the region it works on, the region as
    * a FRACTION pair plus its comb (item 153), and whatever the operation has
-   * accumulated. Plain numbers — the reply crosses a postMessage. The MOD_FUNK
+   * accumulated. Plain numbers — the reply crosses a postMessage. The MOD_INVERT
    * bit-mask travels with it as `modMask`.
    *
    * Field names are the instrument's own, so the reply can be handed straight

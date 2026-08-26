@@ -27,7 +27,7 @@ function makeFixture(fill) {
   const eng = { sampleBin: new Uint8Array(SAMPLE_BIN_TOTAL) };
   for (let i = 0; i < LEN; i++) eng.sampleBin[i] = fill(i);
   const inst = new TaudInst(1);
-  inst.funkMask = null;
+  inst.invertMask = null;
   return { eng, inst };
 }
 

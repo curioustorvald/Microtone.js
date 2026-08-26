@@ -884,7 +884,7 @@ async function playFrom(cue, row) {
   if (!store.doc) return;
   await ensureAudio(); // guarantees store.sync exists for the loaded doc
   store.sync.flushPatterns();
-  store.audio.resetFunkState(0);
+  store.audio.resetSampleFxState(0);
   store.audio.setCuePosition(0, cue);
   store.audio.setTrackerRow(0, row);
   store.audio.play(0);

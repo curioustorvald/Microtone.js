@@ -74,7 +74,7 @@ export const REGION_COMB = 2;
 // the throw is a glitch in the waveform rather than a replacement for it, which
 // is the sound this family is for.
 export const MOD_OFF = 0x0;
-export const MOD_FUNK = 0x1;
+export const MOD_INVERT = 0x1;
 export const MOD_ROL1 = 0x2;
 export const MOD_ROL8 = 0x5;
 export const MOD_SUB2 = 0x6;
@@ -109,7 +109,7 @@ export const MOD_COMB_MAX = 0xe;
 export const MOD_COMB_ODD_MAX = 0xd;
 
 /**
- * How far the funk walk may scan for the next byte the modification touches.
+ * How far the INVERT walk may scan for the next byte the modification touches.
  * An inverted region can exclude almost the whole domain, and the walk must
  * not turn into a linear search for the one byte that is left — past this many
  * misses the step simply does not land. Well above any musically useful comb.
@@ -316,7 +316,7 @@ export class ModGeom {
 /**
  * Resolve `inst`'s region against the loop the voice is sounding, into `g`.
  * Returns `g`. The domain is the loop region when there is one and the whole
- * sample when there is not — the same test §8.4's funk mask makes, so the two
+ * sample when there is not — the same test §8.4's invert mask makes, so the two
  * features cover the same bytes.
  *
  * `inst` is duck-typed: anything carrying modFrom / modTo / modCombBits /

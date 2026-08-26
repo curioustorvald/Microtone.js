@@ -280,11 +280,11 @@ export class SamplesView {
   frame() {
     if (!this.visible) return;
     const audio = this.store.audio;
-    // Refresh the funk-repeat masks of the shown sample's instruments so the
+    // Refresh the invert-loop masks of the shown sample's instruments so the
     // waveform overlay tracks the live S$Fx inversion (reply lands next frame).
     if (audio?.isPlaying()) {
       const s = this.list[this.selected];
-      if (s) for (const inst of s.users) audio.requestFunkMask(inst);
+      if (s) for (const inst of s.users) audio.requestInvertMask(inst);
     }
     if (audio?.isPlaying() || audio?.snapshot) this.drawWave();
     this.updateLiveDots();
@@ -318,20 +318,20 @@ export class SamplesView {
       ctx.fillRect((s.loopStart / s.len) * w, 0, ((s.loopEnd - s.loopStart) / s.len) * w, h);
     }
 
-    // Live sample-modification overlay: the funk repeat's per-instrument XOR
-    // mask (S$Fx, and notefx 2/3's FUNK operation) flips bytes by 0xFF and
+    // Live sample-modification overlay: the invert loop's per-instrument XOR
+    // mask (S$Fx, and notefx 2/3's INVERT operation) flips bytes by 0xFF and
     // persists like ProTracker's destructive EFx; notefx 2/3 can also rotate a
     // region's bytes, scatter them one by one, or slide their level. Everything
     // the modifications touch — inverted, moved or shifted — is drawn in the
-    // funk colour. (taut.js)
+    // invert colour. (taut.js)
     const audio = this.store.audio;
-    let funkMask = null;
+    let invertMask = null;
     let mod = null;
     let modMask = null;
     if (audio) {
       for (const inst of s.users) {
-        const m = audio.getFunkMask(inst);
-        if (m && m.length) { funkMask = m; break; }
+        const m = audio.getInvertMask(inst);
+        if (m && m.length) { invertMask = m; break; }
       }
       for (const inst of s.users) {
         const g = audio.getSampleMod(inst);
@@ -347,8 +347,8 @@ export class SamplesView {
     const touches = (p) => modTouches(modGeom, mod.modInvert, p);
     // A mask sized for a shorter sample than the one on screen (the engine
     // grows it lazily) stops where the bits do.
-    const funkEnd = funkMask
-      ? Math.min(s.loopEnd, s.loopStart + funkMask.length * 8) : 0;
+    const invertEnd = invertMask
+      ? Math.min(s.loopEnd, s.loopStart + invertMask.length * 8) : 0;
     const byteAt = (p, base = s.ptr) => {
       let src = p;
       const hit = modLive && touches(p);
@@ -359,9 +359,9 @@ export class SamplesView {
       let flipped = src !== p;
       // The legacy mask is tested against the byte actually READ, exactly as
       // the engine does — a rotation moves which byte that is.
-      if (funkMask && src >= s.loopStart && src < funkEnd) {
+      if (invertMask && src >= s.loopStart && src < invertEnd) {
         const k = src - s.loopStart;
-        if ((funkMask[k >>> 3] >>> (k & 7)) & 1) { v ^= 0xff; flipped = true; }
+        if ((invertMask[k >>> 3] >>> (k & 7)) & 1) { v ^= 0xff; flipped = true; }
       }
       if (hit) {
         if (modMask && modMask.length) {
@@ -391,7 +391,7 @@ export class SamplesView {
           const { v, flipped } = at(i);
           const yv = yOf(v);
           const top = Math.min(baseY, yv);
-          ctx.fillStyle = flipped ? C.waveFunk : C.wave;
+          ctx.fillStyle = flipped ? C.waveInvert : C.wave;
           ctx.fillRect(Math.floor((i * w) / s.len), top, rectW, Math.max(1, Math.abs(baseY - yv)));
         }
       } else {
@@ -409,7 +409,7 @@ export class SamplesView {
           }
           const yTop = Math.min(baseY, yOf(mx));
           const yBot = Math.max(baseY, yOf(mn));
-          ctx.fillStyle = anyFlip ? C.waveFunk : C.wave;
+          ctx.fillStyle = anyFlip ? C.waveInvert : C.wave;
           ctx.fillRect(col, yTop, 1, Math.max(1, yBot - yTop + 1));
         }
       }

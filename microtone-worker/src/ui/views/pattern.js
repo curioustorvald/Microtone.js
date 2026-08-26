@@ -507,7 +507,7 @@ class PatternPane {
     bytes[1] = (this.patIdx >>> 8) & 0x7f;
     bytes[17] |= 0x80;                      // ch8 sign bit → word0 bit 8 = HALT
     store.audio.uploadCue(PREVIEW_CUE, bytes);
-    store.audio.resetFunkState(0);
+    store.audio.resetSampleFxState(0);
     store.audio.setCuePosition(0, PREVIEW_CUE);
     store.audio.setTrackerRow(0, 0);
     store.audio.play(0);

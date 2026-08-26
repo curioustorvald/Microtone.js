@@ -37,14 +37,14 @@ export const CMD = Object.freeze({
   SET_CUE_POSITION: "setCuePosition",              // {ph, pos}
   SET_TRACKER_ROW: "setTrackerRow",                // {ph, row}
   RESET_PARAMS: "resetParams",                     // {ph}
-  RESET_FUNK_STATE: "resetFunkState",              // {ph}
+  RESET_SAMPLE_FX_STATE: "resetSampleFxState",     // {ph} — invert masks, funk windows, notefx 2/3
   JAM_NOTE: "jamNote",                             // {ph, voice, note, inst}
   JAM_SAMPLE: "jamSample",                         // {ph, voice, note, spec} — raw pooled-sample preview
   JAM_STOP: "jamStop",                             // {ph} — every voice (panic)
   JAM_STOP_VOICE: "jamStopVoice",                  // {ph, voice} — one audition voice; voice < 0 = the whole jam bank
   SET_VOICE_MUTE: "setVoiceMute",                  // {ph, voice, muted}
   SET_VOICE_FADER: "setVoiceFader",                // {ph, voice, fader}
-  QUERY_FUNK_MASK: "queryFunkMask",                // {slot} → MSG.FUNK_MASK
+  QUERY_INVERT_MASK: "queryInvertMask",            // {slot} → MSG.INVERT_MASK
   SNAPSHOT_RETURN: "snapshotReturn",               // {buffer: ArrayBuffer} (recycle)
   USE_SAB: "useSab",                               // {sab: SharedArrayBuffer} — switch to shared-memory snapshots
   USE_AUDIO_SAB: "useAudioSab",                    // {sab: SharedArrayBuffer} — Tier 2 audio ring (worklet consumes; worker produces)
@@ -52,9 +52,9 @@ export const CMD = Object.freeze({
 
 export const MSG = Object.freeze({
   SNAPSHOT: "snapshot", // {buffer: ArrayBuffer} — Float32Array, layout below
-  // {slot, mask: ArrayBuffer, mod} — S$Fx/notefx 2 invert-loop bit mask, plus
+  // {slot, mask: ArrayBuffer, mod} — S $F0xx / notefx 2 invert-loop bit mask, plus
   // the instrument's notefx 2/3 region geometry (engine getInstrumentSampleMod).
-  FUNK_MASK: "funkMask",
+  INVERT_MASK: "invertMask",
   READY: "ready",
   PROFILE: "profile",   // {cpuFrac, renderFrac, ...} — dev profiler, ~1/s (opt-in)
 });

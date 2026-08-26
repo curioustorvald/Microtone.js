@@ -364,12 +364,12 @@ const rawOf = (eng, voice, inst) => (i) =>
 
 test("notefx 3 confines its operation to the region it names", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x03, 0x311f]]); // 3 $311F — middle third, FUNK, every tick
+  loadRows(eng, [[0x03, 0x311f]]); // 3 $311F — middle third, INVERT, every tick
   render(eng, ROW);
   const inst = eng.instruments[1];
   assert.equal(inst.modFrom, 1 / 3, "region start = a third in");
   assert.equal(inst.modTo, 2 / 3);
-  assert.equal(inst.modOp, 1, "operation 1 is funk repeat");
+  assert.equal(inst.modOp, 1, "operation 1 is INVERT");
   assert.equal(inst.modInvert, false, "notefx 3 modifies the region it names");
   assert.ok(inst.modMask !== null, "the walk must have flipped something");
 
@@ -386,7 +386,7 @@ test("notefx 3 confines its operation to the region it names", () => {
 
 test("notefx 2 is the same command with the region inverted", () => {
   const eng = makeEngine();
-  loadRows(eng, [[0x02, 0x311f]]); // 2 $311F — funk EVERYTHING BUT the middle third
+  loadRows(eng, [[0x02, 0x311f]]); // 2 $311F — invert EVERYTHING BUT the middle third
   render(eng, ROW);
   const inst = eng.instruments[1];
   assert.equal(inst.modInvert, true);
@@ -440,7 +440,7 @@ test("$x = 0 resets the modification, region and all", () => {
 test("re-stating the same command does not restart the walk", () => {
   const eng = makeEngine();
   // Both rows carry the SAME argument: the walk must continue across them.
-  loadRows(eng, [[0x03, 0x0f1f], [0x03, 0x0f1f]]); // whole sample, funk, one flip/tick
+  loadRows(eng, [[0x03, 0x0f1f], [0x03, 0x0f1f]]); // whole sample, INVERT, one flip/tick
   render(eng, ROW);
   const after = eng.playheads[0].trackerState.voices[0].modWritePos;
   assert.ok(after > 1, `write pos must have walked (was ${after})`);
@@ -450,7 +450,7 @@ test("re-stating the same command does not restart the walk", () => {
 });
 
 test("$y is a tick period: $F every tick, $8 every eighth, $1 every fifteenth", () => {
-  // FUNK flips one byte per step, so the mask's popcount IS the step count.
+  // INVERT flips one byte per step, so the mask's popcount IS the step count.
   const bitsSet = (eng) => {
     const mask = eng.instruments[1].modMask;
     let n = 0;
@@ -549,26 +549,26 @@ test("S $Fxxx is untouched by any of it", () => {
   loadRows(eng, [[0x1c, 0xf040]]); // S $F040
   render(eng, ROW);
   const inst = eng.instruments[1];
-  assert.ok(inst.funkMask !== null, "legacy funk repeat still walks the loop");
+  assert.ok(inst.invertMask !== null, "the legacy invert loop still walks the loop");
   assert.equal(inst.modOp, 0, "…and never touches the notefx 2/3 modification");
   assert.equal(inst.modCombBits, -1);
 });
 
-test("resetFunkState clears the modification and the legacy mask alike", () => {
+test("resetSampleFxState clears the modification and the legacy mask alike", () => {
   const eng = makeEngine();
   loadRows(eng, [[0x03, 0x0f1f]]);
   render(eng, ROW);
   assert.ok(eng.instruments[1].modMask !== null);
-  eng.resetFunkState(0);
+  eng.resetSampleFxState(0);
   const inst = eng.instruments[1];
-  assert.equal(inst.funkMask, null);
+  assert.equal(inst.invertMask, null);
   assert.equal(inst.modMask, null);
   assert.equal(inst.modOp, 0);
   assert.equal(inst.modFrom, 0);
   assert.equal(inst.modTo, 1);
   assert.equal(inst.modOn, false);
   const v = eng.playheads[0].trackerState.voices[0];
-  assert.equal(v.funkSpeed, 0);
+  assert.equal(v.invertSpeed, 0);
   assert.equal(v.modPeriod, 0);
   assert.equal(v.modWritePos, 0);
   assert.equal(v.modXfade, 0);
@@ -1067,7 +1067,7 @@ test("the crossfade actually flattens the step a jump would otherwise cut", () =
   }
 });
 
-test("FUNK steps do not arm a crossfade — one byte is not a discontinuity", () => {
+test("INVERT steps do not arm a crossfade — one byte is not a discontinuity", () => {
   const eng = makeEngine();
   loadRows(eng, [[0x03, 0x0f1f]]);
   render(eng, TICK + 1);

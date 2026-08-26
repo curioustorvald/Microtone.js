@@ -50,7 +50,7 @@ export class AudioSystem {
                                 // (the cueSheet persists across loads — blank the
                                 // stale tail when a shorter song loads over it)
     this.engineTarget = null;   // where engine commands go: worklet port or the worker
-    this.funkMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
+    this.invertMasks = new Map(); // slot → Uint8Array (latest queried S$Fx invert mask)
     this.sampleMods = new Map(); // slot → notefx 2/3 modification state (item 130)
     this.modMasks = new Map();   // slot → Uint8Array (its inversion mask)
     this.wideCells = false; // format v3's 16-byte cell (set by loadDocument)
@@ -148,8 +148,8 @@ export class AudioSystem {
         if (this.onSnapshot) this.onSnapshot(this.snapshot);
       }
       this.node.port.postMessage({ t: CMD.SNAPSHOT_RETURN, buffer: m.buffer }, [m.buffer]);
-    } else if (m.t === MSG.FUNK_MASK) {
-      this.funkMasks.set(m.slot, new Uint8Array(m.mask));
+    } else if (m.t === MSG.INVERT_MASK) {
+      this.invertMasks.set(m.slot, new Uint8Array(m.mask));
       if (m.mod) this.sampleMods.set(m.slot, m.mod);
       if (m.modMask) this.modMasks.set(m.slot, new Uint8Array(m.modMask));
     } else if (m.t === MSG.PROFILE) {
@@ -285,7 +285,7 @@ export class AudioSystem {
     this._post({ t: CMD.SET_ANALYSIS, ph, target });
   }
   resetParams(ph = 0) { this._post({ t: CMD.RESET_PARAMS, ph }); }
-  resetFunkState(ph = 0) { this._post({ t: CMD.RESET_FUNK_STATE, ph }); }
+  resetSampleFxState(ph = 0) { this._post({ t: CMD.RESET_SAMPLE_FX_STATE, ph }); }
   jamNote(ph, voice, note, inst, audition = false) { this._post({ t: CMD.JAM_NOTE, ph, voice, note, inst, audition }); }
   /** Preview the exact pooled sample `spec` (ptr/len/rate/loop), no zone lookup (bug #65). */
   jamSample(ph, voice, note, spec) { this._post({ t: CMD.JAM_SAMPLE, ph, voice, note, spec }); }
@@ -329,12 +329,12 @@ export class AudioSystem {
   set64ChannelMode(on) { this._post({ t: CMD.SET_64CH, on }); }
 
   /** Ask the worklet for instrument `slot`'s live S$Fx invert-loop bit mask;
-   *  the reply lands in funkMasks (read via getFunkMask, ~1 frame later). */
-  requestFunkMask(slot) { this._post({ t: CMD.QUERY_FUNK_MASK, slot }); }
-  /** Latest queried funk mask for `slot` (Uint8Array; empty when none). */
-  getFunkMask(slot) { return this.funkMasks.get(slot) ?? null; }
+   *  the reply lands in invertMasks (read via getInvertMask, ~1 frame later). */
+  requestInvertMask(slot) { this._post({ t: CMD.QUERY_INVERT_MASK, slot }); }
+  /** Latest queried invert mask for `slot` (Uint8Array; empty when none). */
+  getInvertMask(slot) { return this.invertMasks.get(slot) ?? null; }
   /** Latest queried notefx 2/3 modification for `slot` (item 130), or null.
-   *  Arrives with the funk mask — one query answers for all of it. */
+   *  Arrives with the invert mask — one query answers for all of it. */
   getSampleMod(slot) { return this.sampleMods.get(slot) ?? null; }
   /** …and its inversion mask (Uint8Array; empty when the operation is not one). */
   getModMask(slot) { return this.modMasks.get(slot) ?? null; }

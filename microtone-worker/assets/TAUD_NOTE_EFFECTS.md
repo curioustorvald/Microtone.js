@@ -624,9 +624,9 @@ on every per-tick or fine step:
 
 The mixer reads `channel_pan` (8-bit) through the same path as `S $80xx`, and sums it with `note_pan` and the pan envelope (§3a). P slides interact additively with panbrello (Y) and with the panning column's slide selectors, the latter now by way of the other axis rather than by sharing the register.
 
-## O $xxyy — Set sample offset to $xxyy
+## O $xxxx — Set sample offset to $xxxx
 
-**Plain.** On the row where it appears, jumps the sample playhead to byte $xxyy of the sample data. If the sample is looped and the requested offset exceeds the loop end, the offset wraps around through the loop as if playback had reached that point naturally.
+**Plain.** On the row where it appears, jumps the sample playhead to byte $xxxx of the sample data. If the sample is looped and the requested offset exceeds the loop end, the offset wraps around through the loop as if playback had reached that point naturally.
 
 **Compatibility.** ST3 `Oxx` is 8-bit, addressing offset `xx × $100`. On import, copy the ST3 byte into Taud's high byte and zero the low byte: Taud `O $xx00`. ProTracker `9xx` maps identically. The Taud 16-bit form allows byte-precise seeking within samples larger than $100 bytes. Memory is private.
 
@@ -796,7 +796,7 @@ Operations:
 
 There is no rotate-right: rotating left by `n` and right by `span − n` are the same picture, and the ladder buys more spent on step sizes.
 
-**Everything is measured against the loop region.** The command's **domain** is the sounding voice's loop when it has one and the whole sample when it does not, and every selector, every comb, every wrap and every jump quantum is a fraction of THAT — never a raw byte count, never the base record's loop. So one argument means the same musical thing on every instrument it is pointed at, an Ixmp-patched voice follows its own loop, and `$A`'s eighths are eighths of the bar the loop holds rather than of the file that contains it. The domain test is [§8.4](#8-4-invert-loop)'s: an instrument whose loop points are empty has the whole sample as its domain, which is also why `$00` and `$0F` name the same span.
+**Everything is measured against the loop region.** The command's **domain** is the sounding voice's loop when it has one and the whole sample when it does not, and every selector, every comb, every wrap and every jump quantum is a fraction of THAT — never a raw byte count, never the base record's loop. So one argument means the same musical thing on every instrument it is pointed at, an Ixmp-patched voice follows its own loop, and `$A`'s eighths are eighths of the bar the loop holds rather than of the file that contains it. The domain test is the Engine Specification §8.4's: an instrument whose loop points are empty has the whole sample as its domain, which is also why `$00` and `$0F` name the same span.
 
 `$A`…`$F` are the same address transform driven by chance instead of by a step, and they split on **what the throw applies to**. A **jump** (`$A`…`$C`) draws ONE offset and moves the whole region by it, so the waveform arrives intact somewhere else — the sound survives, its place in the sample does not. A **scatter** (`$D`…`$F`) draws a separate offset **for every byte**, so the region is shuffled rather than moved.
 
@@ -806,7 +806,7 @@ The scatter ladder splits instead on **spread**, and it is short on purpose: `$D
 
 `$y` is a **period in ticks**, not a divisor: `16 − $y`, so `$F` steps every tick, `$E` every other one, `$8` every eighth and `$1` every fifteenth. `$y = 0` **freezes** the modification where it is and keeps everything it has accumulated. `$x = 0` is the reset — the operation, the region and the accumulated state all go.
 
-ProTracker's funk-speed ladder does **not** apply here. That table is an accumulator divisor: `EFx` had to fit its timing into a running sum, which buys an uneven ladder whose steps land where the arithmetic puts them rather than where the bar does. Nothing in this command needs that compromise, and `$A` is worth little without exact timing — a randomised drum loop has to re-deal itself ON the tick grid or it is not in time. `S $F0xx` keeps the historical ladder, because it is ProTracker's effect.
+ProTracker's funk-speed ladder (the table `S $F0xx` and `Z $F0xx` share) does **not** apply here. That table is an accumulator divisor: `EFx` had to fit its timing into a running sum, which buys an uneven ladder whose steps land where the arithmetic puts them rather than where the bar does. Nothing in this command needs that compromise, and `$A` is worth little without exact timing — a randomised drum loop has to re-deal itself ON the tick grid or it is not in time. `S $F0xx` keeps the historical ladder, because it is ProTracker's effect.
 
 **Compatibility.** Unique to Taud — no ST3/IT/PT equivalent, and no converter emits either opcode. `S $F0xx` remains the ProTracker-compatible invert loop and is a **separate, independent** modification: it keeps its own loop-region mask, and a song that never writes `2` or `3` **MUST** render exactly as it did before these effects existed.
 
@@ -832,21 +832,21 @@ on sample byte read at position i:
         ROL/JUMP: read from  wrap_start + ((i - wrap_start + rot) mod wrap_length)
         SCATTER:  read from  wrap_start + ((i - wrap_start + throw(i)) mod wrap_length)
                   where throw(i) is i's OWN offset, uniform over ±reach
-        FUNK: invert the byte when mod_mask[i] is set
+        INVERT: invert the byte when mod_mask[i] is set
         SUB:  byte = (byte - sub) AND $FF
 ```
 
-- **FUNK** keeps a bit-mask one bit per **sample** byte (not per domain byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole domain, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
+- **INVERT** keeps a bit-mask one bit per **sample** byte (not per domain byte: an inverted region's touched set is not a contiguous span, so there is no smaller origin to index from). Each step walks the write position to the next byte the region touches and flips it. An engine **MUST** bound that walk — an inverted region can exclude nearly the whole domain, and the search for the one byte left over must not become the tick's cost. The reference engine scans at most 4096 positions and otherwise lets the step not land.
 - **ROL** accumulates a byte displacement. Its step is an absolute byte count, the one thing in the command that is not a fraction — it is a grain size, not a place.
 - **SUB** accumulates a subtrahend modulo 256, so `$9` (128) inverts the level on odd steps and restores it on even ones, while `$6` (2) crawls.
 - **JUMP** is ROL with a thrown step: one offset for the whole region, drawn **uniformly** over the domain and wrapped into it. `$A` and `$B` **MUST** quantise the draw to a whole multiple of `round(domain_length ÷ {8,16})` — eight/sixteen outcomes, `0` (stay home) among them — while `$C` draws any byte position. Rounding rather than truncating the slice matters: on a domain of 1000 the slice is 125 and the eighth boundary is where it should be, where `⌊1000 ÷ 8⌋` would put every slice a little short of it and the error would grow across the domain. It **MUST NOT** accumulate — each step's offset is measured from the region's real position, not added to the last one. Every byte moves together, so the waveform is intact when it lands; this is a randomised `O $xxyy`, once a step, and it is the one random operation that leaves the instrument recognisable.
 - **SCATTER** shuffles. Every byte of the region **MUST** be displaced *independently*, each by its own offset uniform over `±round(domain_length × fraction)` and wrapped into the domain — moving the region as a block is the rotation, not this. The draw **MUST** be uniform over that range: a bell was tried and reverted, because leaving most bytes at home and flinging a few reads as noise mixed under the sample rather than as the sample breaking up. The offsets **MUST NOT** accumulate either: each step measures from the byte's ORIGINAL position, which is what keeps `$D` inside its 512th of the domain however long the effect runs, and what keeps the three settings three settings rather than the same random walk arriving at different speeds.
 - A scatter's offset **MUST** be a pure **function of the byte's index** within a step, not a value pulled from a stream as bytes are read. One output sample reads the same position through every interpolator tap and through both channels of a stereo sample, and a fresh draw per read would smear every setting into the same white noise. The reference engine therefore draws ONE 32-bit seed per step and hashes it with the byte index (a murmur3-style finaliser); the seed comes from the same RNG as volume and pan swing, so a scatter is the one modification a replay does not reproduce byte-for-byte. A **permutation is not required** — a byte may be drawn twice and another not at all. Requiring one would mean shuffling an index table the size of the sample on every step, and it is not audible at this grain.
 - A scatter is read back through the **normal interpolator**, exactly as if the shuffled bytes had been written into the pool. Where the reach is small next to the sample's own period the neighbouring reads stay correlated and the result is the same note with a rougher waveform; where it approaches that period they stop correlating, the interpolator averages bytes that no longer agree, and the result loses level as it loses shape. That is what fixes the top of the ladder at an eighth of the domain — far enough to hear the sample come apart, not so far that every setting past it is the same noise. Both ends are correct; neither is to be compensated for in the engine.
-- **A step is crossfaded, not cut.** Replacing an address or level mapping in one sample is a discontinuity, and at `$y = $F` that is one per tick — which is what the clicking is. An engine **SHOULD** ease each step in: the reference engine reads both mappings for **64 output samples** (2 ms at 32 kHz) and mixes them on a linear weight, which costs one extra pool read per tap over that window and leaves the effect its bite. FUNK is exempt — one flipped byte is not a discontinuity. **Changing or clearing** the command is not covered either, and is not meant to be: that is a deliberate edit, like a note cut.
+- **A step is crossfaded, not cut.** Replacing an address or level mapping in one sample is a discontinuity, and at `$y = $F` that is one per tick — which is what the clicking is. An engine **SHOULD** ease each step in: the reference engine reads both mappings for **64 output samples** (2 ms at 32 kHz) and mixes them on a linear weight, which costs one extra pool read per tap over that window and leaves the effect its bite. INVERT is exempt — one flipped byte is not a discontinuity. **Changing or clearing** the command is not covered either, and is not meant to be: that is a deliberate edit, like a note cut.
 - Changing the operation, the region or the inversion **MUST** discard whatever the previous operation accumulated and restart the walk — a rotation offset means nothing to a subtract. Re-stating the **same** command row after row **MUST NOT** restart anything, or a command repeated down a pattern would never get past its first step.
 - Every `$x` nibble carries an operation, but a reserved REGION is still ignored **whole**, speed included, so a typo cannot drive a modification the writer never named.
-- The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the funk mask.
+- The modification is **runtime state**: it persists across rows and patterns within one playback, is **NOT** reset by a fresh note trigger (it is sample state, not note state), and **MUST** be cleared on cue-start reset alongside the invert mask.
 
 ### The region argument ($se, effects 2 and 3)
 
@@ -874,7 +874,7 @@ Notes an engine **MUST** honour:
 
 ### Why sample mods and why more of them
 
-**Invert Loop** is a deliberately unusual effect inherited from the ProTracker tradition. The original Funk Repeat manipulated the playback loop itself; later ProTracker versions used the EFx command for Invert Loop, progressively modifying samples within the loop.
+**Invert Loop** is a deliberately unusual effect inherited from the ProTracker tradition. The original Funk Repeat manipulated the playback loop itself — Taud keeps that one too, under its own opcode, as `Z $F0xx` — while ProTracker 1.1B and everything after it used `E $Fx` for Invert Loop, progressively modifying samples within the loop.
 
 Its practical musical value was never obvious, and that is precisely why it survived in tracker folklore. Composers such as *4mat* demonstrated that effects which initially appeared useless could become distinctive musical techniques when placed in the right hands.
 
@@ -1368,23 +1368,25 @@ Q retrigger counters do **not** reset between SEx repetitions.
 
 **Plain.** Produces a hiss-like progressive inversion of the sample loop, toggling individual bytes over time for a gritty textural effect. Setting `$x = 0` turns the effect off; higher `$x` advances the inversion faster.
 
+**Which ProTracker effect this is.** `E $Fx` names two different effects. ProTracker **1.x** used it for **Funk Repeat**, which moves the playback loop and leaves the sample alone; ProTracker **1.1B** replaced that with **Invert Loop**, which leaves the loop alone and grinds a progressive inversion through its bytes — "sounds better than funkrepeat", as the release put it. Everything since has implemented the replacement, and PT's own sources never renamed the routine, so `mt_FunkIt`, `n_funkoffset` and `mt_FunkTable` are all Invert Loop's code. **This command is Invert Loop.** ProTracker 1.x's Funk Repeat is `Z $F0xx`, and the two are separate commands that can run at once. Only the speed ladder is genuinely shared, and it keeps its historical name (`funk_table`) here because that is the name it has in every source that carries it.
+
 **Compatibility.** ProTracker `EFx` is destructive — it XORs bytes directly in the sample data, permanently corrupting the sample. **Taud's implementation MUST be non-destructive**: the XOR **MUST** be applied at playback time through a per-instrument bit-mask, leaving source samples pristine. ST3 does not implement SFx at all and will parse Taud's S $Fx00 as a no-op; converters targeting ST3 **SHOULD** drop the effect. ProTracker `EFx` imports as Taud `S $F0yy`, where `yy = funk_table[x]`.
 
-**Implementation.** Each instrument carries a `funk_mask` bit array, one bit per byte of the loop region, all zero at song start. A per-channel counter `funk_accumulator` and a per-channel `funk_write_pos` track progress.
+**Implementation.** Each instrument carries an `invert_mask` bit array, one bit per byte of the loop region, all zero at song start. A per-channel counter `invert_accumulator` and a per-channel `invert_write_pos` track progress.
 
 ```
 funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
 
-on every tick (when S $F0xx is active with x != 0):
-    funk_accumulator += funk_length
-    if funk_accumulator >= $80:                       # hard reset, drops residual
-        funk_accumulator = 0
-        funk_write_pos = (funk_write_pos + 1) mod loop_length    # pre-increment
-        funk_mask[funk_write_pos] = funk_mask[funk_write_pos] XOR 1
+on every tick (when S $F0xx is active with xx != 0):
+    invert_accumulator += invert_speed                # $xx, a funk_table value
+    if invert_accumulator >= $80:                     # hard reset, drops residual
+        invert_accumulator = 0
+        invert_write_pos = (invert_write_pos + 1) mod loop_length    # pre-increment
+        invert_mask[invert_write_pos] = invert_mask[invert_write_pos] XOR 1
 
 on sample byte read during loop playback:
     raw_byte = sample_data[offset_in_loop]
-    if funk_mask[offset_in_loop] == 1:
+    if invert_mask[offset_in_loop] == 1:
         output_byte = raw_byte XOR $FF
     else:
         output_byte = raw_byte
@@ -1392,11 +1394,13 @@ on sample byte read during loop playback:
 
 Effects `2` and `3` offer the same inversion over a region you choose as one of several operations — see their entry. They keep their own mask; this one is `S $F0xx`'s alone.
 
-`S $F000` **MUST** clear `funk_accumulator` but **MUST** leave `funk_mask` intact (the accumulated inversion pattern persists). **On every fresh note trigger**, `funk_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `funk_accumulator` and `funk_speed` **MUST** persist across notes. The `funk_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
+`S $F000` **MUST** clear `invert_accumulator` but **MUST** leave `invert_mask` intact (the accumulated inversion pattern persists). **On every fresh note trigger**, `invert_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `invert_accumulator` and `invert_speed` **MUST** persist across notes. The `invert_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
 
-The effective speed semantics of the `funk_table` is as follows:
+The mask is indexed against the loop the instrument **declares**, and `Z $F0xx` running on the same voice does not move it: the walked window is where the voice is reading, the mask is what the bytes there read as, and each keeps its own frame.
 
-| Invert speed | Advance every … ticks |
+The effective speed semantics of the `funk_table` is as follows (`Z $F0xx` reads the same ladder):
+
+| Speed | Advance every … ticks |
 | ------------ | --------------------- |
 | $80 |  1 |
 | $40 |  2 |
@@ -1413,6 +1417,49 @@ The effective speed semantics of the `funk_table` is as follows:
 |   7 | 19 |
 |   6 | 22 |
 |   5 | 26 |
+
+## Z $F0xx — Funk repeat with speed $xx (non-destructive)
+
+**Plain.** Walks the sounding **loop** forward through the sample, one byte at a time. The loop keeps the length it was given — the note goes on repeating a window of the same size, at the same pitch — but the window slides, so a short loop crawls through the whole waveform and the held note travels through material it would otherwise never reach. Give it a short loop (`$10`, `$20`, `$40`, `$80` bytes) and it is a slow morph; give it a bar-long one and it is a shuffle. `$xx` is the speed, `$00` switches it off and leaves the loop wherever the walk had carried it, and the next note on the channel puts it back.
+
+**Which ProTracker effect this is.** ProTracker 1.x's `E $Fx`, the original **Funk Repeat** — the one PT 1.1B took out. Its manual is the whole of the surviving description: *"This command will need a short loop ($10,20,40,80 etc. bytes) to work. It will move the loop through the whole length of the sample. Sounds like shit, really, but who cares?"* The machinery below is 1.1B's own `mt_UpdateFunk`, which kept the ladder, the accumulator, the one-byte stride and the wrap and re-pointed the end of the routine at a byte inverter; what it had been pointing at was Paula's repeat register. Invert Loop, the effect that replaced it, is `S $F0xx`. The two are independent and **MAY** run on the same voice at once.
+
+**Compatibility.** A ProTracker module cannot say which of the two it wants: the pattern byte is `E $Fx` either way and only the tracker that wrote it knew. Converters **SHOULD** therefore keep emitting `S $F0yy` (`yy = funk_table[x]`) for `E $Fx` — that is what the file sounds like in every player written since 1990 — and offer `Z $F0yy` as a deliberate choice for modules known to predate PT 1.1B. ST3, IT and FT2 implement neither; FT2's own help lists `E $Fx` as "Funk it! (Not implemented)". Unique to Taud otherwise, and it has no memory slot: `Z $F000` is *off*, not a recall, and it does not disturb the memory `Z $0xxx` keeps.
+
+**Implementation.** The state is per channel: `funk_speed`, an 8-bit `funk_accumulator`, a `funk_pointer` (ProTracker's `n_wavestart`) and the `funk_window` the voice is actually sounding. The ladder and the accumulator are `S $F0xx`'s, unchanged — the same `funk_table`, the same `>= $80` test, the same hard reset.
+
+```
+funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
+
+on every tick, when funk_speed != 0 and the voice has a real forward or
+ping-pong loop with 0 < loop_length <= sample_length:
+    funk_accumulator += funk_speed
+    if funk_accumulator >= $80:                       # hard reset, drops residual
+        funk_accumulator = 0
+        funk_pointer = (funk_pointer unset ? loop_start : funk_pointer) + 1
+        if funk_pointer + loop_length > sample_length:
+            funk_pointer = 0                          # …through the WHOLE sample
+
+the sounding loop is:
+    [funk_window, funk_window + loop_length)          once the walk has moved
+    [loop_start, loop_end)                            until then
+
+when playback reaches the end of the sounding loop:
+    funk_window = funk_pointer                        # the restart latches it
+    position = funk_window + overshoot
+```
+
+**The walk moves the loop, never the sample.** Nothing is written to sample data: `Z $F0xx` **MUST** be implemented by moving where the voice loops, not by copying bytes about. ProTracker wrote the pointer straight into the audio channel's repeat register, which is the same thing on hardware that fetches its own loop.
+
+**The window changes only when the loop restarts.** ProTracker's pointer was latched by the DMA at each loop restart, so the block already sounding always finished first, and the walk was heard as the loop *moving between repeats* rather than as a jump mid-cycle. An engine **MUST** keep that: the pointer advances on the tick, the window it names takes effect at the next restart. On a ping-pong loop the latch **MUST** happen at one end only (the reference engine latches on the way up), so one down-and-back counts as the single repeat it sounds like.
+
+**The wrap keeps the window inside the sample.** ProTracker compared the pointer against the sample end and reset it to the sample start, which let the far end of a window near the end of a sample read whatever happened to follow it in Amiga memory. Taud folds the window's own length into the test — `funk_pointer + loop_length > sample_length` wraps to 0 — so the walk covers the whole sample and never reads past it. This is a deliberate divergence; a conforming engine **MUST NOT** read outside the sample.
+
+**Reset rules**, the same shape as `S $F0xx`'s. On every fresh note trigger the pointer and the window **MUST** return to the sample's own loop (ProTracker re-seeded `n_wavestart` from `n_loopstart`); `funk_speed` and `funk_accumulator` **MUST** persist across notes, so a walk armed on one row keeps working on the notes that follow it. All four **MUST** be cleared on cue-start reset, or a replay would start from a loop the file does not describe. An NNA ghost **SHOULD** keep the window it was displaced with — its playback position is inside that window — while the walk itself stays with the channel.
+
+**An instrument with no loop is left alone.** The command still lands on the channel (its speed is channel state and outlives the note), but a voice with loop mode 0 or 3, an empty loop region, or a loop as long as the whole sample has nothing to walk. A sustain loop that key-off has already released counts as having no loop, like everywhere else.
+
+**Other sample effects keep their own frame.** `S $F0xx`'s mask and the regions of `2 $sexy` / `3 $sexy` are indexed against the loop the instrument **declares**, and the walked window does not move them. Run the walk and the inverter together and the note wanders into progressively fresher material while the bytes under it are ground down; that is the intended composition of the two, not an accident to be corrected.
 
 ## Spatial panning effects
 
@@ -1446,7 +1493,7 @@ An implementation **MAY** additionally offer a **binaural monitor** — a head m
 
 **Plain.** Slides the spherical panning by speed `$xxx`. The speed rate is 1/16 of an azimuth unit per tick (see effect `X $eeaa`). `Z 0000` continues the slide by reusing the previously specified slide speed. If the start and target directions are identical, nothing **MUST** happen. If the start and target directions are antipodal, the interpolation path is implementation-defined.
 
-**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent. The effect has its own memory slot.
+**Compatibility.** Unique to Taud — no ST3/IT/PT equivalent. The effect has its own memory slot, and only this form of `Z` touches it: the opcode multiplexes on its first nibble the way `S` does, and `Z $F0xx` is funk repeat, a sampler command that is live in every song.
 
 **Implementation.** Convert the start and target azimuth/elevation to unit direction vectors. An implementation **MUST** interpolate the source position along the shortest great-circle path at constant angular velocity. Quaternion-based SLERP using minimal-rotation quaternions is the **RECOMMENDED** implementation.
 
@@ -1538,7 +1585,7 @@ This table maps each PT effect to its Taud equivalent. Arguments follow PT's two
 | `E $Cx` | `S $Cx00` | Note cut |
 | `E $Dx` | `S $Dx00` | Note delay |
 | `E $Ex` | `S $Ex00` | Pattern delay |
-| `E $Fx` | `S $F0yy` (Invert) / `Z $F0yy` (Funk) | Invert loop (ProTracker 2.x) / Funk Repeat (ProTracker 1.x), where `yy = funk_table[x]` |
+| `E $Fx` | `S $F0yy` (invert loop) | The byte is ambiguous — PT 1.x meant Funk Repeat, PT 1.1B onwards Invert Loop — so emit the invert loop, which is the one every player since implements. `Z $F0yy` is Funk Repeat, for modules known to predate 1.1B. `yy = funk_table[x]` either way |
 | `F $xx` (xx < $20) | `A $xx00` | Set speed |
 | `F $xx` (xx ≥ $20) | `T $(xx−$18)00` | Set tempo |
 

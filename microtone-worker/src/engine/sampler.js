@@ -35,13 +35,13 @@ export function computePlaybackRate(voice, noteVal, tuningRatio = 1.0) {
  * spec §8.1, and the point both halves of a sample-modification crossfade meet.
  *
  * Loop points come from the ACTIVE view: an Ixmp patch replaces them, and the
- * funk mask is sized and indexed against whichever loop is sounding (item 116).
+ * invert mask is sized and indexed against whichever loop is sounding (item 116).
  * The mask is tested against the byte ACTUALLY READ — a modification that moved
  * the read moved which mask bit answers for it.
  */
 function poolByte(eng, voice, inst, i, binMax, basePtr, ls, le) {
   const b = eng.sampleBin[Math.min(basePtr + i, binMax)];
-  if (inst.funkMask !== null && le > ls && i >= ls && i < le && inst.funkBit(i - ls, le - ls)) {
+  if (inst.invertMask !== null && le > ls && i >= ls && i < le && inst.invertBit(i - ls, le - ls)) {
     return b ^ 0xff;
   }
   return b;
@@ -50,11 +50,11 @@ function poolByte(eng, voice, inst, i, binMax, basePtr, ls, le) {
 /**
  * Read one PCM sample (in [-1,1]) at integer index idx, honouring the
  * instrument's sample modifications — notefx 2/3's address transform (which
- * moves WHICH byte is read), its value transform, and the funk-repeat mask
+ * moves WHICH byte is read), its value transform, and the invert-loop mask
  * (which inverts the byte read). Caller wraps loop regions first.
  * `basePtr` is the pool address of the channel being read — voice.activeSamplePtr
  * for a mono voice or the first channel of a stereo pair, voice.activeChanPtr2
- * for its right channel (both channels share the funk mask and geometry).
+ * for its right channel (both channels share the invert mask and geometry).
  *
  * The modification's region is resolved against the loop THIS voice is sounding
  * (item 153) — the fractions on the instrument cut against the voice's own
@@ -79,7 +79,7 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
   if (!g.live || !modTouches(g, inst.modInvert, i0)) {
     return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
   }
-  // ONE operation is live at a time, so an address transform and a FUNK/SUB
+  // ONE operation is live at a time, so an address transform and an INVERT/SUB
   // value transform never meet.
   const i = modAddress(g, i0, inst.modRot, inst.modScatter, inst.modSeed);
   let b = poolByte(eng, voice, inst, i, binMax, basePtr, ls, le);
@@ -205,10 +205,26 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
   return sample;
 }
 
-/** Step samplePos by the playback rate and apply the loop/end rules. */
+/**
+ * Step samplePos by the playback rate and apply the loop/end rules.
+ *
+ * Funk repeat (Z $F0xx, item 161) is the one thing that can move the loop out
+ * from under the position: its walk carries a window of the loop's own length
+ * through the sample, and the window becomes the loop the voice sounds. The
+ * window only changes where the HARDWARE changed it — Paula latches the repeat
+ * pointer when the loop restarts, so the block being played always finishes
+ * first. Until the walk has stepped once (`funkPos < 0`) this is the same
+ * arithmetic on the same numbers it has always been.
+ */
 function advanceSamplePos(voice, sampleLen) {
-  const loopStart = voice.activeSampleLoopStart;
-  const loopEnd = Math.max(voice.activeSampleLoopEnd, 1.0);
+  // An NNA ghost inherits the window without inheriting the walk, so either
+  // half of the pair on its own means the voice is sounding a moved loop.
+  const windowed = voice.funkPos >= 0 || voice.funkWindow >= 0;
+  const loopStart = voice.funkWindow >= 0
+    ? voice.funkWindow : voice.activeSampleLoopStart;
+  const loopEnd = windowed
+    ? loopStart + Math.max(voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1.0)
+    : Math.max(voice.activeSampleLoopEnd, 1.0);
   if (voice.forward) {
     voice.samplePos += voice.currentPlaybackRate;
     // Sustain bit set + key-off ⇒ escape the loop (loopMode 0 semantics).
@@ -222,9 +238,19 @@ function advanceSamplePos(voice, sampleLen) {
         }
         break;
       case 1:
-        if (voice.samplePos >= loopEnd) voice.samplePos -= Math.max(loopEnd - loopStart, 1.0);
+        if (voice.samplePos >= loopEnd) {
+          if (windowed) {
+            // The restart is where the walk's pointer has got to by now.
+            if (voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+            voice.samplePos = voice.funkWindow + (voice.samplePos - loopEnd);
+          } else {
+            voice.samplePos -= Math.max(loopEnd - loopStart, 1.0);
+          }
+        }
         break;
       case 2:
+        // Ping-pong latches on the way UP (below), so one down-and-back counts
+        // as the single loop iteration it sounds like.
         if (voice.samplePos >= loopEnd) { voice.samplePos = loopEnd; voice.forward = false; }
         break;
       case 3:
@@ -236,7 +262,11 @@ function advanceSamplePos(voice, sampleLen) {
     }
   } else {
     voice.samplePos -= voice.currentPlaybackRate;
-    if (voice.samplePos < loopStart) { voice.samplePos = loopStart; voice.forward = true; }
+    if (voice.samplePos < loopStart) {
+      if (windowed && voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+      voice.samplePos = windowed ? voice.funkWindow : loopStart;
+      voice.forward = true;
+    }
   }
 }
 

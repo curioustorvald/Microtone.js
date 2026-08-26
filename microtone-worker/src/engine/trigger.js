@@ -380,8 +380,13 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.autoVibTicksSinceTrigger = 0;
   voice.nesDpcmCounter = 63;
   voice.right.reset(); // stereo channel 2's filter/crusher/DPCM history
-  // Funk repeat: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
-  voice.funkWritePos = 0;
+  // Invert loop: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
+  voice.invertWritePos = 0;
+  // Funk repeat: the same rule, one command over — PT re-seeds n_wavestart from
+  // the loop start, so a fresh note is heard from the sample's own loop again
+  // however far the walk had carried the window. Speed/accumulator persist.
+  voice.funkPos = -1;
+  voice.funkWindow = -1;
   // Random vol/pan swing biases — seeded once per trigger.
   voice.randomVolBias = inst.volumeSwing !== 0
     ? Math.trunc(random() * (2 * inst.volumeSwing + 1)) - inst.volumeSwing : 0;
@@ -681,6 +686,10 @@ export function ghostVoice(src, channel) {
   v.activeSamplingRate = src.activeSamplingRate;
   v.activeSampleDetune = src.activeSampleDetune;
   v.activeLoopMode = src.activeLoopMode;
+  // The window funk repeat had walked to travels with the ghost — its sample
+  // position is INSIDE that window — but the walk itself does not: the pointer
+  // is the channel's, and a ghost is no longer addressable from the pattern.
+  v.funkWindow = src.funkWindow;
   v.activeVibratoSpeed = src.activeVibratoSpeed;
   v.activeVibratoSweep = src.activeVibratoSweep;
   v.activeVibratoDepth = src.activeVibratoDepth;

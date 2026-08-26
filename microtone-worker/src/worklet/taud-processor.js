@@ -25,7 +25,7 @@ import { TaudEngine } from "../engine/engine.js";
 import { SAMPLING_RATE, TRACKER_CHUNK } from "../engine/constants.js";
 import { CMD, MSG, SNAP_INTERRUPT_MASK, SNAP_FLOATS } from "./protocol.js";
 import {
-  applyAudioCommand, isTransportReset, funkMaskBuffer, modMaskBuffer, fillSnapshotInto,
+  applyAudioCommand, isTransportReset, invertMaskBuffer, modMaskBuffer, fillSnapshotInto,
 } from "./engine-commands.js";
 import {
   audioRingViews, AR_MASK, AR_WRITE, AR_READ, AR_STATE, AR_EPOCH, AR_FLUSH_POS,
@@ -126,11 +126,11 @@ class TaudProcessor extends AudioWorkletProcessor {
             Math.max(1, Math.round((m.snapshotIntervalMs / 1000) * sampleRate));
         }
         break;
-      case CMD.QUERY_FUNK_MASK: {
-        const buf = funkMaskBuffer(eng, m.slot);
+      case CMD.QUERY_INVERT_MASK: {
+        const buf = invertMaskBuffer(eng, m.slot);
         const modBuf = modMaskBuffer(eng, m.slot);
         this.port.postMessage({
-          t: MSG.FUNK_MASK, slot: m.slot, mask: buf,
+          t: MSG.INVERT_MASK, slot: m.slot, mask: buf,
           mod: eng.getInstrumentSampleMod(m.slot), modMask: modBuf,
         }, [buf, modBuf]);
         break;

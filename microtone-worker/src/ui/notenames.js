@@ -78,7 +78,7 @@ const FX_LAYOUT = {
   0: "1111", // no effect (an argument here is junk, but show it)
   1: "11..", // 1 $xx00  global behaviour flags
   2: "1123", // 2 $sexy  sample modification, region INVERTED: region, op, speed
-  3: "1123", // 3 $sexy  sample modification: region, operation, funk speed
+  3: "1123", // 3 $sexy  sample modification: region, operation, step period
   4: "1122", // 4 $eeaa  spherical slide target: elevation, azimuth
   5: "1111", // 5 $xxyy  filter cutoff (one value: 16-bit in SF2 mode, high byte in IT)
   6: "1111", // 6 $xxyy  filter resonance, as 5
@@ -110,7 +110,7 @@ const FX_LAYOUT = {
   32: "12..", // W $xy00  global volume slide
   33: "1122", // X $eeaa  spherical pan: elevation, azimuth
   34: "1122", // Y $xxyy  panbrello: speed, depth
-  35: "o111", // Z $0xxx  spherical pan slide (the sub-selector rides with the opcode)
+  35: "o111", // Z $0xxx spherical pan slide / Z $F0xx funk repeat (the sub-selector rides with the opcode)
 };
 
 // S's sub-commands, keyed by the high nibble. The nibble itself is always 'o'.
@@ -128,7 +128,7 @@ const S_LAYOUT = {
   0xc: "o1..", // S $Cx00  note cut
   0xd: "o123", // S $Dxny  note delay, action, action delay
   0xe: "o1..", // S $Ex00  pattern delay
-  0xf: "o111", // S $Fxxx  funk repeat
+  0xf: "o111", // S $F0xx  invert loop
 };
 
 /**

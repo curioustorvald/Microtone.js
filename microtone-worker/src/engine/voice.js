@@ -371,10 +371,21 @@ export class Voice {
     this.cutAtTick = -1;
     this.noteWasCut = false;
 
-    // Funk repeat (S$Fx).
+    // Invert loop (S $F0xx).
+    this.invertSpeed = 0;
+    this.invertAccumulator = 0;
+    this.invertWritePos = 0;
+
+    // Funk repeat (Z $F0xx) — ProTracker 1.x's OTHER EFx, which walks the
+    // sounding LOOP WINDOW through the sample instead of inverting bytes.
+    // `funkPos` is the walking pointer (PT's n_wavestart: an absolute byte
+    // index, -1 = never walked) and `funkWindow` is the window the voice is
+    // actually sounding — Paula latches the repeat pointer when the loop
+    // restarts, so the pointer may be ahead of the window that is playing.
     this.funkSpeed = 0;
     this.funkAccumulator = 0;
-    this.funkWritePos = 0;
+    this.funkPos = -1;
+    this.funkWindow = -1;
 
     // Sample modification (notefx 2 / 3) — the operation and its region live on
     // the instrument; the channel only drives the clock. `modPeriod` is the step

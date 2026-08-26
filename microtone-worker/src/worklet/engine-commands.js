@@ -34,7 +34,7 @@ const angleBox = new Float64Array(2);
 /**
  * Apply an engine-mutating command to `eng`. Returns true if handled here.
  * Transport/reply commands (INIT, USE_SAB, USE_AUDIO_SAB, SNAPSHOT_RETURN,
- * QUERY_FUNK_MASK) return false — each host handles those itself.
+ * QUERY_INVERT_MASK) return false — each host handles those itself.
  */
 export function applyAudioCommand(eng, m) {
   switch (m.t) {
@@ -72,7 +72,7 @@ export function applyAudioCommand(eng, m) {
     case CMD.SET_CUE_POSITION: eng.setCuePosition(m.ph, m.pos); return true;
     case CMD.SET_TRACKER_ROW: eng.setTrackerRow(m.ph, m.row); return true;
     case CMD.RESET_PARAMS: eng.resetParams(m.ph); return true;
-    case CMD.RESET_FUNK_STATE: eng.resetFunkState(m.ph); return true;
+    case CMD.RESET_SAMPLE_FX_STATE: eng.resetSampleFxState(m.ph); return true;
     case CMD.JAM_NOTE: eng.jamNote(m.ph, m.voice, m.note, m.inst, m.audition); return true;
     case CMD.JAM_SAMPLE: eng.jamSample(m.ph, m.voice, m.note, m.spec); return true;
     case CMD.JAM_STOP: eng.jamStop(m.ph); return true;
@@ -91,8 +91,8 @@ export function isTransportReset(t) {
 }
 
 /** Detached copy of instrument `slot`'s S$Fx invert-loop bit mask (reply payload). */
-export function funkMaskBuffer(eng, slot) {
-  const mask = eng.getInstrumentFunkMask(slot);
+export function invertMaskBuffer(eng, slot) {
+  const mask = eng.getInstrumentInvertMask(slot);
   return mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
 }
 

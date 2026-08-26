@@ -22,7 +22,7 @@ import {
 } from "./trigger.js";
 import { applyRetrigVolMod } from "./effects.js";
 import {
-  MOD_OFF, MOD_FUNK, MOD_STEP, MOD_WALK_SCAN, MOD_XFADE_SAMPLES,
+  MOD_OFF, MOD_INVERT, MOD_STEP, MOD_WALK_SCAN, MOD_XFADE_SAMPLES,
   isRolOp, isJumpOp, isRndOp, modTouches, resolveModGeom,
   jumpRot, scatterReach, scatterSeed,
 } from "./samplemod.js";
@@ -358,19 +358,46 @@ export function applyTrackerTick(eng, ts, playhead) {
     }
   }
 
-  // Funk repeat (S$Fx) — advance the per-instrument XOR mask (PT2 updateFunk).
+  // Invert loop (S $F0xx) — advance the per-instrument XOR mask (PT2 updateFunk).
   for (const voice of ts.voices) {
-    if (voice.funkSpeed === 0 || !voice.active) continue;
+    if (voice.invertSpeed === 0 || !voice.active) continue;
     const inst = eng.instruments[voice.instrumentId];
     // ACTIVE loop, not the base record's — an Ixmp patch brings its own (item 116).
     if (voice.activeSampleLoopEnd <= voice.activeSampleLoopStart) continue;
+    voice.invertAccumulator += voice.invertSpeed;
+    if (voice.invertAccumulator >= 0x80) {
+      voice.invertAccumulator = 0;
+      const loopLen = Math.max(
+        voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
+      voice.invertWritePos = (voice.invertWritePos + 1) % loopLen;
+      inst.toggleInvertBit(voice.invertWritePos, loopLen);
+    }
+  }
+
+  // Funk repeat (Z $F0xx) — walk the loop WINDOW through the sample (item 161).
+  // ProTracker 1.x's EFx, whose routine PT 1.1B kept and re-pointed at the byte
+  // inverter above: same ladder, same 8-bit accumulator, same one-byte stride —
+  // but the byte it advanced was Paula's repeat pointer, so what moved was
+  // where the loop restarts rather than the sample data. The window it lands on
+  // is latched by the sampler when the loop actually restarts, which is where
+  // the hardware latched it too.
+  for (const voice of ts.voices) {
+    if (voice.funkSpeed === 0 || !voice.active) continue;
+    const mode = voice.activeLoopMode & 3;
+    if (mode !== 1 && mode !== 2) continue;   // "will need a short loop to work"
+    const loopStart = voice.activeSampleLoopStart;
+    const loopLen = voice.activeSampleLoopEnd - loopStart;
+    const sampleLen = voice.activeSampleLength;
+    if (loopLen <= 0 || loopLen > sampleLen) continue;
     voice.funkAccumulator += voice.funkSpeed;
     if (voice.funkAccumulator >= 0x80) {
       voice.funkAccumulator = 0;
-      const loopLen = Math.max(
-        voice.activeSampleLoopEnd - voice.activeSampleLoopStart, 1);
-      voice.funkWritePos = (voice.funkWritePos + 1) % loopLen;
-      inst.toggleFunkBit(voice.funkWritePos, loopLen);
+      const next = (voice.funkPos < 0 ? loopStart : voice.funkPos) + 1;
+      // PT compared the pointer against the sample END and wrapped it to the
+      // sample START — "it will move the loop through the whole length of the
+      // sample". The window's own length joins the test here so the far end
+      // stays inside the sample instead of reading whatever follows it.
+      voice.funkPos = next + loopLen > sampleLen ? 0 : next;
     }
   }
 
@@ -493,7 +520,7 @@ function advanceSampleMod(eng, ts, voice) {
   if (++voice.modTickCount < voice.modPeriod) return;
   voice.modTickCount = 0;
   const step = MOD_STEP[inst.modOp];
-  if (inst.modOp === MOD_FUNK) {
+  if (inst.modOp === MOD_INVERT) {
     // Walk to the next byte the region actually touches and flip it. An
     // inverted region can exclude a long stretch, so the scan is bounded —
     // past MOD_WALK_SCAN misses this step simply does not land. One byte is

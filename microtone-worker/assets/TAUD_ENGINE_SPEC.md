@@ -409,7 +409,7 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 22. **Advance the volume and pan envelopes**, then set the per-sample envelope slope for the coming tick.
 23. **Advance the pitch and filter envelopes**.
 
-Then, once per tick at playhead scope: the tempo slide, the global volume slide, and the funk-repeat mask advance. Finally the background voices run their own reduced pass — layer-child re-synchronisation, all four envelopes, fadeout, auto-vibrato, pitch and filter envelopes, coefficient refresh — and fully faded ghosts are reaped.
+Then, once per tick at playhead scope: the tempo slide, the global volume slide, the invert-loop mask advance and the funk-repeat walk. Finally the background voices run their own reduced pass — layer-child re-synchronisation, all four envelopes, fadeout, auto-vibrato, pitch and filter envelopes, coefficient refresh — and fully faded ghosts are reaped.
 
 ### 6.1 Auto-vibrato
 
@@ -507,7 +507,7 @@ An instrument with the key-lift flag treats key-off as a true MIDI key release: 
 
 Sample data is unsigned 8-bit with `0x80` as zero; a byte converts to `(b − 127.5) ÷ 127.5`. Reads clamp the index into the sample and clamp the pool address into the 8 MiB pool, so a malformed pointer cannot read out of bounds.
 
-If the instrument has an active **funk-repeat** mask ([§8.4](#8-4-invert-loop)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `0xFF` before conversion.
+If the instrument has an active **invert-loop** mask ([§8.4](#8-4-invert-loop-and-funk-repeat)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `0xFF` before conversion. The loop that indexes the mask is the one the instrument declares; funk repeat's walk does not move it.
 
 A live **sample modification** ([§8.5](#8-5-sample-modifications)) may additionally move *which* byte this read takes and change its value; [§8.5](#8-5-sample-modifications) fixes the order the two features compose in.
 
@@ -543,13 +543,17 @@ The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225,
 
 SNES and NES DPCM modes carry per-voice state (the DPCM counter), and a stereo voice keeps a separate counter per channel.
 
-### 8.4 Invert loop
+### 8.4 Invert loop and funk repeat
 
-`S $Fx` engages ProTracker's "invert loop": a per-instrument bit mask over the loop region, advanced once per tick by an accumulator. When the accumulator passes `0x80` it resets and toggles the mask bit at the current write position, which then advances cyclically through the loop. Sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
+ProTracker's `EFx` is two effects that were never the same one. **Invert loop** (PT 1.1B onwards) is `S $F0xx` and grinds a progressive inversion through the loop's bytes; **funk repeat** (PT 1.x, which 1.1B replaced) is `Z $F0xx` and walks the loop itself through the sample, leaving every byte alone. They share the speed ladder — an 8-bit accumulator, a table of increments, one step whenever the sum passes `0x80` — and nothing else. Both are per-tick, both are non-destructive here, and both **MAY** run on one voice at once.
 
-The loop the mask covers is the **active** one — an Ixmp patch replaces the base record's loop points, and the mask is sized and indexed against whichever loop the voice is actually sounding.
+**Invert loop** keeps a per-instrument bit mask over the loop region. On each step it toggles the mask bit at the current write position, which advances cyclically through the loop; sample bytes whose mask bit is set read inverted. The write position resets on a fresh trigger; the speed and accumulator persist.
 
-The mask is instrument-scope runtime state and **MUST** be cleared on a transport reset, or a replay will start from a scrambled sample.
+The loop the mask covers is the **active** one — an Ixmp patch replaces the base record's loop points, and the mask is sized and indexed against whichever loop the voice is actually sounding. The mask is instrument-scope runtime state and **MUST** be cleared on a transport reset, or a replay will start from a scrambled sample.
+
+**Funk repeat** keeps a per-voice pointer instead. On each step the pointer advances one byte, wrapping to the sample start when a window of the loop's own length would no longer fit before the sample end, and the window `[pointer, pointer + loop_length)` becomes the loop the voice sounds. The window **MUST** take effect only when the loop restarts — ProTracker wrote the pointer into Paula's repeat register and the DMA latched it at the restart, so the block already sounding always finished first, which is also why the effect does not click. On a ping-pong loop the latch happens at one end only. A voice with no loop, or whose loop is as long as the whole sample, has nothing to walk.
+
+Both the pointer and the window return to the instrument's own loop on a fresh trigger; the speed and accumulator persist, as invert loop's do. An NNA ghost inherits the window it was displaced with — its position is inside it — but not the walk. All of it is voice-scope runtime state and **MUST** be cleared on a transport reset.
 
 ### 8.5 Sample modifications
 
@@ -557,9 +561,9 @@ Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modifica
 
 **State.** An instrument carries **one** modification: an operation, a region (extent plus optional comb), and whatever that operation has accumulated. Writing either opcode replaces it, and changing the operation, the region or the inversion **MUST** discard the accumulated state — a rotation offset means nothing to a subtract. Re-stating the *same* command **MUST NOT** discard anything, or a command repeated down a pattern would never get past its first step. The **clock** driving the modification is per voice, so the state is shared but the clock is not: N voices sounding one instrument step its modification N times per tick.
 
-**The step clock** is a period in ticks: each tick the voice counts one, and on reaching `16 − $y` the count resets and the operation steps once. `$y = 0` freezes the modification without discarding it. This is deliberately *not* invert loop's accumulator ladder ([§8.4](#8-4-invert-loop)) — that table is a divisor whose steps land where the arithmetic puts them, and the jump operations are worth little off the tick grid.
+**The step clock** is a period in ticks: each tick the voice counts one, and on reaching `16 − $y` the count resets and the operation steps once. `$y = 0` freezes the modification without discarding it. This is deliberately *not* invert loop's accumulator ladder ([§8.4](#8-4-invert-loop-and-funk-repeat)) — that table is a divisor whose steps land where the arithmetic puts them, and the jump operations are worth little off the tick grid.
 
-**The domain.** Everything the command measures is a fraction of one span, resolved **per sounding voice**: the active loop region when `loop_end > loop_start`, and the whole sample otherwise — the same test [§8.4](#8-4-invert-loop)'s mask makes. The extent is `domain_start + round(domain_length × from)` to `domain_start + round(domain_length × to)`, where `from`/`to` come from `$se`; the comb cuts *the extent* into `2^(n+1)` equal chunks and keeps the even or the odd ones. An engine **MUST** store the region as a fraction and resolve it at read time, not bake it into byte offsets when the command is written: an Ixmp patch replaces the loop points under a sounding voice ([§4.1](#4-1-the-active-view)), and a baked extent would then name bytes the voice is no longer playing.
+**The domain.** Everything the command measures is a fraction of one span, resolved **per sounding voice**: the active loop region when `loop_end > loop_start`, and the whole sample otherwise — the same test [§8.4](#8-4-invert-loop-and-funk-repeat)'s mask makes. The extent is `domain_start + round(domain_length × from)` to `domain_start + round(domain_length × to)`, where `from`/`to` come from `$se`; the comb cuts *the extent* into `2^(n+1)` equal chunks and keeps the even or the odd ones. An engine **MUST** store the region as a fraction and resolve it at read time, not bake it into byte offsets when the command is written: an Ixmp patch replaces the loop points under a sounding voice ([§4.1](#4-1-the-active-view)), and a baked extent would then name bytes the voice is no longer playing.
 
 **The touch test.** A modification touches sample byte `i` when `i` lies inside the extent and inside a kept comb chunk; effect `2` inverts that answer **within the domain** and nowhere else — `2` spares its region and modifies the rest of the loop, never the rest of the file. Only touched bytes are transformed.
 
@@ -568,7 +572,7 @@ Note effects `2 $sexy` and `3 $sexy` apply a running, non-destructive modifica
 1. Clamp `i` into the sample.
 2. If the modification is live and touches `i`, apply its **address** transform, wrapping the result into the domain below. `i` now names a different byte.
 3. Read the pool byte at `i`.
-4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
+4. Apply the `S $Fx` mask of [§8.4](#8-4-invert-loop-and-funk-repeat), tested against the position **actually read** — a modification that moved the read also moved which mask bit answers for it. `S $Fx` is a separate, independent modification and the two do compose.
 5. If the touch test of step 2 passed, apply the modification's **value** transform.
 6. If a step is being crossfaded (below), repeat steps 2–5 with the **previous** transform state and mix.
 7. Convert to `(b − 127.5) ÷ 127.5`.
@@ -581,7 +585,7 @@ Two positions are in play and an engine **MUST NOT** confuse them: the **touch t
 |---|---|---|
 | Address, uniform | rotate, jump | Every touched byte moves by the *same* offset. Two of the three jump spellings quantise that offset to a whole eighth or sixteenth of the domain, so a loop cut to the bar is re-dealt a slice at a time |
 | Address, per byte | scatter | Every touched byte moves by its *own* offset, drawn uniformly within the setting's fraction of the domain |
-| Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
+| Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop-and-funk-repeat)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
 | Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
 
 **Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh draw over the whole domain, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
@@ -890,7 +894,7 @@ Interrupts are how a song drives something outside itself: lighting cues, subtit
 
 A transport reset restores a well-defined starting state, and getting its scope right prevents a family of "mysteriously lingering" bugs.
 
-A **full reset** sets BPM 125, tick rate 6, global and mixing volume `0x80`, clears the tuning, restores the tone and interpolation modes from the file's global behaviour flags, re-installs the surround model, clears the Amiga filter states, deactivates every voice, empties the background pool, clears every per-voice effect and envelope state, and clears the per-instrument runtime state (funk masks and filter overrides).
+A **full reset** sets BPM 125, tick rate 6, global and mixing volume `0x80`, clears the tuning, restores the tone and interpolation modes from the file's global behaviour flags, re-installs the surround model, clears the Amiga filter states, deactivates every voice, empties the background pool, clears every per-voice effect and envelope state (funk repeat's loop window among it), and clears the per-instrument runtime state (invert-loop masks and filter overrides).
 
 A **play-from-row** reset is narrower and deliberately so: it resets row, tick and jump state, deactivates every voice, **empties the background pool**, clears the per-channel pattern-loop and Ditto state, reconstructs the Ditto arm state for the starting row, and returns every channel to its song-start position and volume — but leaves the playhead's tempo and volumes alone, because a replay must keep the song's tempo.
 
@@ -915,7 +919,8 @@ Opcodes are base-36 digit values: `0`…`9` are `0x00`…`0x09` and `A`…`Z` ar
 | `A` / `T` | Playhead | Tick rate / tempo |
 | `B` / `C` | Playhead | Order jump / pattern break, both resolved at row end |
 | `V` / `W` | Playhead | Set / slide the song global volume |
-| `4` / `X` / `Z` | Voice | Spatial target, position and slide — ignored entirely in a stereo song |
+| `4` / `X` / `Z $0xxx` | Voice | Spatial target, position and slide — ignored entirely in a stereo song |
+| `Z $F0xx` | Voice | Funk repeat: walk the sounding loop window through the sample ([§8.4](#8-4-invert-loop-and-funk-repeat)) — a sampler command, live in every song |
 
 ## 17. Conformance summary
 

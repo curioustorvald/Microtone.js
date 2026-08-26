@@ -68,7 +68,7 @@ test("S is multiplexed — the sub-command nibble takes the OPCODE's ink", () =>
   assert.equal(map(fx("s"), 0xc400), "o1.."); // S $Cx00 note cut
   assert.equal(map(fx("s"), 0x8040), "o111"); // S $80xx pan — 9-bit angle, one field
   assert.equal(map(fx("s"), 0xd123), "o123"); // S $Dxny delay, action, action delay
-  assert.equal(map(fx("s"), 0xf0a0), "o111"); // S $Fxxx funk repeat — 12-bit speed
+  assert.equal(map(fx("s"), 0xf0a0), "o111"); // S $F0xx invert loop — 12-bit speed
   assert.equal(map(fx("s"), 0xa000), "o111"); // undefined sub-command: one field
 });
 

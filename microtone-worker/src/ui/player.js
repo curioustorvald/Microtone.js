@@ -111,7 +111,7 @@ $("song").addEventListener("change", async (e) => {
 
 $("play").addEventListener("click", async () => {
   await ensureAudio();
-  audio.resetFunkState(0);
+  audio.resetSampleFxState(0);
   audio.setCuePosition(0, 0);
   audio.setTrackerRow(0, 0);
   audio.play(0);

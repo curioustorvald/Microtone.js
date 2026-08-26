@@ -53,7 +53,7 @@
   --cv-wave: #43d675;        /* waveform trace */
   --cv-wave-loop: #26314a;   /* loop-region shading */
   --cv-wave-mid: #4a5266;    /* waveform centre baseline */
-  --cv-wave-funk: #f5a623;   /* loop bytes live-inverted by funk repeat (S$Fx) */
+  --cv-wave-invert: #f5a623;   /* loop bytes live-inverted by the invert loop (S $F0xx) */
   --cv-play-cursor: #f5a623; /* envelope nodes, live envelope markers */
   --cv-wave-cursor: #ff5ec4; /* live play-position hairline over a waveform —
                                 a colour NEITHER the trace nor a modified byte
@@ -114,7 +114,7 @@
   --cv-wave: #4ddd7d;
   --cv-wave-loop: #3e4557;
   --cv-wave-mid: #5d636e;
-  --cv-wave-funk: #f5a623;
+  --cv-wave-invert: #f5a623;
   --cv-play-cursor: #f5a623;
   --cv-wave-cursor: #ff5ec4;
   --cv-env-line: #4aa3ff;
@@ -170,7 +170,7 @@
   --cv-wave: #1c9450;
   --cv-wave-loop: #ccd8ee;
   --cv-wave-mid: #b3bcc9;
-  --cv-wave-funk: #c07a10;
+  --cv-wave-invert: #c07a10;
   --cv-play-cursor: #af6f10;
   --cv-wave-cursor: #c1006f;
   --cv-env-line: #1d66b8;

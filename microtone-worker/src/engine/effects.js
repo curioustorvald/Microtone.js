@@ -358,6 +358,15 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
       break;
     case EffectOp.OP_Z: {
+      // Z $F0xx — funk repeat, ProTracker 1.x's EFx (item 161). Not a spatial
+      // command at all: Z multiplexes on its first nibble the way S does, and
+      // this form is live in EVERY song, stereo included. `xx` is the funk
+      // ladder's speed value, the same 8-bit scale S $F0xx reads.
+      if ((rawArg & 0xf000) === 0xf000) {
+        voice.funkSpeed = rawArg & 0xff;
+        voice.funkAccumulator = 0;
+        break;
+      }
       // Z $0xxx — arm the slide for this row at $xxx/16 azimuth units per tick.
       if (ts.surroundModel === SURROUND_STEREO) break;
       const raw = rawArg & 0xfff;
@@ -451,8 +460,8 @@ export function applySEffect(eng, ts, voice, vi, arg) {
       }
       break;
     case 0xf:
-      voice.funkSpeed = arg & 0xff;
-      if (x === 0) voice.funkAccumulator = 0;
+      voice.invertSpeed = arg & 0xff;
+      if (x === 0) voice.invertAccumulator = 0;
       break;
   }
 }
