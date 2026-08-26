@@ -154,6 +154,21 @@ Full ProTracker dispatch per the Note Effects conversion table, with these folds
 
 Sample finetune is pre-baked into each instrument's sampling rate, so notes stay clean.
 
+### 2.4 `E $Fx` — one slot, two effects
+
+`E $Fx` is the one ProTracker command whose *meaning* depends on which ProTracker wrote the file, and nothing in the file says which.
+
+- **ProTracker 1.0C — Funk Repeat.** Adds one whole loop length to the channel's repeat pointer each step, writes it into the audio hardware's loop register, and snaps back to the real loop start when the next block would not fit inside the sample. The loop hops through the body of the sample; the sample data is never touched. Taud's `Z $F0yy`.
+- **ProTracker 1.1B onwards — Invert Loop.** Advances a cursor one byte through the loop each step and one's-complements the sample byte it lands on, in place. The loop degrades into a buzz; the sample data is permanently modified. Taud's `S $F0yy`.
+
+The two share ProTracker's handler, its speed nibble, its accumulator and its speed table, and in ProTracker's sources they share every name (`mt_FunkIt`, `mt_FunkTable`, `n_funkoffset`) — 1.1B replaced one routine body and left everything around it, including the now-dead sample-length field that only Funk Repeat had read. That is why the two are so widely conflated, and why a source listing labelled "funk" is no evidence of which effect it implements.
+
+**What a converter must do.** `mod2taud.py` emits `S $F0yy` with `yy = funk_table[x]`, and a converter **SHOULD** do the same. It is not a coin toss: the scene settled on Invert Loop within a year, every player from PT 2.x onward implements only that, and a module carrying `E $Fx` today was overwhelmingly written and checked against it. A converter **MUST NOT** try to detect the author's intent — there is no version field, no flag, and no reliable heuristic. Offer `Z $F0yy` as a **user-selected** compatibility mode for modules known to predate 1.1B, and nothing else.
+
+**Which release changed.** 1.0C has Funk Repeat and 1.1B has Invert Loop, both established from the playroutine sources. 1.1A is not settled by surviving source — the copy that reaches us is damaged exactly where the routine sat — but its help file and effect list are 1.0C's, still documenting Funk Repeat ("add replen to repeat"), its own changelog lists only the vibrato-depth change against 1.0C, and 1.1B's lists that change *plus* "Funk Repeat changed to Invert Loop". So the change is 1.1B's, and a module of 1.1A vintage or earlier is the case where `Z $F0yy` is the honest import.
+
+**If you convert to Funk Repeat, check the loop first.** The effect needs room: a loop occupying the tail of its sample cannot hop anywhere and is silent, and a loop as long as its sample is silent for the same reason. That is faithful behaviour, not a conversion fault, but it means `Z $F0yy` on a module whose samples all loop to the end will do nothing at all — in which case the module was written for Invert Loop anyway, which is the useful signal in the other direction.
+
 ## 3. ScreamTracker 3 — `.s3m`
 
 ### 3.1 Instrument indexing

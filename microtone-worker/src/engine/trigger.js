@@ -382,9 +382,13 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.right.reset(); // stereo channel 2's filter/crusher/DPCM history
   // Invert loop: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
   voice.invertWritePos = 0;
-  // Funk repeat: the same rule, one command over — PT re-seeds n_wavestart from
-  // the loop start, so a fresh note is heard from the sample's own loop again
-  // however far the walk had carried the window. Speed/accumulator persist.
+  // Funk repeat: the window goes back to the sample's own loop. PT re-seeded
+  // n_wavestart from n_loopstart only when the ROW CARRIED A SAMPLE NUMBER
+  // (FUNK_REPEAT.md §2.1, §7.3) — a bare note left the walk where it stood. A
+  // deliberate divergence: here the window is an offset into the ACTIVE sample
+  // view, which a trigger rebuilds, so carrying it across a re-trigger would
+  // aim it into a sample that may not be the one it was measured against. The
+  // speed and the accumulator persist, which is the part that carries the feel.
   voice.funkPos = -1;
   voice.funkWindow = -1;
   // Random vol/pan swing biases — seeded once per trigger.

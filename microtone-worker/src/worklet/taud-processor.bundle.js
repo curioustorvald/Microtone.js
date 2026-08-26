@@ -3749,12 +3749,14 @@ class Voice {
     this.invertAccumulator = 0;
     this.invertWritePos = 0;
 
-    // Funk repeat (Z $F0xx) — ProTracker 1.x's OTHER EFx, which walks the
-    // sounding LOOP WINDOW through the sample instead of inverting bytes.
-    // `funkPos` is the walking pointer (PT's n_wavestart: an absolute byte
-    // index, -1 = never walked) and `funkWindow` is the window the voice is
-    // actually sounding — Paula latches the repeat pointer when the loop
-    // restarts, so the pointer may be ahead of the window that is playing.
+    // Funk repeat (Z $F0xx) — ProTracker 1.0C's OTHER EFx, which hops the
+    // sounding LOOP WINDOW through the sample a whole loop length at a time
+    // instead of inverting bytes. `funkPos` is the walking pointer (PT's
+    // n_wavestart: an absolute byte index, -1 = never walked) and `funkWindow`
+    // is the window the voice is actually sounding — Paula reloaded AUDxLC at
+    // the loop wrap, so the pointer may be ahead of the window that is playing.
+    // Speed and accumulator are CHANNEL state: nothing resets them but a
+    // transport reset (FUNK_REPEAT.md §2.1).
     this.funkSpeed = 0;
     this.funkAccumulator = 0;
     this.funkPos = -1;
@@ -5664,9 +5666,13 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.right.reset(); // stereo channel 2's filter/crusher/DPCM history
   // Invert loop: PT2 resets n_wavestart on fresh trigger; speed/accumulator persist.
   voice.invertWritePos = 0;
-  // Funk repeat: the same rule, one command over — PT re-seeds n_wavestart from
-  // the loop start, so a fresh note is heard from the sample's own loop again
-  // however far the walk had carried the window. Speed/accumulator persist.
+  // Funk repeat: the window goes back to the sample's own loop. PT re-seeded
+  // n_wavestart from n_loopstart only when the ROW CARRIED A SAMPLE NUMBER
+  // (FUNK_REPEAT.md §2.1, §7.3) — a bare note left the walk where it stood. A
+  // deliberate divergence: here the window is an offset into the ACTIVE sample
+  // view, which a trigger rebuilds, so carrying it across a re-trigger would
+  // aim it into a sample that may not be the one it was measured against. The
+  // speed and the accumulator persist, which is the part that carries the feel.
   voice.funkPos = -1;
   voice.funkWindow = -1;
   // Random vol/pan swing biases — seeded once per trigger.
@@ -6483,13 +6489,17 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
       break;
     case EffectOp.OP_Z: {
-      // Z $F0xx — funk repeat, ProTracker 1.x's EFx (item 161). Not a spatial
+      // Z $F0xx — funk repeat, ProTracker 1.0C's EFx (item 161). Not a spatial
       // command at all: Z multiplexes on its first nibble the way S does, and
       // this form is live in EVERY song, stereo included. `xx` is the funk
       // ladder's speed value, the same 8-bit scale S $F0xx reads.
+      //
+      // The speed is CHANNEL state and sticky (PT kept it in n_glissfunk's high
+      // nibble, alongside glissando's low one), and writing it leaves the
+      // accumulator running — PT's mt_FunkIt never cleared n_funkoffset, not on
+      // a speed change and not on Z $F000, so the phase carries across the lot.
       if ((rawArg & 0xf000) === 0xf000) {
         voice.funkSpeed = rawArg & 0xff;
-        voice.funkAccumulator = 0;
         break;
       }
       // Z $0xxx — arm the slide for this row at $xxx/16 azimuth units per tick.
@@ -7511,12 +7521,17 @@ function applyTrackerTick(eng, ts, playhead) {
   }
 
   // Funk repeat (Z $F0xx) — walk the loop WINDOW through the sample (item 161).
-  // ProTracker 1.x's EFx, whose routine PT 1.1B kept and re-pointed at the byte
-  // inverter above: same ladder, same 8-bit accumulator, same one-byte stride —
-  // but the byte it advanced was Paula's repeat pointer, so what moved was
-  // where the loop restarts rather than the sample data. The window it lands on
-  // is latched by the sampler when the loop actually restarts, which is where
-  // the hardware latched it too.
+  // ProTracker 1.0C's EFx, from the transcription in FUNK_REPEAT.md §3: what
+  // 1.1B kept of it is the ladder, the accumulator and the name; the step body
+  // it threw away moved Paula's AUDxLC by ONE WHOLE LOOP LENGTH a time, so the
+  // loop window hops block by block through the sample and snaps back to the
+  // real loop start as soon as the next block would not fit whole. The window
+  // the sampler sounds is latched at the loop restart, as the DMA latched it.
+  //
+  // The accumulator is deliberately NOT reset here, or by Z $F000, or by a
+  // fresh note: PT never touched n_funkoffset outside this block (§2.1), so a
+  // speed change lands its first step at whatever interval the running phase
+  // leaves — which is the difference between the ladder and a period counter.
   for (const voice of ts.voices) {
     if (voice.funkSpeed === 0 || !voice.active) continue;
     const mode = voice.activeLoopMode & 3;
@@ -7524,16 +7539,16 @@ function applyTrackerTick(eng, ts, playhead) {
     const loopStart = voice.activeSampleLoopStart;
     const loopLen = voice.activeSampleLoopEnd - loopStart;
     const sampleLen = voice.activeSampleLength;
-    if (loopLen <= 0 || loopLen > sampleLen) continue;
-    voice.funkAccumulator += voice.funkSpeed;
-    if (voice.funkAccumulator >= 0x80) {
-      voice.funkAccumulator = 0;
-      const next = (voice.funkPos < 0 ? loopStart : voice.funkPos) + 1;
-      // PT compared the pointer against the sample END and wrapped it to the
-      // sample START — "it will move the loop through the whole length of the
-      // sample". The window's own length joins the test here so the far end
-      // stays inside the sample instead of reading whatever follows it.
-      voice.funkPos = next + loopLen > sampleLen ? 0 : next;
+    if (loopLen <= 0 || loopStart + loopLen > sampleLen) continue;
+    voice.funkAccumulator = (voice.funkAccumulator + voice.funkSpeed) & 0xff;
+    if ((voice.funkAccumulator & 0x80) !== 0) {
+      voice.funkAccumulator = 0;             // reset, not -= 0x80: no jitter
+      // §3.3: keep the candidate while the WHOLE window still fits before the
+      // sample end, else back to the loop the instrument declares. A loop that
+      // already sits at the tail of its sample therefore never moves — inert by
+      // design (§3.5), which is what the manual's "short loop" advice is about.
+      const cand = (voice.funkPos < 0 ? loopStart : voice.funkPos) + loopLen;
+      voice.funkPos = cand + loopLen <= sampleLen ? cand : loopStart;
     }
   }
 

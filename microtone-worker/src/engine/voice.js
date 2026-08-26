@@ -376,12 +376,14 @@ export class Voice {
     this.invertAccumulator = 0;
     this.invertWritePos = 0;
 
-    // Funk repeat (Z $F0xx) — ProTracker 1.x's OTHER EFx, which walks the
-    // sounding LOOP WINDOW through the sample instead of inverting bytes.
-    // `funkPos` is the walking pointer (PT's n_wavestart: an absolute byte
-    // index, -1 = never walked) and `funkWindow` is the window the voice is
-    // actually sounding — Paula latches the repeat pointer when the loop
-    // restarts, so the pointer may be ahead of the window that is playing.
+    // Funk repeat (Z $F0xx) — ProTracker 1.0C's OTHER EFx, which hops the
+    // sounding LOOP WINDOW through the sample a whole loop length at a time
+    // instead of inverting bytes. `funkPos` is the walking pointer (PT's
+    // n_wavestart: an absolute byte index, -1 = never walked) and `funkWindow`
+    // is the window the voice is actually sounding — Paula reloaded AUDxLC at
+    // the loop wrap, so the pointer may be ahead of the window that is playing.
+    // Speed and accumulator are CHANNEL state: nothing resets them but a
+    // transport reset (FUNK_REPEAT.md §2.1).
     this.funkSpeed = 0;
     this.funkAccumulator = 0;
     this.funkPos = -1;

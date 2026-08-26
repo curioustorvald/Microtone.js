@@ -1,23 +1,23 @@
-// Funk repeat — `Z $F0xx`, ProTracker 1.x's EFx (item 161).
+// Funk repeat — `Z $F0xx`, ProTracker 1.0C's EFx (item 161).
 //
-// The disambiguation this file exists to pin: PT 1.x's **Funk Repeat** and PT
-// 2.x's **Invert Loop** are different effects that share one opcode, one speed
-// ladder and (in PT's own sources) one set of `funk*` names. Invert Loop is
-// `S $F0xx` and grinds a progressive XOR through the loop's BYTES; Funk Repeat
-// is this command and walks the loop WINDOW through the sample, leaving every
-// byte alone. PT 1.1A's manual is the only place the original is described:
+// Pinned against the transcription in the TSVM tree's
+// reference_materials/protracker_1/FUNK_REPEAT.md, which derives both halves of
+// `EF $x` line by line from the 1.0C and 1.1B playroutine sources. Section
+// numbers below are that document's.
 //
-//     Cmd EF. Funk Repeat [Speed:$0-$F]
-//     This command will need a short loop ($10,20,40,80 etc. bytes) to work.
-//     It will move the loop through the whole length of the sample.
+// The disambiguation this file exists to hold: `EF $x` is ONE slot with TWO
+// algorithms. **Invert Loop** (1.1B onwards) is `S $F0xx` and one's-complements
+// the loop's bytes in place. **Funk Repeat** (1.0C) is this command: it adds a
+// whole loop length to the repeat pointer, writes it into Paula's AUDxLC, and
+// snaps back to the real loop start when the next block would not fit whole
+// (§3.1). The sample data is never touched. They share the ladder, the
+// accumulator, the sticky speed nibble and — in PT's sources — every name.
 //
-// …and PT 1.1B's playroutine is where the machinery survived, re-pointed at the
-// byte inverter: the ladder, the 8-bit accumulator, the one-byte stride and the
-// wrap all come from `mt_UpdateFunk`, which this engine follows for both.
-//
-// The window only changes where Paula changed it — the repeat pointer is
-// latched when the loop restarts — so the pointer (`funkPos`) runs ahead of the
-// window that is actually sounding (`funkWindow`).
+// State scope (§2.1, §7.2): the window is per voice and follows the note; the
+// speed and the accumulator are per channel and outlive it. PT never cleared
+// the accumulator anywhere but on its own overflow — not on a note, not on a
+// speed change, not on `EF $0` — so the ladder is a running phase, not a
+// period counter.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -83,29 +83,49 @@ function render(eng, samples) {
 
 const voiceOf = (eng) => eng.playheads[0].trackerState.voices[0];
 
-test("Z $F0xx walks the loop window one byte per step", () => {
+test("the window hops a WHOLE LOOP LENGTH per step (§3.2)", () => {
+  // Loop [100, 132) — 32 bytes — in a 1000-byte sample.
   const eng = makeEngine(100, 132);
   loadRows(eng, [[0x23, 0xf080]]); // $80 — the ladder's top rung, one step per tick
   const v = voiceOf(eng);
   assert.equal(v.funkPos, -1, "nothing has moved before the row runs");
 
-  render(eng, ROW);
+  render(eng, TICK);
   assert.equal(v.funkSpeed, 0x80);
-  // Six ticks to the row, one byte a tick, from the loop start.
-  assert.equal(v.funkPos, 106);
-  render(eng, ROW * 5);
-  assert.equal(v.funkPos, 136, "the walk keeps going without another command");
+  assert.equal(v.funkPos, 132, "one step = one loop length, not one byte");
+  render(eng, TICK * 3);
+  assert.equal(v.funkPos, 228, "…and it keeps hopping by 32");
+});
+
+test("the walk snaps back to the LOOP START, not the sample start (§3.3)", () => {
+  // §8.2's first vector in offsets: loopStart 16, loopLen 16, sample 128 bytes.
+  // Successive positions 32 48 64 80 96 112 → 16, i.e. seven distinct blocks.
+  const eng = makeEngine(16, 32);
+  eng.instruments[1].sampleLength = 128;
+  loadRows(eng, [[0x23, 0xf080]]);
+  const v = voiceOf(eng);
+  const seen = [];
+  for (let i = 0; i < 9; i++) { render(eng, TICK); seen.push(v.funkPos); }
+  assert.deepEqual(seen, [32, 48, 64, 80, 96, 112, 16, 32, 48],
+    "the last block visited is the last one that fits WHOLE, then back to 16");
+});
+
+test("a loop at the tail of its sample is inert — by design (§3.5)", () => {
+  // limit == loopStart, so every candidate overshoots and every step resets.
+  const eng = makeEngine(SAMPLE_LEN - 32, SAMPLE_LEN);
+  loadRows(eng, [[0x23, 0xf080]]);
+  const v = voiceOf(eng);
+  render(eng, TICK * 4);
+  assert.equal(v.funkPos, SAMPLE_LEN - 32,
+    "pinned to the real loop start — this is why the manual asks for a SHORT loop");
 });
 
 test("the window is what SOUNDS, and it follows the walk", () => {
   const eng = makeEngine(100, 132);
   loadRows(eng, [[0x23, 0xf080]]);
   const v = voiceOf(eng);
-  render(eng, ROW * 4);
-  // 24 ticks in: the pointer is 24 bytes along and the sounding window is a
-  // 32-byte span pinned to it, so the position is inside the MOVED loop and
-  // nowhere near the sample's own.
-  assert.equal(v.funkPos, 124);
+  render(eng, TICK * 4);
+  assert.equal(v.funkPos, 228);
   assert.ok(v.funkWindow >= 100, "the window has been latched at least once");
   assert.ok(v.samplePos >= v.funkWindow && v.samplePos < v.funkWindow + 32,
     `samplePos ${v.samplePos} sits inside the window at ${v.funkWindow}`);
@@ -115,43 +135,33 @@ test("the window is what SOUNDS, and it follows the walk", () => {
 
 test("the window is latched at the loop restart, not the moment the walk steps", () => {
   // A loop long enough that one iteration outlasts a tick — at rate 1.0 a
-  // 900-byte loop is 900 samples against the tick's 640 — so the pointer gets
-  // to move between two restarts and the lag is visible.
+  // 300-byte loop is 300 samples against the tick's 640 is not enough, so take
+  // 900: the pointer gets to move between two restarts and the lag is visible.
   const eng = makeEngine(0, 900);
   loadRows(eng, [[0x23, 0xf080]]);
   const v = voiceOf(eng);
   render(eng, TICK * 3);
-  assert.equal(v.funkPos, 3, "three ticks, three steps");
-  assert.ok(v.funkWindow < v.funkPos,
-    `the sounding window (${v.funkWindow}) is behind the pointer (${v.funkPos}) ` +
-    "— Paula latches the repeat pointer when the loop restarts");
+  assert.equal(v.funkPos, 0,
+    "a 900-byte window in a 1000-byte sample cannot fit twice: every step resets");
+  assert.equal(v.funkWindow, 0, "so the window it latches is the loop start");
 });
 
-test("the walk wraps at the SAMPLE end, and the whole window stays inside it", () => {
-  // Loop at the very end of the sample: one step already puts the window's far
-  // end past the last byte, so the pointer wraps to the sample start at once.
-  const eng = makeEngine(SAMPLE_LEN - 32, SAMPLE_LEN);
-  loadRows(eng, [[0x23, 0xf080]]);
-  const v = voiceOf(eng);
-  render(eng, TICK);
-  assert.equal(v.funkPos, 0, "wrapped to the sample start rather than reading past the end");
-  render(eng, TICK);
-  assert.equal(v.funkPos, 1, "and carries on from there");
-});
-
-test("a fresh trigger puts the loop back; the speed and accumulator do not", () => {
+test("the accumulator is a running phase: nothing resets it (§2.1, §7.3)", () => {
+  // $2B steps every 3rd tick. Two ticks in, the phase is 2×$2B = $56; a fresh
+  // Z $F02B on the next row must NOT restart the count, so the step still lands
+  // on the 3rd tick of the ORIGINAL count rather than three ticks later.
   const eng = makeEngine(100, 132);
-  // Row 0 arms the walk, row 4 sounds the note again with no effect at all.
-  loadRows(eng, [[0x23, 0xf080]], [4]);
+  loadRows(eng, [[0x23, 0xf02b]]);
   const v = voiceOf(eng);
-  render(eng, ROW * 4 + TICK);   // one tick into the re-triggered note
-  assert.equal(v.funkSpeed, 0x80, "the speed is channel state and survives the note");
-  assert.equal(v.funkPos, 101,
-    "the walk restarts from the loop start (PT's n_wavestart = n_loopstart)");
-  assert.ok(v.samplePos < 132, "and the voice is sounding the sample's own loop again");
+  render(eng, TICK * 2);
+  assert.equal(v.funkAccumulator, 0x2b * 2, "two ticks of phase, unspent");
+  assert.equal(v.funkPos, -1, "and no step yet");
+  render(eng, TICK);
+  assert.equal(v.funkPos, 132, "the third tick overflows $80 and steps");
+  assert.equal(v.funkAccumulator, 0, "reset to zero, not decremented by $80");
 });
 
-test("Z $F000 stops the walk and leaves the window where it stopped", () => {
+test("Z $F000 stops the walk, keeps the phase, and leaves the window where it is", () => {
   const eng = makeEngine(100, 132);
   loadRows(eng, [[0x23, 0xf080], [0x00, 0x0000], [0x23, 0xf000]]);
   const v = voiceOf(eng);
@@ -165,6 +175,18 @@ test("Z $F000 stops the walk and leaves the window where it stopped", () => {
     "the moved window keeps sounding — PT leaves the repeat pointer alone too");
 });
 
+test("a fresh trigger puts the loop back; the speed and the phase do not", () => {
+  const eng = makeEngine(100, 132);
+  // Row 0 arms the walk, row 4 sounds the note again with no effect at all.
+  loadRows(eng, [[0x23, 0xf080]], [4]);
+  const v = voiceOf(eng);
+  render(eng, ROW * 4 + TICK);   // one tick into the re-triggered note
+  assert.equal(v.funkSpeed, 0x80, "the speed is channel state and survives the note");
+  assert.equal(v.funkPos, 132,
+    "the walk restarts from the loop start (PT's n_wavestart = n_loopstart)");
+  assert.ok(v.samplePos < 164, "and the voice is sounding near the sample's own loop again");
+});
+
 test("an unlooped sample is left alone — the effect needs a loop to move", () => {
   const eng = makeEngine(0, 0, 0); // loop mode 0: no loop
   loadRows(eng, [[0x23, 0xf080]]);
@@ -174,16 +196,24 @@ test("an unlooped sample is left alone — the effect needs a loop to move", () 
   assert.equal(v.funkPos, -1, "…and finds nothing to walk");
 });
 
-test("the speed ladder is the accumulator's, shared with the invert loop", () => {
-  // $80 steps every tick, $40 every second, $2B every third: the 8-bit
-  // accumulator adds the value and steps when it passes $80.
-  for (const [speed, ticks, steps] of [[0x80, 6, 6], [0x40, 6, 3], [0x2b, 6, 2], [0x05, 6, 0]]) {
+test("the ladder fires on the ticks §8.1 tabulates", () => {
+  // The report's accumulator table, read back through the engine: the tick a
+  // walk starting from a zero phase takes its FIRST step on.
+  const LADDER = [
+    [0x05, 26], [0x06, 22], [0x07, 19], [0x08, 16], [0x0a, 13], [0x0b, 12],
+    [0x0d, 10], [0x10, 8], [0x13, 7], [0x16, 6], [0x1a, 5], [0x20, 4],
+    [0x2b, 3], [0x40, 2], [0x80, 1],
+  ];
+  for (const [speed, tick] of LADDER) {
     const eng = makeEngine(100, 132);
     loadRows(eng, [[0x23, 0xf000 | speed]]);
     const v = voiceOf(eng);
-    render(eng, TICK * ticks);
-    const walked = v.funkPos < 0 ? 0 : v.funkPos - 100;
-    assert.equal(walked, steps, `speed $${speed.toString(16)} over ${ticks} ticks`);
+    render(eng, TICK * (tick - 1));
+    assert.equal(v.funkPos, -1,
+      `speed $${speed.toString(16)}: nothing before tick ${tick}`);
+    render(eng, TICK);
+    assert.equal(v.funkPos, 132,
+      `speed $${speed.toString(16)}: the first step lands on tick ${tick}`);
   }
 });
 
@@ -203,8 +233,8 @@ test("the funk form of Z is live in a stereo song, and leaves the slide alone", 
   loadRows(eng, [[0x23, 0xf080]]);
   const v = voiceOf(eng);
   assert.equal(eng.getSurroundModel(0), 0, "a plain stereo song");
-  render(eng, ROW);
-  assert.equal(v.funkPos, 106, "…which ignores Z $0xxx but must not ignore Z $F0xx");
+  render(eng, TICK);
+  assert.equal(v.funkPos, 132, "…which ignores Z $0xxx but must not ignore Z $F0xx");
   assert.equal(v.spatialSlideActive, false);
   assert.equal(v.mem.z, 0, "the spatial slide's memory slot is not the funk speed");
 });

@@ -1122,7 +1122,7 @@ export default {
   "pal.fx.Y.n": "Panbrello",
   "pal.fx.Y.a": "$xxyy — x speed, y depth",
   "pal.fx.Z.n": "Pan slide · funk",
-  "pal.fx.Z.a": "$0xxx slide toward the 4-command target at xxx/16 azimuth units per tick ($0000 recalls, surround songs only) · $F0xx funk repeat: walk the loop through the whole sample, xx on the invert-loop ladder ($80 every tick, $40 every other one, $00 off)",
+  "pal.fx.Z.a": "$0xxx slide toward the 4-command target at xxx/16 azimuth units per tick ($0000 recalls, surround songs only) · $F0xx funk repeat: hop the loop through the sample a loop length at a time, xx on the invert-loop ladder ($80 every tick, $40 every other one, $00 off) · needs a short loop",
 
   // ── project view ──
   "proj.untitledProject": "(untitled project)",

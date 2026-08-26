@@ -375,12 +375,17 @@ export function applyTrackerTick(eng, ts, playhead) {
   }
 
   // Funk repeat (Z $F0xx) — walk the loop WINDOW through the sample (item 161).
-  // ProTracker 1.x's EFx, whose routine PT 1.1B kept and re-pointed at the byte
-  // inverter above: same ladder, same 8-bit accumulator, same one-byte stride —
-  // but the byte it advanced was Paula's repeat pointer, so what moved was
-  // where the loop restarts rather than the sample data. The window it lands on
-  // is latched by the sampler when the loop actually restarts, which is where
-  // the hardware latched it too.
+  // ProTracker 1.0C's EFx, from the transcription in FUNK_REPEAT.md §3: what
+  // 1.1B kept of it is the ladder, the accumulator and the name; the step body
+  // it threw away moved Paula's AUDxLC by ONE WHOLE LOOP LENGTH a time, so the
+  // loop window hops block by block through the sample and snaps back to the
+  // real loop start as soon as the next block would not fit whole. The window
+  // the sampler sounds is latched at the loop restart, as the DMA latched it.
+  //
+  // The accumulator is deliberately NOT reset here, or by Z $F000, or by a
+  // fresh note: PT never touched n_funkoffset outside this block (§2.1), so a
+  // speed change lands its first step at whatever interval the running phase
+  // leaves — which is the difference between the ladder and a period counter.
   for (const voice of ts.voices) {
     if (voice.funkSpeed === 0 || !voice.active) continue;
     const mode = voice.activeLoopMode & 3;
@@ -388,16 +393,16 @@ export function applyTrackerTick(eng, ts, playhead) {
     const loopStart = voice.activeSampleLoopStart;
     const loopLen = voice.activeSampleLoopEnd - loopStart;
     const sampleLen = voice.activeSampleLength;
-    if (loopLen <= 0 || loopLen > sampleLen) continue;
-    voice.funkAccumulator += voice.funkSpeed;
-    if (voice.funkAccumulator >= 0x80) {
-      voice.funkAccumulator = 0;
-      const next = (voice.funkPos < 0 ? loopStart : voice.funkPos) + 1;
-      // PT compared the pointer against the sample END and wrapped it to the
-      // sample START — "it will move the loop through the whole length of the
-      // sample". The window's own length joins the test here so the far end
-      // stays inside the sample instead of reading whatever follows it.
-      voice.funkPos = next + loopLen > sampleLen ? 0 : next;
+    if (loopLen <= 0 || loopStart + loopLen > sampleLen) continue;
+    voice.funkAccumulator = (voice.funkAccumulator + voice.funkSpeed) & 0xff;
+    if ((voice.funkAccumulator & 0x80) !== 0) {
+      voice.funkAccumulator = 0;             // reset, not -= 0x80: no jitter
+      // §3.3: keep the candidate while the WHOLE window still fits before the
+      // sample end, else back to the loop the instrument declares. A loop that
+      // already sits at the tail of its sample therefore never moves — inert by
+      // design (§3.5), which is what the manual's "short loop" advice is about.
+      const cand = (voice.funkPos < 0 ? loopStart : voice.funkPos) + loopLen;
+      voice.funkPos = cand + loopLen <= sampleLen ? cand : loopStart;
     }
   }
 

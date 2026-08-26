@@ -1368,7 +1368,7 @@ Q retrigger counters do **not** reset between SEx repetitions.
 
 **Plain.** Produces a hiss-like progressive inversion of the sample loop, toggling individual bytes over time for a gritty textural effect. Setting `$x = 0` turns the effect off; higher `$x` advances the inversion faster.
 
-**Which ProTracker effect this is.** `E $Fx` names two different effects. ProTracker **1.x** used it for **Funk Repeat**, which moves the playback loop and leaves the sample alone; ProTracker **1.1B** replaced that with **Invert Loop**, which leaves the loop alone and grinds a progressive inversion through its bytes — "sounds better than funkrepeat", as the release put it. Everything since has implemented the replacement, and PT's own sources never renamed the routine, so `mt_FunkIt`, `n_funkoffset` and `mt_FunkTable` are all Invert Loop's code. **This command is Invert Loop.** ProTracker 1.x's Funk Repeat is `Z $F0xx`, and the two are separate commands that can run at once. Only the speed ladder is genuinely shared, and it keeps its historical name (`funk_table`) here because that is the name it has in every source that carries it.
+**Which ProTracker effect this is.** `E $Fx` is one slot that held two entirely different algorithms. ProTracker **1.0C** used it for **Funk Repeat**, which moves the playback loop a whole loop length at a time and leaves the sample alone; **1.1B** threw that step away and put **Invert Loop** in its place, one's-complementing the loop's bytes where they lie. Everything since implements the replacement. PT's own sources never renamed the routine around it — `mt_FunkIt`, `n_funkoffset` and `mt_FunkTable` are Invert Loop's code in every version anyone reads — which is how the two came to be treated as one effect described two ways. They are not. **This command is Invert Loop**; Funk Repeat is `Z $F0xx`, they are independent, and they **MAY** run on one voice at once. Only the speed ladder is genuinely shared, and it keeps its historical name (`funk_table`) here because that is the name it carries in every source that has it.
 
 **Compatibility.** ProTracker `EFx` is destructive — it XORs bytes directly in the sample data, permanently corrupting the sample. **Taud's implementation MUST be non-destructive**: the XOR **MUST** be applied at playback time through a per-instrument bit-mask, leaving source samples pristine. ST3 does not implement SFx at all and will parse Taud's S $Fx00 as a no-op; converters targeting ST3 **SHOULD** drop the effect. ProTracker `EFx` imports as Taud `S $F0yy`, where `yy = funk_table[x]`.
 
@@ -1394,51 +1394,58 @@ on sample byte read during loop playback:
 
 Effects `2` and `3` offer the same inversion over a region you choose as one of several operations — see their entry. They keep their own mask; this one is `S $F0xx`'s alone.
 
-`S $F000` **MUST** clear `invert_accumulator` but **MUST** leave `invert_mask` intact (the accumulated inversion pattern persists). **On every fresh note trigger**, `invert_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `invert_accumulator` and `invert_speed` **MUST** persist across notes. The `invert_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
+Inversion is an involution, so a byte hit twice is back as it was: one traversal of the loop inverts every byte, a second restores every one, and the cycle is `2 × loop_length` steps. What the ear follows over that cycle is a sweep from clean, through progressively more inverted, to fully inverted — which is *also* clean, reflected — and back. On the signed samples ProTracker used, `$FF − s` is `−s − 1`: a reflection about −0.5 rather than a negation, which is where the buzz comes from.
+
+`S $F000` **MUST** clear `invert_accumulator` but **MUST** leave `invert_mask` intact (the accumulated inversion pattern persists). This is a deliberate difference from `Z $F0xx`, whose accumulator runs free the way ProTracker's did: `S $F0xx` has cleared it since it shipped, songs are written against that, and re-phasing an inversion the listener is already hearing is not worth the fidelity. **On every fresh note trigger**, `invert_write_pos` **MUST** reset to 0 (matching PT2's `n_wavestart = n_loopstart`); `invert_accumulator` and `invert_speed` **MUST** persist across notes. The `invert_mask` itself **MUST** be cleared only on cue-start reset (i.e. song-start / stop-and-replay) — within a single playback session it accumulates as PT2's destructive in-place edits would, but a clean replay **MUST** reproduce the same audio without needing to reload the song from disk.
 
 The mask is indexed against the loop the instrument **declares**, and `Z $F0xx` running on the same voice does not move it: the walked window is where the voice is reading, the mask is what the bytes there read as, and each keeps its own frame.
 
-The effective speed semantics of the `funk_table` is as follows (`Z $F0xx` reads the same ladder):
+The ladder both commands read is ProTracker's own `mt_FunkTable`, byte-identical in 1.0C and 1.1B. Because the accumulator is **reset to zero** on overflow rather than reduced by `$80`, the remainder is discarded and the period is exactly `ceil($80 ÷ table_value)` ticks with no jitter — the table was chosen to make that a clean ladder. A tick here is an engine tick, so the step rate does **not** scale with the song's speed: a slower song simply spends more ticks per row and steps more often within it.
 
-| Speed | Advance every … ticks |
-| ------------ | --------------------- |
-| $80 |  1 |
-| $40 |  2 |
-| $2B |  3 |
-| $20 |  4 |
-| $1A |  5 |
-| $16 |  6 |
-| $13 |  7 |
-| $10 |  8 |
-|  $D | 10 |
-|  $B | 12 |
-|  $A | 13 |
-|   8 | 16 |
-|   7 | 19 |
-|   6 | 22 |
-|   5 | 26 |
+| PT `E $Fx` | Taud `$xx` | Steps every … ticks |
+| ---: | ---: | ---: |
+| `$0` | `$00` | *(off)* |
+| `$1` | `$05` | 26 |
+| `$2` | `$06` | 22 |
+| `$3` | `$07` | 19 |
+| `$4` | `$08` | 16 |
+| `$5` | `$0A` | 13 |
+| `$6` | `$0B` | 12 |
+| `$7` | `$0D` | 10 |
+| `$8` | `$10` | 8 |
+| `$9` | `$13` | 7 |
+| `$A` | `$16` | 6 |
+| `$B` | `$1A` | 5 |
+| `$C` | `$20` | 4 |
+| `$D` | `$2B` | 3 |
+| `$E` | `$40` | 2 |
+| `$F` | `$80` | 1 |
+
+Taud takes the **table value** as its argument rather than ProTracker's nibble, which is what makes the whole ladder — and everything between its rungs — writable; the `PT $x` column is the conversion. A value of `$00` is off, so an engine **MUST** test for it before doing anything else with the argument.
 
 ## Z $F0xx — Funk repeat with speed $xx (non-destructive)
 
-**Plain.** Walks the sounding **loop** forward through the sample, one byte at a time. The loop keeps the length it was given — the note goes on repeating a window of the same size, at the same pitch — but the window slides, so a short loop crawls through the whole waveform and the held note travels through material it would otherwise never reach. Give it a short loop (`$10`, `$20`, `$40`, `$80` bytes) and it is a slow morph; give it a bar-long one and it is a shuffle. `$xx` is the speed, `$00` switches it off and leaves the loop wherever the walk had carried it, and the next note on the channel puts it back.
+**Plain.** Hops the sounding **loop** through the sample, one whole loop length at a time. The loop keeps its length, so the note goes on repeating a window of the same size at the same pitch — but every step the window jumps forward to the next block of the sample, and when the next block would run off the end it snaps back to the loop the instrument declares. Point it at a short loop inside a long sample and a held note scans the whole waveform in coarse grains, cycling forever; the material changes, the pitch does not. `$xx` is the speed, `$00` switches it off and leaves the loop wherever the hop had taken it, and the next note on the channel puts it back.
 
-**Which ProTracker effect this is.** ProTracker 1.x's `E $Fx`, the original **Funk Repeat** — the one PT 1.1B took out. Its manual is the whole of the surviving description: *"This command will need a short loop ($10,20,40,80 etc. bytes) to work. It will move the loop through the whole length of the sample. Sounds like shit, really, but who cares?"* The machinery below is 1.1B's own `mt_UpdateFunk`, which kept the ladder, the accumulator, the one-byte stride and the wrap and re-pointed the end of the routine at a byte inverter; what it had been pointing at was Paula's repeat register. Invert Loop, the effect that replaced it, is `S $F0xx`. The two are independent and **MAY** run on the same voice at once.
+**It needs a short loop, and the reason is arithmetic.** The step is one loop length, and a step is only taken if the whole window still fits before the end of the sample. A loop occupying the last `n` bytes of its sample therefore has nowhere to go: every candidate overshoots, every step snaps home, and the effect is silent — not broken, just out of room. ProTracker's manual said this as "*This command will need a short loop ($10,20,40,80 etc. bytes) to work*", and the arithmetic is why.
 
-**Compatibility.** A ProTracker module cannot say which of the two it wants: the pattern byte is `E $Fx` either way and only the tracker that wrote it knew. Converters **SHOULD** therefore keep emitting `S $F0yy` (`yy = funk_table[x]`) for `E $Fx` — that is what the file sounds like in every player written since 1990 — and offer `Z $F0yy` as a deliberate choice for modules known to predate PT 1.1B. ST3, IT and FT2 implement neither; FT2's own help lists `E $Fx` as "Funk it! (Not implemented)". Unique to Taud otherwise, and it has no memory slot: `Z $F000` is *off*, not a recall, and it does not disturb the memory `Z $0xxx` keeps.
+**Which ProTracker effect this is.** ProTracker **1.0C**'s `E $Fx`, the original **Funk Repeat**. Its `mt_UpdateFunk` added `2 × n_replen` — one loop length in bytes — to the channel's repeat pointer and wrote the result straight into Paula's `AUDxLC`; the sample data was never touched. 1.1A shipped the same help file and the same effect list (`EF- FunkRepeat … (add replen to repeat)`), and **1.1B replaced the step body** with the byte inverter that is `S $F0xx` here, keeping the handler, the ladder, the accumulator and every `funk` name — it did not even drop `n_reallength`, the field only Funk Repeat read, which is the clearest sign that one routine was swapped rather than a design revised. Invert Loop is therefore not a later reading of this effect; it is a different effect that inherited its slot.
 
-**Implementation.** The state is per channel: `funk_speed`, an 8-bit `funk_accumulator`, a `funk_pointer` (ProTracker's `n_wavestart`) and the `funk_window` the voice is actually sounding. The ladder and the accumulator are `S $F0xx`'s, unchanged — the same `funk_table`, the same `>= $80` test, the same hard reset.
+**Compatibility.** A ProTracker module cannot say which of the two its `E $Fx` meant: there is no version field and no flag, and the byte is identical. The scene settled on Invert Loop — everything from PT 2.x onward implements only that — so converters **SHOULD** keep emitting `S $F0yy` (`yy = funk_table[x]`) for `E $Fx` and offer `Z $F0yy` as a deliberate choice for modules known to predate 1.1B. An engine **MUST NOT** guess between them. ST3, IT and FT2 implement neither; FT2's own help lists `E $Fx` as "Funk it! (Not implemented)". Unique to Taud otherwise, and it has no memory slot: `Z $F000` is *off*, not a recall, and it does not disturb the memory `Z $0xxx` keeps.
+
+**Implementation.** Per-channel state: `funk_speed`, an 8-bit `funk_accumulator`, the walking pointer `funk_pointer` (ProTracker's `n_wavestart`) and the `funk_window` the voice is actually sounding. The clock is `S $F0xx`'s, unchanged — same `funk_table`, same overflow test, same hard reset — so the ladder table in that entry serves both commands.
 
 ```
-funk_table[16] = { 0, 5, 6, 7, 8, $A, $B, $D, $10, $13, $16, $1A, $20, $2B, $40, $80 }
-
 on every tick, when funk_speed != 0 and the voice has a real forward or
-ping-pong loop with 0 < loop_length <= sample_length:
-    funk_accumulator += funk_speed
-    if funk_accumulator >= $80:                       # hard reset, drops residual
-        funk_accumulator = 0
-        funk_pointer = (funk_pointer unset ? loop_start : funk_pointer) + 1
-        if funk_pointer + loop_length > sample_length:
-            funk_pointer = 0                          # …through the WHOLE sample
+ping-pong loop that fits inside its sample:
+    funk_accumulator = (funk_accumulator + funk_speed) AND $FF
+    if funk_accumulator AND $80:                      # bit 7 set = step
+        funk_accumulator = 0                          # reset, NOT -= $80
+        candidate = (funk_pointer unset ? loop_start : funk_pointer) + loop_length
+        if candidate + loop_length <= sample_length:   # the whole window must fit
+            funk_pointer = candidate
+        else:
+            funk_pointer = loop_start                 # snap home
 
 the sounding loop is:
     [funk_window, funk_window + loop_length)          once the walk has moved
@@ -1449,17 +1456,23 @@ when playback reaches the end of the sounding loop:
     position = funk_window + overshoot
 ```
 
-**The walk moves the loop, never the sample.** Nothing is written to sample data: `Z $F0xx` **MUST** be implemented by moving where the voice loops, not by copying bytes about. ProTracker wrote the pointer straight into the audio channel's repeat register, which is the same thing on hardware that fetches its own loop.
+The walk visits `loop_start + k × loop_length` for `k = 0 … K`, where `K` is the largest `k` whose window ends at or before the sample end, then returns to `k = 0`: a cycle of `K + 1` positions.
 
-**The window changes only when the loop restarts.** ProTracker's pointer was latched by the DMA at each loop restart, so the block already sounding always finished first, and the walk was heard as the loop *moving between repeats* rather than as a jump mid-cycle. An engine **MUST** keep that: the pointer advances on the tick, the window it names takes effect at the next restart. On a ping-pong loop the latch **MUST** happen at one end only (the reference engine latches on the way up), so one down-and-back counts as the single repeat it sounds like.
+**The accumulator is a running phase, not a period counter.** ProTracker wrote `n_funkoffset` in exactly three places, all inside the step block: the add, the test and the clear. Nothing else ever touched it — not a note, not an instrument change, not a speed change, not `E $F0`. An engine **MUST** follow that: `Z $F0xx` **MUST NOT** reset `funk_accumulator`, so the first step after a speed change lands at whatever interval the running phase leaves rather than a clean one. Implementing the ladder as "every N ticks" instead of as this accumulator gets the steady state right and this transient wrong.
 
-**The wrap keeps the window inside the sample.** ProTracker compared the pointer against the sample end and reset it to the sample start, which let the far end of a window near the end of a sample read whatever happened to follow it in Amiga memory. Taud folds the window's own length into the test — `funk_pointer + loop_length > sample_length` wraps to 0 — so the walk covers the whole sample and never reads past it. This is a deliberate divergence; a conforming engine **MUST NOT** read outside the sample.
+**The window changes only when the loop restarts.** Paula reloaded its internal pointer from `AUDxLC` at the loop wrap, so a step taken mid-block did nothing until that block finished, and the walk was heard as the loop moving *between* repeats. An engine **MUST** keep that: the pointer advances on the tick, the window it names takes effect at the next restart. Moving the window between two output samples instead is a step discontinuity — a click per step, up to one per tick at `$xx = $80`. On a ping-pong loop the latch **MUST** happen at one end only (the reference engine latches on the way up), so one down-and-back counts as the single repeat it sounds like.
 
-**Reset rules**, the same shape as `S $F0xx`'s. On every fresh note trigger the pointer and the window **MUST** return to the sample's own loop (ProTracker re-seeded `n_wavestart` from `n_loopstart`); `funk_speed` and `funk_accumulator` **MUST** persist across notes, so a walk armed on one row keeps working on the notes that follow it. All four **MUST** be cleared on cue-start reset, or a replay would start from a loop the file does not describe. An NNA ghost **SHOULD** keep the window it was displaced with — its playback position is inside that window — while the walk itself stays with the channel.
+**The walk moves the loop, never the sample.** Nothing is written to sample data, and nothing is shared: the window is the voice's own, so two channels funking one instrument do not interact — the exact opposite of `S $F0xx`, whose mask belongs to the instrument. Stop the effect and the sample is as it always was.
 
-**An instrument with no loop is left alone.** The command still lands on the channel (its speed is channel state and outlives the note), but a voice with loop mode 0 or 3, an empty loop region, or a loop as long as the whole sample has nothing to walk. A sustain loop that key-off has already released counts as having no loop, like everywhere else.
+**Reset rules.** On every fresh note trigger the pointer and the window **MUST** return to the sample's own loop; `funk_speed` and `funk_accumulator` **MUST** persist across notes, so a walk armed on one row keeps working on the notes that follow it. All four **MUST** be cleared on cue-start reset. An NNA ghost **SHOULD** keep the window it was displaced with — its playback position is inside that window — while the walk itself stays with the channel.
 
-**Other sample effects keep their own frame.** `S $F0xx`'s mask and the regions of `2 $sexy` / `3 $sexy` are indexed against the loop the instrument **declares**, and the walked window does not move them. Run the walk and the inverter together and the note wanders into progressively fresher material while the bytes under it are ground down; that is the intended composition of the two, not an accident to be corrected.
+**Where this deliberately parts company with ProTracker 1.0C.** Three places, all of them consequences of being a software mixer rather than a DMA channel:
+
+- **The whole window must fit.** PT compared the candidate against `sample_end − loop_length` computed with a *word* shift, so a sample of `$8000` words or more got a wrong limit; and where a module's loop ran past its sample, Paula would read whatever followed it in Chip RAM. The test above is the same one on exact arithmetic, and a conforming engine **MUST NOT** read outside the sample.
+- **A trigger resets the pointer.** PT re-seeded `n_wavestart` only when the row carried a **sample number**, so a bare note left the walk mid-sweep. Here the window is an offset into the voice's *active* sample view, which a trigger rebuilds — carrying it across would aim it into a sample it was never measured against.
+- **No per-row snap-back.** PT's `mt_SetDMA` rewrote `AUDxLC` from `n_loopstart` for all four channels at the top of every row, undoing the previous row's walk, so the audible 1.0C effect was "home at the top of each row, then out to wherever the cursor has got to". That is a collision between two pieces of replayer plumbing, not the effect's design — the manual describes the free walk — so Taud does not reproduce it. A song that wants the stutter can write the walk against a pattern that re-triggers.
+
+**Other sample effects keep their own frame.** `S $F0xx`'s mask and the regions of `2 $sexy` / `3 $sexy` are indexed against the loop the instrument **declares**, and the walked window does not move them. Run the walk and the inverter together and the note hops into fresher and fresher material while the bytes under it are ground down; that is the intended composition of the two, not an accident to be corrected.
 
 ## Spatial panning effects
 

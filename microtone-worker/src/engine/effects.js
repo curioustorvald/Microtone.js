@@ -358,13 +358,17 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
       break;
     case EffectOp.OP_Z: {
-      // Z $F0xx — funk repeat, ProTracker 1.x's EFx (item 161). Not a spatial
+      // Z $F0xx — funk repeat, ProTracker 1.0C's EFx (item 161). Not a spatial
       // command at all: Z multiplexes on its first nibble the way S does, and
       // this form is live in EVERY song, stereo included. `xx` is the funk
       // ladder's speed value, the same 8-bit scale S $F0xx reads.
+      //
+      // The speed is CHANNEL state and sticky (PT kept it in n_glissfunk's high
+      // nibble, alongside glissando's low one), and writing it leaves the
+      // accumulator running — PT's mt_FunkIt never cleared n_funkoffset, not on
+      // a speed change and not on Z $F000, so the phase carries across the lot.
       if ((rawArg & 0xf000) === 0xf000) {
         voice.funkSpeed = rawArg & 0xff;
-        voice.funkAccumulator = 0;
         break;
       }
       // Z $0xxx — arm the slide for this row at $xxx/16 azimuth units per tick.

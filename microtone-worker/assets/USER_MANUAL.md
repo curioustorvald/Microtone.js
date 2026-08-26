@@ -901,8 +901,10 @@ invert colour. You see the waveform actually being played back, not the
 sample's original bytes.
 
 Funk repeat (`Z $F0xx`) leaves the bytes alone and moves the loop instead, so
-what you see there is the play cursor: it walks out past the loop shading and
-on through the sample, which is exactly where the note has got to.
+what you see there is the play cursor: it jumps clean out of the loop shading
+and works down the waveform a loop length at a time, which is exactly where the
+note has got to. It needs room to do that — a loop sitting at the very end of
+its sample has nowhere to hop and the effect stays silent.
 
 **Edit…** opens the selected sample in the [Sample Lab](#the-sample-lab) — the
 one sample editor. Crop, EQ, chop, normalise, fade, chord: everything the Lab
@@ -1538,7 +1540,7 @@ sidebar (also at [Note Effects](#effects)).
 | W | Global vol slide | `$xy00` |
 | X | Spatial panning | `$eeaa` — elevation, azimuth |
 | Y | Panbrello | `$xxyy` — speed, depth |
-| Z | Special 2 | `$0xxx` spatial slide · `$F0xx` funk repeat: walk the loop through the sample |
+| Z | Special 2 | `$0xxx` spatial slide · `$F0xx` funk repeat: hop the loop through the sample |
 
 ### Ditto ghosts
 
