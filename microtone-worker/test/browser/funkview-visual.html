@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Funk-repeat window overlay visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- The Samples view drawing a LIVE funk-repeat walk (item 164). Loads WHEN,
+       gives its longest sample a short loop near the head (a tracker instrument
+       loops its TAIL for sustain, which is the case funk repeat is inert on),
+       then drives the ENGINE directly — one throwaway pattern holding a note
+       under `Z $F020` — and leaves the Samples view on that sample while it
+       plays. So the shot catches the window band hopped clear of the loop
+       shading, the dashed leading edge of the block it will jump to next, and
+       the readout counting the sweep out under the sample's name.
+         python3 tools/test-server.py &
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/funk.png \
+           --autoplay-policy=no-user-gesture-required --timeout=25000 \
+           "http://localhost:8932/test/browser/funkview-visual.html?theme=dark"
+       ?theme=light for the light theme. Audio has to run in REAL time for the
+       walk to advance, hence /hang rather than a virtual-time budget. -->
+  <img src="/hang" hidden>
+  <pre id="out" style="font:12px monospace"></pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud"
+          style="width:1360px;height:900px;border:0"></iframe>
+  <script type="module">
+    const log = (l) => { document.getElementById("out").textContent += l + "\n"; };
+    (async () => {
+      const q = new URLSearchParams(location.search);
+      const frame = document.getElementById("app");
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const waitFor = (fn, ms = 15000) => new Promise((res, rej) => {
+        const t0 = Date.now();
+        const poll = setInterval(() => {
+          let v; try { v = fn(); } catch { v = null; }
+          if (v) { clearInterval(poll); res(v); }
+          else if (Date.now() - t0 > ms) { clearInterval(poll); rej(new Error("timeout")); }
+        }, 50);
+      });
+      const win = await waitFor(() => {
+        const w = frame.contentWindow;
+        return w && w.__microtone?.store?.doc ? w : null;
+      });
+      const M = win.__microtone;
+      const { store } = M;
+      const doc = win.document;
+      if (q.get("theme")) win.__microtoneSetTheme?.(q.get("theme"));
+      await sleep(300);
+
+      // The effect needs ROOM — a short loop inside a LONG sample — and a
+      // tracker instrument almost never has that: the corpus loops the tail of
+      // its samples for sustain, which is the case funk repeat is inert on (and
+      // a useful thing to have discovered). So take the longest sample there is
+      // and give its instrument a short loop near the head, which is exactly
+      // the authoring choice the effect asks for.
+      const list = store.doc.sampleList();
+      let idx = 0;
+      list.forEach((s, i) => { if (s.users.length && s.len > list[idx].len) idx = i; });
+      const smp = list[idx];
+      const instId = smp.users[0];
+      const LOOP_AT = Math.floor(smp.len * 0.08);
+      const LOOP_LEN = Math.max(256, Math.floor(smp.len / 24));
+      const inst = store.doc.instruments[instId];
+      inst.sampleLoopStart = LOOP_AT;
+      inst.sampleLoopEnd = LOOP_AT + LOOP_LEN;
+      inst.loopMode = 1;
+      store.audio.uploadInstrument(instId, store.doc.instRecordBytes(instId));
+      log(`sample ${idx} "${smp.name}" len ${smp.len}, loop moved to ` +
+          `[${LOOP_AT}..${LOOP_AT + LOOP_LEN}] — room for ` +
+          `${Math.floor((smp.len - LOOP_AT) / LOOP_LEN) - 1} hops · inst $${instId.toString(16)}`);
+
+      // Drive the ENGINE directly rather than editing the song: one held note
+      // with the walk armed, on a throwaway pattern, so the picture does not
+      // depend on what WHEN happens to play on channel 1. The document — and so
+      // the Samples view's own drawing — is untouched.
+      const PAT = 0x0400;
+      const pat = new Uint8Array(512);
+      for (let r = 0; r < 64; r++) { pat[r * 8 + 3] = 0xc0; pat[r * 8 + 4] = 0xc0; }
+      pat[0] = 0x00; pat[1] = 0x40;          // note C-4
+      pat[2] = instId & 0xff;
+      pat[5] = 0x23; pat[6] = 0x20; pat[7] = 0xf0;   // Z $F020
+      store.audio.uploadPattern(PAT, pat);
+      const cue = new Uint8Array(64);
+      for (let ch = 0; ch < 32; ch++) { cue[ch * 2] = 0xff; cue[ch * 2 + 1] = 0x7f; }
+      cue[0] = PAT & 0xff; cue[1] = (PAT >> 8) & 0xff;
+      store.audio.uploadCue(0, cue);
+      store.audio.setBPM(0, 125);
+      store.audio.setTickRate(0, 6);
+      store.audio.setCuePosition(0, 0);
+
+      M.samplesView.show();
+      M.samplesView.selected = idx;
+      M.samplesView.refresh();
+      doc.querySelector('[data-view="samples"]')?.click();
+      await sleep(200);
+
+      store.audio.play(0);
+      // The screenshot lands at the --timeout mark, long after this script
+      // finishes, and by then the document's own sync will have pushed WHEN's
+      // cues back over the throwaway one and the song will have wandered off.
+      // Re-assert it whenever the walk stops running, so the page is in the
+      // right state whenever the shot is actually taken.
+      setInterval(() => {
+        if (store.audio.getVoiceFunkWindow(0) >= 0) return;
+        store.audio.uploadPattern(PAT, pat);
+        store.audio.uploadCue(0, cue);
+        store.audio.setCuePosition(0, 0);
+        store.audio.play(0);
+      }, 700);
+      // Let the walk get several blocks clear of home before the shot.
+      await sleep(2600);
+      const A = store.audio;
+      log(`voice 0: window ${A.getVoiceFunkWindow(0)} pending ${A.getVoiceFunkPos(0)} ` +
+          `len ${A.getVoiceFunkLen(0)} active ${A.getVoiceActive(0)} ` +
+          `ptr ${A.getVoiceSamplePtr(0)} vs sample ptr ${smp.ptr} · playing ${A.isPlaying()}`);
+      log(`view: visible ${M.samplesView.visible} selected ${M.samplesView.selected} ` +
+          `listed ${M.samplesView.list[M.samplesView.selected]?.name}`);
+      log(`readout: "${M.samplesView.funkInfo.textContent}"`);
+      // The band's colour has to exist in whichever theme is up, or the overlay
+      // silently draws in whatever the canvas last had.
+      const cs = win.getComputedStyle(doc.documentElement);
+      log(`theme ${doc.documentElement.dataset.theme || "(system)"} · ` +
+          `--cv-wave-funk "${cs.getPropertyValue("--cv-wave-funk").trim()}"`);
+    })().catch((e) => log("THREW " + e));
+  </script>
+</body>
+</html>

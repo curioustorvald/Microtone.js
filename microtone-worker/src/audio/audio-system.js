@@ -16,6 +16,7 @@ import {
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES, SNAP_GLOBAL_VOLUME,
+  SNAP_V_FUNK_WINDOW, SNAP_V_FUNK_POS, SNAP_V_FUNK_LEN,
   SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
   SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
   SNAP_METER_BASE, SNAP_METER_STRIDE,
@@ -372,6 +373,15 @@ export class AudioSystem {
   getVoiceSamplePos(vi) { return this._v(vi, SNAP_V_SAMPLE_POS); }
   getVoiceSamplePtr(vi) { return this._v(vi, SNAP_V_SAMPLE_PTR); }
   getVoiceSampleLength(vi) { return this._v(vi, SNAP_V_SAMPLE_LEN); }
+  /** Funk repeat (Z $F0xx): the loop window this voice is SOUNDING, as a byte
+   *  offset into its sample, or -1 while it is still on the sample's own loop. */
+  getVoiceFunkWindow(vi) { return this._v(vi, SNAP_V_FUNK_WINDOW); }
+  /** Where the walk will put the window at the next loop restart (-1 = it has
+   *  not stepped yet). Runs AHEAD of getVoiceFunkWindow between restarts. */
+  getVoiceFunkPos(vi) { return this._v(vi, SNAP_V_FUNK_POS); }
+  /** The window's width — the voice's active loop length, which an Ixmp patch
+   *  may have replaced, so it is not the document sample's. */
+  getVoiceFunkLen(vi) { return this._v(vi, SNAP_V_FUNK_LEN); }
   getVoiceEnvVolIndex(vi) { return this._v(vi, SNAP_V_ENV_VOL_IDX); }
   getVoiceEnvVolTime(vi) { return this._v(vi, SNAP_V_ENV_VOL_TIME); }
   getVoiceEnvPanIndex(vi) { return this._v(vi, SNAP_V_ENV_PAN_IDX); }

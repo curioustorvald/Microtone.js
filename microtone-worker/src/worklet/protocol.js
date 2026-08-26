@@ -103,7 +103,15 @@ export const SNAP_V_ENV_FILTER_IDX = 14;
 export const SNAP_V_ENV_FILTER_TIME = 15;
 export const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
 export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
-export const SNAP_VOICE_STRIDE = 18;
+// Funk repeat (item 161), for the Samples view's window overlay: where the
+// voice's loop actually IS (-1 = the sample's own), where the walk will put it
+// at the next restart (-1 = it has not stepped), and how wide the window is —
+// the voice's ACTIVE loop length, which an Ixmp patch can change under it, so
+// the overlay cannot get the width from the document and be right (item 116).
+export const SNAP_V_FUNK_WINDOW = 18;
+export const SNAP_V_FUNK_POS = 19;
+export const SNAP_V_FUNK_LEN = 20;
+export const SNAP_VOICE_STRIDE = 21;
 
 // Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
 // follow a sounding audition — the Instruments/Samples editors scan the block

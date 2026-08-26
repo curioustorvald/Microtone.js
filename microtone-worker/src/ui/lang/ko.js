@@ -394,6 +394,8 @@ export default {
   "smp.infoBytes": "{n} 바이트",
   "smp.infoSustain": "서스테인",
   "smp.infoUsedBy": "사용 악기: {list}",
+  "smp.funkReadout": "펑크 리피트: 루프 위치 {at} — {n}개 중 {k}번째 블록",
+  "smp.funkReadoutNext": " — 다음 이동 {next}",
   "wave.title": "파형 그리기",
   "wave.editTitle": "샘플 {name} 그리기 ({len} 바이트)",
   "wave.longWarn": "이 샘플은 {len} 바이트입니다 — 손으로 그리기는 짧은 파형(≤ {limit})에 적합합니다. 계속할까요?",

@@ -25,6 +25,12 @@ import assert from "node:assert/strict";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { TRACKER_CHUNK, setSamplingRate } from "../../src/engine/constants.js";
 import { SURROUND_SPATIAL } from "../../src/engine/spatial.js";
+import { TOTAL_VOICES } from "../../src/engine/constants.js";
+import { fillSnapshotInto } from "../../src/worklet/engine-commands.js";
+import {
+  SNAP_FLOATS, SNAP_HEADER_SIZE, SNAP_VOICE_STRIDE, SNAP_V_ACTIVE,
+  SNAP_V_FUNK_WINDOW, SNAP_V_FUNK_POS, SNAP_V_FUNK_LEN,
+} from "../../src/worklet/protocol.js";
 
 setSamplingRate(32000);
 
@@ -261,4 +267,43 @@ test("a transport reset clears the walk", () => {
   assert.equal(v.funkAccumulator, 0);
   assert.equal(v.funkPos, -1);
   assert.equal(v.funkWindow, -1, "a clean replay starts from the file's own loop");
+});
+
+// ── The Samples view's state overlay (item 164) ──────────────────────────────
+// The view draws the window from the SNAPSHOT, so what is pinned here is the
+// data path: the three per-voice fields, and that they say what the overlay
+// needs — where the loop is, where it is going, and how wide to draw it.
+
+test("the snapshot carries the window, the pending hop and the width", () => {
+  const eng = makeEngine(100, 132);
+  loadRows(eng, [[0x23, 0xf080]]);
+  const v = voiceOf(eng);
+  const f = new Float64Array(SNAP_FLOATS);
+  const vField = (vi, k) => f[SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE + k];
+
+  render(eng, TICK * 4);
+  fillSnapshotInto(eng, 0, f);
+  assert.equal(vField(0, SNAP_V_FUNK_WINDOW), v.funkWindow);
+  assert.equal(vField(0, SNAP_V_FUNK_POS), v.funkPos);
+  assert.equal(vField(0, SNAP_V_FUNK_LEN), 32, "the VOICE's active loop length");
+  assert.ok(vField(0, SNAP_V_FUNK_POS) >= vField(0, SNAP_V_FUNK_WINDOW),
+    "the pending hop runs ahead of the window that is sounding");
+  // …and the overlay's own guard: the band must fit inside the sample it is
+  // drawn over, whatever the walk is doing.
+  assert.ok(vField(0, SNAP_V_FUNK_WINDOW) + vField(0, SNAP_V_FUNK_LEN) <= SAMPLE_LEN);
+});
+
+test("a voice with no walk reports -1, so nothing is drawn", () => {
+  const eng = makeEngine(100, 132);
+  loadRows(eng, [[0x00, 0x0000]]);   // a note, no funk
+  const f = new Float64Array(SNAP_FLOATS);
+  const vField = (vi, k) => f[SNAP_HEADER_SIZE + vi * SNAP_VOICE_STRIDE + k];
+  render(eng, TICK * 4);
+  fillSnapshotInto(eng, 0, f);
+  assert.equal(vField(0, SNAP_V_ACTIVE), 1, "the voice is sounding");
+  assert.equal(vField(0, SNAP_V_FUNK_WINDOW), -1, "…on the sample's own loop");
+  assert.equal(vField(0, SNAP_V_FUNK_POS), -1);
+  // A silent voice reports -1 too, rather than a stale window from last time.
+  assert.equal(vField(TOTAL_VOICES - 1, SNAP_V_FUNK_WINDOW), -1);
+  assert.equal(vField(TOTAL_VOICES - 1, SNAP_V_FUNK_POS), -1);
 });

@@ -8901,7 +8901,15 @@ const SNAP_V_ENV_FILTER_IDX = 14;
 const SNAP_V_ENV_FILTER_TIME = 15;
 const SNAP_V_AZIMUTH = 16;     // #998: 512-unit angle (0 left, 128 front, CLOCKWISE)
 const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a stereo song)
-const SNAP_VOICE_STRIDE = 18;
+// Funk repeat (item 161), for the Samples view's window overlay: where the
+// voice's loop actually IS (-1 = the sample's own), where the walk will put it
+// at the next restart (-1 = it has not stepped), and how wide the window is —
+// the voice's ACTIVE loop length, which an Ixmp patch can change under it, so
+// the overlay cannot get the width from the document and be right (item 116).
+const SNAP_V_FUNK_WINDOW = 18;
+const SNAP_V_FUNK_POS = 19;
+const SNAP_V_FUNK_LEN = 20;
+const SNAP_VOICE_STRIDE = 21;
 
 // Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
 // follow a sounding audition — the Instruments/Samples editors scan the block
@@ -9345,6 +9353,9 @@ function fillSnapshotInto(eng, playhead, f) {
       f[o + SNAP_V_ENV_PITCH_TIME] = v.envPitchTimeSec;
       f[o + SNAP_V_ENV_FILTER_IDX] = v.envFilterIndex;
       f[o + SNAP_V_ENV_FILTER_TIME] = v.envFilterTimeSec;
+      f[o + SNAP_V_FUNK_WINDOW] = v.funkWindow;
+      f[o + SNAP_V_FUNK_POS] = v.funkPos;
+      f[o + SNAP_V_FUNK_LEN] = v.activeSampleLoopEnd - v.activeSampleLoopStart;
     } else {
       for (let k = 1; k < SNAP_VOICE_STRIDE; k++) f[o + k] = 0;
       f[o + SNAP_V_EFF_PAN] = 128;
@@ -9355,6 +9366,8 @@ function fillSnapshotInto(eng, playhead, f) {
       f[o + SNAP_V_ENV_PAN_IDX] = -1;
       f[o + SNAP_V_ENV_PITCH_IDX] = -1;
       f[o + SNAP_V_ENV_FILTER_IDX] = -1;
+      f[o + SNAP_V_FUNK_WINDOW] = -1;
+      f[o + SNAP_V_FUNK_POS] = -1;
     }
   }
   fillAnalysisInto(ts, f);

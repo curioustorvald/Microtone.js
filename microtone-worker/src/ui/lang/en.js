@@ -401,6 +401,8 @@ export default {
   "smp.infoBytes": "{n} bytes",
   "smp.infoSustain": "sustain",
   "smp.infoUsedBy": "used by {list}",
+  "smp.funkReadout": "funk repeat: loop at {at} — block {k} of {n}",
+  "smp.funkReadoutNext": " — next hop {next}",
   "wave.title": "Paint a waveform",
   "wave.editTitle": "Paint sample {name} ({len} bytes)",
   "wave.longWarn": "This sample is {len} bytes — hand-painting is meant for short waveforms (≤ {limit}). Continue?",

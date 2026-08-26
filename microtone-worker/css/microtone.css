@@ -54,6 +54,7 @@
   --cv-wave-loop: #26314a;   /* loop-region shading */
   --cv-wave-mid: #4a5266;    /* waveform centre baseline */
   --cv-wave-invert: #f5a623;   /* loop bytes live-inverted by the invert loop (S $F0xx) */
+  --cv-wave-funk: #2ec4b6;   /* where funk repeat (Z $F0xx) has walked the loop to */
   --cv-play-cursor: #f5a623; /* envelope nodes, live envelope markers */
   --cv-wave-cursor: #ff5ec4; /* live play-position hairline over a waveform —
                                 a colour NEITHER the trace nor a modified byte
@@ -115,6 +116,7 @@
   --cv-wave-loop: #3e4557;
   --cv-wave-mid: #5d636e;
   --cv-wave-invert: #f5a623;
+  --cv-wave-funk: #2ec4b6;
   --cv-play-cursor: #f5a623;
   --cv-wave-cursor: #ff5ec4;
   --cv-env-line: #4aa3ff;
@@ -171,6 +173,7 @@
   --cv-wave-loop: #ccd8ee;
   --cv-wave-mid: #b3bcc9;
   --cv-wave-invert: #c07a10;
+  --cv-wave-funk: #0f8c80;
   --cv-play-cursor: #af6f10;
   --cv-wave-cursor: #c1006f;
   --cv-env-line: #1d66b8;
@@ -1222,6 +1225,8 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .badge-sm { color: var(--accent-2); font-size: 0.75rem; }
 .side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }
 .detail-info { margin-bottom: 0.6rem; color: var(--dim); font-size: 0.9rem; }
+/* live funk-repeat state, in the colour of the band it describes */
+.detail-info.funk-info { margin-top: -0.4rem; color: var(--cv-wave-funk); min-height: 1.1em; }
 .detail-info b { color: var(--fg); }
 .detail-info b.env-present { color: var(--accent); }
 .wave-canvas {

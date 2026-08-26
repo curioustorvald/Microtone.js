@@ -48,6 +48,10 @@ export class SamplesView {
     this.right.className = "side-detail";
     this.info = document.createElement("div");
     this.info.className = "detail-info";
+    // Live funk-repeat state (item 164) — its own line so the static one above
+    // is not rebuilt sixty times a second.
+    this.funkInfo = document.createElement("div");
+    this.funkInfo.className = "detail-info funk-info";
     this.toolbar = document.createElement("div");
     this.toolbar.className = "smp-toolbar";
     // "Edit…" is the ONE sample editor (item 109): the Sample Lab, opened on a
@@ -113,7 +117,7 @@ export class SamplesView {
       this.exportBtn, this.newInstBtn, this.deleteBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
-    this.right.append(this.info, this.toolbar, this.canvas);
+    this.right.append(this.info, this.funkInfo, this.toolbar, this.canvas);
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
     this.visible = false;
@@ -262,6 +266,31 @@ export class SamplesView {
     for (const r of this.rowEls) r.el.classList.toggle("live", livePtrs.has(r.ptr));
   }
 
+  /**
+   * Per-frame line under the sample's own: what funk repeat is doing to it
+   * right now. The band on the canvas says WHERE; this says how far along the
+   * sweep that is, and where the next hop lands — the two numbers you cannot
+   * read off a 30-pixel block.
+   */
+  updateFunkReadout() {
+    const s = this.list[this.selected];
+    const fws = s ? collectFunkWindows(this.store.audio, s) : [];
+    if (!fws.length) {
+      if (this.funkInfo.textContent !== "") this.funkInfo.textContent = "";
+      return;
+    }
+    const fw = fws[0];
+    const home = (s.loopMode & 3) !== 0 ? s.loopStart : 0;
+    const blocks = Math.max(1, Math.floor((s.len - home) / fw.len));
+    const at = Math.max(0, Math.round((fw.window - home) / fw.len)) + 1;
+    // The pending hop is only worth a clause while it differs from the window:
+    // right after a restart latches it the two are equal, and printing the same
+    // number twice reads as a bug rather than as "it has just landed".
+    const next = fw.pending >= 0 && fw.pending !== fw.window
+      ? t("smp.funkReadoutNext", { next: fw.pending }) : "";
+    this.funkInfo.textContent = t("smp.funkReadout", { at: fw.window, k: at, n: blocks }) + next;
+  }
+
   updateInfo() {
     const s = this.list[this.selected];
     if (!s) { this.info.textContent = t("smp.noSamples"); return; }
@@ -287,6 +316,7 @@ export class SamplesView {
       if (s) for (const inst of s.users) audio.requestInvertMask(inst);
     }
     if (audio?.isPlaying() || audio?.snapshot) this.drawWave();
+    this.updateFunkReadout();
     this.updateLiveDots();
   }
 
@@ -316,6 +346,51 @@ export class SamplesView {
     if (hasLoop) {
       ctx.fillStyle = C.waveLoop;
       ctx.fillRect((s.loopStart / s.len) * w, 0, ((s.loopEnd - s.loopStart) / s.len) * w, h);
+    }
+
+    // Funk repeat (Z $F0xx, item 161) — where the loop has been walked TO.
+    // The shading above is the loop the sample declares; this is the window the
+    // voice is actually sounding, which the walk hops through the sample a whole
+    // loop length at a time. Two marks per sounding voice: a filled band for the
+    // window under the playhead, and an outline one block on for where the next
+    // loop restart will jump. Identical windows are drawn once, so two voices
+    // sitting on the same block do not stack into a brighter band.
+    const funkWindows = collectFunkWindows(this.store.audio, s);
+    if (funkWindows.length) {
+      const xOf = (byte) => (byte / s.len) * w;
+      for (const fw of funkWindows) {
+        ctx.fillStyle = C.waveFunk;
+        ctx.globalAlpha = 0.28;
+        ctx.fillRect(xOf(fw.window), 0, Math.max(1, xOf(fw.len)), h);
+        ctx.globalAlpha = 1;
+        if (fw.pending >= 0 && fw.pending !== fw.window) {
+          // Where the NEXT loop restart will jump to: a faint block plus a
+          // dashed line on its leading edge. An outlined rectangle was tried
+          // and reads as noise once the trace is drawn over the middle of it.
+          ctx.fillStyle = C.waveFunk;
+          ctx.globalAlpha = 0.10;
+          ctx.fillRect(xOf(fw.pending), 0, Math.max(1, xOf(fw.len)), h);
+          ctx.globalAlpha = 0.8;
+          ctx.strokeStyle = C.waveFunk;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(Math.round(xOf(fw.pending)) + 0.5, 0);
+          ctx.lineTo(Math.round(xOf(fw.pending)) + 0.5, h);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+        }
+        // Name the band where there is room for it — a teal block over a
+        // waveform means nothing on its own, and the effect code is the one
+        // caption that needs no translating.
+        if (xOf(fw.len) >= 46) {
+          ctx.fillStyle = C.waveFunk;
+          ctx.globalAlpha = 0.9;
+          ctx.font = "10px sans-serif";
+          ctx.fillText("Z $F0xx", xOf(fw.window) + 4, h - 4);
+          ctx.globalAlpha = 1;
+        }
+      }
     }
 
     // Live sample-modification overlay: the invert loop's per-instrument XOR
@@ -444,6 +519,31 @@ export class SamplesView {
       }
     }
   }
+}
+
+/**
+ * The distinct funk-repeat windows live on `s` right now, newest state per
+ * frame: `{ window, pending, len }` in bytes, ready to scale onto the canvas.
+ *
+ * The width comes from the VOICE (its active loop length), not from the
+ * document's loop points — an Ixmp patch replaces those under a sounding voice
+ * (item 116), and a band drawn at the document's width would then be the wrong
+ * size on exactly the instrument whose loop is most worth watching.
+ */
+function collectFunkWindows(audio, s) {
+  const out = [];
+  if (!audio || !s) return out;
+  for (let vi = 0; vi < TOTAL_VOICES; vi++) {
+    if (!audio.getVoiceActive(vi)) continue;
+    if (audio.getVoiceSamplePtr(vi) !== s.ptr) continue;
+    const len = audio.getVoiceFunkLen(vi);
+    const window = audio.getVoiceFunkWindow(vi);
+    if (!(len > 0) || window < 0 || window + len > s.len) continue;
+    const pending = audio.getVoiceFunkPos(vi);
+    if (out.some((o) => o.window === window && o.len === len && o.pending === pending)) continue;
+    out.push({ window, pending, len });
+  }
+  return out;
 }
 
 function escape(s) {
