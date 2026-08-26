@@ -1598,7 +1598,7 @@ This table maps each PT effect to its Taud equivalent. Arguments follow PT's two
 | `E $Cx` | `S $Cx00` | Note cut |
 | `E $Dx` | `S $Dx00` | Note delay |
 | `E $Ex` | `S $Ex00` | Pattern delay |
-| `E $Fx` | `S $F0yy` (invert loop) | The byte is ambiguous — PT 1.x meant Funk Repeat, PT 1.1B onwards Invert Loop — so emit the invert loop, which is the one every player since implements. `Z $F0yy` is Funk Repeat, for modules known to predate 1.1B. `yy = funk_table[x]` either way |
+| `E $Fx` | `S $F0yy` (invert loop) | The byte is ambiguous — PT 1.0 meant Funk Repeat, PT 1.1B onwards Invert Loop — so emit the invert loop, which is the one every player since implements. `Z $F0yy` is Funk Repeat, for modules known to predate 1.1B. `yy = funk_table[x]` either way |
 | `F $xx` (xx < $20) | `A $xx00` | Set speed |
 | `F $xx` (xx ≥ $20) | `T $(xx−$18)00` | Set tempo |
 
