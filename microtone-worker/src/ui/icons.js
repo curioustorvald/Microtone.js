@@ -238,6 +238,13 @@ export const BTN_ICON = {
    *  so only the two outlines survive here. */
   duplicate: line('<rect x="9" y="9" width="13" height="13" rx="2"/>' +
     '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  /** Drag handle (⠿) — the six dots every sortable list is grabbed by. Solid
+   *  dots rather than line art: at the 0.85rem the row buttons sit at, stroked
+   *  rings this small fill in anyway and read as mush. */
+  grip: solid(
+    '<circle cx="9.5" cy="6" r="1.5"/><circle cx="14.5" cy="6" r="1.5"/>' +
+    '<circle cx="9.5" cy="12" r="1.5"/><circle cx="14.5" cy="12" r="1.5"/>' +
+    '<circle cx="9.5" cy="18" r="1.5"/><circle cx="14.5" cy="18" r="1.5"/>'),
   /** Support the project (♥). */
   heart: solid('<path d="M12 20.6 4.9 13.4a4.4 4.4 0 0 1 0-6.3 4.6 4.6 0 0 1 6.4 0l.7.7.7-.7a4.6 4.6 0 0 1 6.4 0 4.4 4.4 0 0 1 0 6.3z"/>'),
 

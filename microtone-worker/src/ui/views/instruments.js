@@ -36,6 +36,7 @@ import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { mapSpinner } from "../widgets/spinner.js";
+import { dragGrip, focusGrip } from "../widgets/dragsort.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, rangeToStr } from "../notenames.js";
 import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
@@ -127,12 +128,22 @@ export class InstrumentsView {
 
     this._childSelected = null; // meta-layer child explicitly opened via "Edit…"
     this._childParent = null;   // the metainstrument it was opened from (breadcrumb)
+    this._gripFocus = null;     // {list, index}: the drag grip a keyboard move left behind
+    this._gripPending = false;  // …and whether its drop-it-again microtask is queued
+    // An FM rack whose algorithm does not verify, held OUT of the document
+    // (see applyFmRack): {slot, ops, program}.
+    this._fmDraft = null;
     store.on("doc", () => {
       this.selected = 1; this.advanced = false;
       this._childSelected = null; this._childParent = null;
       if (this.visible) this.refresh();
     });
     store.on("edit", (tags) => {
+      // Any document edit arriving while a rack draft is open came from
+      // somewhere else — an undo, another view, a popup — because the draft's
+      // own edits never reach the document. The draft cannot be reconciled
+      // with a document that moved under it, so it goes.
+      this._fmDraft = null;
       // Suppress the rebuild WHILE an envelope node or a General-tab slider is
       // being dragged — each drag step fires an inst edit, and re-rendering
       // would detach the canvas/control (killing pointer capture). The graph
@@ -145,7 +156,7 @@ export class InstrumentsView {
   }
 
   show() { this.visible = true; this.refresh(); }
-  hide() { this.visible = false; }
+  hide() { this.visible = false; this._fmDraft = null; }
 
   refresh() {
     const doc = this.store.doc;
@@ -292,6 +303,11 @@ export class InstrumentsView {
       this.refreshListBadge(this.selected);
       this.advEditor.render();
       return;
+    }
+    // Leaving the rack — another tab, another instrument — drops its unfinished
+    // algorithm: it was never in the document, and the banner said so.
+    if (this._fmDraft && !(this.tab === "fm" && this.selected === this._fmDraft.slot)) {
+      this._fmDraft = null;
     }
     this.panel.innerHTML = "";
     if (inst) this.panel.appendChild(this.nameRow());
@@ -1361,6 +1377,22 @@ export class InstrumentsView {
     this.refresh();
   }
 
+  /** After a re-render, hand the focus back to the grip a KEYBOARD move just
+   *  used, so ↑ ↓ can carry a row several places without re-grabbing it. Only
+   *  the list that asked is restored — the FM tab has two of them.
+   *
+   *  One commit paints the panel TWICE (the store's edit event, then the
+   *  caller's own refresh), and the first paint's grip is detached by the
+   *  second — so the request survives every paint of that task and is dropped
+   *  on the microtask after it, rather than being consumed by the first. */
+  restoreGrip(list, root) {
+    if (this._gripFocus?.list !== list) return;
+    focusGrip(root, this._gripFocus.index);
+    if (this._gripPending) return;
+    this._gripPending = true;
+    queueMicrotask(() => { this._gripFocus = null; this._gripPending = false; });
+  }
+
   /** A committing number input for the layer / operator tables. */
   metaNumIn(value, min, max, onCommit, title = "") {
     const i = document.createElement("input");
@@ -1391,9 +1423,11 @@ export class InstrumentsView {
    * differs is the ACTIONS, which the caller appends to the returned advCell.
    *
    * `commit(fields)` takes a field patch for this entry alone, so the caller
-   * decides whether that goes through patchLayer or patchOperator.
+   * decides whether that goes through patchLayer or patchOperator, and `grip`
+   * is the row's drag handle — the tables reorder differently (a rack has to
+   * renumber its algorithm), so each caller builds its own.
    */
-  metaEntryRow(entry, i, { commit, links = 1, lead = false, leadTitle = "" }) {
+  metaEntryRow(entry, i, { commit, links = 1, lead = false, leadTitle = "", grip = null }) {
     const doc = this.store.doc;
     const preset = this.store.pitchPreset;
     const tr = document.createElement("tr");
@@ -1415,6 +1449,7 @@ export class InstrumentsView {
       star.title = leadTitle;
       idxCell.prepend(star);
     }
+    if (grip) idxCell.prepend(grip);
 
     // A linked entry shares its sub-instrument with its siblings: editing it
     // edits all of them, which is the point of a unison stack and a trap
@@ -1542,16 +1577,22 @@ export class InstrumentsView {
         links,
         lead: i === 0,
         leadTitle: t("meta.foregroundTitle"),
+        // Order is priority here, so it is dragged rather than stepped: the
+        // whole point is putting one layer in FRONT of another, which is one
+        // gesture and one undo step however far it travels.
+        grip: dragGrip({
+          index: i, count: layers.length, title: t("meta.dragTitle"),
+          onMove: (from, to, via) => {
+            if (via === "key") this._gripFocus = { list: "meta", index: to };
+            commit(moveLayer(layers, from, to - from));
+          },
+        }),
       });
 
       // Actions. Layer children are not list-selectable (item 59), so "Edit…"
       // is their only entry point: the child opens in its OWN base editor
       // (item 71) — the same tabs a top-level instrument gets.
       advCell.append(
-        this.metaIconBtn(null, "▲", t("meta.moveUpTitle"),
-          () => commit(moveLayer(layers, i, -1)), i === 0),
-        this.metaIconBtn(null, "▼", t("meta.moveDownTitle"),
-          () => commit(moveLayer(layers, i, +1)), i === layers.length - 1),
         this.metaIconBtn("duplicate", "", t("meta.dupTitle"),
           () => commit(duplicateLayer(layers, i)), full),
         this.metaIconBtn(null, t("meta.chord"), t("meta.chordTitleBtn"), async () => {
@@ -1574,12 +1615,31 @@ export class InstrumentsView {
     });
     table.appendChild(tbody);
     this.panel.appendChild(table);
+    this.restoreGrip("meta", table);
   }
 
-  /** Commit a rack — table and algorithm together, since they share one record
-   *  and any edit to either has to hand the other back untouched. */
+  /**
+   * Commit a rack — table and algorithm together, since they share one record
+   * and any edit to either has to hand the other back untouched.
+   *
+   * An algorithm mid-edit does not always verify, and a rack that does not
+   * verify has no business in the document: the File Format's validity
+   * checklist (§10) says a writer never produces one, the engine silences it
+   * (§7.6 "a reader MUST verify"), and a record it cannot decode reads back as
+   * NO algorithm at all — which is how an unfinished edit used to take the
+   * whole patch with it. So it is held HERE instead, painted red with a banner
+   * over it, and the document keeps the last rack that worked (and keeps
+   * sounding it) until the edit resolves. Whatever the draft accumulated then
+   * lands as ONE undo step.
+   */
   applyFmRack(slot, ops, program) {
+    if (!fmValidate(program, ops.length).ok) {
+      this._fmDraft = { slot, ops, program };
+      this.refresh();
+      return;
+    }
     const inst = this.store.doc.instruments[slot];
+    this._fmDraft = null;
     this.store.undo.apply(setMetaRecordOp(slot, fmRecordOf(inst, ops, program)));
     this.refresh();
   }
@@ -1594,8 +1654,11 @@ export class InstrumentsView {
   renderFm(inst) {
     const doc = this.store.doc;
     const slot = this.selected;
-    const ops = fmOperators(inst);
-    const program = fmProgramOf(inst);
+    // The unfinished rack, if the algorithm stopped verifying mid-edit: it is
+    // the editor's own copy, not the document's (applyFmRack).
+    const draft = this._fmDraft?.slot === slot ? this._fmDraft : null;
+    const ops = draft ? draft.ops : fmOperators(inst);
+    const program = draft ? draft.program : fmProgramOf(inst);
     const named = fmOperatorsNamed(program, ops.length);
     const verdict = fmValidate(program, ops.length);
     const budget = fmBudget(ops.length, program.length);
@@ -1630,6 +1693,7 @@ export class InstrumentsView {
     meterTxt.textContent = t("fm.bytes", { used: budget.used, total: budget.total });
     bar.append(addBtn, tally, meter, meterTxt);
     this.panel.appendChild(bar);
+    if (!verdict.ok) this.panel.appendChild(this.fmWarning(verdict, draft !== null));
 
     // ── the rack ──
     const table = document.createElement("table");
@@ -1647,6 +1711,17 @@ export class InstrumentsView {
         links,
         lead: i === 0,
         leadTitle: t("fm.principalTitle"),
+        // Dragging an operator renumbers the algorithm with it (moveOperator is
+        // a permutation), so the patch sounds the same wherever it lands —
+        // what the drag really chooses is which operator is the principal.
+        grip: dragGrip({
+          index: i, count: ops.length, title: t("fm.dragTitle"),
+          onMove: (from, to, via) => {
+            if (via === "key") this._gripFocus = { list: "fm", index: to };
+            const r = moveOperator(ops, program, from, to - from);
+            commit(r.ops, r.program);
+          },
+        }),
       });
       // An operator nothing names is dead weight in the record; say so rather
       // than leaving the user to work out why it makes no sound.
@@ -1658,11 +1733,6 @@ export class InstrumentsView {
         tr.querySelector(".nameCell").append(badge);
       }
       advCell.append(
-        this.metaIconBtn(null, "▲", t("fm.moveUpTitle"),
-          () => { const r = moveOperator(ops, program, i, -1); commit(r.ops, r.program); }, i === 0),
-        this.metaIconBtn(null, "▼", t("fm.moveDownTitle"),
-          () => { const r = moveOperator(ops, program, i, +1); commit(r.ops, r.program); },
-          i === ops.length - 1),
         this.metaIconBtn(null, t("meta.unlink"), t("meta.unlinkTitle"), async () => {
           const { planUnlinkMetaLayer } = await import("../../doc/bankmerge.js");
           const plan = planUnlinkMetaLayer(doc, slot, i);
@@ -1680,9 +1750,30 @@ export class InstrumentsView {
     });
     table.appendChild(tbody);
     this.panel.appendChild(table);
+    this.restoreGrip("fm", table);
 
     // ── the algorithm ──
-    this.panel.appendChild(this.fmAlgorithm(ops, program, verdict, commit));
+    const algo = this.fmAlgorithm(ops, program, verdict, commit);
+    this.panel.appendChild(algo);
+    this.restoreGrip("word", algo);
+  }
+
+  /**
+   * The strip that says what an unverified rack means — the two cases are not
+   * the same thing and must not read as if they were. A DRAFT is an edit in
+   * progress that the document has not been given (and will not be, until it
+   * verifies); anything else is a rack in the document that verifies now as
+   * little as it did when it was loaded, and is therefore silent.
+   */
+  fmWarning(verdict, held) {
+    const box = document.createElement("div");
+    box.className = "fm-warn";
+    box.append(
+      Object.assign(document.createElement("strong"),
+        { textContent: t(held ? "fm.heldTitle" : "fm.silentTitle") }),
+      Object.assign(document.createElement("span"),
+        { textContent: `${t(`fm.err.${verdict.error}`)} — ${t(held ? "fm.heldBody" : "fm.silentBody")}` }));
+    return box;
   }
 
   /**
@@ -1731,13 +1822,26 @@ export class InstrumentsView {
 
     const list = document.createElement("div");
     list.className = "fm-words";
+    // Red down the side of the list rather than over the controls: every word
+    // stays legible and editable — being able to keep working on it is the
+    // whole point of holding it here.
+    list.classList.toggle("unverified", !verdict.ok);
 
     const wordRow = (w, i) => {
       const row = document.createElement("div");
       row.className = "fm-word";
       if (!verdict.ok && verdict.at === i) row.classList.add("bad");
-      row.append(Object.assign(document.createElement("span"),
-        { className: "dim fm-word-idx", textContent: String(i) }));
+      row.append(
+        dragGrip({
+          index: i, count: program.length, rowSel: ".fm-word",
+          title: t("fm.wordDragTitle"),
+          onMove: (from, to, via) => {
+            if (via === "key") this._gripFocus = { list: "word", index: to };
+            commit(ops, moveWord(program, from, to - from));
+          },
+        }),
+        Object.assign(document.createElement("span"),
+          { className: "dim fm-word-idx", textContent: String(i) }));
 
       // What KIND of word this is …
       const cls = document.createElement("select");
@@ -1784,10 +1888,6 @@ export class InstrumentsView {
       row.append(depth);
 
       row.append(
-        this.metaIconBtn(null, "▲", t("fm.wordUpTitle"),
-          () => commit(ops, moveWord(program, i, -1)), i === 0),
-        this.metaIconBtn(null, "▼", t("fm.wordDownTitle"),
-          () => commit(ops, moveWord(program, i, +1)), i === program.length - 1),
         this.metaIconBtn(null, "+", t("fm.wordAddTitle"),
           () => commit(ops, insertWord(program, i, fmWord(FM_CLASS_OSC, 0))),
           !fmCanAddWord(ops, program)),

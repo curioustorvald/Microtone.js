@@ -137,15 +137,56 @@
         check("…carrying the source's settings", layers()[1].volStart === 16);
         check("…and the row is badged as linked", !!rows()[0].querySelector(".meta-link"));
 
-        // ── reorder ──
+        // ── reorder: a drag handle, where the ▲ ▼ buttons used to be ──
+        const grip = (r) => rows()[r].querySelector(".drag-grip");
+        const midY = (r) => {
+          const b = rows()[r].getBoundingClientRect();
+          return b.top + b.height / 2;
+        };
+        const pt = (type, el, clientY) => el.dispatchEvent(new win.PointerEvent(type, {
+          pointerId: 7, clientX: 20, clientY, button: 0, buttons: 1, bubbles: true,
+        }));
         const ids = layers().map((l) => `${l.instIdx}:${l.detune}`);
-        acts(1).find((b) => b.textContent === "▲").click();
+        // The drag reads row midpoints, so a table with no geometry would make
+        // the legs below pass without meaning anything.
+        check("the table is really laid out", rows()[0].getBoundingClientRect().height > 4);
+
+        // Drag the LAST row to the top, in two moves. Only the pointerdown is
+        // aimed at the grip: moving a row re-inserts it in the DOM, which drops
+        // the pointer capture the grip was holding, so from the second move on
+        // the events arrive somewhere else entirely — the drag has to keep
+        // working when they do. (A drag that moved one row and then went deaf,
+        // never seeing its own release, was exactly the bug.)
+        const body = win.document.body;
+        const last = layers().length - 1;
+        const dragged = rows()[last];
+        const g = grip(last);
+        const overs = [midY(last - 1) - 4, midY(0) - 4];
+        const stepsBefore = store.undo.undoStack.length;
+        pt("pointerdown", g, midY(last));
+        pt("pointermove", body, overs[0]);
+        check("the dragged row follows the pointer", rows()[last - 1] === dragged);
+        pt("pointermove", body, overs[1]);
+        check("…and keeps following it after the first move", rows()[0] === dragged);
+        check("…without committing anything yet",
+          layers().map((l) => `${l.instIdx}:${l.detune}`).join() === ids.join());
+        pt("pointerup", body, overs[1]);
         await sleep(30);
         const swapped = layers().map((l) => `${l.instIdx}:${l.detune}`);
-        check("▲ moves a layer up", swapped[0] === ids[1] && swapped[1] === ids[0]);
-        acts(0).find((b) => b.textContent === "▼").click();
-        await sleep(30);
-        check("▼ puts it back", layers().map((l) => `${l.instIdx}:${l.detune}`).join() === ids.join());
+        check("dropping it commits the whole gesture",
+          swapped.join() === [ids[last], ...ids.slice(0, last)].join());
+        check("…as ONE undo step", store.undo.undoStack.length === stepsBefore + 1);
+        check("…and the drag really ended", !body.classList.contains("dragsorting"));
+
+        // The handle is a button, so the keyboard still reorders without a
+        // pointer — and walking the row back proves nothing is left armed.
+        const arrow = (r, key) => grip(r).dispatchEvent(
+          new win.KeyboardEvent("keydown", { key, bubbles: true }));
+        for (let r = 0; r < last; r++) { arrow(r, "ArrowDown"); await sleep(30); }
+        check("↓ on the focused handle walks it back",
+          layers().map((l) => `${l.instIdx}:${l.detune}`).join() === ids.join());
+        check("…and the focus follows the row it moved",
+          win.document.activeElement === grip(last));
 
         // ── unlink: layer 1 gets its own copy, layer 0 keeps the original ──
         const unlinkBtn = acts(1).find((b) => b.textContent.includes("Unlink"));

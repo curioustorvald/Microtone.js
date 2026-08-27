@@ -89,34 +89,71 @@
         log(`…and it became a feedback tap: ` +
           ok(fmedit.fmWordClass(after.fmProgram[0]) === "fb"));
 
-        // ── a broken algorithm shows the error, and no diagram ──
-        const words2 = iv.panel.querySelectorAll(".fm-word");
-        const argSel = words2[0].querySelector(".fm-word-arg");
+        // ── a broken algorithm is HELD in the editor, not in the document ──
+        // The file format's validity checklist (§10) says a rack in a file
+        // verifies, and a record the reader cannot decode reads back as no
+        // algorithm at all — so an edit that does not verify stays here, on
+        // screen and editable, and the document keeps the last rack that
+        // worked. Nothing about that may quietly change.
+        const wordsOf = () => iv.panel.querySelectorAll(".fm-word");
+        const before = [...doc.instruments[slot].fmProgram];
+        const depthBefore = store.undo.undoStack.length;
+        const words2 = wordsOf();
         const clsSel2 = words2[0].querySelector(".fm-word-class");
         clsSel2.value = "mod";
         clsSel2.dispatchEvent(new win.Event("change"));   // pops an empty stack
-        await waitFor(() => iv.panel.querySelector(".fm-formula"));
-        log(`broken algorithm: no diagram, formula flagged: ` +
+        await waitFor(() => iv.panel.querySelector(".fm-warn"));
+        log(`broken algorithm: no diagram, formula flagged, banner shown: ` +
           ok(!iv.panel.querySelector(".fm-graph-frame") &&
-             iv.panel.querySelector(".fm-formula").classList.contains("bad")));
-        store.undo.undo();
-        iv.refresh();
-        await waitFor(() => iv.panel.querySelector(".fm-graph-frame"));
-        log(`…and the diagram comes back with the fix: ok`);
-        void argSel;
+             iv.panel.querySelector(".fm-formula").classList.contains("bad") &&
+             !!iv.panel.querySelector(".fm-warn")));
+        log(`…the words are still there and still editable (${wordsOf().length}): ` +
+          ok(wordsOf().length === words2.length &&
+             wordsOf()[0].querySelector(".fm-word-class").value === "mod" &&
+             iv.panel.querySelector(".fm-words").classList.contains("unverified")));
+        log(`…the document kept the algorithm that verified: ` +
+          ok(String([...doc.instruments[slot].fmProgram]) === String(before)));
+        log(`…and nothing was committed: ` +
+          ok(store.undo.undoStack.length === depthBefore));
 
-        // ── undo puts the algorithm back ──
-        store.undo.undo();
-        log(`undo restored the algorithm: ` +
-          ok(fmedit.fmWordClass(doc.instruments[slot].fmProgram[0]) === "osc"));
+        // Repairing it applies the whole held edit as ONE step.
+        const fix = wordsOf()[0].querySelector(".fm-word-class");
+        fix.value = "osc";
+        fix.dispatchEvent(new win.Event("change"));
+        await waitFor(() => iv.panel.querySelector(".fm-graph-frame"));
+        log(`the fix commits the held rack in one step, diagram back: ` +
+          ok(store.undo.undoStack.length === depthBefore + 1 &&
+             fmedit.fmWordClass(doc.instruments[slot].fmProgram[0]) === "osc" &&
+             !iv.panel.querySelector(".fm-warn")));
+
+        // Leaving the tab drops a held edit — and takes nothing with it.
+        const kept = [...doc.instruments[slot].fmProgram];
+        const brk = wordsOf()[0].querySelector(".fm-word-class");
+        brk.value = "mod";
+        brk.dispatchEvent(new win.Event("change"));
+        await waitFor(() => iv.panel.querySelector(".fm-warn"));
+        iv.tab = "general"; iv.renderPanel();
+        iv.tab = "fm"; iv.renderPanel();
+        await waitFor(() => iv.panel.querySelector(".fm-word"));
+        log(`leaving the tab drops the held edit, the rack is intact: ` +
+          ok(!iv.panel.querySelector(".fm-warn") &&
+             String([...doc.instruments[slot].fmProgram]) === String(kept) &&
+             wordsOf().length === kept.length));
 
         // ── an operator the algorithm names cannot be removed ──
-        const removeBtns = [...rows].map((r) => r.querySelectorAll(".advCell .meta-act"));
-        const closeDisabled = [...rows].every((r) => {
-          const btns = [...r.querySelectorAll(".advCell .meta-act")];
-          return btns.some((b) => b.disabled);
-        });
+        // The ✕ is the icon-only button of the row's action group; check IT
+        // rather than "some button is disabled", which any row satisfies.
+        const closeOf = (r) => [...r.querySelectorAll(".advCell .meta-act")]
+          .find((b) => !b.textContent.trim());
+        const closeDisabled = [...iv.panel.querySelectorAll(".meta-table tbody tr")]
+          .every((r) => closeOf(r)?.disabled);
         log(`wired operators are guarded against removal: ${ok(closeDisabled)}`);
+
+        // ── every rack row and every algorithm word has a drag grip ──
+        const grips = iv.panel.querySelectorAll(".meta-table tbody tr .drag-grip").length;
+        const wordGrips = iv.panel.querySelectorAll(".fm-word .drag-grip").length;
+        log(`reorder handles: ${grips} on operators, ${wordGrips} on words: ` +
+          ok(grips === 4 && wordGrips === iv.panel.querySelectorAll(".fm-word").length));
 
         // ── the rack survives a save/reload round trip ──
         const bytes = doc.toBytes();

@@ -909,6 +909,30 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .inst-lookup .il-kind { color: var(--dim); }
 .inst-lookup .il-empty { padding: 0.5rem 0.6rem; }
 
+/* Drag-to-reorder grips (layer table, FM rack, algorithm word list). The
+   handle is a real button — ↑ ↓ move the row while it is focused — so it
+   carries a focus ring, but it must not look like the action buttons beside
+   it: no border, no fill, just the six dots and the grab cursor. */
+.drag-grip {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0.1rem 0.15rem; margin-right: 0.2rem;
+  background: none; border: 1px solid transparent; border-radius: 0.25rem;
+  color: var(--dim); cursor: grab; box-shadow: none; vertical-align: middle;
+  touch-action: none; /* the grip owns the gesture — do not scroll the panel */
+}
+.drag-grip:hover:not(:disabled) { color: var(--fg); background: var(--panel-2); }
+.drag-grip:active:not(:disabled) { cursor: grabbing; }
+.drag-grip:disabled { opacity: 0.25; cursor: default; }
+.drag-grip .btn-ico { width: 1.1em; height: 1.1em; }
+/* The row being dragged. It is the real row, moving through the list under the
+   pointer, so it is marked rather than ghosted — a half-transparent row is
+   hard to read against the ones it is being placed between. */
+.dragging { background: var(--panel-2); outline: 1px solid var(--accent); }
+tr.dragging td { background: var(--panel-2); }
+/* While a drag runs, the pointer is captured by the grip: keep the grabbing
+   cursor everywhere and stop the drag from selecting the table's text. */
+body.dragsorting { cursor: grabbing; user-select: none; }
+
 /* Meta-instrument layer editor: compact numeric inputs + dB readout. */
 .meta-table .meta-num { width: 4.5em; }
 .meta-table .meta-db { margin-left: 0.4rem; }
@@ -957,6 +981,23 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .meta-table .fm-unused {
   margin-left: 0.4rem; opacity: 0.75; font-style: italic;
 }
+
+/* An unverified rack. The banner says which of the two states it is in — an
+   edit being held out of the document, or a rack in the document that plays
+   nothing — and the word list is marked down its side rather than washed in
+   red, because every control in it has to stay readable and usable. */
+.fm-warn {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 0.45rem 0.6rem; margin-bottom: 0.6rem;
+  background: var(--err-bg); border: 1px solid var(--err-fg); border-radius: 0.3rem;
+}
+.fm-warn strong { color: var(--err-fg); }
+.fm-warn span { font-size: 0.85rem; }
+.fm-words.unverified {
+  border-left: 2px solid var(--err-fg);
+  padding-left: 0.4rem; margin-left: 0.1rem;
+}
+.fm-words.unverified .fm-word-idx, .fm-words.unverified .fm-word-depth { color: var(--err-fg); }
 
 .fm-algo { margin-top: 0.9rem; }
 .fm-algo-head {

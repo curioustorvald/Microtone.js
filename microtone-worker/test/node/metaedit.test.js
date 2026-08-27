@@ -147,6 +147,28 @@ test("metaedit: the last layer can't be removed; reorder + patch behave", () => 
   assert.equal(tuned[0].detune, 0, "siblings untouched");
 });
 
+test("metaedit: a reorder crosses any number of rows in one step", () => {
+  // The drag handle commits ONE move for the whole gesture, so the deltas the
+  // ▲ ▼ buttons could never produce (a row dropped three places away) are the
+  // ordinary case now.
+  const inst = new TaudInst(0);
+  inst.loadRecord(metaRecord([
+    { inst: 0x100, mix: 159, detune: 0 },
+    { inst: 0x101, mix: 159, detune: 0 },
+    { inst: 0x102, mix: 159, detune: 0 },
+    { inst: 0x103, mix: 159, detune: 0 },
+  ]));
+  const layers = metaLayers(inst);
+  const ids = (ls) => ls.map((l) => l.instIdx);
+
+  assert.deepEqual(ids(moveLayer(layers, 3, -3)), [0x103, 0x100, 0x101, 0x102], "tail to the front");
+  assert.deepEqual(ids(moveLayer(layers, 0, +3)), [0x101, 0x102, 0x103, 0x100], "front to the tail");
+  assert.deepEqual(ids(moveLayer(layers, 1, +2)), [0x100, 0x102, 0x103, 0x101], "past two rows");
+  assert.deepEqual(ids(moveLayer(layers, 2, 0)), ids(layers), "a drop where it started changes nothing");
+  assert.equal(moveLayer(layers, 1, +3), layers, "off the end is a no-op");
+  assert.deepEqual(ids(layers), [0x100, 0x101, 0x102, 0x103], "the source array is never touched");
+});
+
 test("metaedit: the layer table caps at META_MAX_LAYERS", () => {
   const inst = new TaudInst(0);
   inst.loadRecord(metaRecord([{ inst: 0x100, mix: 159, detune: 0 }]));
