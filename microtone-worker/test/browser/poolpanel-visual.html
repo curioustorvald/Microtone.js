@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sample-memory panel visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- The Samples view with the memory panel open (item 166), on a pool doctored
+       to hold every state the map can draw: a sample two instruments claim
+       different slices of (the overlap lanes), a hole where one was freed, and
+       a hole that still holds the audio of something nothing points at.
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox --window-size=1500,1200 \
+           --screenshot=/tmp/pool.png --virtual-time-budget=30000 \
+           "http://localhost:8932/test/browser/poolpanel-visual.html?theme=dark"
+       ?theme=light / ?theme=dim for the other two, ?song=Onestop.taud for a
+       pool packed with 244 samples (what a dense map looks like). -->
+  <pre id="out" style="font:12px monospace"></pre>
+  <iframe id="app" src="" style="width:1440px;height:1000px;border:0"></iframe>
+  <script type="module">
+    const log = (l) => { document.getElementById("out").textContent += l + "\n"; };
+    const q = new URLSearchParams(location.search);
+    const song = q.get("song") ?? "WHEN.taud";
+    const frame = document.getElementById("app");
+    // ?theme= is the app's own boot override (src/ui/app.js), so it travels on
+    // the iframe URL rather than being poked in after load.
+    frame.src = `../../index.html?load=test/corpus/${song}` +
+      (q.get("theme") ? `&theme=${q.get("theme")}` : "");
+    const waitFor = (fn, ms = 15000) => new Promise((res, rej) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); res(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); rej(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      const win = await waitFor(() => {
+        const w = frame.contentWindow;
+        return w && w.__microtone?.store?.doc ? w : null;
+      });
+      const M = win.__microtone;
+      const { store, samplesView: sv } = M;
+      win.document.querySelector('[data-view="samples"]')?.click();
+
+      // ── doctor the pool so every state is on screen ──
+      const list = store.doc.sampleList();
+      // 1. a second instrument claiming a SLICE of the longest sample: same
+      //    recording, its own (ptr:len), so the census gives it a row of its own
+      //    and the map gives it a lane of its own.
+      let big = list[0];
+      for (const e of list) if (e.len > big.len) big = e;
+      const free = [...store.doc.usedInstrumentSlots()];
+      const slot = Math.max(...free.filter((s) => s < 0x100)) + 1;
+      const inst = store.doc.instruments[slot];
+      inst.samplePtr = big.ptr + Math.floor(big.len / 3);
+      inst.sampleLength = Math.floor(big.len / 3);
+      inst.samplingRate = big.rate;
+      inst.sampleLoopStart = Math.floor(big.len / 9);
+      inst.sampleLoopEnd = Math.floor(big.len / 5);
+      inst.loopMode = 1;
+      store.doc.markInstUsed(slot);
+      log(`slot $${slot.toString(16)} claims a slice of sample ${big.index} ` +
+          `(${big.ptr}+${Math.floor(big.len / 3)})`);
+
+      // 2. a hole, by cutting a sample loose without sweeping the bytes: exactly
+      //    what an unswept project looks like after an edit that reallocates.
+      const victim = store.doc.sampleList().find((e) => e.index > 0 && e.users.length === 1);
+      if (victim) {
+        for (const s of victim.users) {
+          const iv = store.doc.instruments[s];
+          if (iv.samplePtr === victim.ptr) { iv.samplePtr = 0; iv.sampleLength = 0; }
+        }
+        store.doc.markInstUsed(victim.users[0]);
+        log(`sample ${victim.index} cut loose at ${victim.ptr}, ${victim.len} B left unswept`);
+      }
+      store.emit("edit", [{ kind: "bank" }]);
+
+      if (!sv.poolOpen) sv.togglePool();
+      sv.selected = Math.min(store.doc.sampleList().length - 1,
+        store.doc.sampleList().findIndex((e) => e.ptr === big.ptr));
+      sv.refresh();
+      const m = sv.pool.map;
+      log(`map: ${m.stats.spans} spans, ${m.lanes} lane(s), ${m.stats.holeCount} hole(s), ` +
+          `${m.stats.sharedBytes} B shared, ${m.stats.staleBytes} B leftover`);
+      log(sv.pool.stats.textContent);
+      for (const li of sv.pool.notes.querySelectorAll("li")) log("• " + li.textContent);
+    })();
+  </script>
+</body>
+</html>

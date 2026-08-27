@@ -65,6 +65,15 @@
   --cv-env-loop: #33314a44;  /* loop-region shading (translucent) */
   --cv-live: #43d675;        /* live envelope cursor */
 
+  /* sample-memory panel (item 166) — the pool drawn as ADDRESSES. Four states
+   * no other canvas colour may be confused with: a claimed span, a span two
+   * census rows both claim, free space, and free space that still holds the
+   * audio of something deleted. The selection is drawn in --accent. */
+  --cv-pool-used: #4a7fb5;   /* bytes some sample claims */
+  --cv-pool-shared: #d08bff; /* bytes MORE THAN ONE census row claims */
+  --cv-pool-free: #262b35;   /* unclaimed and swept */
+  --cv-pool-stale: #7a4a3a;  /* unclaimed, still holding old audio */
+
   --brand: #ff4362;
   --brand2: #eeeeee;
 }
@@ -125,6 +134,11 @@
   --cv-env-loop: #4a476644;
   --cv-live: #4ddd7d;
 
+  --cv-pool-used: #5a8fc4;
+  --cv-pool-shared: #d08bff;
+  --cv-pool-free: #343a48;
+  --cv-pool-stale: #8a5545;
+
   --brand: #ff4362;
   --brand2: #eeeeee;
 }
@@ -181,6 +195,11 @@
   --cv-env-sus: #d7e7d9;
   --cv-env-loop: #c3c9e766;
   --cv-live: #1c9450;
+
+  --cv-pool-used: #3d78b0;
+  --cv-pool-shared: #8f36bd;
+  --cv-pool-free: #dde1e9;
+  --cv-pool-stale: #c9a877;
 
   --brand: #f20046;
   --brand2: #404758;
@@ -1649,6 +1668,37 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .smp-toolbar {
   display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
   padding: 0.3rem 0.6rem; margin: 0 0 0.5rem;
+}
+
+/* ── Sample-memory panel (item 166) — the optional map under the waveform ── */
+.smp-toolbar .smp-pool.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.pool-panel { margin: 0.8rem 0 0.2rem; }
+.pool-stats { color: var(--dim); font-size: 0.82rem; margin-bottom: 0.35rem; }
+.pool-wrap { position: relative; line-height: 0; }
+.pool-canvas {
+  display: block;
+  background: var(--cv-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  touch-action: none;
+}
+/* The live voice ticks: their own layer, so the map is not repainted per frame. */
+.pool-overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+/* Fixed height so the canvas does not jump as the pointer crosses the map. */
+.pool-hover {
+  color: var(--fg2); font-family: "Roboto Mono", monospace; font-size: 0.78rem;
+  min-height: 1.2em; margin: 0.3rem 0 0;
+}
+.pool-notes { color: var(--dim); font-size: 0.82rem; margin: 0.2rem 0 0; padding-left: 1.1rem; }
+.pool-notes li { margin: 0.1rem 0; }
+.pool-legend {
+  display: flex; gap: 0.9rem; flex-wrap: wrap; align-items: center;
+  color: var(--dim); font-size: 0.76rem; margin: 0.35rem 0 0;
+}
+.pool-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.pool-legend i {
+  width: 12px; height: 9px; border-radius: 2px; display: inline-block;
+  border: 1px solid var(--border);
 }
 
 /* ── Sample Lab (items 83/84/109) ── */

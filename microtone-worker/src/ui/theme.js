@@ -31,6 +31,9 @@ const VAR_KEYS = {
   waveCursor: "--cv-wave-cursor",
   envLine: "--cv-env-line", envNode: "--cv-env-node", envSus: "--cv-env-sus",
   envLoop: "--cv-env-loop", live: "--cv-live",
+  // canvas: sample-memory panel (item 166)
+  poolUsed: "--cv-pool-used", poolShared: "--cv-pool-shared",
+  poolFree: "--cv-pool-free", poolStale: "--cv-pool-stale",
 };
 
 let _cache = null;

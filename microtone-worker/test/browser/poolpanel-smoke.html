@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>sample-memory panel smoke (item 166)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox --dump-dom \
+           --virtual-time-budget=45000 \
+           http://localhost:8932/test/browser/poolpanel-smoke.html
+       Loads 4THSYM, which carries three junk instrument records pointing far
+       outside the 8 MB pool — the case the Samples list shows as ordinary
+       samples and the memory panel has to name. -->
+  <iframe id="app" src="../../index.html?load=test/corpus/4THSYM.taud" style="width:1200px;height:800px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, what) => log(`${what}: ${cond ? "ok" : "FAIL"}`);
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { store, samplesView: sv } = win.__microtone;
+        // A remembered "on" from an earlier run must not decide this one.
+        try { win.localStorage.removeItem("microtone-poolpanel"); } catch { /* private mode */ }
+        log("app loaded");
+
+        sv.show();
+        const panel = sv.pool.element;
+        ok([...sv.toolbar.querySelectorAll("button")].some((b) => b.textContent === "Memory"),
+          "a1 the Samples toolbar has a Memory toggle");
+        ok(panel.hidden, "a2 the panel is off until asked for");
+        ok(sv.pool.map === null, "a3 …and computes nothing while it is off");
+
+        // ── open it ──
+        sv.togglePool();
+        ok(!panel.hidden, "b1 the toggle shows the panel");
+        ok(sv.poolBtn.classList.contains("on"), "b2 …and lights the button");
+        ok(win.localStorage.getItem("microtone-poolpanel") === "1", "b3 …and remembers it");
+        const map = sv.pool.map;
+        ok(!!map, "b4 the map is computed on open");
+        ok(sv.pool.canvas.width > 0 && sv.pool.canvas.height > 0, "b5 the canvas has a size");
+
+        // ── what the map says about 4THSYM ──
+        ok(map.stats.spans === store.doc.sampleList().flatMap((e) =>
+          [e, ...(e.chanPtrs ?? [])]).length, "c1 one claim per pool span");
+        ok(map.outside.length === 3,
+          `c2 the three junk records are flagged as outside the pool (${map.outside.length})`);
+        ok(map.highWater === 8410, `c3 the real high-water mark is 8410 (${map.highWater})`);
+        ok(map.stats.holeCount === 0 && map.stats.overlapPairs === 0,
+          "c4 the converter packed it: no holes, nothing shared");
+        ok(map.lanes === 1, "c5 …so the map draws on one lane");
+        const notes = [...sv.pool.notes.querySelectorAll("li")].map((li) => li.textContent);
+        ok(notes.some((n) => n.includes("outside the 8 MB pool")),
+          "c6 the panel SAYS so, in words: " + JSON.stringify(notes[0]?.slice(0, 60)));
+        ok(sv.pool.stats.textContent.includes("8.00 MB"),
+          "c7 the stats line names the pool size: " + JSON.stringify(sv.pool.stats.textContent));
+
+        // ── the bands, and clicking one ──
+        const bands = sv.pool.bands.map((b) => b.kind);
+        ok(bands.join(",") === "pool,used,zoom", "d1 three bands: " + bands.join(","));
+        const usedBand = sv.pool.bands[1];
+        ok(usedBand.rects.length >= 17, `d2 the claimed band drew its blocks (${usedBand.rects.length})`);
+        const target = usedBand.rects.find((r) => r.claim && r.claim.index === 5);
+        ok(!!target, "d3 sample 005 has a block");
+        const rect = sv.pool.canvas.getBoundingClientRect();
+        const ev = (type, r) => new win.PointerEvent(type, {
+          clientX: rect.left + r.x + r.w / 2, clientY: rect.top + r.y + r.h / 2, bubbles: true,
+        });
+        sv.pool.canvas.dispatchEvent(ev("pointermove", target));
+        ok(sv.pool.hover.textContent.includes("sample 005"),
+          "d4 hovering reads the claim out: " + JSON.stringify(sv.pool.hover.textContent));
+        sv.selected = 0;
+        sv.refresh();
+        sv.pool.canvas.dispatchEvent(ev("pointerdown", target));
+        ok(sv.selected === 5, `d5 clicking a block selects that row (${sv.selected})`);
+        ok(sv.pool.selected === 5, "d6 …and the map follows the selection");
+        const zoom = sv.pool.bands.find((b) => b.kind === "zoom");
+        ok(zoom && zoom.from <= 2742 && zoom.to >= 2742,
+          `d7 the zoom band re-centres on it (${zoom?.from}..${zoom?.to})`);
+
+        // ── a hole, made for real ──
+        const before = sv.pool.map.stats.holeCount;
+        const victim = sv.list[3];
+        const plan = (await import("../../src/doc/cleanup.js")).planDeleteSample(store.doc, victim);
+        store.undo.apply((await import("../../src/doc/ops.js")).cleanupBankOp(plan));
+        store.emit("edit", [{ kind: "bank" }]);
+        ok(sv.pool.map.stats.holeCount === before + 1,
+          `e1 deleting a sample opens a hole the panel picks up (${before} → ${sv.pool.map.stats.holeCount})`);
+        ok(sv.pool.map.holes.some((h) => h.ptr === victim.ptr && h.len === victim.len),
+          "e2 …at the freed span");
+        ok(sv.pool.map.holes.every((h) => h.stale === 0),
+          "e3 …swept, because delete zeroes what it frees");
+        store.undo.undo();
+        store.emit("edit", [{ kind: "bank" }]);
+        ok(sv.pool.map.stats.holeCount === before, "e4 undo closes it again");
+
+        // ── off again ──
+        sv.togglePool();
+        ok(panel.hidden && !sv.poolBtn.classList.contains("on"), "f1 the toggle hides it");
+        ok(win.localStorage.getItem("microtone-poolpanel") === "0", "f2 …and remembers that too");
+
+        log("DONE " + (out.some((l) => l.includes("FAIL")) ? "with FAILURES" : "all ok"));
+      } catch (err) {
+        log("EXCEPTION " + (err?.stack ?? err));
+      }
+    })();
+  </script>
+</body>
+</html>

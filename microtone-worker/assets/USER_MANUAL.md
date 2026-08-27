@@ -961,6 +961,38 @@ Stereo samples reach a project from a stereo audio file or recording (through
 the Sample Lab), from an `.it` module whose samples are stereo, or from a
 SoundFont import with **Import stereo instruments in stereo** ticked.
 
+### Sample memory
+
+The list is a census of *samples*, not a map of *memory*. It shows one row per
+distinct claim — a pointer into the 8 MB sample pool and a length — which is the
+right unit for naming, editing and exporting, and it deliberately says nothing
+about where those bytes are or who else is reading them. **Memory** in the
+toolbar opens a panel that shows the pool itself. It stays open until you turn
+it off, and it never changes anything: it only reports.
+
+Three strips, top to bottom:
+
+- **The whole pool** — all 8 MB at once, with megabyte gridlines, so how much room is left needs no arithmetic. A tick marks the selected sample, and a rule marks the high-water mark (the end of the last claimed byte).
+- **The claimed range** — 0 up to the high-water mark, one block per pool span. This is the map proper. Samples that overlap each other are drawn on separate lines, so a second line anywhere means two rows really are reading the same bytes.
+- **Around the selected sample** — a few sample-lengths of neighbourhood, where names fit and each block carries a thin bar showing the loop region that row declares. This is where "these two rows are one recording" becomes obvious.
+
+Hovering reads out an address range, the sample it belongs to and how many
+instruments play it; clicking any block selects that row in the list, so the map
+navigates. While the song plays, a tick per sounding voice shows where in memory
+each note has got to.
+
+Colours: **claimed** is one sample's bytes, **shared** means more than one row
+claims them, **selected** is the row the list is on, **free** is unclaimed, and
+**leftover** is unclaimed space that still holds the audio of something deleted.
+
+Underneath, the panel names what it found — and these are the things worth
+knowing about, because none of them are visible from the list:
+
+- **Overlapping samples.** Two rows can be different windows onto one recording: the same bytes with different lengths, loop points or rates. Editing either one rewrites the other, which is why the Sample Lab refuses to *change the length* of a sample whose bytes another sample overlaps. A stereo sample's own two channels are not an overlap — it is one sample occupying two spans.
+- **Samples pointing outside the pool.** Almost every module conversion leaves a few junk instrument records behind, usually up at the top of the slot range, whose sample pointers land far outside 8 MB. They appear in the list looking like ordinary samples and they play nothing. [Housekeeping](#housekeeping) drops them.
+- **Gaps.** Deleting a sample, or replacing one with something that no longer fits its old span, leaves a hole. A new sample is fitted into the first hole big enough for it, so holes are reused rather than wasted — but a pool full of small holes can refuse a large sample while showing plenty free, and the panel gives you the largest run so you can see that coming.
+- **Leftover audio.** Freeing bytes does not always blank them, and bytes nothing points at still travel inside the project file. Housekeeping sweeps them.
+
 ## The Sample Lab
 
 The Sample Lab is *the* sample editor — a tiny Audacity that opens whenever

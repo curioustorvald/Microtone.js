@@ -25,6 +25,16 @@ import { importBankOp, cleanupBankOp } from "../../doc/ops.js";
 import { showModal } from "../widgets/modal.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
+import { PoolPanel } from "./poolpanel.js";
+
+/** The memory panel is off by default and remembered per browser. */
+const POOL_PREF_KEY = "microtone-poolpanel";
+function loadPoolPref() {
+  try { return localStorage.getItem(POOL_PREF_KEY) === "1"; } catch { return false; }
+}
+function savePoolPref(v) {
+  try { localStorage.setItem(POOL_PREF_KEY, v ? "1" : "0"); } catch { /* private mode */ }
+}
 
 /** Waveform canvas height PER CHANNEL (px). */
 const WAVE_LANE_H = 220;
@@ -113,11 +123,30 @@ export class SamplesView {
     this.deleteBtn.textContent = t("smp.delete");
     this.deleteBtn.title = t("smp.deleteTitle");
     this.deleteBtn.addEventListener("click", () => this.deleteSample());
+    // "Memory" (item 166) toggles the pool map under the waveform: the list is
+    // a CENSUS of (ptr:len) claims and says nothing about where the bytes are,
+    // and this is the view that does. Off by default and remembered.
+    this.poolBtn = document.createElement("button");
+    this.poolBtn.className = "smp-pool";
+    this.poolBtn.textContent = t("pool.toggle");
+    this.poolBtn.title = t("pool.toggleTitle");
+    this.poolBtn.addEventListener("click", () => this.togglePool());
     this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.dupBtn,
-      this.exportBtn, this.newInstBtn, this.deleteBtn);
+      this.exportBtn, this.newInstBtn, this.deleteBtn, this.poolBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
-    this.right.append(this.info, this.funkInfo, this.toolbar, this.canvas);
+    this.pool = new PoolPanel(store, {
+      onSelect: (idx) => {
+        if (idx === this.selected || idx < 0 || idx >= this.list.length) return;
+        this.selected = idx;
+        this.refresh();
+        this.rowEls?.[idx]?.el.scrollIntoView({ block: "nearest" });
+      },
+    });
+    this.poolOpen = loadPoolPref();
+    this.pool.element.hidden = !this.poolOpen;
+    this.poolBtn.classList.toggle("on", this.poolOpen);
+    this.right.append(this.info, this.funkInfo, this.toolbar, this.canvas, this.pool.element);
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
     this.visible = false;
@@ -127,7 +156,24 @@ export class SamplesView {
       // bank import/undo changes the census; inst edits move loop points
       if (this.visible && tags?.some?.((t) => t.kind === "bank" || t.kind === "inst")) this.refresh();
     });
-    new ResizeObserver(() => { if (this.visible) this.drawWave(); }).observe(this.right);
+    new ResizeObserver(() => {
+      if (!this.visible) return;
+      this.drawWave();
+      if (this.poolOpen) this.pool.draw();
+    }).observe(this.right);
+  }
+
+  /** Show/hide the sample-memory panel, and remember the choice. */
+  togglePool() {
+    this.poolOpen = !this.poolOpen;
+    savePoolPref(this.poolOpen);
+    this.poolBtn.classList.toggle("on", this.poolOpen);
+    this.pool.element.hidden = !this.poolOpen;
+    if (!this.poolOpen) return;
+    this.pool.refresh(this.selected);
+    // Opened from a toolbar at the top of a pane whose waveform can be two
+    // lanes tall, so bring the thing that just appeared into view.
+    this.pool.element.scrollIntoView({ block: "nearest" });
   }
 
   show() { this.visible = true; this.refresh(); }
@@ -253,6 +299,7 @@ export class SamplesView {
     });
     this.updateInfo();
     this.drawWave();
+    if (this.poolOpen) this.pool.refresh(this.selected);
   }
 
   /** Light the list rows of samples any voice is sounding right now. */
@@ -324,6 +371,9 @@ export class SamplesView {
     if (audio?.isPlaying() || audio?.snapshot) this.drawWave();
     this.updateFunkReadout();
     this.updateLiveDots();
+    // Only the tick layer — the map itself is arithmetic over the census and
+    // has no business being repainted sixty times a second.
+    if (this.poolOpen && (audio?.isPlaying() || audio?.snapshot)) this.pool.drawLive();
   }
 
   drawWave() {
