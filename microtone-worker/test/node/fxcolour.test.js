@@ -68,19 +68,32 @@ test("S is multiplexed — the sub-command nibble takes the OPCODE's ink", () =>
   assert.equal(map(fx("s"), 0xc400), "o1.."); // S $Cx00 note cut
   assert.equal(map(fx("s"), 0x8040), "o111"); // S $80xx pan — 9-bit angle, one field
   assert.equal(map(fx("s"), 0xd123), "o123"); // S $Dxny delay, action, action delay
-  assert.equal(map(fx("s"), 0xf0a0), "o111"); // S $F0xx invert loop — 12-bit speed
+  assert.equal(map(fx("s"), 0xf0a0), "o.11"); // S $F0xx invert loop — 8-bit speed over a reserved nibble
   assert.equal(map(fx("s"), 0xa000), "o111"); // undefined sub-command: one field
 });
 
 test("Z is multiplexed the same way", () => {
   assert.equal(map(fx("z"), 0x0080), "o111"); // Z $0xxx — selector + 12-bit speed
+  // 163.1: the funk form carries TWO values — the walk selector and the speed
+  // it drives — so it must not read as one 12-bit number the way the slide does.
+  assert.equal(map(fx("z"), 0xf080), "o122"); // Z $Ffxx — selector, walk, speed
+  assert.equal(map(fx("z"), 0xffff), "o122");
+});
+
+test("effect 0 is an explicit blank: no field, every nibble dim", () => {
+  // 163.1: `0 $xxxx` exists to say "nothing happens here" over a pattern-ditto
+  // ghost. The engine reads no part of the argument, so no part of it is a
+  // value — the whole cell is reserved ink, which is what tells the two apart.
+  assert.equal(map(0, 0x0000), "....");
+  assert.equal(map(0, 0xbeef), "....");
 });
 
 test("every effect number yields four fields, and the last is never the opcode's", () => {
   // 120.2: the opcode's colour and the LAST argument's colour must differ, so
   // no layout may end on 'o' (or on a reserved nibble, which would leave the
-  // cell ending in dim ink).
-  for (let effect = 0; effect <= 35; effect++) {
+  // cell ending in dim ink). Effect 0 is exempt on both counts and tested
+  // above: it is the one command with no argument at all.
+  for (let effect = 1; effect <= 35; effect++) {
     for (const arg of [0x0000, 0x1234, 0xf155, 0xff64, 0x8040, 0xffff]) {
       const fields = fxArgFields(effect, arg);
       assert.equal(fields.length, 4, `effect ${effect} arg ${arg}`);

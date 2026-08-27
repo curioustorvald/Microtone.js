@@ -16,7 +16,7 @@ import {
   SNAP_V_ENV_VOL_IDX, SNAP_V_ENV_VOL_TIME, SNAP_V_ENV_PAN_IDX, SNAP_V_ENV_PAN_TIME,
   SNAP_V_ENV_PITCH_IDX, SNAP_V_ENV_PITCH_TIME, SNAP_V_ENV_FILTER_IDX, SNAP_V_ENV_FILTER_TIME,
   SNAP_VOICE_STRIDE, SNAP_FLOATS, SNAP_SAB_BYTES, SNAP_GLOBAL_VOLUME,
-  SNAP_V_FUNK_WINDOW, SNAP_V_FUNK_POS, SNAP_V_FUNK_LEN,
+  SNAP_V_FUNK_WINDOW, SNAP_V_FUNK_POS, SNAP_V_FUNK_LEN, SNAP_V_FUNK_MODE,
   SNAP_AN_METERS, SNAP_AN_FRAMES, SNAP_AN_FIELD,
   SNAP_AN_CORR_LL, SNAP_AN_CORR_RR, SNAP_AN_CORR_LR, SNAP_AN_RING_WRITE,
   SNAP_METER_BASE, SNAP_METER_STRIDE,
@@ -382,6 +382,9 @@ export class AudioSystem {
   /** The window's width — the voice's active loop length, which an Ixmp patch
    *  may have replaced, so it is not the document sample's. */
   getVoiceFunkLen(vi) { return this._v(vi, SNAP_V_FUNK_LEN); }
+  /** Which walk is hopping the window (item 163's `$f` nibble): the low two
+   *  bits are the hop size (loop length >> them), the high two the family. */
+  getVoiceFunkMode(vi) { return this._v(vi, SNAP_V_FUNK_MODE); }
   getVoiceEnvVolIndex(vi) { return this._v(vi, SNAP_V_ENV_VOL_IDX); }
   getVoiceEnvVolTime(vi) { return this._v(vi, SNAP_V_ENV_VOL_TIME); }
   getVoiceEnvPanIndex(vi) { return this._v(vi, SNAP_V_ENV_PAN_IDX); }

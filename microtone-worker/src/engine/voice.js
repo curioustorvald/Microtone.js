@@ -376,18 +376,32 @@ export class Voice {
     this.invertAccumulator = 0;
     this.invertWritePos = 0;
 
-    // Funk repeat (Z $F0xx) — ProTracker 1.0C's OTHER EFx, which hops the
-    // sounding LOOP WINDOW through the sample a whole loop length at a time
-    // instead of inverting bytes. `funkPos` is the walking pointer (PT's
-    // n_wavestart: an absolute byte index, -1 = never walked) and `funkWindow`
-    // is the window the voice is actually sounding — Paula reloaded AUDxLC at
-    // the loop wrap, so the pointer may be ahead of the window that is playing.
-    // Speed and accumulator are CHANNEL state: nothing resets them but a
-    // transport reset (FUNK_REPEAT.md §2.1).
+    // Funk repeat (Z $Ffxx) — ProTracker 1.0C's OTHER EFx, which hops the
+    // sounding LOOP WINDOW through the sample instead of inverting bytes.
+    // `funkPos` is the walking pointer (PT's n_wavestart: an absolute byte
+    // index, -1 = never walked) and `funkWindow` is the window the voice is
+    // actually sounding — Paula reloaded AUDxLC at the loop wrap, so the
+    // pointer may be ahead of the window that is playing. `funkMode` is item
+    // 163's `$f`: the hop's size and what it does (tick.js funkWalkStep /
+    // funkWalkPointer), 0 being 1.0C's own whole-block hop forward.
+    // `funkWalk` is where the DETERMINISTIC walk has got to, which is the same
+    // as funkPos except under `$8`-`$B`, whose throw is measured from it every
+    // step so the jitter cannot accumulate. Speed, mode and accumulator are all
+    // CHANNEL state: nothing resets them but a transport reset (§2.1).
     this.funkSpeed = 0;
+    this.funkMode = 0;
     this.funkAccumulator = 0;
+    this.funkWalk = -1;
     this.funkPos = -1;
     this.funkWindow = -1;
+    // Anti-click crossfade over the seam a hop opens (item 163.2), the sample
+    // modifications' idea applied to a moved loop: `funkXfade` counts down
+    // output samples out of `funkXfadeLen`, and the ghost read is the live
+    // position shifted by `funkXfadeOffset` — (old window − new window), so it
+    // follows the voice's own rate and direction without a second cursor.
+    this.funkXfade = 0;
+    this.funkXfadeLen = 1;
+    this.funkXfadeOffset = 0;
 
     // Sample modification (notefx 2 / 3) — the operation and its region live on
     // the instrument; the channel only drives the clock. `modPeriod` is the step

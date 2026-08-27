@@ -111,7 +111,12 @@ export const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 
 export const SNAP_V_FUNK_WINDOW = 18;
 export const SNAP_V_FUNK_POS = 19;
 export const SNAP_V_FUNK_LEN = 20;
-export const SNAP_VOICE_STRIDE = 21;
+// …and which walk is hopping it (item 163's `$f`): the overlay names the
+// command it is drawing, and the hop's SIZE is the loop length shifted right by
+// the low two bits, so a half- or eighth-block walk is stepped through at the
+// spacing it really uses instead of the loop length.
+export const SNAP_V_FUNK_MODE = 21;
+export const SNAP_VOICE_STRIDE = 22;
 
 // Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
 // follow a sounding audition — the Instruments/Samples editors scan the block

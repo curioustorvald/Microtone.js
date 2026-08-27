@@ -29,9 +29,118 @@ import {
 import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
 } from "./spatial.js";
+import { random } from "./rng.js";
 
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
+
+// ── Funk repeat's walk (Z $Ffxx, item 163) ───────────────────────────────────
+// ProTracker 1.0C took one walk: forward, a whole loop length a step, home when
+// the next block would not fit. Item 163 keeps that as `$f = 0` and reads the
+// nibble as two independent choices, which is granular synthesis' own pair of
+// knobs — the GRAIN is the loop, and this picks the HOP:
+//
+//   $f & 3   the hop's size: the loop length shifted right by it, so $0 is a
+//            whole block (no overlap), $1 a half, $2 a quarter, $3 an eighth —
+//            each finer setting overlaps the grains further and smooths the
+//            scan into a slur rather than a stutter
+//   $f >> 2  what the hop DOES: 0 forward, 1 backward, 2 forward with the
+//            landing JITTERED, 3 a free throw across the whole sample
+//
+// The walk lives on a GRID of hop-sized positions rooted at the loop start, and
+// the grid stops at the last position whose whole window still fits before the
+// sample end (§3.3's test, in the general case) — so `K` below is the walk's
+// whole territory, `K + 1` positions, and a loop with no room to move keeps
+// 1.0C's inert behaviour whatever `$f` says.
+//
+// TWO POINTERS, and the difference is the whole of `$8`-`$B`. `funkWalk` is
+// where the WALK is — it steps forward (or backward) one hop a time and nothing
+// random ever touches it — and `funkPos` is where THIS grain landed, which is
+// the walk plus a fresh throw. The throw is measured from the walk every time,
+// never from the previous throw, which is the rule the sample modifications'
+// jumps and scatters follow for the same reason (ENGINE_SPEC §8.5, "the random
+// operations do not accumulate"): feed a throw back into the next one and the
+// bound stops meaning anything after a few seconds — the narrowest setting
+// diffuses into the widest, and every rung of the ladder ends up the same
+// effect with a different rise time. A jittery walk is still a walk.
+const FUNK_JITTER_DIVISOR = 16;   // `$8`-`$B` throw within ±1/16 of the territory
+
+/** The hop, in bytes: the loop length shifted by `$f`'s low two bits. */
+function funkHop(funkMode, loopLen) {
+  return Math.max(1, loopLen >> (funkMode & 3));
+}
+
+/**
+ * The last grid position whose window still fits whole (§3.3), as an index.
+ * Zero means the loop sits at its sample's tail with nowhere to go: every
+ * candidate overshoots and the effect is silent — not broken, out of room.
+ */
+function funkGridTop(hop, loopStart, loopLen, sampleLen) {
+  return Math.floor((sampleLen - loopLen - loopStart) / hop);
+}
+
+/**
+ * `pos` as a grid index, re-quantised onto THIS hop's grid: `$f` may have
+ * changed under a running walk, and a finer grid contains every coarser one, so
+ * going finer never moves the pointer and going coarser moves it to the nearest
+ * whole hop. -1 (never walked) reads as the loop start.
+ */
+function funkGridIndex(pos, hop, loopStart, K) {
+  if (pos < 0) return 0;
+  return Math.min(Math.max(Math.round((pos - loopStart) / hop), 0), K);
+}
+
+/** A uniform integer in [0, n). */
+function uniformInt(n) {
+  return Math.min(Math.floor(random() * n), n - 1);
+}
+
+/**
+ * Step the WALK: forward for `$0`-`$3` and `$8`-`$B`, backward for `$4`-`$7`,
+ * and forward for `$C`-`$F` too, where nothing reads it but switching back to a
+ * directional `$f` should carry on from somewhere sensible rather than from the
+ * last throw. Deterministic — this is the pointer the throws measure from.
+ * `walk` is where it is now (-1 = it has never moved); the result is an
+ * absolute byte offset.
+ */
+export function funkWalkStep(funkMode, walk, loopStart, loopLen, sampleLen) {
+  const hop = funkHop(funkMode, loopLen);
+  const K = funkGridTop(hop, loopStart, loopLen, sampleLen);
+  if (K <= 0) return loopStart;
+  const n = funkGridIndex(walk, hop, loopStart, K);
+  // Forward snaps home when the next window would not fit; backward is the
+  // mirror and wraps to the TOP — the last position that does fit — so a walk
+  // that has never moved goes there on its first backward step instead of
+  // sitting at the bottom with nowhere below it.
+  const next = (funkMode >> 2) === 1
+    ? (n - 1 < 0 ? K : n - 1)
+    : (n + 1 > K ? 0 : n + 1);
+  return loopStart + next * hop;
+}
+
+/**
+ * Where the grain actually goes, given the walk `funkWalkStep` just produced.
+ * `$0`-`$7` sound the walk itself; `$8`-`$B` throw once around it, within ±1/8
+ * of the territory, clamped to the ends (a clamp cannot pile up here — the walk
+ * has moved on by the next step, which is exactly what an accumulating walk
+ * could not say); `$C`-`$F` ignore the walk and throw over the whole territory,
+ * which is what "no restriction on the next position" means.
+ *
+ * One draw per STEP, from rng.js — never a draw per output sample, and never
+ * one measured from the previous throw.
+ */
+export function funkWalkPointer(funkMode, walk, loopStart, loopLen, sampleLen) {
+  const family = funkMode >> 2;
+  if (family < 2) return walk;
+  const hop = funkHop(funkMode, loopLen);
+  const K = funkGridTop(hop, loopStart, loopLen, sampleLen);
+  if (K <= 0) return loopStart;
+  if (family === 3) return loopStart + uniformInt(K + 1) * hop;
+  const n = funkGridIndex(walk, hop, loopStart, K);
+  const reach = Math.max(1, Math.round((K + 1) / FUNK_JITTER_DIVISOR));
+  const thrown = n + uniformInt(2 * reach + 1) - reach;
+  return loopStart + Math.min(Math.max(thrown, 0), K) * hop;
+}
 
 /**
  * Arm the anti-click crossfade on every voice sounding `instId` (item 153.5).
@@ -374,13 +483,15 @@ export function applyTrackerTick(eng, ts, playhead) {
     }
   }
 
-  // Funk repeat (Z $F0xx) — walk the loop WINDOW through the sample (item 161).
-  // ProTracker 1.0C's EFx, from the transcription in FUNK_REPEAT.md §3: what
-  // 1.1B kept of it is the ladder, the accumulator and the name; the step body
-  // it threw away moved Paula's AUDxLC by ONE WHOLE LOOP LENGTH a time, so the
-  // loop window hops block by block through the sample and snaps back to the
-  // real loop start as soon as the next block would not fit whole. The window
-  // the sampler sounds is latched at the loop restart, as the DMA latched it.
+  // Funk repeat (Z $Ffxx) — walk the loop WINDOW through the sample (item 161,
+  // extended by item 163). ProTracker 1.0C's EFx, from the transcription in
+  // FUNK_REPEAT.md §3: what 1.1B kept of it is the ladder, the accumulator and
+  // the name; the step body it threw away moved Paula's AUDxLC by ONE WHOLE
+  // LOOP LENGTH a time, so the loop window hops block by block through the
+  // sample and snaps back to the real loop start as soon as the next block
+  // would not fit whole. The window the sampler sounds is latched at the loop
+  // restart, as the DMA latched it. `$f` sizes the hop and picks what it does
+  // (funkWalkStep / funkWalkPointer above); `$f = 0` is 1.0C's own, unchanged.
   //
   // The accumulator is deliberately NOT reset here, or by Z $F000, or by a
   // fresh note: PT never touched n_funkoffset outside this block (§2.1), so a
@@ -397,12 +508,13 @@ export function applyTrackerTick(eng, ts, playhead) {
     voice.funkAccumulator = (voice.funkAccumulator + voice.funkSpeed) & 0xff;
     if ((voice.funkAccumulator & 0x80) !== 0) {
       voice.funkAccumulator = 0;             // reset, not -= 0x80: no jitter
-      // §3.3: keep the candidate while the WHOLE window still fits before the
-      // sample end, else back to the loop the instrument declares. A loop that
-      // already sits at the tail of its sample therefore never moves — inert by
-      // design (§3.5), which is what the manual's "short loop" advice is about.
-      const cand = (voice.funkPos < 0 ? loopStart : voice.funkPos) + loopLen;
-      voice.funkPos = cand + loopLen <= sampleLen ? cand : loopStart;
+      // The walk steps first and the grain is placed against it: `$8`-`$B`'s
+      // throw is measured from where the WALK is, never from where the last
+      // throw landed, so the jitter cannot diffuse into a wider setting.
+      voice.funkWalk = funkWalkStep(
+        voice.funkMode, voice.funkWalk, loopStart, loopLen, sampleLen);
+      voice.funkPos = funkWalkPointer(
+        voice.funkMode, voice.funkWalk, loopStart, loopLen, sampleLen);
     }
   }
 

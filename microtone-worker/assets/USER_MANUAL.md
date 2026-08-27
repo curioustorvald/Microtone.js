@@ -900,11 +900,15 @@ level it is playing, and everything the modification touches is drawn in the
 invert colour. You see the waveform actually being played back, not the
 sample's original bytes.
 
-Funk repeat (`Z $F0xx`) leaves the bytes alone and moves the loop instead, so
+Funk repeat (`Z $Ffxx`) leaves the bytes alone and moves the loop instead, so
 what you see there is the play cursor: it jumps clean out of the loop shading
-and works down the waveform a loop length at a time, which is exactly where the
-note has got to. It needs room to do that — a loop sitting at the very end of
-its sample has nowhere to hop and the effect stays silent.
+and works through the waveform a hop at a time, which is exactly where the note
+has got to. The `$f` nibble picks that hop — a whole loop length, a half, a
+quarter or an eighth of one, going forwards, going backwards, going forwards
+with each landing jittered, or thrown anywhere in the sample — and the band
+drawn over the waveform, with the next hop outlined beside it, follows whichever
+you chose. It needs room to do that — a loop sitting at the very end of its sample
+has nowhere to hop and the effect stays silent.
 
 **Edit…** opens the selected sample in the [Sample Lab](#the-sample-lab) — the
 one sample editor. Crop, EQ, chop, normalise, fade, chord: everything the Lab
@@ -1540,7 +1544,7 @@ sidebar (also at [Note Effects](#effects)).
 | W | Global vol slide | `$xy00` |
 | X | Spatial panning | `$eeaa` — elevation, azimuth |
 | Y | Panbrello | `$xxyy` — speed, depth |
-| Z | Special 2 | `$0xxx` spatial slide · `$F0xx` funk repeat: hop the loop through the sample |
+| Z | Special 2 | `$0xxx` spatial slide · `$Ffxx` funk repeat: hop the loop through the sample, `$f` = the hop |
 
 ### Ditto ghosts
 
@@ -1554,6 +1558,12 @@ Grey means "not really here": ghosts only ever fill sub-columns the row leaves
 blank, and anything you type wins immediately and returns to its own colour.
 The row carrying the `7 $llrr` command keeps showing that command, even though
 the engine plays the repeated row's effect there instead.
+
+To say "**nothing** happens here" and stop a ghosted effect reaching a row, put
+effect `0` on it with any non-zero argument. Effect 0 does nothing whatever its
+argument, but the cell is no longer blank, so the ditto has nothing to fill —
+and because no part of the argument is read, the grids draw all four digits
+dim, which is how an explicit blank tells itself apart from a command.
 
 Starting playback **from a ghost row** sounds it: seeking into the middle of a
 ditto region rebuilds the repeat so the note you see in grey is the note you

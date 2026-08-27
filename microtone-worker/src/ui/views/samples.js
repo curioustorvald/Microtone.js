@@ -281,14 +281,20 @@ export class SamplesView {
     }
     const fw = fws[0];
     const home = (s.loopMode & 3) !== 0 ? s.loopStart : 0;
-    const blocks = Math.max(1, Math.floor((s.len - home) / fw.len));
-    const at = Math.max(0, Math.round((fw.window - home) / fw.len)) + 1;
+    // The walk's grid is the HOP's, not the window's (item 163): a half- or
+    // eighth-block walk visits four or eight times as many positions over the
+    // same sample, and counting them in loop lengths would say "step 3 of 7"
+    // while the band was plainly somewhere else.
+    const hop = funkHopSize(fw);
+    const blocks = Math.max(1, Math.floor((s.len - fw.len - home) / hop) + 1);
+    const at = Math.min(Math.max(Math.round((fw.window - home) / hop), 0), blocks - 1) + 1;
     // The pending hop is only worth a clause while it differs from the window:
     // right after a restart latches it the two are equal, and printing the same
     // number twice reads as a bug rather than as "it has just landed".
     const next = fw.pending >= 0 && fw.pending !== fw.window
       ? t("smp.funkReadoutNext", { next: fw.pending }) : "";
-    this.funkInfo.textContent = t("smp.funkReadout", { at: fw.window, k: at, n: blocks }) + next;
+    this.funkInfo.textContent =
+      t("smp.funkReadout", { f: funkSpelling(fw), at: fw.window, k: at, n: blocks }) + next;
   }
 
   updateInfo() {
@@ -387,7 +393,7 @@ export class SamplesView {
           ctx.fillStyle = C.waveFunk;
           ctx.globalAlpha = 0.9;
           ctx.font = "10px sans-serif";
-          ctx.fillText("Z $F0xx", xOf(fw.window) + 4, h - 4);
+          ctx.fillText(`Z ${funkSpelling(fw)}xx`, xOf(fw.window) + 4, h - 4);
           ctx.globalAlpha = 1;
         }
       }
@@ -521,9 +527,22 @@ export class SamplesView {
   }
 }
 
+/** The walk's hop in bytes: the window's length shifted by `$f`'s low two bits
+ *  ($0 a whole block, $3 an eighth of one), never less than a byte. */
+function funkHopSize(fw) {
+  return Math.max(1, fw.len >> (fw.mode & 3));
+}
+
+/** How the command that is driving this window is spelled — `$F0` … `$FF`. The
+ *  effect code is the one caption that needs no translating. */
+function funkSpelling(fw) {
+  return `$F${(fw.mode & 0xf).toString(16).toUpperCase()}`;
+}
+
 /**
  * The distinct funk-repeat windows live on `s` right now, newest state per
- * frame: `{ window, pending, len }` in bytes, ready to scale onto the canvas.
+ * frame: `{ window, pending, len }` in bytes plus the walk's `mode` (item
+ * 163's `$f`), ready to scale onto the canvas.
  *
  * The width comes from the VOICE (its active loop length), not from the
  * document's loop points — an Ixmp patch replaces those under a sounding voice
@@ -540,8 +559,10 @@ function collectFunkWindows(audio, s) {
     const window = audio.getVoiceFunkWindow(vi);
     if (!(len > 0) || window < 0 || window + len > s.len) continue;
     const pending = audio.getVoiceFunkPos(vi);
-    if (out.some((o) => o.window === window && o.len === len && o.pending === pending)) continue;
-    out.push({ window, pending, len });
+    const mode = audio.getVoiceFunkMode(vi) | 0;
+    if (out.some((o) => o.window === window && o.len === len
+      && o.pending === pending && o.mode === mode)) continue;
+    out.push({ window, pending, len, mode });
   }
   return out;
 }

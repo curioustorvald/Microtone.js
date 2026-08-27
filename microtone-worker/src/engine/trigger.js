@@ -389,8 +389,10 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   // view, which a trigger rebuilds, so carrying it across a re-trigger would
   // aim it into a sample that may not be the one it was measured against. The
   // speed and the accumulator persist, which is the part that carries the feel.
+  voice.funkWalk = -1;
   voice.funkPos = -1;
   voice.funkWindow = -1;
+  voice.funkXfade = 0;
   // Random vol/pan swing biases — seeded once per trigger.
   voice.randomVolBias = inst.volumeSwing !== 0
     ? Math.trunc(random() * (2 * inst.volumeSwing + 1)) - inst.volumeSwing : 0;

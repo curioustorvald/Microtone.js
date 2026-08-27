@@ -3749,18 +3749,32 @@ class Voice {
     this.invertAccumulator = 0;
     this.invertWritePos = 0;
 
-    // Funk repeat (Z $F0xx) — ProTracker 1.0C's OTHER EFx, which hops the
-    // sounding LOOP WINDOW through the sample a whole loop length at a time
-    // instead of inverting bytes. `funkPos` is the walking pointer (PT's
-    // n_wavestart: an absolute byte index, -1 = never walked) and `funkWindow`
-    // is the window the voice is actually sounding — Paula reloaded AUDxLC at
-    // the loop wrap, so the pointer may be ahead of the window that is playing.
-    // Speed and accumulator are CHANNEL state: nothing resets them but a
-    // transport reset (FUNK_REPEAT.md §2.1).
+    // Funk repeat (Z $Ffxx) — ProTracker 1.0C's OTHER EFx, which hops the
+    // sounding LOOP WINDOW through the sample instead of inverting bytes.
+    // `funkPos` is the walking pointer (PT's n_wavestart: an absolute byte
+    // index, -1 = never walked) and `funkWindow` is the window the voice is
+    // actually sounding — Paula reloaded AUDxLC at the loop wrap, so the
+    // pointer may be ahead of the window that is playing. `funkMode` is item
+    // 163's `$f`: the hop's size and what it does (tick.js funkWalkStep /
+    // funkWalkPointer), 0 being 1.0C's own whole-block hop forward.
+    // `funkWalk` is where the DETERMINISTIC walk has got to, which is the same
+    // as funkPos except under `$8`-`$B`, whose throw is measured from it every
+    // step so the jitter cannot accumulate. Speed, mode and accumulator are all
+    // CHANNEL state: nothing resets them but a transport reset (§2.1).
     this.funkSpeed = 0;
+    this.funkMode = 0;
     this.funkAccumulator = 0;
+    this.funkWalk = -1;
     this.funkPos = -1;
     this.funkWindow = -1;
+    // Anti-click crossfade over the seam a hop opens (item 163.2), the sample
+    // modifications' idea applied to a moved loop: `funkXfade` counts down
+    // output samples out of `funkXfadeLen`, and the ghost read is the live
+    // position shifted by `funkXfadeOffset` — (old window − new window), so it
+    // follows the voice's own rate and direction without a second cursor.
+    this.funkXfade = 0;
+    this.funkXfadeLen = 1;
+    this.funkXfadeOffset = 0;
 
     // Sample modification (notefx 2 / 3) — the operation and its region live on
     // the instrument; the channel only drives the clock. `modPeriod` is the step
@@ -4336,9 +4350,12 @@ class Playhead {
       it.invertAccumulator = 0;
       it.invertWritePos = 0;
       it.funkSpeed = 0;
+      it.funkMode = 0;
       it.funkAccumulator = 0;
+      it.funkWalk = -1;
       it.funkPos = -1;
       it.funkWindow = -1;
+      it.funkXfade = 0;
       it.modPeriod = 0;
       it.modTickCount = 0;
       it.modWritePos = 0;
@@ -4404,9 +4421,12 @@ class Playhead {
         it.invertAccumulator = 0;
         it.invertWritePos = 0;
         it.funkSpeed = 0;
+        it.funkMode = 0;
         it.funkAccumulator = 0;
+        it.funkWalk = -1;
         it.funkPos = -1;
         it.funkWindow = -1;
+        it.funkXfade = 0;
         it.modPeriod = 0;
         it.modTickCount = 0;
         it.modWritePos = 0;
@@ -4584,6 +4604,58 @@ function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, bas
 }
 
 /**
+ * Anti-click crossfade for funk repeat's hop (item 163.2), the same idea as the
+ * sample modifications' (§8.5) and there for the same reason: the restart that
+ * installs a walked window jumps the read into a part of the sample that has
+ * nothing to do with the one just playing, and a step discontinuity between two
+ * output samples is a click — one per hop, up to one per tick at `$xx = $80`.
+ *
+ * Latching at the loop restart (which is what Paula did) removes the click a
+ * MID-BLOCK move would make; it does nothing about the seam itself, because a
+ * loop point is only continuous when someone chose it to be and the walk lands
+ * where the arithmetic says. So the seam is crossfaded: for `funkXfade` output
+ * samples the voice also reads through the window the hop replaced — the SAME
+ * position offset back by `funkXfadeOffset`, which is what "the previous
+ * mapping" means here — and the two are mixed on a falling weight.
+ *
+ * The window is capped at one grain (`loopLen / rate` output samples), so a
+ * crossfade always finishes before the restart that would re-arm it: on the
+ * short loops this effect is written for — ProTracker's manual says $10, $20,
+ * $40, $80 bytes — a fixed 2 ms would span several grains and smear the walk
+ * into a comb filter instead of smoothing it.
+ */
+const FUNK_XFADE_SAMPLES = 64;
+
+/** Arm the seam crossfade. `offset` is (old window − new window) in bytes, so
+ *  the ghost read is just `samplePos + offset`, and 0 (the window did not move)
+ *  arms nothing — an ordinary loop wrap must sound exactly as it always has. */
+function armFunkXfade(voice, offset, windowLen) {
+  if (offset === 0) return;
+  const rate = Math.abs(voice.currentPlaybackRate);
+  const grain = rate > 0 ? Math.floor(windowLen / rate) : FUNK_XFADE_SAMPLES;
+  const len = Math.min(FUNK_XFADE_SAMPLES, Math.max(1, grain));
+  voice.funkXfade = len;
+  voice.funkXfadeLen = len;
+  voice.funkXfadeOffset = offset;
+}
+
+/**
+ * One channel read through the window the hop replaced. The position is the
+ * live one shifted back, so it follows the voice's own rate and direction for
+ * free; the DPCM slew counter is saved and restored because the ghost must not
+ * advance the state the real trajectory is keeping.
+ */
+function funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st) {
+  const keepPos = voice.samplePos;
+  const keepDpcm = st.nesDpcmCounter;
+  voice.samplePos = keepPos + voice.funkXfadeOffset;
+  const g = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st);
+  voice.samplePos = keepPos;
+  st.nesDpcmCounter = keepDpcm;
+  return g;
+}
+
+/**
  * Fetch BOTH channels of a stereo voice at one position, then advance once —
  * the pair is one sample of one voice, so pitch, loop wrapping and the
  * sample-end ramp are shared. Writes [ch1, ch2] into `out` (a length-2 array
@@ -4598,6 +4670,16 @@ function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
     voice.activeSamplePtr, voice);
   out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeChanPtr2, voice.right);
+  if (voice.funkXfade > 0) {
+    // One weight per output sample, shared by both channels — the crossfade of
+    // the two windows is then exactly the crossfade of the two signals.
+    const w = voice.funkXfade / voice.funkXfadeLen;
+    out[0] = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeSamplePtr, voice) * w + out[0] * (1.0 - w);
+    out[1] = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeChanPtr2, voice.right) * w + out[1] * (1.0 - w);
+    voice.funkXfade--;
+  }
   if (voice.modXfade > 0) voice.modXfade--;
   if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
   return out;
@@ -4608,11 +4690,17 @@ function fetchTrackerSample(eng, voice, inst, interpMode) {
 
   const sampleLen = Math.max(voice.activeSampleLength, 1);
   const binMax = SAMPLE_BIN_TOTAL - 1;
-  const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+  let sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
+  if (voice.funkXfade > 0) {
+    const w = voice.funkXfade / voice.funkXfadeLen;
+    sample = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeSamplePtr, voice) * w + sample * (1.0 - w);
+    voice.funkXfade--;
+  }
 
-  // The crossfade runs on the OUTPUT clock, once per sample however many taps
-  // read through it, and keeps running while the voice ramps out.
+  // The crossfades run on the OUTPUT clock, once per sample however many taps
+  // read through them, and keep running while the voice ramps out.
   if (voice.modXfade > 0) voice.modXfade--;
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
@@ -4655,8 +4743,11 @@ function advanceSamplePos(voice, sampleLen) {
       case 1:
         if (voice.samplePos >= loopEnd) {
           if (windowed) {
-            // The restart is where the walk's pointer has got to by now.
+            // The restart is where the walk's pointer has got to by now, and
+            // the seam it opens is crossfaded (item 163.2).
+            const prevWindow = loopStart;
             if (voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+            armFunkXfade(voice, prevWindow - voice.funkWindow, loopEnd - loopStart);
             voice.samplePos = voice.funkWindow + (voice.samplePos - loopEnd);
           } else {
             voice.samplePos -= Math.max(loopEnd - loopStart, 1.0);
@@ -4678,8 +4769,14 @@ function advanceSamplePos(voice, sampleLen) {
   } else {
     voice.samplePos -= voice.currentPlaybackRate;
     if (voice.samplePos < loopStart) {
-      if (windowed && voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
-      voice.samplePos = windowed ? voice.funkWindow : loopStart;
+      if (windowed) {
+        const prevWindow = loopStart;
+        if (voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+        armFunkXfade(voice, prevWindow - voice.funkWindow, loopEnd - loopStart);
+        voice.samplePos = voice.funkWindow;
+      } else {
+        voice.samplePos = loopStart;
+      }
       voice.forward = true;
     }
   }
@@ -5673,8 +5770,10 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   // view, which a trigger rebuilds, so carrying it across a re-trigger would
   // aim it into a sample that may not be the one it was measured against. The
   // speed and the accumulator persist, which is the part that carries the feel.
+  voice.funkWalk = -1;
   voice.funkPos = -1;
   voice.funkWindow = -1;
+  voice.funkXfade = 0;
   // Random vol/pan swing biases — seeded once per trigger.
   voice.randomVolBias = inst.volumeSwing !== 0
     ? Math.trunc(random() * (2 * inst.volumeSwing + 1)) - inst.volumeSwing : 0;
@@ -6489,16 +6588,22 @@ function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
       break;
     case EffectOp.OP_Z: {
-      // Z $F0xx — funk repeat, ProTracker 1.0C's EFx (item 161). Not a spatial
-      // command at all: Z multiplexes on its first nibble the way S does, and
-      // this form is live in EVERY song, stereo included. `xx` is the funk
-      // ladder's speed value, the same 8-bit scale S $F0xx reads.
+      // Z $Ffxx — funk repeat, ProTracker 1.0C's EFx (item 161), with item
+      // 163's walk selector in `$f`. Not a spatial command at all: Z
+      // multiplexes on its first nibble the way S does, and this form is live
+      // in EVERY song, stereo included. `xx` is the funk ladder's speed value,
+      // the same 8-bit scale S $F0xx reads, and `$f` picks the walk that speed
+      // drives — `$0` being 1.0C's own, so every `Z $F0xx` ever written keeps
+      // meaning what it meant.
       //
-      // The speed is CHANNEL state and sticky (PT kept it in n_glissfunk's high
-      // nibble, alongside glissando's low one), and writing it leaves the
-      // accumulator running — PT's mt_FunkIt never cleared n_funkoffset, not on
-      // a speed change and not on Z $F000, so the phase carries across the lot.
+      // Speed and walk are both CHANNEL state and sticky (PT kept the speed in
+      // n_glissfunk's high nibble, alongside glissando's low one), and writing
+      // either leaves the accumulator running — PT's mt_FunkIt never cleared
+      // n_funkoffset, not on a speed change and not on Z $F000, so the phase
+      // carries across the lot. The walk is written even by `Z $Ff00`, which
+      // arms a mode for the speed that follows it.
       if ((rawArg & 0xf000) === 0xf000) {
+        voice.funkMode = (rawArg >>> 8) & 0xf;
         voice.funkSpeed = rawArg & 0xff;
         break;
       }
@@ -6595,8 +6700,11 @@ function applySEffect(eng, ts, voice, vi, arg) {
       }
       break;
     case 0xf:
+      // S $F0xx — invert loop. `$x` is RESERVED (item 163.1 paints it dim), so
+      // it is not read: every spelling of the command clears the accumulator,
+      // which is the difference from Z $Ffxx's free-running phase.
       voice.invertSpeed = arg & 0xff;
-      if (x === 0) voice.invertAccumulator = 0;
+      voice.invertAccumulator = 0;
       break;
   }
 }
@@ -7176,8 +7284,117 @@ function advanceRow(eng, ts, playhead) {
 
 
 
+
 /** Scratch [azimuth, elevation] for the Z slide — one voice steps at a time. */
 const spatialStep = new Float64Array(2);
+
+// ── Funk repeat's walk (Z $Ffxx, item 163) ───────────────────────────────────
+// ProTracker 1.0C took one walk: forward, a whole loop length a step, home when
+// the next block would not fit. Item 163 keeps that as `$f = 0` and reads the
+// nibble as two independent choices, which is granular synthesis' own pair of
+// knobs — the GRAIN is the loop, and this picks the HOP:
+//
+//   $f & 3   the hop's size: the loop length shifted right by it, so $0 is a
+//            whole block (no overlap), $1 a half, $2 a quarter, $3 an eighth —
+//            each finer setting overlaps the grains further and smooths the
+//            scan into a slur rather than a stutter
+//   $f >> 2  what the hop DOES: 0 forward, 1 backward, 2 forward with the
+//            landing JITTERED, 3 a free throw across the whole sample
+//
+// The walk lives on a GRID of hop-sized positions rooted at the loop start, and
+// the grid stops at the last position whose whole window still fits before the
+// sample end (§3.3's test, in the general case) — so `K` below is the walk's
+// whole territory, `K + 1` positions, and a loop with no room to move keeps
+// 1.0C's inert behaviour whatever `$f` says.
+//
+// TWO POINTERS, and the difference is the whole of `$8`-`$B`. `funkWalk` is
+// where the WALK is — it steps forward (or backward) one hop a time and nothing
+// random ever touches it — and `funkPos` is where THIS grain landed, which is
+// the walk plus a fresh throw. The throw is measured from the walk every time,
+// never from the previous throw, which is the rule the sample modifications'
+// jumps and scatters follow for the same reason (ENGINE_SPEC §8.5, "the random
+// operations do not accumulate"): feed a throw back into the next one and the
+// bound stops meaning anything after a few seconds — the narrowest setting
+// diffuses into the widest, and every rung of the ladder ends up the same
+// effect with a different rise time. A jittery walk is still a walk.
+const FUNK_JITTER_DIVISOR = 16;   // `$8`-`$B` throw within ±1/16 of the territory
+
+/** The hop, in bytes: the loop length shifted by `$f`'s low two bits. */
+function funkHop(funkMode, loopLen) {
+  return Math.max(1, loopLen >> (funkMode & 3));
+}
+
+/**
+ * The last grid position whose window still fits whole (§3.3), as an index.
+ * Zero means the loop sits at its sample's tail with nowhere to go: every
+ * candidate overshoots and the effect is silent — not broken, out of room.
+ */
+function funkGridTop(hop, loopStart, loopLen, sampleLen) {
+  return Math.floor((sampleLen - loopLen - loopStart) / hop);
+}
+
+/**
+ * `pos` as a grid index, re-quantised onto THIS hop's grid: `$f` may have
+ * changed under a running walk, and a finer grid contains every coarser one, so
+ * going finer never moves the pointer and going coarser moves it to the nearest
+ * whole hop. -1 (never walked) reads as the loop start.
+ */
+function funkGridIndex(pos, hop, loopStart, K) {
+  if (pos < 0) return 0;
+  return Math.min(Math.max(Math.round((pos - loopStart) / hop), 0), K);
+}
+
+/** A uniform integer in [0, n). */
+function uniformInt(n) {
+  return Math.min(Math.floor(random() * n), n - 1);
+}
+
+/**
+ * Step the WALK: forward for `$0`-`$3` and `$8`-`$B`, backward for `$4`-`$7`,
+ * and forward for `$C`-`$F` too, where nothing reads it but switching back to a
+ * directional `$f` should carry on from somewhere sensible rather than from the
+ * last throw. Deterministic — this is the pointer the throws measure from.
+ * `walk` is where it is now (-1 = it has never moved); the result is an
+ * absolute byte offset.
+ */
+function funkWalkStep(funkMode, walk, loopStart, loopLen, sampleLen) {
+  const hop = funkHop(funkMode, loopLen);
+  const K = funkGridTop(hop, loopStart, loopLen, sampleLen);
+  if (K <= 0) return loopStart;
+  const n = funkGridIndex(walk, hop, loopStart, K);
+  // Forward snaps home when the next window would not fit; backward is the
+  // mirror and wraps to the TOP — the last position that does fit — so a walk
+  // that has never moved goes there on its first backward step instead of
+  // sitting at the bottom with nowhere below it.
+  const next = (funkMode >> 2) === 1
+    ? (n - 1 < 0 ? K : n - 1)
+    : (n + 1 > K ? 0 : n + 1);
+  return loopStart + next * hop;
+}
+
+/**
+ * Where the grain actually goes, given the walk `funkWalkStep` just produced.
+ * `$0`-`$7` sound the walk itself; `$8`-`$B` throw once around it, within ±1/8
+ * of the territory, clamped to the ends (a clamp cannot pile up here — the walk
+ * has moved on by the next step, which is exactly what an accumulating walk
+ * could not say); `$C`-`$F` ignore the walk and throw over the whole territory,
+ * which is what "no restriction on the next position" means.
+ *
+ * One draw per STEP, from rng.js — never a draw per output sample, and never
+ * one measured from the previous throw.
+ */
+function funkWalkPointer(funkMode, walk, loopStart, loopLen, sampleLen) {
+  const family = funkMode >> 2;
+  if (family < 2) return walk;
+  const hop = funkHop(funkMode, loopLen);
+  const K = funkGridTop(hop, loopStart, loopLen, sampleLen);
+  if (K <= 0) return loopStart;
+  if (family === 3) return loopStart + uniformInt(K + 1) * hop;
+  const n = funkGridIndex(walk, hop, loopStart, K);
+  const reach = Math.max(1, Math.round((K + 1) / FUNK_JITTER_DIVISOR));
+  const thrown = n + uniformInt(2 * reach + 1) - reach;
+  return loopStart + Math.min(Math.max(thrown, 0), K) * hop;
+}
 
 /**
  * Arm the anti-click crossfade on every voice sounding `instId` (item 153.5).
@@ -7520,13 +7737,15 @@ function applyTrackerTick(eng, ts, playhead) {
     }
   }
 
-  // Funk repeat (Z $F0xx) — walk the loop WINDOW through the sample (item 161).
-  // ProTracker 1.0C's EFx, from the transcription in FUNK_REPEAT.md §3: what
-  // 1.1B kept of it is the ladder, the accumulator and the name; the step body
-  // it threw away moved Paula's AUDxLC by ONE WHOLE LOOP LENGTH a time, so the
-  // loop window hops block by block through the sample and snaps back to the
-  // real loop start as soon as the next block would not fit whole. The window
-  // the sampler sounds is latched at the loop restart, as the DMA latched it.
+  // Funk repeat (Z $Ffxx) — walk the loop WINDOW through the sample (item 161,
+  // extended by item 163). ProTracker 1.0C's EFx, from the transcription in
+  // FUNK_REPEAT.md §3: what 1.1B kept of it is the ladder, the accumulator and
+  // the name; the step body it threw away moved Paula's AUDxLC by ONE WHOLE
+  // LOOP LENGTH a time, so the loop window hops block by block through the
+  // sample and snaps back to the real loop start as soon as the next block
+  // would not fit whole. The window the sampler sounds is latched at the loop
+  // restart, as the DMA latched it. `$f` sizes the hop and picks what it does
+  // (funkWalkStep / funkWalkPointer above); `$f = 0` is 1.0C's own, unchanged.
   //
   // The accumulator is deliberately NOT reset here, or by Z $F000, or by a
   // fresh note: PT never touched n_funkoffset outside this block (§2.1), so a
@@ -7543,12 +7762,13 @@ function applyTrackerTick(eng, ts, playhead) {
     voice.funkAccumulator = (voice.funkAccumulator + voice.funkSpeed) & 0xff;
     if ((voice.funkAccumulator & 0x80) !== 0) {
       voice.funkAccumulator = 0;             // reset, not -= 0x80: no jitter
-      // §3.3: keep the candidate while the WHOLE window still fits before the
-      // sample end, else back to the loop the instrument declares. A loop that
-      // already sits at the tail of its sample therefore never moves — inert by
-      // design (§3.5), which is what the manual's "short loop" advice is about.
-      const cand = (voice.funkPos < 0 ? loopStart : voice.funkPos) + loopLen;
-      voice.funkPos = cand + loopLen <= sampleLen ? cand : loopStart;
+      // The walk steps first and the grain is placed against it: `$8`-`$B`'s
+      // throw is measured from where the WALK is, never from where the last
+      // throw landed, so the jitter cannot diffuse into a wider setting.
+      voice.funkWalk = funkWalkStep(
+        voice.funkMode, voice.funkWalk, loopStart, loopLen, sampleLen);
+      voice.funkPos = funkWalkPointer(
+        voice.funkMode, voice.funkWalk, loopStart, loopLen, sampleLen);
     }
   }
 
@@ -8909,7 +9129,12 @@ const SNAP_V_ELEVATION = 17;   // #998: signed, 128 units = 90° (always 0 in a 
 const SNAP_V_FUNK_WINDOW = 18;
 const SNAP_V_FUNK_POS = 19;
 const SNAP_V_FUNK_LEN = 20;
-const SNAP_VOICE_STRIDE = 21;
+// …and which walk is hopping it (item 163's `$f`): the overlay names the
+// command it is drawing, and the hop's SIZE is the loop length shifted right by
+// the low two bits, so a half- or eighth-block walk is stepped through at the
+// spacing it really uses instead of the loop length.
+const SNAP_V_FUNK_MODE = 21;
+const SNAP_VOICE_STRIDE = 22;
 
 // Every PHYSICAL voice, so the jam bank (item 140) is visible to the views that
 // follow a sounding audition — the Instruments/Samples editors scan the block
@@ -9356,6 +9581,7 @@ function fillSnapshotInto(eng, playhead, f) {
       f[o + SNAP_V_FUNK_WINDOW] = v.funkWindow;
       f[o + SNAP_V_FUNK_POS] = v.funkPos;
       f[o + SNAP_V_FUNK_LEN] = v.activeSampleLoopEnd - v.activeSampleLoopStart;
+      f[o + SNAP_V_FUNK_MODE] = v.funkMode;
     } else {
       for (let k = 1; k < SNAP_VOICE_STRIDE; k++) f[o + k] = 0;
       f[o + SNAP_V_EFF_PAN] = 128;

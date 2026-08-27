@@ -169,6 +169,58 @@ function interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, bas
 }
 
 /**
+ * Anti-click crossfade for funk repeat's hop (item 163.2), the same idea as the
+ * sample modifications' (§8.5) and there for the same reason: the restart that
+ * installs a walked window jumps the read into a part of the sample that has
+ * nothing to do with the one just playing, and a step discontinuity between two
+ * output samples is a click — one per hop, up to one per tick at `$xx = $80`.
+ *
+ * Latching at the loop restart (which is what Paula did) removes the click a
+ * MID-BLOCK move would make; it does nothing about the seam itself, because a
+ * loop point is only continuous when someone chose it to be and the walk lands
+ * where the arithmetic says. So the seam is crossfaded: for `funkXfade` output
+ * samples the voice also reads through the window the hop replaced — the SAME
+ * position offset back by `funkXfadeOffset`, which is what "the previous
+ * mapping" means here — and the two are mixed on a falling weight.
+ *
+ * The window is capped at one grain (`loopLen / rate` output samples), so a
+ * crossfade always finishes before the restart that would re-arm it: on the
+ * short loops this effect is written for — ProTracker's manual says $10, $20,
+ * $40, $80 bytes — a fixed 2 ms would span several grains and smear the walk
+ * into a comb filter instead of smoothing it.
+ */
+export const FUNK_XFADE_SAMPLES = 64;
+
+/** Arm the seam crossfade. `offset` is (old window − new window) in bytes, so
+ *  the ghost read is just `samplePos + offset`, and 0 (the window did not move)
+ *  arms nothing — an ordinary loop wrap must sound exactly as it always has. */
+function armFunkXfade(voice, offset, windowLen) {
+  if (offset === 0) return;
+  const rate = Math.abs(voice.currentPlaybackRate);
+  const grain = rate > 0 ? Math.floor(windowLen / rate) : FUNK_XFADE_SAMPLES;
+  const len = Math.min(FUNK_XFADE_SAMPLES, Math.max(1, grain));
+  voice.funkXfade = len;
+  voice.funkXfadeLen = len;
+  voice.funkXfadeOffset = offset;
+}
+
+/**
+ * One channel read through the window the hop replaced. The position is the
+ * live one shifted back, so it follows the voice's own rate and direction for
+ * free; the DPCM slew counter is saved and restored because the ghost must not
+ * advance the state the real trajectory is keeping.
+ */
+function funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st) {
+  const keepPos = voice.samplePos;
+  const keepDpcm = st.nesDpcmCounter;
+  voice.samplePos = keepPos + voice.funkXfadeOffset;
+  const g = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax, basePtr, st);
+  voice.samplePos = keepPos;
+  st.nesDpcmCounter = keepDpcm;
+  return g;
+}
+
+/**
  * Fetch BOTH channels of a stereo voice at one position, then advance once —
  * the pair is one sample of one voice, so pitch, loop wrapping and the
  * sample-end ramp are shared. Writes [ch1, ch2] into `out` (a length-2 array
@@ -183,6 +235,16 @@ export function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
     voice.activeSamplePtr, voice);
   out[1] = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeChanPtr2, voice.right);
+  if (voice.funkXfade > 0) {
+    // One weight per output sample, shared by both channels — the crossfade of
+    // the two windows is then exactly the crossfade of the two signals.
+    const w = voice.funkXfade / voice.funkXfadeLen;
+    out[0] = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeSamplePtr, voice) * w + out[0] * (1.0 - w);
+    out[1] = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeChanPtr2, voice.right) * w + out[1] * (1.0 - w);
+    voice.funkXfade--;
+  }
   if (voice.modXfade > 0) voice.modXfade--;
   if (voice.rampOutSamples <= 0) advanceSamplePos(voice, sampleLen);
   return out;
@@ -193,11 +255,17 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
 
   const sampleLen = Math.max(voice.activeSampleLength, 1);
   const binMax = SAMPLE_BIN_TOTAL - 1;
-  const sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+  let sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
+  if (voice.funkXfade > 0) {
+    const w = voice.funkXfade / voice.funkXfadeLen;
+    sample = funkGhostChannel(eng, voice, inst, interpMode, sampleLen, binMax,
+      voice.activeSamplePtr, voice) * w + sample * (1.0 - w);
+    voice.funkXfade--;
+  }
 
-  // The crossfade runs on the OUTPUT clock, once per sample however many taps
-  // read through it, and keeps running while the voice ramps out.
+  // The crossfades run on the OUTPUT clock, once per sample however many taps
+  // read through them, and keep running while the voice ramps out.
   if (voice.modXfade > 0) voice.modXfade--;
   // While ramping out at sample end, hold position (mixer emits with decaying gain).
   if (voice.rampOutSamples > 0) return sample;
@@ -240,8 +308,11 @@ function advanceSamplePos(voice, sampleLen) {
       case 1:
         if (voice.samplePos >= loopEnd) {
           if (windowed) {
-            // The restart is where the walk's pointer has got to by now.
+            // The restart is where the walk's pointer has got to by now, and
+            // the seam it opens is crossfaded (item 163.2).
+            const prevWindow = loopStart;
             if (voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+            armFunkXfade(voice, prevWindow - voice.funkWindow, loopEnd - loopStart);
             voice.samplePos = voice.funkWindow + (voice.samplePos - loopEnd);
           } else {
             voice.samplePos -= Math.max(loopEnd - loopStart, 1.0);
@@ -263,8 +334,14 @@ function advanceSamplePos(voice, sampleLen) {
   } else {
     voice.samplePos -= voice.currentPlaybackRate;
     if (voice.samplePos < loopStart) {
-      if (windowed && voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
-      voice.samplePos = windowed ? voice.funkWindow : loopStart;
+      if (windowed) {
+        const prevWindow = loopStart;
+        if (voice.funkPos >= 0) voice.funkWindow = voice.funkPos;
+        armFunkXfade(voice, prevWindow - voice.funkWindow, loopEnd - loopStart);
+        voice.samplePos = voice.funkWindow;
+      } else {
+        voice.samplePos = loopStart;
+      }
       voice.forward = true;
     }
   }

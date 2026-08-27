@@ -394,7 +394,7 @@ export default {
   "smp.infoBytes": "{n} 바이트",
   "smp.infoSustain": "서스테인",
   "smp.infoUsedBy": "사용 악기: {list}",
-  "smp.funkReadout": "펑크 리피트: 루프 위치 {at} — {n}개 중 {k}번째 블록",
+  "smp.funkReadout": "펑크 리피트 {f}: 루프 위치 {at} — {n}개 중 {k}번째 위치",
   "smp.funkReadoutNext": " — 다음 이동 {next}",
   "wave.title": "파형 그리기",
   "wave.editTitle": "샘플 {name} 그리기 ({len} 바이트)",
@@ -1115,7 +1115,7 @@ export default {
   "pal.fx.Y.n": "팬브렐로",
   "pal.fx.Y.a": "$xxyy — x 속도, y 깊이",
   "pal.fx.Z.n": "팬 슬라이드 · 펑크",
-  "pal.fx.Z.a": "$0xxx 4 명령의 목표를 향해 틱당 xxx/16 방위각 유닛으로 슬라이드 ($0000 = 이전 값 재사용, 서라운드 곡 전용) · $F0xx 펑크 리피트: 루프 구간을 루프 길이만큼씩 건너뛰며 샘플 전체를 훑음, xx는 인버트 루프와 같은 사다리 속도 ($80 매 틱, $40 두 틱마다, $00 끄기) · 짧은 루프 필요",
+  "pal.fx.Z.a": "$0xxx 4 명령의 목표를 향해 틱당 xxx/16 방위각 유닛으로 슬라이드 ($0000 = 이전 값 재사용, 서라운드 곡 전용) · $Ffxx 펑크 리피트: 루프 구간을 건너뛰며 샘플 전체를 훑음, xx는 인버트 루프와 같은 사다리 속도 ($80 매 틱, $40 두 틱마다, $00 끄기) · f = 도약 방식: $0-3 전진, $4-7 후진, $8-B 전진하되 착지점을 훑는 범위의 1/8 안에서 흔듦, $C-F 전역 랜덤, 각각 1/2/4/8분할 블록 단위 · 짧은 루프 필요",
 
   // ── project view ──
   "proj.untitledProject": "(제목 없는 프로젝트)",

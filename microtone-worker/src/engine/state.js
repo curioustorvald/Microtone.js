@@ -513,9 +513,12 @@ export class Playhead {
       it.invertAccumulator = 0;
       it.invertWritePos = 0;
       it.funkSpeed = 0;
+      it.funkMode = 0;
       it.funkAccumulator = 0;
+      it.funkWalk = -1;
       it.funkPos = -1;
       it.funkWindow = -1;
+      it.funkXfade = 0;
       it.modPeriod = 0;
       it.modTickCount = 0;
       it.modWritePos = 0;
@@ -581,9 +584,12 @@ export class Playhead {
         it.invertAccumulator = 0;
         it.invertWritePos = 0;
         it.funkSpeed = 0;
+        it.funkMode = 0;
         it.funkAccumulator = 0;
+        it.funkWalk = -1;
         it.funkPos = -1;
         it.funkWindow = -1;
+        it.funkXfade = 0;
         it.modPeriod = 0;
         it.modTickCount = 0;
         it.modWritePos = 0;

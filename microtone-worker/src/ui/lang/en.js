@@ -401,7 +401,7 @@ export default {
   "smp.infoBytes": "{n} bytes",
   "smp.infoSustain": "sustain",
   "smp.infoUsedBy": "used by {list}",
-  "smp.funkReadout": "funk repeat: loop at {at} — block {k} of {n}",
+  "smp.funkReadout": "funk repeat {f}: loop at {at} — step {k} of {n}",
   "smp.funkReadoutNext": " — next hop {next}",
   "wave.title": "Paint a waveform",
   "wave.editTitle": "Paint sample {name} ({len} bytes)",
@@ -1124,7 +1124,7 @@ export default {
   "pal.fx.Y.n": "Panbrello",
   "pal.fx.Y.a": "$xxyy — x speed, y depth",
   "pal.fx.Z.n": "Pan slide · funk",
-  "pal.fx.Z.a": "$0xxx slide toward the 4-command target at xxx/16 azimuth units per tick ($0000 recalls, surround songs only) · $F0xx funk repeat: hop the loop through the sample a loop length at a time, xx on the invert-loop ladder ($80 every tick, $40 every other one, $00 off) · needs a short loop",
+  "pal.fx.Z.a": "$0xxx slide toward the 4-command target at xxx/16 azimuth units per tick ($0000 recalls, surround songs only) · $Ffxx funk repeat: hop the loop through the sample, xx on the invert-loop ladder ($80 every tick, $40 every other one, $00 off) · f = hop: $0-3 forward, $4-7 backward, $8-B forward with each landing jittered by up to an eighth of the sweep, $C-F thrown anywhere, each in whole/half/quarter/eighth blocks · needs a short loop",
 
   // ── project view ──
   "proj.untitledProject": "(untitled project)",

@@ -358,16 +358,22 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       voice.spatialTargetEl = ts.surroundModel === SURROUND_SPATIAL ? spatialArg[1] : 0.0;
       break;
     case EffectOp.OP_Z: {
-      // Z $F0xx — funk repeat, ProTracker 1.0C's EFx (item 161). Not a spatial
-      // command at all: Z multiplexes on its first nibble the way S does, and
-      // this form is live in EVERY song, stereo included. `xx` is the funk
-      // ladder's speed value, the same 8-bit scale S $F0xx reads.
+      // Z $Ffxx — funk repeat, ProTracker 1.0C's EFx (item 161), with item
+      // 163's walk selector in `$f`. Not a spatial command at all: Z
+      // multiplexes on its first nibble the way S does, and this form is live
+      // in EVERY song, stereo included. `xx` is the funk ladder's speed value,
+      // the same 8-bit scale S $F0xx reads, and `$f` picks the walk that speed
+      // drives — `$0` being 1.0C's own, so every `Z $F0xx` ever written keeps
+      // meaning what it meant.
       //
-      // The speed is CHANNEL state and sticky (PT kept it in n_glissfunk's high
-      // nibble, alongside glissando's low one), and writing it leaves the
-      // accumulator running — PT's mt_FunkIt never cleared n_funkoffset, not on
-      // a speed change and not on Z $F000, so the phase carries across the lot.
+      // Speed and walk are both CHANNEL state and sticky (PT kept the speed in
+      // n_glissfunk's high nibble, alongside glissando's low one), and writing
+      // either leaves the accumulator running — PT's mt_FunkIt never cleared
+      // n_funkoffset, not on a speed change and not on Z $F000, so the phase
+      // carries across the lot. The walk is written even by `Z $Ff00`, which
+      // arms a mode for the speed that follows it.
       if ((rawArg & 0xf000) === 0xf000) {
+        voice.funkMode = (rawArg >>> 8) & 0xf;
         voice.funkSpeed = rawArg & 0xff;
         break;
       }
@@ -464,8 +470,11 @@ export function applySEffect(eng, ts, voice, vi, arg) {
       }
       break;
     case 0xf:
+      // S $F0xx — invert loop. `$x` is RESERVED (item 163.1 paints it dim), so
+      // it is not read: every spelling of the command clears the accumulator,
+      // which is the difference from Z $Ffxx's free-running phase.
       voice.invertSpeed = arg & 0xff;
-      if (x === 0) voice.invertAccumulator = 0;
+      voice.invertAccumulator = 0;
       break;
   }
 }

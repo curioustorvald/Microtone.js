@@ -75,7 +75,9 @@ export function hex4(v) { return v.toString(16).toUpperCase().padStart(4, "0"); 
 //
 // Sources: TAUD_NOTE_EFFECTS.md, one entry per command heading.
 const FX_LAYOUT = {
-  0: "1111", // no effect (an argument here is junk, but show it)
+  0: "....", // no effect — an explicit "nothing happens here", used to overwrite
+             // a ditto ghost (item 163.1). Every nibble is ignored, so the whole
+             // cell is dim: there is no argument to read.
   1: "11..", // 1 $xx00  global behaviour flags
   2: "1123", // 2 $sexy  sample modification, region INVERTED: region, op, speed
   3: "1123", // 3 $sexy  sample modification: region, operation, step period
@@ -110,7 +112,7 @@ const FX_LAYOUT = {
   32: "12..", // W $xy00  global volume slide
   33: "1122", // X $eeaa  spherical pan: elevation, azimuth
   34: "1122", // Y $xxyy  panbrello: speed, depth
-  35: "o111", // Z $0xxx spherical pan slide / Z $F0xx funk repeat (the sub-selector rides with the opcode)
+  35: null, //  Z        multiplexed — see fxArgFields
 };
 
 // S's sub-commands, keyed by the high nibble. The nibble itself is always 'o'.
@@ -128,7 +130,7 @@ const S_LAYOUT = {
   0xc: "o1..", // S $Cx00  note cut
   0xd: "o123", // S $Dxny  note delay, action, action delay
   0xe: "o1..", // S $Ex00  pattern delay
-  0xf: "o111", // S $F0xx  invert loop
+  0xf: "o.11", // S $F0xx  invert loop: the middle nibble is reserved
 };
 
 /**
@@ -155,6 +157,11 @@ function fxLayout(effect, arg) {
       return (arg & 0xf000) === 0xf000 ? "1222" : "1111";
     case 28: // S: high nibble multiplexes; unknown sub-commands stay one field
       return S_LAYOUT[(arg >> 12) & 0xf] ?? "o111";
+    case 35:
+      // Z: $F multiplexes to funk repeat, whose argument is TWO fields — item
+      // 163's walk selector and the ladder speed it drives. Every other
+      // selector is the spatial slide's 12-bit speed, one field.
+      return (arg & 0xf000) === 0xf000 ? "o122" : "o111";
     case 29: {
       // T: a zero high byte means "tempo slide" and moves everything into the
       // low byte; $FF means "extended set" and makes the low byte the value.
