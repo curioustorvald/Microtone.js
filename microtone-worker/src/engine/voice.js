@@ -139,6 +139,16 @@ export class Voice {
     this.metaForeground = false;
     this.noteFading = false;
 
+    // ── FM operator rack (Metainstrument type 4, item 159) ──
+    // On a channel's foreground voice: the live rack this note is sounding
+    // (engine/fm.js FmRig), or null for every ordinary voice — which is what
+    // the mixer branches on, so nothing that never plays a rack pays for it.
+    this.fmRig = null;
+    // On a background voice: this is an OPERATOR of some channel's rack, not a
+    // sound of its own. The tick pass maintains it like a layer child; the
+    // mixer skips it, because the rack's own render is what reads it.
+    this.fmOperator = false;
+
     // Two-axis volume AND pan model (TAUD_NOTE_EFFECTS.md §3). Both axes work
     // the same way on either side: the instrument seeds the NOTE axis and the
     // pattern's channel commands own the CHANNEL axis, and the two combine at

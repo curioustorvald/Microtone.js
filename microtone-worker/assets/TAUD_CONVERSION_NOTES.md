@@ -33,7 +33,7 @@ The pattern budget is the one that bites first on wide modules, because a Taud p
 Taud samples are **unsigned 8-bit**, so every source needs depth conversion:
 
 - 16-bit signed → take the high byte and add 128.
-- 8-bit signed → XOR with `0x80`.
+- 8-bit signed → XOR with `$80`.
 - 8-bit unsigned → pass through.
 
 Stereo sources are stored **split**, not interleaved: the whole left channel followed by the whole right, which matches the on-disk layout IT, S3M and XM already use. A converter that keeps stereo emits two pool spans joined by an Ixmp `s` patch; one that does not downmixes to mono.
@@ -47,13 +47,13 @@ Both passes invalidate sample-offset effect arguments (`O`), so those **MUST** b
 
 ### 1.3 Pitch
 
-Every source pitch becomes a 4096-TET note word anchored at C4 = `0x5000`:
+Every source pitch becomes a 4096-TET note word anchored at C4 = `$5000`:
 
 | Source | Conversion |
 |---|---|
-| ProTracker period | `round(0x5000 + 4096 × log2(428 ÷ period))` |
-| Semitone index *n* relative to C4 | `round(0x5000 + n × 4096 ÷ 12)` |
-| Frequency *f* Hz | `round(0x5000 + 4096 × log2(f ÷ 261.6255653))` |
+| ProTracker period | `round($5000 + 4096 × log2(428 ÷ period))` |
+| Semitone index *n* relative to C4 | `round($5000 + n × 4096 ÷ 12)` |
+| Frequency *f* Hz | `round($5000 + 4096 × log2(f ÷ 261.6255653))` |
 
 Per-sample tuning offsets — XM's `relative note` and `finetune`, IT's C5 speed, SoundFont's `originalPitch` and `pitchCorrection` — are baked into the instrument's **sampling rate at C4** field, or into its signed **sample detune** field, rather than being pushed into every note. That keeps the pattern readable and lets a retune operate on musical pitches.
 
@@ -88,7 +88,7 @@ The reference converters therefore **resolve recalls eagerly**: they walk the pa
 
 ### 1.7 Volume and pan columns
 
-Taud's volume and pan columns each carry a 6-bit value plus a selector, and the FINE selector with value 0 is the canonical **no-op** (byte `0xC0`). Two conventions follow:
+Taud's volume and pan columns each carry a 6-bit value plus a selector, and the FINE selector with value 0 is the canonical **no-op** (byte `$C0`). Two conventions follow:
 
 - On a row that triggers a note but carries no explicit source volume, emit a **SET** with the instrument's default volume. Otherwise the channel's prior volume persists into the fresh note, which is almost never what the source meant.
 - On every other row, emit the FINE-0 no-op so the column does not disturb running state.
@@ -101,7 +101,7 @@ Effects that only set channel volume or panning (`M`, `N`, `X`, `P` in ST3 terms
 
 Modules do not carry a subsong table; subsongs emerge from the order list's flow graph. The shared detector takes the lowest unvisited non-terminator order as the next subsong's entry point, walks forward reachability through fall-through and `Bxx` targets, marks everything reached as visited, and repeats.
 
-The subtlety is fall-through: it is treated as **dead** when the pattern at that order carries a `Bxx` on its absolute last row, which is every tracker's idiom for "the song ends here, loop back". Without that rule, subsongs separated only by `Bxx` terminators — with no explicit `0xFF` marker — merge into one. In practice this finds 4 subsongs in `WHEN.s3m` (which does use `0xFF` separators) and 8 in `Insaniq2.it` (which does not).
+The subtlety is fall-through: it is treated as **dead** when the pattern at that order carries a `Bxx` on its absolute last row, which is every tracker's idiom for "the song ends here, loop back". Without that rule, subsongs separated only by `Bxx` terminators — with no explicit `$FF` marker — merge into one. In practice this finds 4 subsongs in `WHEN.s3m` (which does use `$FF` separators) and 8 in `Insaniq2.it` (which does not).
 
 Each detected subsong becomes one entry in the Taud song table.
 
@@ -183,7 +183,7 @@ ST3 backs effects `D`, `E`, `F`, `I`, `J`, `K`, `L`, `Q`, `R` and `S` with a **s
 
 ### 3.3 Numeric quirks
 
-- **`Cxx` is BCD on disk.** `$10` means decimal row 10, not hex row 16. Decode as `(byte >> 4) × 10 + (byte & 0xF)`; anything decoding to 64 or above clamps to row 0. (IT's `Cxx` is plain binary — the two formats differ here and mixing them up shifts every pattern break.)
+- **`Cxx` is BCD on disk.** `$10` means decimal row 10, not hex row 16. Decode as `(byte >> 4) × 10 + (byte & $F)`; anything decoding to 64 or above clamps to row 0. (IT's `Cxx` is plain binary — the two formats differ here and mixing them up shifts every pattern break.)
 - **The coarse pitch-slide unit is 1/16 semitone**, ≈ 21.33 Taud units, so `E`, `F` and `G` coarse arguments are multiplied by `$0015`. Fine forms are packed into Taud's `$F0xx` fine form after the same per-step scale.
 - **Global volume is 0…$40**, scaled to Taud's 0…$FF by ×4 with a clamp.
 - **Tempo** is a raw decimal BPM; Taud's byte is biased −25. The converter also scans row 0 of the order list's first pattern for `A` and `T` and prefers those over the header defaults, because that is where trackers actually put the intended tempo.
@@ -223,7 +223,7 @@ XM volume (0…64) and panning (0…64, with 32 as centre) envelopes convert to 
 **Fadeout needs rescaling and this is a common mistake.** FT2's per-tick decrement is `stored ÷ 32768` of unit volume; Taud's is `stored ÷ 1024`. Divide by 32, rounding to nearest:
 
 ```
-taud_fadeout = min((xm_fadeout + 16) ÷ 32, 0x0FFF)
+taud_fadeout = min((xm_fadeout + 16) ÷ 32, $0FFF)
 ```
 
 XM values 1…15 round to Taud 0 — those originals ran over eleven minutes at 50 Hz and were effectively "no fade" anyway. XM 32 becomes Taud 1 (≈ 20 s). MilkyTracker writes 32767 to encode its "cut" slider, which becomes Taud 1024, a one-tick cut.
@@ -238,7 +238,7 @@ XM has no New Note Action — every new note unconditionally retriggers the chan
 
 Full XM dispatch per the Note Effects conversion table. Volume-column commands fold into the Taud volume column when they can, or occupy the main effect slot when it is free, and are dropped otherwise — the same policy `it2taud` uses. `E5x` (set finetune) becomes `S $5x`. Position jump and pattern break are remapped to Taud cue indices after any pattern splitting.
 
-`Kxx` (delayed key-off) carries no note-column entry of its own in XM — it acts on whatever is already sounding — so it cannot become `S $Dx00` on a `NOTE_KEYOFF` sentinel the way a note-column key-off can; that path fires the key-off at `$x` and leaves nothing else to defer. Instead it becomes `S $D00xx` (`x`=0, `n`=0 note off, `y`=`xx` clamped to the 4-bit range, i.e. `min(xx, 0xF)`, never a truncating mask — `K10` must land on `y=$F`, not silently become a no-op at `y=0`) and the row's own note column is left empty, letting the engine's follow-up-action mechanism apply the note-off to the sounding voice at the right tick. `K00` (arg 0) has no follow-up window to defer into — `S $D`'s action never arms when `$y` is zero — so it still forces an immediate `NOTE_KEYOFF` instead. One gap survives the fix: the FT2-only quirk where a key-off on a vol-env-off instrument hard-mutes the volume (see the `keyoff_zero_rows` gating below) cannot be replayed on the deferred tick without re-losing the delay, so it is skipped for a delayed `Kxx` — only the real note-off fires.
+`Kxx` (delayed key-off) carries no note-column entry of its own in XM — it acts on whatever is already sounding — so it cannot become `S $Dx00` on a `NOTE_KEYOFF` sentinel the way a note-column key-off can; that path fires the key-off at `$x` and leaves nothing else to defer. Instead it becomes `S $D00xx` (`x`=0, `n`=0 note off, `y`=`xx` clamped to the 4-bit range, i.e. `min(xx, $F)`, never a truncating mask — `K10` must land on `y=$F`, not silently become a no-op at `y=0`) and the row's own note column is left empty, letting the engine's follow-up-action mechanism apply the note-off to the sounding voice at the right tick. `K00` (arg 0) has no follow-up window to defer into — `S $D`'s action never arms when `$y` is zero — so it still forces an immediate `NOTE_KEYOFF` instead. One gap survives the fix: the FT2-only quirk where a key-off on a vol-env-off instrument hard-mutes the volume (see the `keyoff_zero_rows` gating below) cannot be replayed on the deferred tick without re-losing the delay, so it is skipped for a delayed `Kxx` — only the real note-off fires.
 
 ## 5. ImpulseTracker — `.it`
 
@@ -246,7 +246,7 @@ IT is the richest source and maps onto Taud most directly, because most of Taud'
 
 ### 5.1 Channels
 
-The converter takes the non-muted, in-use channels: 32 or fewer stay in the default layout, 33…64 switch the file to **64-channel mode** (the `xHDR` flag), and only a song exceeding 64 active channels is capped. A channel is "muted" when its pan byte has bit 7 set or reads `0xC0`, and "in use" when any cell on it is non-empty.
+The converter takes the non-muted, in-use channels: 32 or fewer stay in the default layout, 33…64 switch the file to **64-channel mode** (the `xHDR` flag), and only a song exceeding 64 active channels is capped. A channel is "muted" when its pan byte has bit 7 set or reads `$C0`, and "in use" when any cell on it is non-empty.
 
 ### 5.2 Instruments and Ixmp
 
@@ -293,11 +293,11 @@ Monotone is Calvin "Trixter" French's tracker for the PC speaker, Tandy and TI-9
 
 ### 6.1 The instrument
 
-The converter synthesises a single instrument: a 32-byte, 50 %-duty square wave at offset 0 of the pool, looping forward, with a sampling rate of 8372 Hz so C4 sounds at 261.6 Hz. Its instrument global volume is set to `0xA0` for headroom (a square wave is loud), its default note volume to full, its filter off, and its NNA to Note Cut. Every Monotone voice plays this one instrument.
+The converter synthesises a single instrument: a 32-byte, 50 %-duty square wave at offset 0 of the pool, looping forward, with a sampling rate of 8372 Hz so C4 sounds at 261.6 Hz. Its instrument global volume is set to `$A0` for headroom (a square wave is loud), its default note volume to full, its filter off, and its NNA to Note Cut. Every Monotone voice plays this one instrument.
 
 ### 6.2 Pitch and slides
 
-Monotone note value 1 is A0, so C4 sits at value 40 and `note = 0x5000 + round((value − 40) × 4096 ÷ 12)`. Value `0x7F` is a note cut.
+Monotone note value 1 is A0, so C4 sits at value 40 and `note = $5000 + round((value − 40) × 4096 ÷ 12)`. Value `$7F` is a note cut.
 
 The interesting decision is the slides. Monotone's `1xx`, `2xx` and `3xx` are **Hz per tick** — its player literally adds the argument to a frequency. Rather than rescale them into 4096-TET units and accumulate drift, the converter emits them verbatim and turns on Taud's **linear-frequency tone mode**, so the engine performs exactly the same arithmetic the original player did. Interpolation is set to none, matching a square-wave source.
 
@@ -379,7 +379,7 @@ Polyphony rides on New Note Actions, which is what makes MIDI-shaped music fit a
 
 The voice-column budget defaults to 32. A song exceeding it releases the oldest pedal-held or soonest-ending note **early** rather than cutting it. Raising the budget above 32 opts into 64-channel Taud mode, but only takes effect if the song actually allocates 33 or more voices.
 
-SF2 **exclusiveClass** (generator 57) is honoured on the percussion channel: a new note in a class chokes any ringing note of the same class, matching FluidSynth's kill-by-exclusive-class. The choke is emitted as the fast note-fade sentinel (`0x0004`, ≈ 0.3 s) at the next same-class onset. Without it, long percussion tails wash over the whole beat — an open hi-hat ringing through the closed one that should have stopped it.
+SF2 **exclusiveClass** (generator 57) is honoured on the percussion channel: a new note in a class chokes any ringing note of the same class, matching FluidSynth's kill-by-exclusive-class. The choke is emitted as the fast note-fade sentinel (`$0004`, ≈ 0.3 s) at the next same-class onset. Without it, long percussion tails wash over the whole beat — an open hi-hat ringing through the closed one that should have stopped it.
 
 ### 7.7 Looping
 

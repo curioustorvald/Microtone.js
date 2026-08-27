@@ -464,6 +464,14 @@ export class TaudEngine {
   /** True when metainstrument `inst` would produce at least one sounding layer
    *  at `note` (mirrors the strict-layer gating in triggerMetaOrNote). */
   _metaSoundsAt(inst, note) {
+    // An FM rack stands or falls on operator 0: the rest of the rack is read
+    // through it, so a note its rectangle excludes is silent whatever the
+    // modulators say (§5.5.1, triggerFmRack).
+    if (inst.isFm) {
+      const o = inst.metaLayers[0];
+      return inst.fmProgram !== null && o.instIdx >= 1 &&
+        note >= o.pitchStart && note <= o.pitchEnd && o.volStart <= 0x3f && o.volEnd >= 0x3f;
+    }
     let layers = inst.resolveMetaLayers(note, 0x3f);
     if (inst.metaStrict) {
       layers = layers.filter((l) => {

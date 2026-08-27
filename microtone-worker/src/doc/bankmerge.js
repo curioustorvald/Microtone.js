@@ -15,6 +15,7 @@
 import { SAMPLEBIN_SIZE, ixmpPatchLen, ixmpChanByteOffset } from "../format/taud-const.js";
 import {
   parsePatchesBlob, TaudInst, buildMetaRecord, makeMetaLayer, META_MAX_LAYERS,
+  META_TYPE_FM, FM_MAX_OPERATORS, FM_BUDGET_BYTES, defaultFmProgram, fmRecordBytes,
   patchChannelPtrs, makeInstPatch, writePatchesBlob, CHAN_MODE_DISCRETE,
 } from "../engine/inst.js";
 import { sampleSpans } from "./document.js";
@@ -110,6 +111,8 @@ export function bankInventory(srcDoc) {
       slot,
       name: srcDoc.instrumentName(slot),
       isMeta: inst.isMeta,
+      isFm: inst.isFm,
+      layerCount: inst.metaLayers?.length ?? 0,
       patchCount: inst.extraPatches?.length ?? 0,
       sampleBytes,
       layerOf: layerOf.get(slot) ?? [],
@@ -1073,6 +1076,71 @@ export function planCreateMeta(destDoc, picks, name = "") {
 }
 
 /**
+ * Plan a new type-4 FM rack (item 159) out of instruments already in the
+ * project — planCreateMeta's twin, and deliberately the same copy-into-$100+
+ * shape, because an operator is an ordinary instrument in every respect the
+ * bank cares about.
+ *
+ * `picks` are read in ORDER and each count expands in place, so what the picker
+ * shows top to bottom is the rack top to bottom, and operator 0 — the principal
+ * whose envelope is the note's — is the first thing picked. The algorithm it
+ * starts with is the plain chain (defaultFmProgram): the last operator into the
+ * one before it, all the way down into operator 0.
+ */
+export function planCreateFm(destDoc, picks, name = "") {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const used = new Set(destDoc.usedInstrumentSlots());
+  const counts = normalisePicks(picks, used);
+  if (counts.size === 0) return { error: "No instruments selected." };
+  if ([...counts.keys()].some((s) => destDoc.instruments[s].isMeta)) {
+    return { error: "A metainstrument can't be an FM operator." };
+  }
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  if (total > FM_MAX_OPERATORS) {
+    return { error: `An FM rack holds at most ${FM_MAX_OPERATORS} operators (${total} selected).` };
+  }
+
+  const taken = new Set(used);
+  let metaSlot = 1;
+  while (metaSlot <= 255 && taken.has(metaSlot)) metaSlot++;
+  if (metaSlot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+  taken.add(metaSlot);
+
+  const insts = [];
+  const ops = [];
+  for (const [src, n] of counts) {
+    const child = allocChildSlot(taken);
+    if (child < 0) return { error: "No free sub-instrument slots left in $100–$3FF." };
+    insts.push(copyEntry(destDoc, src, child));
+    // Full-rect operators at unity mix and no detune: a rack that sounds the
+    // moment it is made, with every operator in the game until the user tunes
+    // one out of it.
+    for (let k = 0; k < n; k++) ops.push(makeMetaLayer(child, 159, 0, 0x0000, 0xffff, 0, 63));
+  }
+  insts.push({
+    srcSlot: -1,
+    destSlot: metaSlot,
+    topLevel: true,
+    record: buildMetaRecord(ops, { type: META_TYPE_FM, program: defaultFmProgram(ops.length) }),
+    ixmpBlob: null,
+    ixmpCount: 0,
+  });
+
+  const names = insts.filter((it) => it.srcSlot >= 0)
+    .map((it) => [it.destSlot, destDoc.instrumentName(it.srcSlot)]);
+  names.push([metaSlot, name]);
+
+  return metaPlan(insts, inamPayloadWith(destDoc, names), {
+    metaSlot,
+    childSlots: insts.filter((it) => it.srcSlot >= 0).map((it) => it.destSlot),
+  });
+}
+
+/**
  * Append layers to an EXISTING metainstrument (item 113) — the Layers tab's
  * "Add layers…". Same copy-into-a-child rule as planCreateMeta; the meta's
  * current table is kept and the new layers land after it, so the foreground
@@ -1092,7 +1160,18 @@ export function planAddMetaLayers(destDoc, metaSlot, picks) {
   }
   const existing = metaLayers(meta);
   const total = existing.length + [...counts.values()].reduce((a, b) => a + b, 0);
-  if (total > META_MAX_LAYERS) {
+  // A rack's ceiling is lower than a layer table's, and it is not just a count:
+  // the operators and the algorithm share the record's 252 bytes (§7.6).
+  if (meta.isFm) {
+    const words = meta.fmProgram === null ? 0 : meta.fmProgram.length;
+    if (total > FM_MAX_OPERATORS) {
+      return { error: `An FM rack holds at most ${FM_MAX_OPERATORS} operators (${total} would result).` };
+    }
+    if (fmRecordBytes(total, words) > FM_BUDGET_BYTES) {
+      return { error: `That would not fit the record: ${total} operators and a ${words}-word algorithm need ` +
+        `${fmRecordBytes(total, words)} of 252 bytes.` };
+    }
+  } else if (total > META_MAX_LAYERS) {
     return { error: `A metainstrument holds at most ${META_MAX_LAYERS} layers (${total} would result).` };
   }
 

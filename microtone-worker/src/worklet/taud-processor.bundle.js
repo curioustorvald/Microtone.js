@@ -2852,22 +2852,151 @@ function makeMetaLayer(instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart
  *  count + bytes 2..3 sentinel, then 10 bytes per layer. */
 const META_MAX_LAYERS = 25;
 
+// ── Metainstrument types (record byte 0, high nibble) ─────────────────────
+/** Type 0 — LAYERED: every layer whose rectangle covers the trigger sounds on
+ *  its own voice, mixed in parallel (§7.4). */
+const META_TYPE_LAYERED = 0;
+/**
+ * Type 4 — FM (item 159): the layer table becomes an OPERATOR RACK and the
+ * bytes after it carry an RPN program saying how the operators feed each other.
+ * The rack is one voice, not `n` of them: operator 0 sounds on the channel and
+ * the rest are read by the program.
+ */
+const META_TYPE_FM = 4;
+
+/**
+ * Operators an FM rack can hold. The whole rack — 10 bytes an operator plus the
+ * program — has to fit the 252 bytes a record has left after the header, so this
+ * is a floor on the room the program gets: 16 operators leave 92 bytes = 46
+ * words, which is more than any 16-operator algorithm needs (n pushes + n−1
+ * combining operators + END = 32 words at the very worst).
+ */
+const FM_MAX_OPERATORS = 16;
+
+/** Bytes of a 256-byte record the operator rack and its program share. */
+const FM_BUDGET_BYTES = 252;
+
+// ── RPN word classes (§7.6) ──────────────────────────────────────────────
+// A word is read as (class, operand): the top nibble pair picks the class and
+// the low 10 bits the operator it addresses. $FFxx is the operator space, which
+// no operand word can collide with because an operand's index is 10-bit.
+const FM_WORD_OSC = 0x0000;  // $0000-$03FF — push operator n, free-running
+const FM_WORD_MOD = 0x0400;  // $0400-$07FF — push operator n, phase-modulated by TOS
+const FM_WORD_FB  = 0x0800;  // $0800-$0BFF — push operator n's PREVIOUS output (z-1)
+const FM_WORD_OP  = 0xff00;  // $FF00-$FFFE — a stack operator
+const FM_INDEX_MASK = 0x03ff;
+
+/** Stack operators. Opcode = the word's low byte. */
+const FmOp = {
+  ADD: 0xff00,   // pop b, a -> push a + b            (parallel carriers)
+  MUL: 0xff01,   // pop b, a -> push a * b            (ring modulation)
+  NEG: 0xff02,   // pop a    -> push -a               (inverted modulator)
+  DUP: 0xff03,   // pop a    -> push a, a
+  SWAP: 0xff04,  // pop b, a -> push b, a
+  END: 0xffff,   // stop; the stack top is the patch's output
+};
+
+/** Deepest the evaluation stack may go. A program that pushes past it is
+ *  invalid (buildFmProgram refuses it; the engine treats the overflow as END). */
+const FM_STACK_MAX = 16;
+
+/**
+ * The default algorithm for an `n`-operator rack: a straight modulation CHAIN,
+ * operator n−1 into n−2 into … into 0, with 0 as the carrier. One push and
+ * n−1 modulated pushes — the shape every FM patch starts life as.
+ */
+function defaultFmProgram(n) {
+  const count = Math.max(1, Math.min(n | 0, FM_MAX_OPERATORS));
+  const out = [count - 1];
+  for (let k = count - 2; k >= 0; k--) out.push(FM_WORD_MOD | k);
+  return Uint16Array.from(out);
+}
+
+/**
+ * How many stack cells a word pops and pushes — the whole of what validation
+ * needs to know about it, and the reason an unknown word can be rejected rather
+ * than guessed at. Returns null for a word that is not a legal operand or
+ * operator against a rack of `opCount` operators.
+ */
+function fmWordArity(word, opCount) {
+  const w = word & 0xffff;
+  if (w >= FM_WORD_OP) {
+    switch (w) {
+      case FmOp.ADD: case FmOp.MUL: return { pop: 2, push: 1 };
+      case FmOp.NEG: return { pop: 1, push: 1 };
+      case FmOp.DUP: return { pop: 1, push: 2 };
+      case FmOp.SWAP: return { pop: 2, push: 2 };
+      default: return null; // END is handled by the caller; the rest is reserved
+    }
+  }
+  const idx = w & FM_INDEX_MASK;
+  if (idx >= opCount) return null;
+  switch (w & ~FM_INDEX_MASK) {
+    case FM_WORD_OSC: case FM_WORD_FB: return { pop: 0, push: 1 };
+    case FM_WORD_MOD: return { pop: 1, push: 1 };
+    default: return null;
+  }
+}
+
+/**
+ * Read the RPN program packed at byte `off` of a type-4 record and hand back
+ * its words WITHOUT the END terminator, or null when it does not parse.
+ *
+ * Rejecting outright is deliberate. An FM rack whose algorithm is half-read is
+ * not a patch that sounds a bit wrong — it is a stack machine running on
+ * whatever the record's tail happened to hold, so the engine treats a program
+ * it cannot verify as no program at all and the instrument stays silent.
+ */
+function decodeFmProgram(b, off, opCount) {
+  const words = [];
+  let depth = 0;
+  let ended = false;
+  for (let o = off; o + 2 <= 256; o += 2) {
+    const w = (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8);
+    if (w === FmOp.END) { ended = true; break; }
+    const arity = fmWordArity(w, opCount);
+    if (arity === null) return null;
+    if (depth < arity.pop) return null;                    // stack underflow
+    depth += arity.push - arity.pop;
+    if (depth > FM_STACK_MAX) return null;                 // stack overflow
+    words.push(w);
+  }
+  // A program that fills the record to the last byte ends there; one that stops
+  // early must say so, or the words after it are being ignored by accident.
+  if (!ended && off + words.length * 2 + 2 <= 256) return null;
+  return depth >= 1 ? Uint16Array.from(words) : null;
+}
+
+/** Bytes an `n`-operator rack with a `words`-word program occupies of the 252 —
+ *  the END terminator counted, because the record has to carry it too. */
+function fmRecordBytes(n, words) {
+  return n * 10 + (words + 1) * 2;
+}
+
 /**
  * Pack a 256-byte metainstrument record — the byte-inverse of loadRecord's meta
  * branch. `layers` are makeMetaLayer shapes; layer 0 is the FOREGROUND layer and
  * the rest spawn as background children (trigger.js triggerMetaOrNote). Layers
- * beyond META_MAX_LAYERS are dropped.
+ * beyond the type's capacity are dropped.
  *
  * A layer child must NOT itself be a metainstrument: triggerMetaOrNote resolves
  * layers through triggerNote, which never re-enters the meta branch, so a nested
  * meta's record would be read as sample fields.
+ *
+ * `type` picks the metainstrument kind (§7.4). META_TYPE_FM makes `layers` an
+ * OPERATOR RACK and appends `program` — the RPN algorithm — after it, terminated
+ * by END. Program words past the 252-byte budget are dropped, which is why the
+ * editor keeps a memory meter: the rack and the algorithm share one record.
  */
-function buildMetaRecord(layers, { strict = false, percussion = false } = {}) {
-  const use = layers.slice(0, META_MAX_LAYERS);
+function buildMetaRecord(layers, {
+  strict = false, percussion = false, type = META_TYPE_LAYERED, program = null,
+} = {}) {
+  const fm = type === META_TYPE_FM;
+  const use = layers.slice(0, fm ? FM_MAX_OPERATORS : META_MAX_LAYERS);
   const b = new Uint8Array(256);
   // samplePtr high 16 bits = 0xFFFF is the Metainstrument sentinel; the low
   // bytes carry the flags (byte 0) and the layer count (byte 1) instead.
-  b[0] = (strict ? 0x01 : 0) | (percussion ? 0x02 : 0);
+  b[0] = ((type & 0x0f) << 4) | (strict ? 0x01 : 0) | (percussion ? 0x02 : 0);
   b[1] = use.length & 0xff;
   b[2] = 0xff;
   b[3] = 0xff;
@@ -2887,6 +3016,19 @@ function buildMetaRecord(layers, { strict = false, percussion = false } = {}) {
     b[o + 8] = (l.volStart & 0x3f) | (((idx >>> 8) & 0x3) << 6);
     b[o + 9] = l.volEnd & 0x3f;
     o += 10;
+  }
+  if (fm) {
+    const prog = program === null ? defaultFmProgram(use.length) : program;
+    // The END word is the packer's, not the caller's: a program is a word LIST
+    // everywhere above this line, and the terminator only exists because the
+    // record's tail has to say where the algorithm stops.
+    for (const w of prog) {
+      if ((w & 0xffff) === FmOp.END || o + 4 > 256) break;
+      b[o] = w & 0xff;
+      b[o + 1] = (w >>> 8) & 0xff;
+      o += 2;
+    }
+    if (o + 2 <= 256) { b[o] = 0xff; b[o + 1] = 0xff; }
   }
   return b;
 }
@@ -2956,6 +3098,12 @@ class TaudInst {
     this.metaLayers = null;
     this.metaRaw = null;          // verbatim 256-byte record for lossless capture
     this.metaStrict = false;
+    this.metaType = META_TYPE_LAYERED; // record byte 0's high nibble (§7.4)
+    // FM rack (type 4, item 159): the RPN algorithm packed after the operator
+    // table, END-terminated and already validated by decodeFmProgram — null for
+    // every other type AND for an FM record whose program does not parse, which
+    // is what makes the instrument silent rather than unpredictable.
+    this.fmProgram = null;
 
     // Invert loop (S $F0xx) XOR bit-mask over the loop region.
     this.invertMask = null;
@@ -3023,6 +3171,9 @@ class TaudInst {
   /** byte 173 bit 4: false = ImpulseTracker filter units, true = SoundFont. */
   get filterSfMode() { return ((this.fadeoutHigh >>> 4) & 1) !== 0; }
   get isMeta() { return this.metaLayers !== null; }
+  /** True for a type-4 rack: the layer table is an OPERATOR rack read by
+   *  `fmProgram`, not a set of parallel layers (§7.6). */
+  get isFm() { return this.metaLayers !== null && this.metaType === META_TYPE_FM; }
 
   get defaultCutoff16() {
     if (this.cutoffOverride >= 0) return this.cutoffOverride;
@@ -3059,13 +3210,17 @@ class TaudInst {
   }
 
   /** Load a full 256-byte record; detects the Metainstrument sentinel
-   *  (samplePtr high 16 bits == 0xFFFF) and parses its layer table. */
+   *  (samplePtr high 16 bits == 0xFFFF) and parses its layer table — which for
+   *  a type-4 record is an operator rack followed by an RPN program (§7.6). */
   loadRecord(b) {
     this.cutoffOverride = -1;
     this.resonanceOverride = -1;
     const sp = ((b[0] & 0xff) | ((b[1] & 0xff) << 8) | ((b[2] & 0xff) << 16)) + (b[3] & 0xff) * 0x1000000;
     if (((sp >>> 16) & 0xffff) === 0xffff) {
-      const count = (sp >>> 8) & 0xff; // byte 1 = layer count
+      const type = (b[0] >>> 4) & 0x0f;
+      const fm = type === META_TYPE_FM;
+      const rawCount = (sp >>> 8) & 0xff; // byte 1 = layer / operator count
+      const count = fm ? Math.min(rawCount, FM_MAX_OPERATORS) : rawCount;
       const layers = [];
       let o = 4;
       for (let n = 0; n < count; n++) {
@@ -3079,8 +3234,13 @@ class TaudInst {
         const pEnd = (b[o + 6] & 0xff) | ((b[o + 7] & 0xff) << 8);
         const vStart = b[o + 8] & 0x3f;
         const vEnd = b[o + 9] & 0x3f;
-        if (instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index) {
-          const layer = makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd);
+        const usable = instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index;
+        // A layered record DROPS an unusable layer; an FM rack MUTES it in
+        // place, because the program addresses operators by POSITION and
+        // compacting the rack would rewire the algorithm under it.
+        if (usable || fm) {
+          const layer = makeMetaLayer(usable ? instIdx : 0, mixOctet, detune,
+            pStart, pEnd, vStart, vEnd);
           layer.rawOffset = o; // metaRaw byte offset of this layer (editors target it)
           layers.push(layer);
         }
@@ -3089,11 +3249,16 @@ class TaudInst {
       this.metaLayers = layers.length === 0 ? null : layers;
       this.metaRaw = this.metaLayers !== null ? Uint8Array.from(b.slice(0, 256)) : null;
       this.metaStrict = this.metaLayers !== null && (b[0] & 0x01) !== 0;
+      this.metaType = this.metaLayers !== null ? type : META_TYPE_LAYERED;
+      this.fmProgram = this.metaLayers !== null && fm
+        ? decodeFmProgram(b, o, layers.length) : null;
       this.extraPatches = null;
     } else {
       this.metaLayers = null;
       this.metaRaw = null;
       this.metaStrict = false;
+      this.metaType = META_TYPE_LAYERED;
+      this.fmProgram = null;
       const n = Math.min(256, b.length);
       for (let i = 0; i < n; i++) this.setByte(i, b[i] & 0xff);
     }
@@ -3511,6 +3676,16 @@ class Voice {
     this.filterEnvOn = true;
     this.metaForeground = false;
     this.noteFading = false;
+
+    // ── FM operator rack (Metainstrument type 4, item 159) ──
+    // On a channel's foreground voice: the live rack this note is sounding
+    // (engine/fm.js FmRig), or null for every ordinary voice — which is what
+    // the mixer branches on, so nothing that never plays a rack pays for it.
+    this.fmRig = null;
+    // On a background voice: this is an OPERATOR of some channel's rack, not a
+    // sound of its own. The tick pass maintains it like a layer child; the
+    // mixer skips it, because the rack's own render is what reads it.
+    this.fmOperator = false;
 
     // Two-axis volume AND pan model (TAUD_NOTE_EFFECTS.md §3). Both axes work
     // the same way on either side: the instrument seeds the NOTE axis and the
@@ -4377,6 +4552,7 @@ class Playhead {
       it.layerMixGain = 1.0; it.isLayerChild = false; it.layerRelDetune = 0;
       it.layerRelPan = 0; it.layerRelElevation = 0;
       it.layerPitchMod = 0; it.pitchModDelta = 0;
+      it.fmRig = null; it.fmOperator = false;
       // "What's playing" state — cleared alongside the volume reset so a stale
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;
@@ -4694,11 +4870,46 @@ function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
   return out;
 }
 
-function fetchTrackerSample(eng, voice, inst, interpMode) {
+/**
+ * The read position a phase-modulated fetch (item 159) lands on: the voice's
+ * own position displaced by `offset` FRAMES and folded back into the waveform.
+ *
+ * Folding is what makes the displacement a PHASE. A looping voice wraps into
+ * its loop, so a modulator big enough to sweep several cycles keeps sweeping
+ * them instead of running off the end of the sample and clamping to a constant
+ * — which is the difference between FM and a click. A one-shot has no cycle to
+ * wrap into, so it clamps.
+ */
+function wrapReadPos(voice, pos, sampleLen) {
+  const mode = voice.activeLoopMode & 3;
+  const ls = voice.activeSampleLoopStart;
+  const le = voice.activeSampleLoopEnd;
+  if ((mode === 1 || mode === 2) && le > ls) {
+    const span = le - ls;
+    let p = (pos - ls) % span;
+    if (p < 0) p += span;
+    return ls + p;
+  }
+  return Math.min(Math.max(pos, 0), sampleLen - 1);
+}
+
+/**
+ * `posOffset` (item 159) displaces the READ without touching the trajectory:
+ * the sample is taken `posOffset` frames away from where the voice is, and the
+ * voice then advances from where it actually was. That separation is the whole
+ * of phase modulation — the carrier keeps its own pitch, and the modulator only
+ * says where in the waveform this one output sample is drawn from.
+ *
+ * It defaults to 0, which restores the position, the branch and the arithmetic
+ * exactly as they were: an ordinary voice fetches bit-for-bit as it always has.
+ */
+function fetchTrackerSample(eng, voice, inst, interpMode, posOffset = 0) {
   if (inst.index === 0) return 0.0;
 
   const sampleLen = Math.max(voice.activeSampleLength, 1);
   const binMax = SAMPLE_BIN_TOTAL - 1;
+  const keepPos = voice.samplePos;
+  if (posOffset !== 0) voice.samplePos = wrapReadPos(voice, keepPos + posOffset, sampleLen);
   let sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
   if (voice.funkXfade > 0) {
@@ -4707,6 +4918,7 @@ function fetchTrackerSample(eng, voice, inst, interpMode) {
       voice.activeSamplePtr, voice) * w + sample * (1.0 - w);
     voice.funkXfade--;
   }
+  if (posOffset !== 0) voice.samplePos = keepPos;
 
   // The crossfades run on the OUTPUT clock, once per sample however many taps
   // read through them, and keep running while the voice ramps out.
@@ -5111,6 +5323,235 @@ function applyTaudVoiceFx(voice, sample, st = voice) {
   return s;
 }
 
+// ══ src/engine/fm.js ══
+// FM operator racks — Metainstrument type 4 (item 159). No Kotlin counterpart
+// yet: this is a Microtone-first format extension, specified in
+// TAUD_FILE_FORMAT.md §7.6 and TAUD_ENGINE_SPEC.md §5.5.1.
+//
+// A layered metainstrument (type 0) is `n` instruments sounding side by side.
+// A type-4 rack is the opposite arrangement: the same 10-byte table, but its
+// entries are OPERATORS that feed each other, and the whole rack is ONE voice.
+// The wiring is an RPN program packed into the record's tail, so an algorithm
+// is data — there is no fixed set of "algorithm 1…32" to choose from.
+//
+// The oscillator of a classic FM chip is a sine table. Here it is an ordinary
+// Taud instrument: its sample IS the waveform, its loop IS the cycle, and its
+// envelope, filter, auto-vibrato and detune all keep working. Modulate a
+// single-cycle loop and the result is textbook phase modulation; modulate a
+// drum hit and it is something no DX7 could do.
+
+
+
+
+
+
+/**
+ * The live rack behind one sounding note. Allocated per trigger, hung off the
+ * channel's foreground Voice as `voice.fmRig`, and dropped the moment that
+ * voice is retriggered with anything else.
+ *
+ * `voices[0]` is the channel's OWN voice — operator 0 sounds on it, which is
+ * what gives the note a lifetime, an envelope and a place in the mix. Operators
+ * 1… are background voices flagged `fmOperator`, so the tick pass maintains
+ * them like layer children while the mixer leaves them alone: they are read
+ * from here, not summed.
+ *
+ * A null slot is an operator that is not sounding this note — gated out by its
+ * rectangle, pointed at nothing, or simply never named by the algorithm — and
+ * reads as a constant 0.
+ */
+class FmRig {
+  constructor(count) {
+    this.count = count;
+    this.voices = new Array(count).fill(null);
+    this.gain = new Float64Array(count);   // the mix octet's linear gain
+    this.cur = new Float64Array(count);    // this output sample's value
+    this.last = new Float64Array(count);   // …and the previous one's, for $08xx
+    this.done = new Uint8Array(count);     // evaluated yet, this sample?
+    this.program = null;                   // Uint16Array, END already stripped
+    this.stack = new Float64Array(FM_STACK_MAX + 2);
+  }
+}
+
+/**
+ * Which operators the algorithm actually reads, as a boolean per slot.
+ *
+ * Only `$00xx` and `$04xx` count. A `$08xx` feedback tap reads what an operator
+ * left behind LAST sample, so it cannot be the thing that makes an operator
+ * sound — an operator named by nothing but feedback taps would have to produce
+ * the value its own tap then reads, and there is no such value. Naming it
+ * anyway is harmless and reads as 0, which is also what the tap of a gated-out
+ * operator gives.
+ *
+ * The point of asking at all is that a rack triggers only the operators it
+ * reads: an unread operator costs no voice, no sample fetch and no envelope.
+ */
+function fmReferencedOperators(program, count) {
+  const used = new Uint8Array(count);
+  if (program === null) return used;
+  for (const w of program) {
+    if (w >= FM_WORD_OP) continue;
+    const cls = w & ~FM_INDEX_MASK;
+    if (cls !== FM_WORD_OSC && cls !== FM_WORD_MOD) continue;
+    const k = w & FM_INDEX_MASK;
+    if (k < count) used[k] = 1;
+  }
+  return used;
+}
+
+/** Seed a rack's per-operator mix gains from the rack's own table. */
+function fmSeedGains(rig, ops) {
+  for (let k = 0; k < rig.count && k < ops.length; k++) {
+    rig.gain[k] = META_MIX_GAIN[ops[k].mixOctet & 0xff];
+  }
+}
+
+/**
+ * The frame count one unit of modulation is worth for `v` — its CYCLE.
+ *
+ * A looping operator's cycle is its loop, so a modulator swinging ±1 sweeps the
+ * carrier a whole cycle either way and the mix octet reads as an FM index in
+ * the ordinary sense (unity = ±1 cycle, +24 dB ≈ ±16). Give the operator a
+ * single-cycle loop and that is exactly classic phase modulation. A one-shot
+ * has no cycle, so its whole length stands in for one — a modulator at unity
+ * scrubs the entire sample, which is the useful reading of "as far as this
+ * waveform goes".
+ */
+function fmCycleFrames(v) {
+  const span = v.activeSampleLoopEnd - v.activeSampleLoopStart;
+  if ((v.activeLoopMode & 3) !== 0 && span > 0) return span;
+  return Math.max(v.activeSampleLength, 1);
+}
+
+/**
+ * One operator, evaluated at most ONCE per output sample. Naming an operator
+ * twice in one algorithm — the natural way to write "operator 5 modulates both
+ * 4 and 2" — gives the same value both times, because an operator is one
+ * oscillator with one phase and not a function that can be called again.
+ *
+ * `offset` is the phase modulation in units of the operator's own cycle; 0 is
+ * a free-running read.
+ */
+function fmEvalOperator(eng, ts, rig, k, interpMode, spt, offset) {
+  if (rig.done[k] !== 0) return rig.cur[k];
+  rig.done[k] = 1;
+  const v = rig.voices[k];
+  if (v === null || !v.active) { rig.cur[k] = 0.0; return 0.0; }
+  const inst = eng.instruments[v.instrumentId];
+  const frames = offset === 0 ? 0 : offset * fmCycleFrames(v);
+  let s = fetchTrackerSample(eng, v, inst, interpMode, frames);
+  let g = rig.gain[k];
+  if (k !== 0) {
+    // Operator 0 is the channel's own voice: the mixer runs its filter, its
+    // envelope and its ramps over the FINISHED signal (§5.5.1), so doing any of
+    // that here would apply them twice. Every other operator is invisible to the
+    // mixer and gets the same per-sample maintenance here, in the same order.
+    s = applyVoiceFilter(v, s);
+    v.envVolMix += v.envVolStep;
+    const effEnvVol = v.volEnvOn ? v.envVolMix : 1.0;
+    advanceVolumeRamp(v, ts.volDiv);
+    advancePitchRamp(v, spt);
+    g *= effEnvVol * v.fadeoutVolume * v.currentMixVolume * v.activeAttenGain *
+      (inst.instGlobalVolume / 255.0);
+    if (v.rampOutSamples > 0) {
+      g *= v.rampOutGain;
+      v.rampOutGain -= v.rampOutStep;
+      v.rampOutSamples--;
+      if (v.rampOutSamples === 0) v.active = false;
+    }
+    if (v.attackRampSamples > 0) {
+      const elapsed = ATTACK_RAMP_SAMPLES - v.attackRampSamples;
+      g *= 0.5 - 0.5 * Math.cos((Math.PI * elapsed) / ATTACK_RAMP_SAMPLES);
+      v.attackRampSamples--;
+    }
+  }
+  const out = s * g;
+  rig.cur[k] = out;
+  return out;
+}
+
+/**
+ * Run the rack's algorithm for one output sample and return the patch's signal.
+ *
+ * The stack machine is straight-line: every word runs every sample, in order,
+ * so there is nothing to schedule and no graph to walk. A modulator is simply
+ * an operand that was pushed before the operator it modulates is read — which
+ * is what RPN gives for free, and the reason the format stores the algorithm
+ * this way rather than as a matrix of "who feeds whom".
+ *
+ * The program was verified when the record was read (inst.js decodeFmProgram),
+ * so the underflow and overflow guards here are the belt to that braces: a rig
+ * whose program is null renders silence and never reaches this loop at all.
+ */
+function renderFmVoice(eng, ts, voice, interpMode, spt) {
+  const rig = voice.fmRig;
+  const prog = rig.program;
+  if (prog === null) return 0.0;
+  const stack = rig.stack;
+  const done = rig.done;
+  done.fill(0);
+  let sp = 0;
+
+  for (let i = 0; i < prog.length; i++) {
+    const w = prog[i];
+    if (w >= FM_WORD_OP) {
+      switch (w) {
+        case FmOp.ADD:
+          if (sp >= 2) { const b = stack[--sp]; stack[sp - 1] += b; }
+          break;
+        case FmOp.MUL:
+          if (sp >= 2) { const b = stack[--sp]; stack[sp - 1] *= b; }
+          break;
+        case FmOp.NEG:
+          if (sp >= 1) stack[sp - 1] = -stack[sp - 1];
+          break;
+        case FmOp.DUP:
+          if (sp >= 1 && sp < FM_STACK_MAX) { stack[sp] = stack[sp - 1]; sp++; }
+          break;
+        case FmOp.SWAP:
+          if (sp >= 2) { const b = stack[sp - 1]; stack[sp - 1] = stack[sp - 2]; stack[sp - 2] = b; }
+          break;
+        default:
+          break; // reserved: a no-op, so a newer record still makes a sound here
+      }
+      continue;
+    }
+    const k = w & FM_INDEX_MASK;
+    if (k >= rig.count) continue;
+    const cls = w & ~FM_INDEX_MASK;
+    if (cls === FM_WORD_FB) {
+      if (sp < FM_STACK_MAX) stack[sp++] = rig.last[k];
+      continue;
+    }
+    const offset = cls === FM_WORD_MOD && sp > 0 ? stack[--sp] : 0.0;
+    if (sp < FM_STACK_MAX) stack[sp++] = fmEvalOperator(eng, ts, rig, k, interpMode, spt, offset);
+  }
+
+  // The z⁻¹ taps move on together, AFTER the whole program: a feedback word
+  // reads the previous output sample even when it sits after the operator it
+  // taps, which is what lets a rack close a loop on itself in one pass.
+  for (let k = 0; k < rig.count; k++) if (done[k] !== 0) rig.last[k] = rig.cur[k];
+  return sp > 0 ? stack[sp - 1] : 0.0;
+}
+
+/**
+ * Detach and silence every operator voice channel `vi` is driving. Called where
+ * a layered meta releases its children — but an orphaned operator is not a
+ * sound that should be allowed to finish: on its own it is a modulator nobody
+ * is reading, so it is cut rather than released.
+ */
+function dropFmOperators(ts, vi) {
+  for (let i = ts.backgroundVoices.length - 1; i >= 0; i--) {
+    const bg = ts.backgroundVoices[i];
+    if (bg.fmOperator && bg.sourceChannel === vi) {
+      bg.active = false;
+      bg.fmOperator = false;
+      bg.isLayerChild = false;
+      ts.backgroundVoices.splice(i, 1);
+    }
+  }
+}
+
 // ══ src/engine/envelope.js ══
 // Envelope walkers — port of AudioAdapter.kt resolveEnvWrap (1708), envPresent
 // (1728), applyKeyLift (1755), advanceEnvelope (1768), advancePfRole (1881),
@@ -5407,6 +5848,7 @@ function advanceAutoVibrato(voice, inst) {
 
 
 
+
 /**
  * Scratch out-box for triggerNote: [notePan, noteElevation, present] as the
  * INSTRUMENT left them for the trigger just run — `present` is 0 when the
@@ -5567,9 +6009,15 @@ function rowVolumeFromDefault(inst, patch = null, volMax = 0x3f) {
 /** Cap backgroundVoices to MAX_BG_VOICES, preferring to evict the oldest NON-layer ghost. */
 function capBackgroundVoices(ts) {
   while (ts.backgroundVoices.length > MAX_BG_VOICES) {
-    const idx = ts.backgroundVoices.findIndex((v) => !v.isLayerChild);
-    if (idx >= 0) ts.backgroundVoices.splice(idx, 1);
-    else ts.backgroundVoices.shift();
+    // Plain NNA ghosts go first, then layer children. An FM operator goes LAST
+    // and, when it does go, is deactivated rather than merely dropped: its rack
+    // still holds a reference to it, and a culled operand that kept sounding
+    // would be an operand nothing was ageing any more.
+    let idx = ts.backgroundVoices.findIndex((v) => !v.isLayerChild && !v.fmOperator);
+    if (idx < 0) idx = ts.backgroundVoices.findIndex((v) => !v.fmOperator);
+    if (idx < 0) idx = 0;
+    ts.backgroundVoices[idx].active = false;
+    ts.backgroundVoices.splice(idx, 1);
   }
 }
 
@@ -5577,6 +6025,7 @@ function capBackgroundVoices(ts) {
 function releaseLayerChildren(eng, ts, vi) {
   for (const bg of ts.backgroundVoices) {
     if (!bg.isLayerChild || bg.sourceChannel !== vi) continue;
+    if (bg.fmOperator) continue; // dropFmOperators cuts these outright
     bg.isLayerChild = false;
     // A detached child runs no effects any more, so it drops back to its own
     // note rather than freezing mid-bend — the same rule the plain NNA ghost
@@ -5613,6 +6062,7 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   // byte keeps the last one, matching what the pattern shows.
   if (instId !== 0) voice.displayInst = instId;
   releaseLayerChildren(eng, ts, vi);
+  dropFmOperators(ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {
     triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
@@ -5627,6 +6077,10 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
   // the column's width: narrow a wide cell's volume to it.
   const gateVol = ts.wideCells ? rowVolOverride >> 2 : rowVolOverride;
   const seedVol = gateVol >= 0 && gateVol <= 0x3f ? gateVol : 0x3f;
+  if (inst.isFm) {
+    triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVol);
+    return;
+  }
   let layers = inst.resolveMetaLayers(noteVal, seedVol);
   // STRICT layering: drop layers whose patches don't cover the note (the gating
   // bbox is loose; strict converters emit each layer's canonical into its patches).
@@ -5702,6 +6156,96 @@ function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOverride) 
     child.noteElevation = voice.noteElevation + child.layerRelElevation;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
     ts.backgroundVoices.push(child);
+  }
+  capBackgroundVoices(ts);
+}
+
+/**
+ * Sound a type-4 FM rack (item 159) on channel vi's foreground voice.
+ *
+ * The shape deliberately mirrors the layered path above — operator 0 takes the
+ * channel's own voice and the rest spawn background children carrying relative
+ * detune — because everything downstream of the trigger (the per-tick sync, Q's
+ * whole-instrument retrigger, the release of the previous note) then works on a
+ * rack for exactly the reasons it works on a stack of layers.
+ *
+ * What differs is what the children are FOR. A layer child is a sound; an
+ * operator is an operand. So an operator carries no position of its own (the
+ * rack is one signal, and it sits where the channel sits), its mix octet is
+ * applied by the rack rather than by the mixer, and it is only spawned at all
+ * when the algorithm names it.
+ */
+function triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVol) {
+  const ops = inst.metaLayers;
+  const program = inst.fmProgram;
+  const sounds = (o) =>
+    o.instIdx >= 1 && o.instIdx <= 1023 && !eng.instruments[o.instIdx].isMeta &&
+    noteVal >= o.pitchStart && noteVal <= o.pitchEnd &&
+    seedVol >= o.volStart && seedVol <= o.volEnd;
+  // No algorithm, or no principal operator, is silence — the same answer the
+  // layered path gives when no layer covers the note, and for the same reason:
+  // there is nothing here to sound, and guessing at one would be worse.
+  if (program === null || !sounds(ops[0])) {
+    voice.active = false;
+    voice.fmRig = null;
+    voice.layerMixGain = 1.0;
+    voice.layerRelDetune = 0;
+    return;
+  }
+  const referenced = fmReferencedOperators(program, ops.length);
+  const rig = new FmRig(ops.length);
+  rig.program = program;
+  fmSeedGains(rig, ops);
+
+  // The channel's pan context as it stands BEFORE operator 0 retriggers — read
+  // once, for the same reason the layered path reads it (a child's own trigger
+  // must not inherit a sibling's).
+  const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanPanbrello = voice.panbrelloOffset;
+  const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
+  triggerNote(eng, ts, voice, clamp(noteVal + ops[0].detune, 0x20, 0xffff),
+    ops[0].instIdx, rowVolOverride);
+  // The rack applies every operator's mix level itself, operator 0's included,
+  // so the mixer's layer gain stays out of it: leaving operator 0's octet here
+  // would scale the whole finished patch by one operand's level.
+  voice.layerMixGain = 1.0;
+  voice.layerRelDetune = 0;
+  voice.layerRelPan = 0;
+  voice.layerRelElevation = 0;
+  voice.isLayerChild = false;
+  voice.metaForeground = true;
+  voice.fmRig = rig;
+  rig.voices[0] = voice;
+
+  for (let k = 1; k < ops.length; k++) {
+    if (referenced[k] === 0 || !sounds(ops[k])) continue;
+    const op = new Voice();
+    op.channelVolume = voice.channelVolume;
+    op.channelPan = chanPan;
+    op.rowPan = chanRowPan;
+    op.panbrelloOffset = chanPanbrello;
+    op.panAzimuth = chanAzimuth;
+    op.panElevation = chanElevation;
+    op.clipMode = voice.clipMode;
+    op.bitcrusherDepth = voice.bitcrusherDepth;
+    op.bitcrusherSkip = voice.bitcrusherSkip;
+    op.overdriveAmp = voice.overdriveAmp;
+    triggerNote(eng, ts, op, clamp(noteVal + ops[k].detune, 0x20, 0xffff),
+      ops[k].instIdx, rowVolOverride);
+    op.isLayerChild = true;
+    op.fmOperator = true;
+    op.sourceChannel = vi;
+    op.displayInst = voice.displayInst;
+    op.layerRelDetune = ops[k].detune - ops[0].detune;
+    op.layerMixGain = 1.0;
+    // An operand has no place of its own: the rack is one signal at the
+    // channel's position, so an operator never pulls it sideways.
+    op.layerRelPan = 0;
+    op.layerRelElevation = 0;
+    op.notePan = voice.notePan;
+    op.noteElevation = voice.noteElevation;
+    rig.voices[k] = op;
+    ts.backgroundVoices.push(op);
   }
   capBackgroundVoices(ts);
 }
@@ -5886,6 +6430,10 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.pitchEnvOn = true;
   voice.filterEnvOn = true;
   voice.metaForeground = false; // triggerMetaOrNote re-sets for the meta path
+  // A rack belongs to the note that built it, so ANY fresh trigger drops it —
+  // including the ones that never go through triggerMetaOrNote (the audition
+  // path, a layer child). triggerFmRack re-hangs it after this returns.
+  voice.fmRig = null;
   if (voice.vibratoRetrig) voice.vibratoLfoPos = 0;
   if (voice.tremoloRetrig) voice.tremoloLfoPos = 0;
   if (voice.panbrelloRetrig) voice.panbrelloLfoPos = 0;
@@ -5944,6 +6492,14 @@ function applyDuplicateCheck(eng, ts, channel, newInstId, newNote) {
  */
 function maybeSpawnBackgroundForNNA(eng, ts, voice, channel) {
   if (!voice.active) return;
+  // An FM rack (item 159) does not ghost. A ghost is a snapshot of ONE voice,
+  // and a rack is a voice plus the operators that shape it — copy the snapshot
+  // alone and the ghost sounds operator 0's raw sample, which is not the note
+  // that was playing and not a sound the patch can make at all. So the new note
+  // simply takes the channel — triggerMetaOrNote's dropFmOperators, a moment
+  // later, cuts the operands with it, and the incoming note's attack ramp
+  // covers the seam the way it does for a Note Cut.
+  if (voice.fmRig !== null) return;
   const nna = voice.nnaOverride >= 0
     ? voice.nnaOverride
     : eng.instruments[voice.instrumentId].newNoteAction;
@@ -7801,6 +8357,16 @@ function applyTrackerTick(eng, ts, playhead) {
     if (bg.isLayerChild) {
       const parent = bg.sourceChannel >= 0 && bg.sourceChannel < ts.voices.length
         ? ts.voices[bg.sourceChannel] : null;
+      // An FM operator outlives its rack for no one: nothing reads it once the
+      // rack is gone, and the mixer never summed it, so a detached operator
+      // would be an inaudible voice ageing forever. It dies with the note.
+      if (bg.fmOperator && (parent === null || !parent.active ||
+          parent.fmRig === null || parent.fmRig.voices[0] !== parent)) {
+        bg.active = false;
+        bg.fmOperator = false;
+        ts.backgroundVoices.splice(i, 1);
+        continue;
+      }
       if (parent === null || !parent.active) {
         // Parent ended. If it was RELEASED and its fast fadeout deactivated it in
         // the SAME tick the release fired, the sync below never ran — inherit the
@@ -7992,6 +8558,7 @@ function restartVoice(v) {
 
 
 
+
 const fround = Math.fround;
 
 /** Scratch pair for fetchTrackerSampleStereo — one voice is mixed at a time. */
@@ -8013,7 +8580,17 @@ const stereoPair = [0.0, 0.0];
  * the ITU angle for the sample's channel count (#998.0). Anything not
  * stereo-shaped stays mono here.
  */
-function renderVoicePair(eng, voice, inst, interpMode, out) {
+function renderVoicePair(eng, ts, voice, inst, interpMode, spt, out) {
+  // An FM rack (item 159) replaces the voice's own sample fetch, and nothing
+  // else: the filter, the voice FX and every gain below still act on the
+  // finished patch exactly as they act on a sampled one.
+  if (voice.fmRig !== null) {
+    const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
+      renderFmVoice(eng, ts, voice, interpMode, spt)));
+    out[0] = s;
+    out[1] = s;
+    return out;
+  }
   if (voice.activeChanCount !== 2) {
     const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
       fetchTrackerSample(eng, voice, inst, interpMode)));
@@ -8157,7 +8734,7 @@ function generateTrackerAudio(eng, playhead, out) {
         continue;
       }
       const voiceInst = eng.instruments[voice.instrumentId];
-      renderVoicePair(eng, voice, voiceInst, ts.interpolationMode, stereoPair);
+      renderVoicePair(eng, ts, voice, voiceInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];
       // Soundscope shows the mono sum — a stereo voice is still one voice.
@@ -8231,6 +8808,10 @@ function generateTrackerAudio(eng, playhead, out) {
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
+      // An FM operator is an OPERAND, not a sound: the rack that owns it read
+      // it (and aged it) in the foreground pass above, so summing it here would
+      // put the modulators into the mix beside the note they shaped.
+      if (bg.fmOperator) continue;
       // Muting a channel must also silence the NNA ghosts and layer children it
       // spawned (item 45): fold the source channel's fader into the bg voice's
       // own, so a channel mute/solo covers everything that came from it.
@@ -8238,7 +8819,7 @@ function generateTrackerAudio(eng, playhead, out) {
       const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
       if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
-      renderVoicePair(eng, bg, bgInst, ts.interpolationMode, stereoPair);
+      renderVoicePair(eng, ts, bg, bgInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];
       const instGv = bgInst.instGlobalVolume / 255.0;
@@ -8827,6 +9408,14 @@ class TaudEngine {
   /** True when metainstrument `inst` would produce at least one sounding layer
    *  at `note` (mirrors the strict-layer gating in triggerMetaOrNote). */
   _metaSoundsAt(inst, note) {
+    // An FM rack stands or falls on operator 0: the rest of the rack is read
+    // through it, so a note its rectangle excludes is silent whatever the
+    // modulators say (§5.5.1, triggerFmRack).
+    if (inst.isFm) {
+      const o = inst.metaLayers[0];
+      return inst.fmProgram !== null && o.instIdx >= 1 &&
+        note >= o.pitchStart && note <= o.pitchEnd && o.volStart <= 0x3f && o.volEnd >= 0x3f;
+    }
     let layers = inst.resolveMetaLayers(note, 0x3f);
     if (inst.metaStrict) {
       layers = layers.filter((l) => {

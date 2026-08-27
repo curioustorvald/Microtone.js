@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>instrument toolbox + Meta chooser smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    // Item 167: the Instruments toolbox is two rows of three, and the sixth
+    // button ("Meta…") is a CHOOSER — the layered picker and the FM picker are
+    // both behind it now, so what this checks is that each card still reaches
+    // the picker it used to be a button for, and that Cancel at either step
+    // leaves the bank alone.
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            const w = frame.contentWindow;
+            if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+          }, 100);
+        });
+        const M = win.__microtone;
+        const { store, instrumentsView: iv } = M;
+        const d = win.document;
+        log("app loaded, doc ready");
+
+        // Through the tab, not iv.refresh(): a hidden host has zero-size rects,
+        // and the row split is exactly what this is measuring.
+        d.querySelector('#tabs button[data-view="instruments"]').click();
+        await sleep(300);
+        const bar = d.querySelector(".side-toolbar-inst");
+        const btns = [...bar.querySelectorAll("button")];
+        // Two rows of three: the grid is what makes the rows, so assert the
+        // count AND that the buttons really land on two distinct y offsets.
+        const rows = new Set(btns.map((b) => Math.round(b.getBoundingClientRect().top)));
+        const gridOk = btns.length === 6 && rows.size === 2;
+        log(`toolbox: ${btns.length} buttons on ${rows.size} rows [${btns.map((b) => b.textContent).join(" | ")}] (${gridOk ? "ok" : "FAIL"})`);
+        // Nothing may overflow its cell — the labels were shortened for this.
+        const fits = btns.every((b) => b.scrollWidth <= b.clientWidth + 1);
+        log(`labels fit their buttons (${fits ? "ok" : "FAIL"})`);
+
+        const metaBtn = btns[5];
+        const openChooser = async () => {
+          metaBtn.click();
+          for (let i = 0; i < 40 && !d.querySelector("dialog.kind-modal"); i++) await sleep(50);
+          return d.querySelector("dialog.kind-modal");
+        };
+        const waitPicker = async () => {
+          for (let i = 0; i < 40; i++) {
+            const p = d.querySelector("dialog.import-modal .meta-picker");
+            if (p) return p.closest("dialog");
+            await sleep(50);
+          }
+          return null;
+        };
+
+        // ── cancelling the chooser ──
+        let dlg = await openChooser();
+        const cards = [...dlg.querySelectorAll(".kind-card")];
+        const cardsOk = cards.length === 2 && cards.every((c) =>
+          c.querySelector(".kind-diagram") && c.querySelector(".kind-card-name") &&
+          c.querySelector(".kind-card-sub") && c.querySelector(".kind-card-body")?.textContent.length > 80);
+        log(`chooser: ${cards.length} cards, each with a diagram, a name, a subtitle and prose (${cardsOk ? "ok" : "FAIL"})`);
+        const before = store.doc.selectableInstrumentSlots().length;
+        [...dlg.querySelectorAll(".modal-buttons button")].at(-1).click();
+        await sleep(150);
+        const cancelOk = !d.querySelector("dialog.kind-modal") &&
+          store.doc.selectableInstrumentSlots().length === before;
+        log(`cancel closes it and creates nothing (${cancelOk ? "ok" : "FAIL"})`);
+
+        // ── card 0 → the layered picker; card 1 → the FM picker ──
+        const reach = async (idx, wantOk) => {
+          const c = await openChooser();
+          [...c.querySelectorAll(".kind-card")][idx].click();
+          const picker = await waitPicker();
+          if (!picker) return false;
+          const title = picker.querySelector("h3").textContent;
+          const tally = picker.querySelector(".import-tally").textContent;
+          [...picker.querySelectorAll(".modal-buttons button")].at(-1).click();
+          await sleep(150);
+          log(`card ${idx} → "${title}" / tally "${tally}"`);
+          return wantOk(title, tally) && !d.querySelector("dialog.import-modal");
+        };
+        // The two pickers are told apart by their tally, which is the thing
+        // that actually differs: layers cost voices, operators cost record bytes.
+        const metaOk = await reach(0, (title, tally) => /\bvoice/i.test(tally) || /보이스/.test(tally));
+        log(`layered card reaches the layer picker (${metaOk ? "ok" : "FAIL"})`);
+        const fmOk = await reach(1, (title, tally) => /\bbyte/i.test(tally) || /바이트/.test(tally));
+        log(`FM card reaches the operator picker (${fmOk ? "ok" : "FAIL"})`);
+
+        const pass = gridOk && fits && cardsOk && cancelOk && metaOk && fmOk;
+        log(pass ? "RESULT: PASS" : "RESULT: FAIL");
+      } catch (err) {
+        log(`RESULT: ERROR ${err.message}\n${err.stack}`);
+      }
+    })();
+  </script>
+</body>
+</html>

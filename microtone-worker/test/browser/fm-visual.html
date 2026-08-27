@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FM rack visual harness (screenshot / layout tuning)</title>
+</head>
+<body>
+  <!-- Builds a four-operator rack out of the corpus's own instruments, wires it
+       into a two-carrier algorithm and leaves the FM tab open — a layout harness
+       like chord-visual:
+         chromium --headless=new --window-size=1400,1000 --screenshot=/tmp/fm.png \
+           --timeout=15000 "http://localhost:8932/test/browser/fm-visual.html?theme=dark"
+       ?theme=light for the light theme. -->
+  <img src="/hang" hidden>
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1360px;height:940px;border:0"></iframe>
+  <script type="module">
+    (async () => {
+      const frame = document.getElementById("app");
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          if (w && w.__microtone?.store.doc) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme");
+      if (theme) (await win.eval('import("/src/ui/theme.js")')).applyTheme(theme);
+
+      const { store } = win.__microtone;
+      const doc = store.doc;
+      const bank = await import("../../src/doc/bankmerge.js");
+      const ops = await import("../../src/doc/ops.js");
+      const fmedit = await import("../../src/doc/fmedit.js");
+
+      const picks = doc.selectableInstrumentSlots()
+        .filter((s) => !doc.instruments[s].isMeta).slice(0, 4)
+        .map((slot) => ({ slot, count: 1 }));
+      const plan = bank.planCreateFm(doc, picks, "FM bell");
+      store.undo.apply(ops.importBankOp(plan));
+      const slot = plan.metaSlot;
+
+      // Two carriers with a shared modulator and a feedback tap — enough shapes
+      // in one algorithm that the readout and the depth column both have
+      // something to say.
+      const OSC = (k) => fmedit.fmWord(fmedit.FM_CLASS_OSC, k);
+      const MOD = (k) => fmedit.fmWord(fmedit.FM_CLASS_MOD, k);
+      const FB = (k) => fmedit.fmWord(fmedit.FM_CLASS_FB, k);
+      const rack = doc.instruments[slot];
+      const opsArr = fmedit.fmOperators(rack);
+      opsArr[1].detune = 4096;        // one octave up — a 2:1 modulator
+      opsArr[2].detune = 6485;        // a twelfth — the inharmonic one
+      opsArr[3].mixOctet = 190;
+      store.undo.apply(ops.setMetaRecordOp(slot, fmedit.fmRecordOf(rack, opsArr,
+        [FB(0), MOD(2), MOD(1), MOD(0), OSC(3), fmedit.FmOp.ADD])));
+
+      win.__microtone.split.reveal("instruments");
+      const view = win.__microtone.instrumentsView;
+      view.selected = slot;
+      view.refresh();
+      document.title = "FM rack ready";
+    })();
+  </script>
+</body>
+</html>

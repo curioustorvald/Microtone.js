@@ -90,7 +90,7 @@ A file whose magic does not match is **INVALID**.
   - **1** — legacy cue sheet: 20 voices, 12-bit pattern numbers, 32 bytes per cue.
   - **2** — extended cue sheet (2026-07-01): 32 voices, 15-bit pattern numbers, 64 bytes per cue with sign-bit instruction words.
   - **3** — the wide pattern cell (2026-07-31): 16 bytes per cell, 8-bit volume, spherical panning column, a second effect ([§5.5](#5-5-format-version-3-the-wide-cell)). Cue sheets are as version 2. Surround songs only, and not readable by the TSVM device.
-- `x` (`0x20`) — the Project Data carries an `xHDR` section, which the reader **MUST** also parse. If this bit is clear but an `xHDR` section is present, the file is **INVALID**.
+- `x` (`$20`) — the Project Data carries an `xHDR` section, which the reader **MUST** also parse. If this bit is clear but an `xHDR` section is present, the file is **INVALID**.
 - `kk` — container kind, per the table in [§1](#container-kinds).
 
 A version-2 reader **MUST** accept version-1 files and translate their cue images into the version-2 layout on load (see [§6.3](#6-3-legacy-version-1-cue-sheet)). Writers **SHOULD** emit version 2, and version 3 only for the songs that need it.
@@ -107,10 +107,10 @@ One compressed blob that decompresses to exactly **8 650 752 bytes**:
 
 | Range | Size | Contents |
 |---|---|---|
-| `0x000000`–`0x7FFFFF` | 8 MiB | Sample pool — raw unsigned 8-bit PCM, no headers |
-| `0x800000`–`0x83FFFF` | 256 KiB | Instrument bin — 1024 records of 256 bytes |
+| `$000000`–`$7FFFFF` | 8 MiB | Sample pool — raw unsigned 8-bit PCM, no headers |
+| `$800000`–`$83FFFF` | 256 KiB | Instrument bin — 1024 records of 256 bytes |
 
-The sample pool is a flat byte array. Nothing in it is self-describing: an instrument record (or Ixmp patch) supplies the pointer, length and loop points of every sample, and two instruments **MAY** address overlapping spans. Sample data is unsigned, with `0x80` as the zero level.
+The sample pool is a flat byte array. Nothing in it is self-describing: an instrument record (or Ixmp patch) supplies the pointer, length and loop points of every sample, and two instruments **MAY** address overlapping spans. Sample data is unsigned, with `$80` as the zero level.
 
 The instrument bin holds records for instrument indices 0…1023:
 
@@ -129,7 +129,7 @@ Present in `.taud` and `.tpif`; the entry count is the header's song count. Each
 | 0 | `U32` | Absolute file offset of this song's pattern bin |
 | 4 | `U8` | Number of voices (channels) |
 | 5 | `U16` | Number of patterns; **0 is INVALID**. Decompressed pattern bin length = `numPatterns × 512` |
-| 7 | `U8` | Initial BPM, low 8 bits, biased by −25 (`0x00` = 25 BPM, `0xFF` = 280 BPM) |
+| 7 | `U8` | Initial BPM, low 8 bits, biased by −25 (`$00` = 25 BPM, `$FF` = 280 BPM) |
 | 8 | `U8` | bit 7 = BPM bit 8; bits 0…6 = initial tick rate (**0 is INVALID**) |
 | 9 | `U16` | Tuning base note, 1…65533 — a 4096-TET note word; 0 = "use the tracker default" |
 | 11 | `F32` | Frequency in Hz at the base note; 0 = "use the tracker default" |
@@ -142,7 +142,7 @@ Present in `.taud` and `.tpif`; the entry count is the header's song count. Each
 | 28 | `U8` | Immutable song flags (below) |
 | 29 | `Byte[3]` | **RESERVED** |
 
-The BPM field is split across two bytes, giving a 9-bit range of 25…535. Values above 280 are reachable only from the file or from the extended set-tempo effect; note that the effect form `T $FFxx` cannot express `0x1FF`.
+The BPM field is split across two bytes, giving a 9-bit range of 25…535. Values above 280 are reachable only from the file or from the extended set-tempo effect; note that the effect form `T $FFxx` cannot express `$1FF`.
 
 The cue count at offset 26 exists so a loader can size the cue image without deriving it from the decompressed length. When it is 0 (a version-1 file, or a version-2 writer that omitted it), a reader **MUST** fall back to `decompressed_length ÷ cue_size`.
 
@@ -172,16 +172,16 @@ Effect `1` may change these at runtime, but the change does not persist: startin
 
 ### Tuning
 
-The pair at offsets 9 and 11 declares "note *N* sounds at *F* Hz", and the engine scales the whole song accordingly. Either field reading 0 means "assume the tracker default", which is **C9 (`0xA000`) at 8363.0 Hz** — the Amiga convention, which puts A4 at roughly 439.53 Hz, about 1.87 cents flat of concert pitch. (The exact NTSC-derived reference is `(3579545 ÷ 428) × 2^(3/4) ÷ 32` ≈ 439.548 Hz; the format stores the rounded 8363.0.)
+The pair at offsets 9 and 11 declares "note *N* sounds at *F* Hz", and the engine scales the whole song accordingly. Either field reading 0 means "assume the tracker default", which is **C9 (`$A000`) at 8363.0 Hz** — the Amiga convention, which puts A4 at roughly 439.53 Hz, about 1.87 cents flat of concert pitch. (The exact NTSC-derived reference is `(3579545 ÷ 428) × 2^(3/4) ÷ 32` ≈ 439.548 Hz; the format stores the rounded 8363.0.)
 
 Well-known declarations:
 
 | Declaration | Meaning |
 |---|---|
-| A4 (`0x5C00`) @ 440 Hz | ISO concert pitch — renders as an exact identity, disturbing no bits |
+| A4 (`$5C00`) @ 440 Hz | ISO concert pitch — renders as an exact identity, disturbing no bits |
 | A4 @ 435 Hz | Former French standard (1859) |
 | A4 @ 452 Hz | Old Philharmonic pitch (19th-century Britain) |
-| C4 (`0x5000`) @ 256 Hz | Scientific / power-of-two pitch |
+| C4 (`$5000`) @ 256 Hz | Scientific / power-of-two pitch |
 | C4 @ 262 Hz | Modern Chinese *a-ak* convention |
 | C4 @ 311 Hz | Korean *hyang-ak* standard (ROK National Gugak Center) |
 
@@ -197,7 +197,7 @@ A song's pattern bin decompresses to `numPatterns × 64 × cellSize` bytes: one 
 | 2 | `U8` | Instrument, 0…255; 0 = no instrument change |
 | 3 | `U8` | Volume column: bits 0…5 value, bits 6…7 selector |
 | 4 | `U8` | Panning column: bits 0…5 value, bits 6…7 selector |
-| 5 | `U8` | Effect opcode — a base-36 digit value (`0`…`9` = `0x00`…`0x09`, `A`…`Z` = `0x0A`…`0x23`) |
+| 5 | `U8` | Effect opcode — a base-36 digit value (`0`…`9` = `$00`…`$09`, `A`…`Z` = `$0A`…`$23`) |
 | 6 | `U16` | Effect argument |
 
 Rendered by a tracker's display, one row reads:
@@ -209,17 +209,17 @@ rr || NOTE | Ins | E.Vol | E.Pan | EE.ffff |
 
 ### Note words
 
-Notes are **4096 tone-equal temperament**: 4096 steps to the octave, with `0x1000` per octave. `0x5000` is C4 (middle C); `0x1000` is C0 and `0xF000` is C14. The playable range is `0x0020`…`0xFFFF`. Values `0x0000`…`0x001F` are reserved for sentinels:
+Notes are **4096 tone-equal temperament**: 4096 steps to the octave, with `$1000` per octave. `$5000` is C4 (middle C); `$1000` is C0 and `$F000` is C14. The playable range is `$0020`…`$FFFF`. Values `$0000`…`$001F` are reserved for sentinels:
 
 | Value | Name | Meaning |
 |---|---|---|
-| `0x0000` | — | No note event on this row |
-| `0x0001` | Key off | Release the sustain region; the release stage of the envelope plays |
-| `0x0002` | Note cut | Silence the voice immediately |
-| `0x0003` | Note fade | Begin the fadeout without releasing sustain |
-| `0x0004` | Fast fade | Fast fadeout (~0.3 s) — the SoundFont *exclusiveClass* choke |
-| `0x0005`–`0x000F` | — | **RESERVED** |
-| `0x0010`–`0x001F` | Int0…IntF | Interrupt markers 0…15: produce no sound, latch a host-visible flag |
+| `$0000` | — | No note event on this row |
+| `$0001` | Key off | Release the sustain region; the release stage of the envelope plays |
+| `$0002` | Note cut | Silence the voice immediately |
+| `$0003` | Note fade | Begin the fadeout without releasing sustain |
+| `$0004` | Fast fade | Fast fadeout (~0.3 s) — the SoundFont *exclusiveClass* choke |
+| `$0005`–`$000F` | — | **RESERVED** |
+| `$0010`–`$001F` | Int0…IntF | Interrupt markers 0…15: produce no sound, latch a host-visible flag |
 
 Actual sounding pitch also depends on the instrument's sampling rate and detune; the note word alone is not a frequency. See the Engine Specification.
 
@@ -234,7 +234,7 @@ Both columns share one encoding: a 6-bit value plus a 2-bit selector.
 | 2 | SLIDE DOWN | Slide volume down by *value* per tick | Slide note pan left by *value* per tick |
 | 3 | FINE | One-shot delta on tick 0: bit 5 = direction (set = up/right), bits 0…4 = magnitude | Same |
 
-A FINE selector with a value of 0 is therefore a **no-op**, and that is the canonical "this column is empty" encoding: byte `0xC0`. Converters and editors write `0xC0` into both columns of an untouched cell, so a cell with no volume or pan intent does not disturb running state.
+A FINE selector with a value of 0 is therefore a **no-op**, and that is the canonical "this column is empty" encoding: byte `$C0`. Converters and editors write `$C0` into both columns of an untouched cell, so a cell with no volume or pan intent does not disturb running state.
 
 Both columns address the **per-note** axis of their quantity, never the per-channel one: the volume column writes `note_vol` and the panning column writes `note_pan`, while `channel_vol` belongs to M / N and `channel_pan` to S $80xx / P / X / 4 / Z (TAUD_NOTE_EFFECTS.md §3, §3a). A pan column SET therefore places the note within the channel rather than moving the channel, and composes with a set-pan effect on the same row instead of losing to it.
 
@@ -283,7 +283,7 @@ The value is a plain byte, 0…255. Note volume, row volume and channel volume a
 - **SLIDE UP / SLIDE DOWN** — by *value* per tick, in the same 0…255 units, so a slide can now move by one unit per tick.
 - **FINE** — a one-shot delta on tick 0: **bit 7** = direction (set = up), bits 0…6 = magnitude. (Version 2 put the direction in bit 5, the top of its 6-bit field; the flag moves with the field width.)
 
-A FINE selector with a value of 0 remains the **no-op**, and remains the canonical "this column is empty" encoding: a fine slide by zero is meaningless at any width. An untouched v3 cell therefore has selector byte `0x33` — FINE in both columns — with its value, azimuth and elevation bytes zero.
+A FINE selector with a value of 0 remains the **no-op**, and remains the canonical "this column is empty" encoding: a fine slide by zero is meaningless at any width. An untouched v3 cell therefore has selector byte `$33` — FINE in both columns — with its value, azimuth and elevation bytes zero.
 
 **What stays six bits.** Volume-envelope node values and an Ixmp patch's velocity rectangle live in the *instrument* record, which version 3 does not change: a bank is format-neutral, and the same `.tsii` loads into a v2 or a v3 project. A v3 engine scales those 0…63 values by 4 when it reads or compares them. Effect-column volume slides (`D`, `K`, `L`, `N`, the retrigger volume modifiers) are nibble-packed and keep their version-2 arguments; a v3 engine multiplies their per-tick step by 4, so `D $01` moves at the rate it always did. Effects that set an absolute volume LEVEL from a byte — channel volume `M` — use the full 0…255 range.
 
@@ -334,7 +334,7 @@ Each channel word:
 
 | Bits | Field |
 |---|---|
-| 0…14 | Pattern number, 0…`0x7FFE`; `0x7FFF` = no pattern on this channel |
+| 0…14 | Pattern number, 0…`$7FFE`; `$7FFF` = no pattern on this channel |
 | 15 | One bit of an instruction word (below) |
 
 A song may therefore carry up to 32 767 patterns, and the cue sheet holds up to 8192 cues (4096 in 64-channel mode).
@@ -348,11 +348,11 @@ The sign bits of the channel words are harvested into two 16-bit instruction wor
 
 In 64-channel mode a cue spans two 64-byte rows and the sign bits of channels 32…63 encode nothing; the two-instruction limit is unchanged.
 
-A word decodes from `b30 = word >> 8` and `b31 = word & 0xFF`:
+A word decodes from `b30 = word >> 8` and `b31 = word & $FF`:
 
 | `b30` | `b31` | Instruction | Meaning |
 |---|---|---|---|
-| `0x00` | `0x00` | NOP | No operation — a plain 64-row cue |
+| `$00` | `$00` | NOP | No operation — a plain 64-row cue |
 | `1000xxxx` | `yyyyyyyy` | BAK | Go back `0bxxxxyyyyyyyy` cues |
 | `1001xxxx` | `yyyyyyyy` | FWD | Skip forward `0bxxxxyyyyyyyy` cues |
 | `1111xxxx` | `yyyyyyyy` | JMP | Jump to absolute cue `0bxxxxyyyyyyyy` (this is how a song loops) |
@@ -369,7 +369,7 @@ Reader rules:
 - A cue's effective row count is the **minimum** of what each word implies (64 unless the word is LEN or HALT AT).
 - The cue halts playback if **either** word is HALT or HALT AT.
 - The flow instruction is word 0's if word 0 carries one, otherwise word 1's.
-- `b30 == 0x01` with `b31` not matching `01xxxxxx` decodes as a plain HALT. Historic documentation assigned `00000001 00xxxxxx` to a "fade out then stop" instruction; it was never implemented and is now **RESERVED**.
+- `b30 == $01` with `b31` not matching `01xxxxxx` decodes as a plain HALT. Historic documentation assigned `00000001 00xxxxxx` to a "fade out then stop" instruction; it was never implemented and is now **RESERVED**.
 
 Converters place the HALT on the **last active cue**, not in an empty cue appended after it, so playback stops as the last row completes rather than after a silent 64-row gap.
 
@@ -384,17 +384,17 @@ Version-1 files store 32 bytes per cue for 20 voices, with 12-bit pattern number
 | 20…29 | High nibble, same packing |
 | 30…31 | Instruction word: byte 30 is the high byte, byte 31 the low byte |
 
-The pattern-empty sentinel is `0xFFF`. A version-2 reader **MUST** translate: reassemble each 12-bit number, map `0xFFF` to `0x7FFF`, place the instruction word's bit *c* into channel *c*'s sign bit for channels 0…15, and leave channels 20…31 empty. Instruction decoding is identical.
+The pattern-empty sentinel is `$FFF`. A version-2 reader **MUST** translate: reassemble each 12-bit number, map `$FFF` to `$7FFF`, place the instruction word's bit *c* into channel *c*'s sign bit for channels 0…15, and leave channels 20…31 empty. Instruction decoding is identical.
 
 ### 6.4 Trailing-cue trimming
 
-A cue is *empty* when every channel word is `0x7FFF` and both instruction words are NOP — that is, every byte of its stride is `FF 7F`. Writers **SHOULD** drop the trailing run of empty cues (keeping at least one cue) so that deleting content past a point actually shrinks the file. Interior empty cues are meaningful rests and **MUST** be preserved.
+A cue is *empty* when every channel word is `$7FFF` and both instruction words are NOP — that is, every byte of its stride is `FF 7F`. Writers **SHOULD** drop the trailing run of empty cues (keeping at least one cue) so that deleting content past a point actually shrinks the file. Interior empty cues are meaningful rests and **MUST** be preserved.
 
 ## 7. Instrument records
 
 Each instrument occupies 256 bytes in the instrument bin. Envelopes are described by three independent regions per envelope, and the record carries two pitch-or-filter envelope slots, which is what lets a single instrument hold both.
 
-If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a value no real sample pointer can take, since the 8 MiB pool caps pointers at `0x7FFFFF` — the record is a **Metainstrument** and bytes 0…3 are reinterpreted per [§7.4](#7-4-metainstrument-records).
+If the record's `U32` at offset 0 has its high 16 bits equal to `$FFFF` — a value no real sample pointer can take, since the 8 MiB pool caps pointers at `$7FFFFF` — the record is a **Metainstrument** and bytes 0…3 are reinterpreted per [§7.4](#7-4-metainstrument-records).
 
 ### 7.1 Byte map
 
@@ -402,7 +402,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 |---|---|---|
 | 0 | `U32` | Sample pointer into the pool (or the Metainstrument sentinel) |
 | 4 | `U16` | Sample length in bytes |
-| 6 | `U16` | Sampling rate at C4 (note `0x5000`) |
+| 6 | `U16` | Sampling rate at C4 (note `$5000`) |
 | 8 | `U16` | Play start — where a fresh trigger begins (usually 0) |
 | 10 | `U16` | Loop start (**MAY** be smaller than play start) |
 | 12 | `U16` | Loop end |
@@ -411,8 +411,8 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 | 17 | `U16` | Panning envelope LOOP word |
 | 19 | `U16` | Pitch/filter envelope LOOP word, slot 1 |
 | 21 | `U16 × 25` | Volume envelope nodes — value 0…63, then offset |
-| 71 | `U16 × 25` | Panning envelope nodes — value 0…255 (`0x80` centre), then offset |
-| 121 | `U16 × 25` | Pitch/filter envelope nodes, slot 1 — value 0…255 (`0x80` unity), then offset |
+| 71 | `U16 × 25` | Panning envelope nodes — value 0…255 (`$80` centre), then offset |
+| 121 | `U16 × 25` | Pitch/filter envelope nodes, slot 1 — value 0…255 (`$80` unity), then offset |
 | 171 | `U8` | Instrument global volume, 0…255 |
 | 172 | `U8` | Volume fadeout, low 8 bits |
 | 173 | `U8` | Fadeout high nibble + filter interpretation mode (below) |
@@ -445,7 +445,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `0xFFFF` — a v
 
 **The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
 
-A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch overrides them**: a patch that carries a pan (its own `0xFF` sentinel being the only gate — **not** `p`, see [§9.10](#9-10-ixmp-patch-records)) is the more specific statement of the same thing, so it wins and the base record's fields do not also apply. A patch record has no elevation field, so a patch override moves the azimuth alone and the instrument's elevation stands.
+A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch overrides them**: a patch that carries a pan (its own `$FF` sentinel being the only gate — **not** `p`, see [§9.10](#9-10-ixmp-patch-records)) is the more specific statement of the same thing, so it wins and the base record's fields do not also apply. A patch record has no elevation field, so a patch override moves the azimuth alone and the instrument's elevation stands.
 
 **The instrument's default position is a `note_pan` offset, not a channel pan** (TAUD_NOTE_EFFECTS.md §3a): the position it names is measured from wherever the channel is pointing, so it lands exactly where it says when the channel sits at its `$80` / front default, and it ROTATES with the channel when `S $80xx`, `P`, `X` or `Z` has moved it. An instrument never writes the channel's own position. The pan ENVELOPE offsets the azimuth on top of both and leaves the elevation alone.
 
@@ -460,7 +460,7 @@ A planar song forces the elevation to zero, as it does for every other source of
 | `pp` (0…1) | Loop mode: 0 = none, 1 = forward loop, 2 = ping-pong, 3 = one-shot (plays to the end regardless of note length) |
 | `s` (2) | The loop is a **sustain** loop: key-off escapes it |
 | `P` (4) | This instrument is **percussion**; a retuner or transposer **MUST NOT** touch its notes |
-| `A` (5) | The panning azimuth is behind the listener: bit 8 of the 9-bit azimuth, i.e. **add 0x100** to byte 177's value |
+| `A` (5) | The panning azimuth is behind the listener: bit 8 of the 9-bit azimuth, i.e. **add $100** to byte 177's value |
 
 #### Byte 173 — fadeout high bits and filter mode
 
@@ -584,11 +584,18 @@ A Metainstrument occupies an ordinary 256-byte slot and is referenced by a patte
 |---|---|---|
 | 0 | `U8` | Type and flags: `0b tttt_00Ps` |
 | 1 | `U8` | Layer count, 1…25 |
-| 2 | `U8` | Sentinel — **MUST** be `0xFF` |
-| 3 | `U8` | Sentinel — **MUST** be `0xFF` |
+| 2 | `U8` | Sentinel — **MUST** be `$FF` |
+| 3 | `U8` | Sentinel — **MUST** be `$FF` |
 | 4 | — | Layer records, 10 bytes each |
 
-Bytes 0…3 alias the base record's sample pointer, and the two `0xFF` sentinels are what put `0xFFFF` in its high half. In byte 0: `t` is the type (only type 0, *layered*, is defined), `P` marks the instrument as percussion, and `s` selects **strict layering** (below). Legacy files leave byte 0 as `0x00`.
+Bytes 0…3 alias the base record's sample pointer, and the two `$FF` sentinels are what put `$FFFF` in its high half. In byte 0: `t` is the **type**, `P` marks the instrument as percussion, and `s` selects **strict layering** (below). Legacy files leave byte 0 as `$00`.
+
+| `t` | Type | Meaning |
+|---|---|---|
+| 0 | **Layered** | The table is a list of layers, sounded in parallel. This section. |
+| 4 | **FM** | The table is an *operator rack* and the bytes after it carry the algorithm that wires it. [§7.6](#7-6-metainstrument-type-4-fm-operator-racks). |
+
+Every other value is **RESERVED**. A reader that does not know a type **MUST** treat the record as sounding nothing, not as type 0 — the table's *entries* have the same shape in every type, but what they mean does not.
 
 Each layer record:
 
@@ -597,8 +604,8 @@ Each layer record:
 | +0 | `U8` | Layer instrument index, low 8 bits |
 | +1 | `U8` | Mix volume as a decibel octet ([§7.5](#7-5-the-decibel-octet-table)) |
 | +2 | `S16` | Sample detune, in 4096-TET units |
-| +4 | `U16` | Pitch range low (full range = `0x0000`) |
-| +6 | `U16` | Pitch range high, inclusive (full range = `0xFFFF`) |
+| +4 | `U16` | Pitch range low (full range = `$0000`) |
+| +6 | `U16` | Pitch range high, inclusive (full range = `$FFFF`) |
 | +8 | `U8` | bits 0…5 = volume range low (0…63); bits 6…7 = layer instrument index bits 8…9 |
 | +9 | `U8` | bits 0…5 = volume range high, inclusive; bits 6…7 **RESERVED** |
 
@@ -607,7 +614,7 @@ The four range fields define a rectangle over the same pitch × volume space as 
 - Layer rectangles **MAY** overlap; that is the entire point. Every layer whose rectangle contains the trigger sounds, each on its own voice. (Overlap within a single ordinary instrument's Ixmp patch list remains **INVALID** — layering lives here instead.)
 - The same ordinary instrument **MAY** be listed several times at different detune and mix level, which reproduces SoundFont detune stacks without spending extra instrument slots.
 - Mix volume **scales** the layer's output; it multiplies with the trigger's velocity rather than replacing it. Sample detune is **added** to the trigger note and to the layer instrument's own detune.
-- **Recursion is forbidden.** A layer index **MUST** resolve to an ordinary instrument in `0x001`…`0x3FF`. A layer pointing at another Metainstrument, or at instrument 0, is skipped by the engine.
+- **Recursion is forbidden.** A layer index **MUST** resolve to an ordinary instrument in `$001`…`$3FF`. A layer pointing at another Metainstrument, or at instrument 0, is skipped by the engine.
 - A single Metainstrument trigger costs up to *layer count* voices against the mixer's pool.
 
 **Strict layering** (byte 0, bit 0) addresses a subtle failure. A layer's rectangle is a single bounding box, but the layer instrument's own Ixmp zones may cover only part of it — a drum layer holding scattered keys has a box spanning the gaps between them. Under legacy semantics a trigger landing in such a gap still fires the layer and, matching no patch, falls through to that instrument's base sample, sounding a wrong instrument (a closed hi-hat under an open one). With strict layering the engine drops the layer for that note instead. A producer setting this bit **MUST** also place each layer instrument's canonical zone in its own Ixmp patch list, so that a non-match unambiguously means "no zone covers this trigger".
@@ -628,6 +635,60 @@ Two fields — Metainstrument layer mix volume and instrument/patch initial atte
 | 0 | — | −∞ (silence) |
 
 Linear amplitude is `10^(dB ÷ 20)`. **Octet 0 means unity, not silence, in the two *initial attenuation* fields** (byte 251 and the Ixmp `x` block), where it is the unset sentinel that keeps legacy files — whose reserved bytes were zero — unaffected. In the Metainstrument layer mix field, 0 is genuine silence.
+
+### 7.6 Metainstrument type 4 — FM operator racks
+
+A type-4 Metainstrument is an **operator rack**. The 10-byte table is read exactly as in [§7.4](#7-4-metainstrument-records), but its entries are not layers sounding side by side: they are **operators**, and the bytes after the table say how they feed each other. The whole rack is **one voice**.
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | `U8` | `0b 0100_00P0` — type 4, `P` = percussion |
+| 1 | `U8` | Operator count, 1…16 |
+| 2…3 | `U8`×2 | Sentinels, `$FF $FF` |
+| 4 | — | Operator records, 10 bytes each — the [§7.4](#7-4-metainstrument-records) layer layout, field for field |
+| 4 + 10·*n* | `U16`… | The **algorithm**: RPN words, terminated by `$FFFF` |
+
+The operator's mix octet is its **output level**, and its sample detune is its **frequency ratio** — one octave up is `+4096`, a perfect twelfth `+6485`. Those are the two numbers an FM operator has always had; the pitch and volume rectangles are the third thing, and they gate the operator exactly as they gate a layer: an operator whose rectangle excludes the trigger is **silent** for that note, which is how key scaling and velocity-switched brightness are written.
+
+Both halves live in the **252 bytes** the record has after its header — 10 a operator, 2 a word, 2 for the terminator. More operators means less room for the algorithm, and an editor **SHOULD** show that as one figure rather than two limits.
+
+#### Words
+
+The algorithm is Reverse Polish. A word is either an **operand**, which names an operator, or an **operator**, which combines what is on the stack.
+
+| Word | Class | Effect |
+|---|---|---|
+| `$0000`…`$03FF` | operand | Push operator *n*, read free-running |
+| `$0400`…`$07FF` | operand | Pop a value; push operator *n*−`$400` read with that value as its **phase modulation** |
+| `$0800`…`$0BFF` | operand | Push what operator *n*−`$800` produced on the **previous** output sample (a z⁻¹ tap) |
+| `$FF00` | operator | **Add** — pop *b*, *a*; push *a* + *b* |
+| `$FF01` | operator | **Ring-modulate** — pop *b*, *a*; push *a* × *b* |
+| `$FF02` | operator | **Invert** — pop *a*; push −*a* |
+| `$FF03` | operator | **Duplicate** — pop *a*; push *a*, *a* |
+| `$FF04` | operator | **Swap** — pop *b*, *a*; push *b*, *a* |
+| `$FFFF` | — | **End**. The stack top is the patch's output. |
+
+Everything else is **RESERVED**. Operand words carry a 10-bit index, which is what keeps them clear of the `$FFxx` operator space.
+
+The `$04xx` class is what makes an RPN program able to express FM at all. A modulator has to be *computed before* the carrier it modulates is *read*, and postfix notation puts a subtree's whole value on the stack before the word that consumes it — so "operator 6 modulates operator 5" is written `$0006 $0405`, in that order, and a chain is just more of the same. That is also why there is no binary "FM" operator: by the time a plain `$0005` had been evaluated the carrier would already have been read unmodulated, and there would be nothing left to modulate.
+
+#### Validity
+
+A reader **MUST** verify the algorithm before playing it, and a rack whose algorithm does not verify **MUST** sound nothing. An algorithm verifies when, reading words in order from the first to the terminator or the record's end:
+
+- every word is a defined operand or operator, and every operand's index is below the operator count;
+- no word pops more than the stack holds, and the stack never exceeds **16** entries;
+- at least one value remains at the end.
+
+The strictness is deliberate. The tail of a 256-byte record is whatever the writer left there, so a program a reader cannot fully verify is not a patch that sounds slightly wrong — it is a stack machine running on unrelated bytes.
+
+#### Evaluation
+
+- An operator is evaluated **at most once per output sample**. Naming one twice — the ordinary way to write "operator 5 modulates both 4 and 2" — reads the same value both times, because an operator is one oscillator with one phase and not a function that can be called again.
+- An operator the algorithm never names by a `$00xx` or `$04xx` word is not sounded at all: it costs no voice and its phase does not advance. A `$08xx` tap on such an operator reads 0.
+- **Operator 0 is the principal.** It sounds on the channel's own voice, so its envelope, its fadeout, its instrument global volume and its sample ending belong to the whole note; its own mix octet applies to its operand alone. A rack whose operator 0 is gated out, or points at nothing, sounds nothing.
+
+The rest of what the words mean at playback — the unit phase modulation is measured in, and what a rack costs the mixer — is the engine's business: [Engine Specification §5.5.1](TAUD_ENGINE_SPEC.md).
 
 ## 8. `.tsii` and `.tpif`
 
@@ -687,19 +748,19 @@ Only a format-version-2 (or later) file **MAY** carry this section; otherwise th
 
 Each holds one UTF-8 string: the project name, author, copyright notice and free-form message respectively. A terminating `NUL` is **OPTIONAL**; a reader **MUST** stop at the first `NUL` when one is present and otherwise consume the whole payload.
 
-`PMsg` is the only one of the four that **MAY** carry line breaks. They are `LF` (`0x0A`); a producer converting from a format whose message separates lines with `CR` (ImpulseTracker) or `CRLF` **MUST** translate them, and **SHOULD** trim the trailing padding those formats write.
+`PMsg` is the only one of the four that **MAY** carry line breaks. They are `LF` (`$0A`); a producer converting from a format whose message separates lines with `CR` (ImpulseTracker) or `CRLF` **MUST** translate them, and **SHOULD** trim the trailing padding those formats write.
 
 ### 9.3 `INam` — instrument name table
 
-Instrument names, separated by `0x1E`, in instrument-index order. UTF-8.
+Instrument names, separated by `$1E`, in instrument-index order. UTF-8.
 
 ### 9.4 `SNam` — sample name table
 
-Sample names, separated by `0x1E`, in sample-pool order. UTF-8. Taud has no sample records — a "sample" is a span in the pool referenced by instruments — so this table is ordered by the deduplicated census of spans that a producer derives from the instrument bin and the Ixmp patches.
+Sample names, separated by `$1E`, in sample-pool order. UTF-8. Taud has no sample records — a "sample" is a span in the pool referenced by instruments — so this table is ordered by the deduplicated census of spans that a producer derives from the instrument bin and the Ixmp patches.
 
 ### 9.5 `pNam` — pattern name table
 
-Pattern names, separated by `0x1E`, in pattern-index order. UTF-8.
+Pattern names, separated by `$1E`, in pattern-index order. UTF-8.
 
 ### 9.6 `sMet` — song metadata table
 
@@ -742,13 +803,13 @@ Defines notations beyond the registered set. Repetition of:
 | `U8` | Notation index, counting from 0 (internally mapped to 65535 − index) |
 | `U32` | Size of the remainder of this entry |
 | `U16` | **RESERVED** for flags |
-| `U16` | Interval size in the 4096-TET lattice — octave = `0x1000`, tritave = `0x195C`. **0** when the notation is not an interval system (and therefore names every note it can express explicitly) |
+| `U16` | Interval size in the 4096-TET lattice — octave = `$1000`, tritave = `$195C`. **0** when the notation is not an interval system (and therefore names every note it can express explicitly) |
 | `U16` | **RESERVED** for a float32 interval size |
 | `U16` | Notes between intervals **minus one** — 12-TET stores 11 |
-| `U16` | Base note the frequency table is offset against, as an absolute note word (C4 = `0x5000`); 0 = the default |
+| `U16` | Base note the frequency table is offset against, as an absolute note word (C4 = `$5000`); 0 = the default |
 | `Byte[6]` | **RESERVED** |
 | `Byte[*]` | Name, NUL-terminated, UTF-8 |
-| `Byte[*]` | Notation table — `0xFF`-separated, NUL-terminated, in the Taud character set |
+| `Byte[*]` | Notation table — `$FF`-separated, NUL-terminated, in the Taud character set |
 | `U16[*]` | Frequency table — relative pitch offsets in 4096-TET space; index 0 **MUST** be 0 |
 
 Frequency-table offsets are unsigned, so an interval-less notation that must name notes below C4 declares its lowest note in the base-note field. For an interval system the base note is the root of the root interval and the field **MUST** be 0.
@@ -835,19 +896,19 @@ Patch records are **variable length**. Each begins with a version byte that is r
 | 19 | `U16` | Sampling rate at C4 — same encoding as base record bytes 6…7 |
 | 21 | `S16` | Sample detune, in 4096-TET units (XM finetune; IT samples leave 0) |
 | 23 | `U8` | Loop mode and sustain bit — identical to base record byte 14 |
-| 24 | `U8` | Default pan, 0…255; **`0xFF` = no override** |
+| 24 | `U8` | Default pan, 0…255; **`$FF` = no override** |
 | 25 | `U8` | Default note volume, 0…255; **0 = no override** |
 | 26 | `U8` | Auto-vibrato speed |
 | 27 | `U8` | Auto-vibrato sweep |
 | 28 | `U8` | Auto-vibrato depth |
 | 29 | `U8` | Auto-vibrato rate |
-| 30 | `U8` | Auto-vibrato waveform, bits 0…2; **`0xFF` = no override** |
+| 30 | `U8` | Auto-vibrato waveform, bits 0…2; **`$FF` = no override** |
 
 The first four fields define a rectangle over pitch × volume space. **Patch selection walks the list in order and the first patch whose rectangle contains the trigger wins**; when nothing matches, the base record's sample fields are used unchanged. The "no override" sentinels let a converter that has no per-sample data for one axis defer to the base record.
 
 The IT and XM formats do not define a velocity axis; those converters leave the volume range at 0…63. SoundFont does, and the velocity axis is `round(velocity × 63 ÷ 127)`.
 
-**The sentinels are the only gate.** A `default pan` other than `0xFF` is applied at every trigger the patch wins, whether or not the base record's pan envelope carries its `p` bit; likewise a non-zero `default note volume` and an auto-vibrato waveform other than `0xFF`. A patch may bring its own pan envelope, whose LOOP word replaces the base record's, so a producer **MUST NOT** rely on `p` to enable or suppress a patch's pan — set `0xFF` to defer instead.
+**The sentinels are the only gate.** A `default pan` other than `$FF` is applied at every trigger the patch wins, whether or not the base record's pan envelope carries its `p` bit; likewise a non-zero `default note volume` and an auto-vibrato waveform other than `$FF`. A patch may bring its own pan envelope, whose LOOP word replaces the base record's, so a producer **MUST NOT** rely on `p` to enable or suppress a patch's pan — set `$FF` to defer instead.
 
 **A zone pan is a `note_pan` offset** (TAUD_NOTE_EFFECTS.md §3a), as the base record's default pan is. This is what makes a per-zone pan usable as an ARRANGEMENT: an instrument that pans by pitch — the ordinary shape of an SF2 import — keeps its spread when the pattern places the channel somewhere, because `S $80xx` rotates the whole keyboard instead of collapsing it onto one spot. A producer wanting one note somewhere else writes the panning column on that row, which replaces the zone's seed for that note only.
 
@@ -907,9 +968,10 @@ A writer producing a file that any conforming reader will accept must satisfy al
 - Every song's pattern count is non-zero and its tick rate is non-zero.
 - Each song's pattern bin decompresses to exactly `numPatterns × 512` bytes.
 - Each song's cue sheet decompresses to a whole number of cues at the stride implied by `xHDR`.
-- No pattern number in a cue exceeds `0x7FFE` except the `0x7FFF` sentinel.
+- No pattern number in a cue exceeds `$7FFE` except the `$7FFF` sentinel.
 - Every `Ixmp` entry names a distinct instrument, and no two patches of one instrument have overlapping rectangles.
-- Every Metainstrument layer index resolves to an ordinary instrument in `0x001`…`0x3FF`.
+- Every Metainstrument layer index resolves to an ordinary instrument in `$001`…`$3FF`.
+- Every type-4 rack holds 1…16 operators, its algorithm verifies ([§7.6](#7-6-metainstrument-type-4-fm-operator-racks)), and the two together fit 252 bytes.
 - Envelopes carrying nodes have `P = 1` in their LOOP word.
 - The two pitch/filter slots of one record do not claim the same role.
 
@@ -927,5 +989,6 @@ A writer producing a file that any conforming reader will accept must satisfy al
 | 2026-07-01 | Format version 2: 32-channel cue sheet, 15-bit pattern numbers, 64-byte cues, two instruction words; auxiliary instrument bin ($100…$3FF); `xHDR` 64-channel mode |
 | 2026-07-28 | Ixmp `s` block — multi-channel (stereo) samples |
 | 2026-07-29 | Song table byte 28: the `ss` surround model flag |
-| 2026-08-08 | An Ixmp patch's `default pan` no longer needs the base record's pan-envelope `p` bit — its `0xFF` sentinel is the only gate |
+| 2026-08-08 | An Ixmp patch's `default pan` no longer needs the base record's pan-envelope `p` bit — its `$FF` sentinel is the only gate |
 | 2026-08-08 | Panning splits into two axes like volume: instrument and Ixmp pans and the panning column write `note_pan`, S $80xx / P / X / 4 / Z write `channel_pan`, and the mixer adds them |
+| 2026-08-28 | Metainstrument type 4 — FM operator racks: the layer table read as operators, with an RPN algorithm packed after it |

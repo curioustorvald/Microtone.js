@@ -1,8 +1,9 @@
 // Instruments view (F5) — list + tabbed editor: General (editable scalars),
 // Volume/Panning/PF1/PF2 envelope graphs (drag nodes vertically to edit
 // values; live playback cursor overlay), Zones (Ixmp rectangle map with live
-// trigger overlay), Meta (layer table). Reference: taut_views.mjs instrument
-// tab + openAdvancedInstEdit.
+// trigger overlay), Layers (a metainstrument's layer table) and FM (a type-4
+// rack: the same table read as operators, plus the algorithm that wires them —
+// item 159). Reference: taut_views.mjs instrument tab + openAdvancedInstEdit.
 
 import {
   setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp,
@@ -13,6 +14,14 @@ import {
   metaLayers, metaRecordOf, duplicateLayer, removeLayer, moveLayer, patchLayer,
   linkCount, clampDetune, META_MAX_LAYERS,
 } from "../../doc/metaedit.js";
+import {
+  fmOperators, fmProgramOf, fmRecordOf, fmValidate, fmBudget, fmFormula, fmGraph,
+  fmWord, fmWordClass, fmWordIndex, fmOperatorsNamed, fmCanAddOperator, fmCanAddWord,
+  canRemoveOperator, removeOperator, moveOperator, patchOperator,
+  insertWord, removeWord, moveWord, setWord,
+  FM_OPERATORS, FM_CLASS_OSC, FM_CLASS_MOD, FM_CLASS_FB, FM_CLASS_OP,
+  FM_MAX_OPERATORS,
+} from "../../doc/fmedit.js";
 import {
   planRenumberInstrument, instrumentCellRefs,
   planDeleteInstrument, metainstrumentParents,
@@ -30,6 +39,7 @@ import { mapSpinner } from "../widgets/spinner.js";
 import { envPresent } from "../../engine/envelope.js";
 import { hex2, rangeToStr } from "../notenames.js";
 import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
+import { fmGraphSvg } from "../fmgraph.js";
 import { ANCHOR_NOTE, stepNoteInTable } from "../pitchtables.js";
 import { UNITS_PER_OCTAVE } from "../../doc/chord.js";
 import { themeColors } from "../theme.js";
@@ -182,14 +192,20 @@ export class InstrumentsView {
       const { recordSample } = await import("../popups/recordsample.js");
       adopt(await recordSample(this.store));
     });
+    // Layered metas and FM racks share one button: they are built from the same
+    // picker out of the same candidates, and the chooser explains the
+    // difference far better than two bare labels in a crowded toolbox did.
     const metaBtn = document.createElement("button");
-    metaBtn.textContent = t("inst.newMeta");
-    metaBtn.title = t("inst.newMetaTitle");
+    metaBtn.textContent = t("inst.newMetaKind");
+    metaBtn.title = t("inst.newMetaKindTitle");
     metaBtn.addEventListener("click", async () => {
-      const { showNewMeta } = await import("../popups/newmeta.js");
-      adopt(await showNewMeta(this.store));
+      const { showNewMetaKind } = await import("../popups/newmeta.js");
+      adopt(await showNewMetaKind(this.store));
     });
-    bar.append(addBtn, importBtn, smpBtn, paintBtn, recBtn, metaBtn);
+    // Two rows of three, in the order they are reached for: the three ways a
+    // slot gets filled from OUTSIDE the project, then the three that make
+    // something new inside it.
+    bar.append(addBtn, smpBtn, importBtn, recBtn, paintBtn, metaBtn);
     this.listEl.appendChild(bar);
     // Only top-level instruments are listed — a metainstrument's sub-instruments
     // are not directly selectable (item 59); edit them via their metainstrument.
@@ -209,7 +225,7 @@ export class InstrumentsView {
       const inst = doc.instruments[slot];
       const row = document.createElement("div");
       row.className = "side-row" + (slot === this.selected ? " sel" : "");
-      const kind = inst.isMeta ? "META" : inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
+      const kind = instKindBadge(inst);
       row.innerHTML =
         `<span class="dot"></span>` +
         `<span class="idx">$${slot.toString(16).toUpperCase().padStart(3, "0")}</span>` +
@@ -245,8 +261,9 @@ export class InstrumentsView {
   renderTabs() {
     this.tabBar.innerHTML = "";
     const inst = this.store.doc?.instruments[this.selected];
+    const metaTab = inst?.isFm ? ["fm", t("inst.tabFm")] : ["meta", t("inst.tabLayers")];
     const tabs = inst?.isMeta
-      ? [["meta", t("inst.tabLayers")]]
+      ? [metaTab]
       : [["general", t("inst.tabGeneral")], ["env0", t("inst.tabVolEnv")], ["env1", t("inst.tabPanEnv")],
          ["pitch", t("inst.tabPitch")], ["filter", t("inst.tabFilter")], ["zones", t("inst.tabZones")]];
     for (const [key, label] of tabs) {
@@ -256,8 +273,8 @@ export class InstrumentsView {
       b.addEventListener("click", () => { this.tab = key; this.renderTabs(); this.renderPanel(); });
       this.tabBar.appendChild(b);
     }
-    if (inst?.isMeta) this.tab = "meta";
-    else if (this.tab === "meta") this.tab = "general";
+    if (inst?.isMeta) this.tab = metaTab[0];
+    else if (this.tab === "meta" || this.tab === "fm") this.tab = "general";
   }
 
   renderPanel() {
@@ -284,6 +301,7 @@ export class InstrumentsView {
     else if (this.tab === "filter") this.renderEnv(inst, roleTabDef(inst, true));
     else if (this.tab === "zones") this.renderZones(inst);
     else if (this.tab === "meta") this.renderMeta(inst);
+    else if (this.tab === "fm") this.renderFm(inst);
   }
 
   setField(key, value) {
@@ -467,7 +485,7 @@ export class InstrumentsView {
       this.selected = this._childParent;
       this._childSelected = null;
       this._childParent = null;
-      this.tab = doc.instruments[this.selected].isMeta ? "meta" : "general";
+      this.tab = metaTabKey(doc.instruments[this.selected]);
     } else {
       this._childSelected = null;
       this._childParent = null;
@@ -529,7 +547,7 @@ export class InstrumentsView {
     const badge = r?.el.querySelector(".badge-sm");
     if (!badge) return;
     const inst = this.store.doc.instruments[slot];
-    badge.textContent = inst.isMeta ? "META" : inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
+    badge.textContent = instKindBadge(inst);
   }
 
   /** Open a metainstrument's layer child (item 71) in its own base editor.
@@ -540,7 +558,7 @@ export class InstrumentsView {
     this._childParent = parentSlot;
     this.selected = slot;
     this.advanced = false;
-    this.tab = this.store.doc?.instruments[slot]?.isMeta ? "meta" : "general";
+    this.tab = metaTabKey(this.store.doc?.instruments[slot]);
     this.refresh();
   }
 
@@ -1343,11 +1361,151 @@ export class InstrumentsView {
     this.refresh();
   }
 
+  /** A committing number input for the layer / operator tables. */
+  metaNumIn(value, min, max, onCommit, title = "") {
+    const i = document.createElement("input");
+    i.type = "number"; i.min = min; i.max = max; i.value = value;
+    i.className = "meta-num";
+    if (title) i.title = title;
+    i.addEventListener("change", () =>
+      onCommit(clampN(Math.round(Number(i.value) || 0), min, max)));
+    return i;
+  }
+
+  /** A small row-action button. */
+  metaIconBtn(name, label, title, onClick, disabled = false) {
+    const b = document.createElement("button");
+    b.className = "meta-act";
+    if (name) setIconLabel(b, name, label);
+    else b.textContent = label;
+    b.title = title;
+    b.disabled = disabled;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  /**
+   * The cells a layer row and an operator row have in common: which
+   * sub-instrument, mix level, detune and the two gating ranges. Both tables
+   * describe the same 10-byte record entry, so they read it the same way; what
+   * differs is the ACTIONS, which the caller appends to the returned advCell.
+   *
+   * `commit(fields)` takes a field patch for this entry alone, so the caller
+   * decides whether that goes through patchLayer or patchOperator.
+   */
+  metaEntryRow(entry, i, { commit, links = 1, lead = false, leadTitle = "" }) {
+    const doc = this.store.doc;
+    const preset = this.store.pitchPreset;
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td class="idxCell"></td><td class="nameCell"></td><td class="mixCell"></td>` +
+      `<td class="detCell"></td><td class="rngCell"></td><td class="velCell"></td>` +
+      `<td class="advCell"></td>`;
+
+    // Entry 0 leads: for a layer table that is priority (the first layer that
+    // COVERS a trigger plays on the channel itself and the rest spawn
+    // background voices); for a rack it is the PRINCIPAL operator, whose
+    // envelope is the note's own.
+    const idxCell = tr.querySelector(".idxCell");
+    idxCell.textContent = String(i);
+    if (lead) {
+      const star = document.createElement("span");
+      star.className = "meta-fg";
+      star.textContent = "▸";
+      star.title = leadTitle;
+      idxCell.prepend(star);
+    }
+
+    // A linked entry shares its sub-instrument with its siblings: editing it
+    // edits all of them, which is the point of a unison stack and a trap
+    // otherwise — so it is badged, and Unlink is right there.
+    const nameCell = tr.querySelector(".nameCell");
+    const nameTxt = document.createElement("span");
+    nameTxt.textContent = `$${(entry.instIdx & 0x3ff).toString(16).toUpperCase().padStart(3, "0")} ` +
+      (unescapeName(doc.instrumentName(entry.instIdx)) || "");
+    nameCell.append(nameTxt);
+    if (links > 1) {
+      const badge = document.createElement("span");
+      badge.className = "badge-sm meta-link";
+      badge.textContent = t("meta.linked", { n: links });
+      badge.title = t("meta.linkedTitle", { n: links });
+      nameCell.append(badge);
+    }
+
+    // Mix. The record stores a raw PSO octet (0..255, 159 = 0 dB) and nobody
+    // mixes in those — so the box reads DECIBELS while − and + still walk one
+    // octet at a time, which is item 156.2's mapping in its plainest form.
+    // The octet itself stays visible beside it, because it is what the file
+    // holds and what a bug report has to quote.
+    const mixIn = document.createElement("input");
+    mixIn.className = "meta-num";
+    mixIn.title = t("meta.mixTitle");
+    // mapSpinner FIRST: its own change handler is what settles `rawValue`
+    // from a hand-typed decibel figure, and the commit below reads that.
+    mapSpinner(mixIn, MIX_DB_MAP, entry.mixOctet);
+    mixIn.addEventListener("change", () => commit({ mixOctet: mixIn.rawValue }));
+    tr.querySelector(".mixCell").append(
+      mixIn,
+      Object.assign(document.createElement("span"),
+        { className: "dim meta-db", textContent: annHex2(entry.mixOctet) }));
+
+    // Detune. The record stores signed 4096-TET units — a major third is 1365
+    // and a chorus detune is 6 — which nobody thinks in, so the field is CENTS
+    // while − and + step whole degrees of the song's own pitch table
+    // (stepNoteInTable, so unequal tables step to real degrees, not by 341).
+    // That is the same one-control shape as every other value in the app
+    // (item 156): the pair of arrows this cell used to carry beside the box
+    // ARE the spinner's buttons now, with the mapping doing the units.
+    const detCell = tr.querySelector(".detCell");
+    const centsIn = document.createElement("input");
+    centsIn.className = "meta-num";
+    centsIn.title = t("meta.detuneTitle");
+    centsIn.dataset.mtDecTitle = t("meta.detuneDownTitle");
+    centsIn.dataset.mtIncTitle = t("meta.detuneUpTitle");
+    mapSpinner(centsIn, {
+      toDisplay: (units) => `${centsOfUnits(units).toFixed(1)} ¢`,
+      fromDisplay: (text) => {
+        const c = Number.parseFloat(String(text).replace("−", "-"));
+        return clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0);
+      },
+      step: (units, dir) => clampDetune(
+        stepNoteInTable(clampN(ANCHOR_NOTE + units, 0x20, 0xffff), preset, dir) - ANCHOR_NOTE),
+    }, entry.detune);
+    centsIn.addEventListener("change", () => commit({ detune: centsIn.rawValue }));
+    // The note the detune lands on, painted in the SONG's notation (the
+    // grids' own glyph painter) rather than spelled in 12-EDO — the − +
+    // buttons already step degrees of this table, so the readout has to agree
+    // with them. The raw 4096-TET units stay as text beside the glyph.
+    const detAnn = Object.assign(document.createElement("span"), { className: "dim meta-det-ann" });
+    detAnn.append(
+      noteGlyphCanvas(clampN(ANCHOR_NOTE + entry.detune, 0x20, 0xffff), preset),
+      ` · ${entry.detune}`);
+    detCell.append(centsIn, detAnn);
+
+    // Gating rectangle. The new-meta hint has always told people to "narrow
+    // them on the Layers tab"; until item 113 there was nothing here to narrow.
+    const rngCell = tr.querySelector(".rngCell");
+    const rngAnn = Object.assign(document.createElement("span"), { className: "dim meta-rng-ann" });
+    rngAnn.append(rangeGlyphCanvas(entry.pitchStart, entry.pitchEnd, preset, t("range.whole")));
+    rngCell.append(
+      this.metaNumIn(entry.pitchStart, 0, 0xffff, (v) => commit({ pitchStart: v }),
+        t("meta.pitchLoTitle")),
+      this.metaNumIn(entry.pitchEnd, 0, 0xffff, (v) => commit({ pitchEnd: v }),
+        t("meta.pitchHiTitle")),
+      rngAnn);
+
+    const velCell = tr.querySelector(".velCell");
+    velCell.append(
+      this.metaNumIn(entry.volStart, 0, 63, (v) => commit({ volStart: v }), t("meta.velLoTitle")),
+      this.metaNumIn(entry.volEnd, 0, 63, (v) => commit({ volEnd: v }), t("meta.velHiTitle")));
+
+    return { tr, advCell: tr.querySelector(".advCell") };
+  }
+
   renderMeta(inst) {
     const doc = this.store.doc;
     const slot = this.selected;
     const layers = metaLayers(inst);
-    const preset = this.store.pitchPreset;
     const commit = (next) => this.applyMetaLayers(slot, next);
     const full = layers.length >= META_MAX_LAYERS;
 
@@ -1377,166 +1535,284 @@ export class InstrumentsView {
       `<th>${escape(t("meta.vel"))}</th><th></th></tr></thead>`;
     const tbody = document.createElement("tbody");
 
-    /** A committing number input. */
-    const numIn = (value, min, max, onCommit, title = "") => {
-      const i = document.createElement("input");
-      i.type = "number"; i.min = min; i.max = max; i.value = value;
-      i.className = "meta-num";
-      if (title) i.title = title;
-      i.addEventListener("change", () =>
-        onCommit(clampN(Math.round(Number(i.value) || 0), min, max)));
-      return i;
-    };
-    const iconBtn = (name, label, title, onClick, disabled = false) => {
-      const b = document.createElement("button");
-      b.className = "meta-act";
-      if (name) setIconLabel(b, name, label);
-      else b.textContent = label;
-      b.title = title;
-      b.disabled = disabled;
-      b.addEventListener("click", onClick);
-      return b;
-    };
-
     layers.forEach((l, i) => {
       const links = linkCount(layers, i);
-      const tr = document.createElement("tr");
-      tr.innerHTML =
-        `<td class="idxCell"></td><td class="nameCell"></td><td class="mixCell"></td>` +
-        `<td class="detCell"></td><td class="rngCell"></td><td class="velCell"></td>` +
-        `<td class="advCell"></td>`;
-
-      // Layer 0 leads: the first layer that COVERS a trigger plays on the
-      // channel itself and the rest spawn background voices, so record order is
-      // priority (trigger.js triggerMetaOrNote).
-      const idxCell = tr.querySelector(".idxCell");
-      idxCell.textContent = String(i);
-      if (i === 0) {
-        const star = document.createElement("span");
-        star.className = "meta-fg";
-        star.textContent = "▸";
-        star.title = t("meta.foregroundTitle");
-        idxCell.prepend(star);
-      }
-
-      // A linked layer shares its sub-instrument with its siblings: editing it
-      // edits all of them, which is the point of a unison stack and a trap
-      // otherwise — so it is badged, and Unlink is right there.
-      const nameCell = tr.querySelector(".nameCell");
-      const nameTxt = document.createElement("span");
-      nameTxt.textContent = `$${(l.instIdx & 0x3ff).toString(16).toUpperCase().padStart(3, "0")} ` +
-        (unescapeName(doc.instrumentName(l.instIdx)) || "");
-      nameCell.append(nameTxt);
-      if (links > 1) {
-        const badge = document.createElement("span");
-        badge.className = "badge-sm meta-link";
-        badge.textContent = t("meta.linked", { n: links });
-        badge.title = t("meta.linkedTitle", { n: links });
-        nameCell.append(badge);
-      }
-
-      // Mix. The record stores a raw PSO octet (0..255, 159 = 0 dB) and nobody
-      // mixes in those — so the box reads DECIBELS while − and + still walk one
-      // octet at a time, which is item 156.2's mapping in its plainest form.
-      // The octet itself stays visible beside it, because it is what the file
-      // holds and what a bug report has to quote.
-      const mixIn = document.createElement("input");
-      mixIn.className = "meta-num";
-      mixIn.title = t("meta.mixTitle");
-      // mapSpinner FIRST: its own change handler is what settles `rawValue`
-      // from a hand-typed decibel figure, and the commit below reads that.
-      mapSpinner(mixIn, MIX_DB_MAP, l.mixOctet);
-      mixIn.addEventListener("change", () =>
-        commit(patchLayer(layers, i, { mixOctet: mixIn.rawValue })));
-      tr.querySelector(".mixCell").append(
-        mixIn,
-        Object.assign(document.createElement("span"),
-          { className: "dim meta-db", textContent: annHex2(l.mixOctet) }));
-
-      // Detune. The record stores signed 4096-TET units — a major third is 1365
-      // and a chorus detune is 6 — which nobody thinks in, so the field is CENTS
-      // while − and + step whole degrees of the song's own pitch table
-      // (stepNoteInTable, so unequal tables step to real degrees, not by 341).
-      // That is the same one-control shape as every other value in the app
-      // (item 156): the pair of arrows this cell used to carry beside the box
-      // ARE the spinner's buttons now, with the mapping doing the units.
-      const detCell = tr.querySelector(".detCell");
-      const centsIn = document.createElement("input");
-      centsIn.className = "meta-num";
-      centsIn.title = t("meta.detuneTitle");
-      centsIn.dataset.mtDecTitle = t("meta.detuneDownTitle");
-      centsIn.dataset.mtIncTitle = t("meta.detuneUpTitle");
-      mapSpinner(centsIn, {
-        toDisplay: (units) => `${centsOfUnits(units).toFixed(1)} ¢`,
-        fromDisplay: (text) => {
-          const c = Number.parseFloat(String(text).replace("−", "-"));
-          return clampDetune(Number.isFinite(c) ? unitsOfCents(c) : 0);
-        },
-        step: (units, dir) => clampDetune(
-          stepNoteInTable(clampN(ANCHOR_NOTE + units, 0x20, 0xffff), preset, dir) - ANCHOR_NOTE),
-      }, l.detune);
-      centsIn.addEventListener("change", () =>
-        commit(patchLayer(layers, i, { detune: centsIn.rawValue })));
-      // The note the detune lands on, painted in the SONG's notation (the
-      // grids' own glyph painter) rather than spelled in 12-EDO — the − +
-      // buttons already step degrees of this table, so the readout has to agree
-      // with them. The raw 4096-TET units stay as text beside the glyph.
-      const detAnn = Object.assign(document.createElement("span"), { className: "dim meta-det-ann" });
-      detAnn.append(
-        noteGlyphCanvas(clampN(ANCHOR_NOTE + l.detune, 0x20, 0xffff), preset),
-        ` · ${l.detune}`);
-      detCell.append(centsIn, detAnn);
-
-      // Gating rectangle. The new-meta hint has always told people to "narrow
-      // them on the Layers tab"; until item 113 there was nothing here to narrow.
-      const rngCell = tr.querySelector(".rngCell");
-      const rngAnn = Object.assign(document.createElement("span"), { className: "dim meta-rng-ann" });
-      rngAnn.append(rangeGlyphCanvas(l.pitchStart, l.pitchEnd, preset, t("range.whole")));
-      rngCell.append(
-        numIn(l.pitchStart, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchStart: v })),
-          t("meta.pitchLoTitle")),
-        numIn(l.pitchEnd, 0, 0xffff, (v) => commit(patchLayer(layers, i, { pitchEnd: v })),
-          t("meta.pitchHiTitle")),
-        rngAnn);
-
-      const velCell = tr.querySelector(".velCell");
-      velCell.append(
-        numIn(l.volStart, 0, 63, (v) => commit(patchLayer(layers, i, { volStart: v })),
-          t("meta.velLoTitle")),
-        numIn(l.volEnd, 0, 63, (v) => commit(patchLayer(layers, i, { volEnd: v })),
-          t("meta.velHiTitle")));
+      const { tr, advCell } = this.metaEntryRow(l, i, {
+        commit: (fields) => commit(patchLayer(layers, i, fields)),
+        links,
+        lead: i === 0,
+        leadTitle: t("meta.foregroundTitle"),
+      });
 
       // Actions. Layer children are not list-selectable (item 59), so "Edit…"
       // is their only entry point: the child opens in its OWN base editor
       // (item 71) — the same tabs a top-level instrument gets.
-      const advCell = tr.querySelector(".advCell");
       advCell.append(
-        iconBtn(null, "▲", t("meta.moveUpTitle"),
+        this.metaIconBtn(null, "▲", t("meta.moveUpTitle"),
           () => commit(moveLayer(layers, i, -1)), i === 0),
-        iconBtn(null, "▼", t("meta.moveDownTitle"),
+        this.metaIconBtn(null, "▼", t("meta.moveDownTitle"),
           () => commit(moveLayer(layers, i, +1)), i === layers.length - 1),
-        iconBtn("duplicate", "", t("meta.dupTitle"),
+        this.metaIconBtn("duplicate", "", t("meta.dupTitle"),
           () => commit(duplicateLayer(layers, i)), full),
-        iconBtn(null, t("meta.chord"), t("meta.chordTitleBtn"), async () => {
+        this.metaIconBtn(null, t("meta.chord"), t("meta.chordTitleBtn"), async () => {
           const { showChordStack } = await import("../popups/metachord.js");
           if ((await showChordStack(this.store, slot, i)) !== null) this.refresh();
         }, full),
-        iconBtn(null, t("meta.unlink"), t("meta.unlinkTitle"), async () => {
+        this.metaIconBtn(null, t("meta.unlink"), t("meta.unlinkTitle"), async () => {
           const { planUnlinkMetaLayer } = await import("../../doc/bankmerge.js");
           const plan = planUnlinkMetaLayer(doc, slot, i);
           if (plan.error) { alert(plan.error); return; }
           this.store.undo.apply(importBankOp(plan));
           this.refresh();
         }, links < 2),
-        iconBtn("close", "", t("meta.removeTitle"),
+        this.metaIconBtn("close", "", t("meta.removeTitle"),
           () => commit(removeLayer(layers, i)), layers.length <= 1),
-        iconBtn(null, t("meta.edit"), t("meta.editTitle"),
+        this.metaIconBtn(null, t("meta.edit"), t("meta.editTitle"),
           () => this.openChild(l.instIdx & 0x3ff, slot)));
 
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
     this.panel.appendChild(table);
+  }
+
+  /** Commit a rack — table and algorithm together, since they share one record
+   *  and any edit to either has to hand the other back untouched. */
+  applyFmRack(slot, ops, program) {
+    const inst = this.store.doc.instruments[slot];
+    this.store.undo.apply(setMetaRecordOp(slot, fmRecordOf(inst, ops, program)));
+    this.refresh();
+  }
+
+  /**
+   * The FM tab (item 159): the operator rack above, the algorithm below.
+   *
+   * The two halves are one record, and the meter in the toolbar is there
+   * because that is not obvious — a rack does not run out of operators so much
+   * as it runs out of BYTES, and the algorithm is what it spends them against.
+   */
+  renderFm(inst) {
+    const doc = this.store.doc;
+    const slot = this.selected;
+    const ops = fmOperators(inst);
+    const program = fmProgramOf(inst);
+    const named = fmOperatorsNamed(program, ops.length);
+    const verdict = fmValidate(program, ops.length);
+    const budget = fmBudget(ops.length, program.length);
+    const commit = (nextOps, nextProg) => this.applyFmRack(slot, nextOps, nextProg);
+
+    // ── toolbar: the rack's size, and what is left of the record ──
+    const bar = document.createElement("div");
+    bar.className = "meta-bar";
+    const addBtn = document.createElement("button");
+    setIconLabel(addBtn, "filePlus", t("fm.addOps"));
+    addBtn.title = t("fm.addOpsTitle");
+    addBtn.disabled = !fmCanAddOperator(ops, program);
+    addBtn.addEventListener("click", async () => {
+      const { showAddFmOperators } = await import("../popups/newmeta.js");
+      if ((await showAddFmOperators(this.store, slot)) !== null) this.refresh();
+    });
+    const tally = document.createElement("span");
+    tally.className = "dim meta-tally";
+    tally.textContent = t("fm.tally", { n: ops.length, max: FM_MAX_OPERATORS });
+    // The memory meter (item 159.1). Operators and algorithm come out of the
+    // same 252 bytes, so one bar for both is the only honest way to show it.
+    const meter = document.createElement("div");
+    meter.className = "fm-meter";
+    meter.title = t("fm.meterTitle");
+    const fill = document.createElement("span");
+    fill.className = "fm-meter-fill";
+    fill.style.width = `${Math.min(100, (budget.used / budget.total) * 100)}%`;
+    if (budget.free < 20) fill.classList.add("tight");
+    meter.append(fill);
+    const meterTxt = document.createElement("span");
+    meterTxt.className = "dim fm-meter-text";
+    meterTxt.textContent = t("fm.bytes", { used: budget.used, total: budget.total });
+    bar.append(addBtn, tally, meter, meterTxt);
+    this.panel.appendChild(bar);
+
+    // ── the rack ──
+    const table = document.createElement("table");
+    table.className = "files-table meta-table";
+    table.innerHTML =
+      `<thead><tr><th>#</th><th>${escape(t("meta.subInst"))}</th><th>${escape(t("fm.level"))}</th>` +
+      `<th>${escape(t("fm.ratio"))}</th><th>${escape(t("meta.pitchRange"))}</th>` +
+      `<th>${escape(t("meta.vel"))}</th><th></th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+
+    ops.forEach((o, i) => {
+      const links = linkCount(ops, i);
+      const { tr, advCell } = this.metaEntryRow(o, i, {
+        commit: (fields) => commit(patchOperator(ops, i, fields), program),
+        links,
+        lead: i === 0,
+        leadTitle: t("fm.principalTitle"),
+      });
+      // An operator nothing names is dead weight in the record; say so rather
+      // than leaving the user to work out why it makes no sound.
+      if (named[i] === 0) {
+        const badge = document.createElement("span");
+        badge.className = "badge-sm fm-unused";
+        badge.textContent = t("fm.unused");
+        badge.title = t("fm.unusedTitle");
+        tr.querySelector(".nameCell").append(badge);
+      }
+      advCell.append(
+        this.metaIconBtn(null, "▲", t("fm.moveUpTitle"),
+          () => { const r = moveOperator(ops, program, i, -1); commit(r.ops, r.program); }, i === 0),
+        this.metaIconBtn(null, "▼", t("fm.moveDownTitle"),
+          () => { const r = moveOperator(ops, program, i, +1); commit(r.ops, r.program); },
+          i === ops.length - 1),
+        this.metaIconBtn(null, t("meta.unlink"), t("meta.unlinkTitle"), async () => {
+          const { planUnlinkMetaLayer } = await import("../../doc/bankmerge.js");
+          const plan = planUnlinkMetaLayer(doc, slot, i);
+          if (plan.error) { alert(plan.error); return; }
+          this.store.undo.apply(importBankOp(plan));
+          this.refresh();
+        }, links < 2),
+        this.metaIconBtn("close", "",
+          canRemoveOperator(ops, program, i) ? t("fm.removeTitle") : t("fm.removeBlockedTitle"),
+          () => { const r = removeOperator(ops, program, i); commit(r.ops, r.program); },
+          !canRemoveOperator(ops, program, i)),
+        this.metaIconBtn(null, t("meta.edit"), t("fm.editTitle"),
+          () => this.openChild(o.instIdx & 0x3ff, slot)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    this.panel.appendChild(table);
+
+    // ── the algorithm ──
+    this.panel.appendChild(this.fmAlgorithm(ops, program, verdict, commit));
+  }
+
+  /**
+   * The algorithm editor: an expression readout, then the word list.
+   *
+   * RPN is exactly the notation you would not choose to READ a patch in, so the
+   * formula above the list says the same thing the other way round —
+   * `0[1[2]] + 3` is "2 modulates 1 modulates 0, and 3 is a carrier beside it".
+   * The stack-depth column beside each word is the other half of the same idea:
+   * it is what makes an unbalanced program visible before it is saved rather
+   * than after it goes silent.
+   */
+  fmAlgorithm(ops, program, verdict, commit) {
+    const doc = this.store.doc;
+    const wrap = document.createElement("div");
+    wrap.className = "fm-algo";
+
+    const head = document.createElement("div");
+    head.className = "fm-algo-head";
+    head.append(Object.assign(document.createElement("h4"), { textContent: t("fm.algorithm") }));
+    const formula = document.createElement("code");
+    formula.className = "fm-formula";
+    formula.textContent = verdict.ok ? fmFormula(program, ops.length) : t(`fm.err.${verdict.error}`);
+    formula.classList.toggle("bad", !verdict.ok);
+    formula.title = verdict.ok ? t("fm.formulaTitle") : t("fm.invalidTitle");
+    head.append(formula);
+    wrap.append(head);
+
+    // The picture, above the words. It is the same program the formula and the
+    // list below describe — one glance instead of one sentence — and it is only
+    // drawn when the algorithm verifies, because there is no diagram of a patch
+    // that does not resolve.
+    const graph = verdict.ok ? fmGraph(program, ops.length) : null;
+    if (graph !== null) {
+      const frame = document.createElement("div");
+      frame.className = "fm-graph-frame";
+      frame.title = t("fm.graphTitle");
+      frame.append(fmGraphSvg(graph, {
+        title: (k) => `${t("fm.operator", { n: k })} · $${(ops[k]?.instIdx & 0x3ff)
+          .toString(16).toUpperCase().padStart(3, "0")} ` +
+          (unescapeName(doc.instrumentName(ops[k]?.instIdx ?? 0)) || ""),
+        outLabel: t("fm.out"),
+      }));
+      wrap.append(frame);
+    }
+
+    const list = document.createElement("div");
+    list.className = "fm-words";
+
+    const wordRow = (w, i) => {
+      const row = document.createElement("div");
+      row.className = "fm-word";
+      if (!verdict.ok && verdict.at === i) row.classList.add("bad");
+      row.append(Object.assign(document.createElement("span"),
+        { className: "dim fm-word-idx", textContent: String(i) }));
+
+      // What KIND of word this is …
+      const cls = document.createElement("select");
+      cls.className = "fm-word-class";
+      cls.title = t("fm.classTitle");
+      for (const [key, label] of [
+        [FM_CLASS_OSC, t("fm.classOsc")], [FM_CLASS_MOD, t("fm.classMod")],
+        [FM_CLASS_FB, t("fm.classFb")], [FM_CLASS_OP, t("fm.classOp")],
+      ]) {
+        cls.append(new Option(label, key, false, fmWordClass(w) === key));
+      }
+
+      // … and which operator (or which stack operator) it means.
+      const arg = document.createElement("select");
+      arg.className = "fm-word-arg";
+      const isOp = fmWordClass(w) === FM_CLASS_OP;
+      arg.title = isOp ? t("fm.opTitle") : t("fm.operandTitle");
+      if (isOp) {
+        for (const o of FM_OPERATORS) {
+          arg.append(new Option(`${o.symbol}  ${t(`fm.op.${o.key}`)}`, String(o.word), false, w === o.word));
+        }
+      } else {
+        for (let k = 0; k < ops.length; k++) {
+          arg.append(new Option(t("fm.operator", { n: k }), String(k), false, fmWordIndex(w) === k));
+        }
+      }
+      const rebuild = () => {
+        const nextCls = cls.value;
+        const value = nextCls === FM_CLASS_OP
+          ? (isOp ? Number(arg.value) : FM_OPERATORS[0].word)
+          : (isOp ? 0 : Number(arg.value));
+        commit(ops, setWord(program, i, fmWord(nextCls, value)));
+      };
+      cls.addEventListener("change", rebuild);
+      arg.addEventListener("change", rebuild);
+      row.append(cls, arg);
+
+      // The stack depth this word leaves behind — one number, and the whole
+      // reason an RPN patch can be checked by eye.
+      const depth = document.createElement("span");
+      depth.className = "dim fm-word-depth";
+      depth.textContent = `≡ ${verdict.depth[i + 1] ?? verdict.depth[i] ?? 0}`;
+      depth.title = t("fm.depthTitle");
+      row.append(depth);
+
+      row.append(
+        this.metaIconBtn(null, "▲", t("fm.wordUpTitle"),
+          () => commit(ops, moveWord(program, i, -1)), i === 0),
+        this.metaIconBtn(null, "▼", t("fm.wordDownTitle"),
+          () => commit(ops, moveWord(program, i, +1)), i === program.length - 1),
+        this.metaIconBtn(null, "+", t("fm.wordAddTitle"),
+          () => commit(ops, insertWord(program, i, fmWord(FM_CLASS_OSC, 0))),
+          !fmCanAddWord(ops, program)),
+        this.metaIconBtn("close", "", t("fm.wordRemoveTitle"),
+          () => commit(ops, removeWord(program, i))));
+      return row;
+    };
+
+    program.forEach((w, i) => list.append(wordRow(w, i)));
+    if (program.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "dim";
+      empty.textContent = t("fm.noWords");
+      list.append(empty);
+    }
+    wrap.append(list);
+
+    const add = document.createElement("button");
+    setIconLabel(add, "filePlus", t("fm.wordAdd"));
+    add.title = t("fm.wordAddTitle");
+    add.disabled = !fmCanAddWord(ops, program);
+    add.addEventListener("click", () =>
+      commit(ops, insertWord(program, program.length - 1, fmWord(FM_CLASS_OSC, 0))));
+    wrap.append(add);
+    return wrap;
   }
 
   frame() {
@@ -1556,6 +1832,20 @@ function escape(s) {
 }
 
 function clampN(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/** What the list row and the detail header say this instrument IS. An FM rack
+ *  carries its operator count, because that is the number that tells you what
+ *  you are looking at ("FM·4" is a patch; "FM·1" is a sample with extra steps). */
+/** Which tab an instrument opens on: its rack, its layer table, or General. */
+function metaTabKey(inst) {
+  return inst?.isFm ? "fm" : inst?.isMeta ? "meta" : "general";
+}
+
+function instKindBadge(inst) {
+  if (inst.isFm) return `FM·${inst.metaLayers.length}`;
+  if (inst.isMeta) return "META";
+  return inst.extraPatches ? `IXMP·${inst.extraPatches.length}` : "";
+}
 
 // Meta layer detune is a signed 4096-TET offset; the Layers tab shows cents.
 const centsOfUnits = (units) => (units * 1200) / UNITS_PER_OCTAVE;

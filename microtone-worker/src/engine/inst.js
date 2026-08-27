@@ -235,22 +235,151 @@ export function makeMetaLayer(instIdx, mixOctet, detune, pitchStart, pitchEnd, v
  *  count + bytes 2..3 sentinel, then 10 bytes per layer. */
 export const META_MAX_LAYERS = 25;
 
+// ── Metainstrument types (record byte 0, high nibble) ─────────────────────
+/** Type 0 — LAYERED: every layer whose rectangle covers the trigger sounds on
+ *  its own voice, mixed in parallel (§7.4). */
+export const META_TYPE_LAYERED = 0;
+/**
+ * Type 4 — FM (item 159): the layer table becomes an OPERATOR RACK and the
+ * bytes after it carry an RPN program saying how the operators feed each other.
+ * The rack is one voice, not `n` of them: operator 0 sounds on the channel and
+ * the rest are read by the program.
+ */
+export const META_TYPE_FM = 4;
+
+/**
+ * Operators an FM rack can hold. The whole rack — 10 bytes an operator plus the
+ * program — has to fit the 252 bytes a record has left after the header, so this
+ * is a floor on the room the program gets: 16 operators leave 92 bytes = 46
+ * words, which is more than any 16-operator algorithm needs (n pushes + n−1
+ * combining operators + END = 32 words at the very worst).
+ */
+export const FM_MAX_OPERATORS = 16;
+
+/** Bytes of a 256-byte record the operator rack and its program share. */
+export const FM_BUDGET_BYTES = 252;
+
+// ── RPN word classes (§7.6) ──────────────────────────────────────────────
+// A word is read as (class, operand): the top nibble pair picks the class and
+// the low 10 bits the operator it addresses. $FFxx is the operator space, which
+// no operand word can collide with because an operand's index is 10-bit.
+export const FM_WORD_OSC = 0x0000;  // $0000-$03FF — push operator n, free-running
+export const FM_WORD_MOD = 0x0400;  // $0400-$07FF — push operator n, phase-modulated by TOS
+export const FM_WORD_FB  = 0x0800;  // $0800-$0BFF — push operator n's PREVIOUS output (z-1)
+export const FM_WORD_OP  = 0xff00;  // $FF00-$FFFE — a stack operator
+export const FM_INDEX_MASK = 0x03ff;
+
+/** Stack operators. Opcode = the word's low byte. */
+export const FmOp = {
+  ADD: 0xff00,   // pop b, a -> push a + b            (parallel carriers)
+  MUL: 0xff01,   // pop b, a -> push a * b            (ring modulation)
+  NEG: 0xff02,   // pop a    -> push -a               (inverted modulator)
+  DUP: 0xff03,   // pop a    -> push a, a
+  SWAP: 0xff04,  // pop b, a -> push b, a
+  END: 0xffff,   // stop; the stack top is the patch's output
+};
+
+/** Deepest the evaluation stack may go. A program that pushes past it is
+ *  invalid (buildFmProgram refuses it; the engine treats the overflow as END). */
+export const FM_STACK_MAX = 16;
+
+/**
+ * The default algorithm for an `n`-operator rack: a straight modulation CHAIN,
+ * operator n−1 into n−2 into … into 0, with 0 as the carrier. One push and
+ * n−1 modulated pushes — the shape every FM patch starts life as.
+ */
+export function defaultFmProgram(n) {
+  const count = Math.max(1, Math.min(n | 0, FM_MAX_OPERATORS));
+  const out = [count - 1];
+  for (let k = count - 2; k >= 0; k--) out.push(FM_WORD_MOD | k);
+  return Uint16Array.from(out);
+}
+
+/**
+ * How many stack cells a word pops and pushes — the whole of what validation
+ * needs to know about it, and the reason an unknown word can be rejected rather
+ * than guessed at. Returns null for a word that is not a legal operand or
+ * operator against a rack of `opCount` operators.
+ */
+export function fmWordArity(word, opCount) {
+  const w = word & 0xffff;
+  if (w >= FM_WORD_OP) {
+    switch (w) {
+      case FmOp.ADD: case FmOp.MUL: return { pop: 2, push: 1 };
+      case FmOp.NEG: return { pop: 1, push: 1 };
+      case FmOp.DUP: return { pop: 1, push: 2 };
+      case FmOp.SWAP: return { pop: 2, push: 2 };
+      default: return null; // END is handled by the caller; the rest is reserved
+    }
+  }
+  const idx = w & FM_INDEX_MASK;
+  if (idx >= opCount) return null;
+  switch (w & ~FM_INDEX_MASK) {
+    case FM_WORD_OSC: case FM_WORD_FB: return { pop: 0, push: 1 };
+    case FM_WORD_MOD: return { pop: 1, push: 1 };
+    default: return null;
+  }
+}
+
+/**
+ * Read the RPN program packed at byte `off` of a type-4 record and hand back
+ * its words WITHOUT the END terminator, or null when it does not parse.
+ *
+ * Rejecting outright is deliberate. An FM rack whose algorithm is half-read is
+ * not a patch that sounds a bit wrong — it is a stack machine running on
+ * whatever the record's tail happened to hold, so the engine treats a program
+ * it cannot verify as no program at all and the instrument stays silent.
+ */
+export function decodeFmProgram(b, off, opCount) {
+  const words = [];
+  let depth = 0;
+  let ended = false;
+  for (let o = off; o + 2 <= 256; o += 2) {
+    const w = (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8);
+    if (w === FmOp.END) { ended = true; break; }
+    const arity = fmWordArity(w, opCount);
+    if (arity === null) return null;
+    if (depth < arity.pop) return null;                    // stack underflow
+    depth += arity.push - arity.pop;
+    if (depth > FM_STACK_MAX) return null;                 // stack overflow
+    words.push(w);
+  }
+  // A program that fills the record to the last byte ends there; one that stops
+  // early must say so, or the words after it are being ignored by accident.
+  if (!ended && off + words.length * 2 + 2 <= 256) return null;
+  return depth >= 1 ? Uint16Array.from(words) : null;
+}
+
+/** Bytes an `n`-operator rack with a `words`-word program occupies of the 252 —
+ *  the END terminator counted, because the record has to carry it too. */
+export function fmRecordBytes(n, words) {
+  return n * 10 + (words + 1) * 2;
+}
+
 /**
  * Pack a 256-byte metainstrument record — the byte-inverse of loadRecord's meta
  * branch. `layers` are makeMetaLayer shapes; layer 0 is the FOREGROUND layer and
  * the rest spawn as background children (trigger.js triggerMetaOrNote). Layers
- * beyond META_MAX_LAYERS are dropped.
+ * beyond the type's capacity are dropped.
  *
  * A layer child must NOT itself be a metainstrument: triggerMetaOrNote resolves
  * layers through triggerNote, which never re-enters the meta branch, so a nested
  * meta's record would be read as sample fields.
+ *
+ * `type` picks the metainstrument kind (§7.4). META_TYPE_FM makes `layers` an
+ * OPERATOR RACK and appends `program` — the RPN algorithm — after it, terminated
+ * by END. Program words past the 252-byte budget are dropped, which is why the
+ * editor keeps a memory meter: the rack and the algorithm share one record.
  */
-export function buildMetaRecord(layers, { strict = false, percussion = false } = {}) {
-  const use = layers.slice(0, META_MAX_LAYERS);
+export function buildMetaRecord(layers, {
+  strict = false, percussion = false, type = META_TYPE_LAYERED, program = null,
+} = {}) {
+  const fm = type === META_TYPE_FM;
+  const use = layers.slice(0, fm ? FM_MAX_OPERATORS : META_MAX_LAYERS);
   const b = new Uint8Array(256);
   // samplePtr high 16 bits = 0xFFFF is the Metainstrument sentinel; the low
   // bytes carry the flags (byte 0) and the layer count (byte 1) instead.
-  b[0] = (strict ? 0x01 : 0) | (percussion ? 0x02 : 0);
+  b[0] = ((type & 0x0f) << 4) | (strict ? 0x01 : 0) | (percussion ? 0x02 : 0);
   b[1] = use.length & 0xff;
   b[2] = 0xff;
   b[3] = 0xff;
@@ -270,6 +399,19 @@ export function buildMetaRecord(layers, { strict = false, percussion = false } =
     b[o + 8] = (l.volStart & 0x3f) | (((idx >>> 8) & 0x3) << 6);
     b[o + 9] = l.volEnd & 0x3f;
     o += 10;
+  }
+  if (fm) {
+    const prog = program === null ? defaultFmProgram(use.length) : program;
+    // The END word is the packer's, not the caller's: a program is a word LIST
+    // everywhere above this line, and the terminator only exists because the
+    // record's tail has to say where the algorithm stops.
+    for (const w of prog) {
+      if ((w & 0xffff) === FmOp.END || o + 4 > 256) break;
+      b[o] = w & 0xff;
+      b[o + 1] = (w >>> 8) & 0xff;
+      o += 2;
+    }
+    if (o + 2 <= 256) { b[o] = 0xff; b[o + 1] = 0xff; }
   }
   return b;
 }
@@ -339,6 +481,12 @@ export class TaudInst {
     this.metaLayers = null;
     this.metaRaw = null;          // verbatim 256-byte record for lossless capture
     this.metaStrict = false;
+    this.metaType = META_TYPE_LAYERED; // record byte 0's high nibble (§7.4)
+    // FM rack (type 4, item 159): the RPN algorithm packed after the operator
+    // table, END-terminated and already validated by decodeFmProgram — null for
+    // every other type AND for an FM record whose program does not parse, which
+    // is what makes the instrument silent rather than unpredictable.
+    this.fmProgram = null;
 
     // Invert loop (S $F0xx) XOR bit-mask over the loop region.
     this.invertMask = null;
@@ -406,6 +554,9 @@ export class TaudInst {
   /** byte 173 bit 4: false = ImpulseTracker filter units, true = SoundFont. */
   get filterSfMode() { return ((this.fadeoutHigh >>> 4) & 1) !== 0; }
   get isMeta() { return this.metaLayers !== null; }
+  /** True for a type-4 rack: the layer table is an OPERATOR rack read by
+   *  `fmProgram`, not a set of parallel layers (§7.6). */
+  get isFm() { return this.metaLayers !== null && this.metaType === META_TYPE_FM; }
 
   get defaultCutoff16() {
     if (this.cutoffOverride >= 0) return this.cutoffOverride;
@@ -442,13 +593,17 @@ export class TaudInst {
   }
 
   /** Load a full 256-byte record; detects the Metainstrument sentinel
-   *  (samplePtr high 16 bits == 0xFFFF) and parses its layer table. */
+   *  (samplePtr high 16 bits == 0xFFFF) and parses its layer table — which for
+   *  a type-4 record is an operator rack followed by an RPN program (§7.6). */
   loadRecord(b) {
     this.cutoffOverride = -1;
     this.resonanceOverride = -1;
     const sp = ((b[0] & 0xff) | ((b[1] & 0xff) << 8) | ((b[2] & 0xff) << 16)) + (b[3] & 0xff) * 0x1000000;
     if (((sp >>> 16) & 0xffff) === 0xffff) {
-      const count = (sp >>> 8) & 0xff; // byte 1 = layer count
+      const type = (b[0] >>> 4) & 0x0f;
+      const fm = type === META_TYPE_FM;
+      const rawCount = (sp >>> 8) & 0xff; // byte 1 = layer / operator count
+      const count = fm ? Math.min(rawCount, FM_MAX_OPERATORS) : rawCount;
       const layers = [];
       let o = 4;
       for (let n = 0; n < count; n++) {
@@ -462,8 +617,13 @@ export class TaudInst {
         const pEnd = (b[o + 6] & 0xff) | ((b[o + 7] & 0xff) << 8);
         const vStart = b[o + 8] & 0x3f;
         const vEnd = b[o + 9] & 0x3f;
-        if (instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index) {
-          const layer = makeMetaLayer(instIdx, mixOctet, detune, pStart, pEnd, vStart, vEnd);
+        const usable = instIdx >= 1 && instIdx <= 1023 && instIdx !== this.index;
+        // A layered record DROPS an unusable layer; an FM rack MUTES it in
+        // place, because the program addresses operators by POSITION and
+        // compacting the rack would rewire the algorithm under it.
+        if (usable || fm) {
+          const layer = makeMetaLayer(usable ? instIdx : 0, mixOctet, detune,
+            pStart, pEnd, vStart, vEnd);
           layer.rawOffset = o; // metaRaw byte offset of this layer (editors target it)
           layers.push(layer);
         }
@@ -472,11 +632,16 @@ export class TaudInst {
       this.metaLayers = layers.length === 0 ? null : layers;
       this.metaRaw = this.metaLayers !== null ? Uint8Array.from(b.slice(0, 256)) : null;
       this.metaStrict = this.metaLayers !== null && (b[0] & 0x01) !== 0;
+      this.metaType = this.metaLayers !== null ? type : META_TYPE_LAYERED;
+      this.fmProgram = this.metaLayers !== null && fm
+        ? decodeFmProgram(b, o, layers.length) : null;
       this.extraPatches = null;
     } else {
       this.metaLayers = null;
       this.metaRaw = null;
       this.metaStrict = false;
+      this.metaType = META_TYPE_LAYERED;
+      this.fmProgram = null;
       const n = Math.min(256, b.length);
       for (let i = 0; i < n; i++) this.setByte(i, b[i] & 0xff);
     }

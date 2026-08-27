@@ -970,14 +970,25 @@ export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignT
     if (deleteSet.has(o)) continue;
     const oi = doc.instruments[o];
     if (!oi.metaLayers || !oi.metaLayers.some((l) => deleteSet.has(l.instIdx & 0x3ff))) continue;
-    const kept = oi.metaLayers.filter((l) => !deleteSet.has(l.instIdx & 0x3ff));
-    if (kept.length === 0) {
+    // A type-4 rack is addressed BY POSITION, so a doomed operator is MUTED in
+    // place rather than repacked out — compacting the table would slide every
+    // operator after it under a word of the algorithm that meant another one.
+    const fm = oi.isFm;
+    const kept = fm
+      ? oi.metaLayers.map((l) => (deleteSet.has(l.instIdx & 0x3ff) ? { ...l, instIdx: 0 } : l))
+      : oi.metaLayers.filter((l) => !deleteSet.has(l.instIdx & 0x3ff));
+    // A rack whose PRINCIPAL operator is gone sounds nothing at all (§5.5.1), so
+    // it is emptied like a layer table with nothing left in it.
+    const dead = fm ? kept[0].instIdx === 0 : kept.length === 0;
+    if (dead) {
       image.fill(0, recOff(o), recOff(o) + 256);
       emptiedMetas.push(o);
     } else {
       image.set(buildMetaRecord(kept, {
         strict: oi.metaStrict,
         percussion: (oi.metaRaw[0] & 0x02) !== 0,
+        type: oi.metaType,
+        program: oi.fmProgram,
       }), recOff(o));
       rewiredMetas.push(o);
     }

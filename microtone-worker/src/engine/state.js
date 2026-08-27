@@ -540,6 +540,7 @@ export class Playhead {
       it.layerMixGain = 1.0; it.isLayerChild = false; it.layerRelDetune = 0;
       it.layerRelPan = 0; it.layerRelElevation = 0;
       it.layerPitchMod = 0; it.pitchModDelta = 0;
+      it.fmRig = null; it.fmOperator = false;
       // "What's playing" state — cleared alongside the volume reset so a stale
       // instrumentId can't survive into a fresh session (AudioAdapter.kt:5130-5142).
       it.instrumentId = 0;

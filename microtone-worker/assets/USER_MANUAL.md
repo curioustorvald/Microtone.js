@@ -42,7 +42,7 @@ home. If not, here is the vocabulary this manual uses:
 | **Row** | One line of a pattern. Each row holds a note, an instrument, a volume, a pan and an effect. |
 | **Tick** | The engine's time slice. Each row lasts *speed* ticks; effects update per tick. |
 | **Cue** | One entry of the song's order list: for every channel, which pattern plays next, plus optional flow commands (jump, halt, length…). A song is a sequence of cues. |
-| **Instrument** | A playable definition: a sample plus envelopes, filter, panning, NNA rules — or a *metainstrument* layering several others. |
+| **Instrument** | A playable definition: a sample plus envelopes, filter, panning, NNA rules — or a *metainstrument* layering several others, or an *FM rack* wiring several into one another. |
 | **Sample** | Raw 8-bit audio data in the shared sample pool. Several instruments may use the same sample. |
 | **Note word** | A 16-bit pitch value; see the pitch system below. |
 
@@ -996,8 +996,8 @@ knowing about, because none of them are visible from the list:
 ## The Sample Lab
 
 The Sample Lab is *the* sample editor — a tiny Audacity that opens whenever
-audio enters the project from outside (**New from sample…** for audio files,
-**Record sample…** for the microphone) and whenever you edit a sample already
+audio enters the project from outside (**Sample…** for audio files,
+**Record…** for the microphone) and whenever you edit a sample already
 in the project (the Samples view's **Edit…** and **Chord…**). It works on a
 high-resolution float copy of the take, so every edit here happens *before* the
 8-bit, 65535-frame pool format is committed — the one place where cropping and
@@ -1055,7 +1055,7 @@ not something the mixer can arrange for you.
 
 ### Recording from the microphone
 
-**Record sample…** (Instruments view) captures raw PCM from the microphone —
+**Record…** (Instruments view) captures raw PCM from the microphone —
 no lossy codec touches the take. A level meter runs while you record (up to
 120 s); **Edit in Sample Lab** then opens the take for cropping and chopping
 before anything reaches the pool. Browsers only expose the microphone on
@@ -1066,18 +1066,20 @@ secure origins, and will ask for permission on first use.
 The left list shows every defined instrument slot; rows light up while an
 instrument plays. Above it:
 
-- **Add…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
+Two rows of three: the top row fills a slot from outside the project, the bottom row makes something new inside it.
+
+- **New…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
+- **Sample…** — build instruments from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded to mono and opens in the [Sample Lab](#the-sample-lab) for cropping, EQ and chopping before it is committed to the engine's 8-bit format.
 - **Import…** — merge instruments (with their samples and patches) from a `.taud` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
-- **New from sample…** — build instruments from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded to mono and opens in the [Sample Lab](#the-sample-lab) for cropping, EQ and chopping before it is committed to the engine's 8-bit format.
-- **Paint sample…** — draw a waveform by hand and add it as an instrument.
-- **Record sample…** — record from the microphone; the take opens in the Sample Lab.
-- **New metainstrument…** — layer several of the project's instruments into one (below).
+- **Record…** — record from the microphone; the take opens in the Sample Lab.
+- **Paint…** — draw a waveform by hand and add it as an instrument.
+- **Meta…** — build one instrument out of several of the project's instruments. A chooser asks which kind first: **Layered**, where every child is heard and the mixer sums them, or **FM Rack**, where the children modulate each other and only operator 0 is heard. Both are described below.
 
 All imports are single undo steps.
 
 ### Building a metainstrument
 
-**New metainstrument…** picks any number of ordinary instruments and stacks them
+**Meta… → Layered** picks any number of ordinary instruments and stacks them
 into a single new one. Each pick is **copied** into a sub-instrument slot
 (`$100`+, a range pattern cells cannot address) and the copies become the
 layers, so:
@@ -1097,6 +1099,33 @@ Every layer starts at unity mix (159 = 0 dB) across the whole note and velocity
 range; spread and narrow them on the new instrument's **Layers** tab.
 Metainstruments are not offered as picks — the engine resolves a layer directly
 to a sample, so metainstruments cannot be nested.
+
+### Building an FM rack
+
+**Meta… → FM Rack** takes the same picker and makes something quite different
+out of it. The instruments you pick become **operators**, and instead of sounding
+side by side they modulate each other: one operator's output bends where in the
+waveform the next one is read, which is what turns two plain samples into a
+sound neither of them contains. The whole rack is **one voice** however many
+operators it has — the modulators are never heard directly, only what they did
+to the carrier.
+
+Order matters here in a way it does not for layers. The **first** instrument
+picked becomes **operator 0**, the *principal*: it is the one that reaches the
+channel, and its envelope, its fadeout and its sample ending are the note's. The
+rack starts wired as a plain chain — the last operator modulates the one before
+it, all the way down into operator 0 — and the **FM** tab is where that is
+changed.
+
+An operator's **loop is its cycle**, and that is the one thing worth knowing
+before picking instruments. A single-cycle looped waveform gives textbook FM,
+with the operator's *level* reading as a modulation index: at 0 dB the modulator
+sweeps a whole cycle either way, and every decibel above that is brighter. Point
+an operator at a drum hit or a long sustained sample instead and it scrubs
+through the whole thing — a much stranger noise, and a perfectly good one.
+
+Metainstruments are not offered as picks: an operator resolves straight to a
+sample.
 
 ### Duplicating an instrument
 
@@ -1137,6 +1166,14 @@ either way.
   - Duplicated layers are **linked**: they share one sub-instrument, badged *linked ×n*, so editing it moves every voice of the stack together. When one voice needs to differ, **Unlink** gives that layer its own copy.
   - Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
   - The last layer cannot be removed (a metainstrument with no layers is not a metainstrument); delete the whole instrument instead.
+- **FM** (FM racks) — the operator table above, the algorithm below. The table reads like the Layers one, with two columns renamed for what they mean here: **level** is the operator's output level, which doubles as its modulation index when it modulates something, and **ratio** is its detune from the played note — an octave up is a 2:1 modulator, a twelfth is the inharmonic one that makes bells. The pitch and velocity bounds still gate: an operator whose bounds exclude the note falls silent for it, which is how a patch gets brighter as you play harder.
+  - The ▸ beside row 0 marks the **principal** operator, whose envelope is the note's own. **▲ ▼** move an operator, and the algorithm is renumbered with it — the patch sounds exactly the same, but this is how the principal is chosen.
+  - The meter in the toolbar is the real limit. The operator table and the algorithm share one 252-byte record — 10 bytes an operator, 2 a word — so more operators means less room for wiring, and the bar shows both at once.
+  - **Algorithm** is the wiring, shown three ways. The line beside the heading is the patch as an expression: `0[1[2]] + 3` reads "operator 2 modulates 1 modulates 0, and 3 is a second carrier beside it". Under it is the **diagram** — the picture an FM chip's manual prints, turned on its side so the signal runs left to right into OUT. A box is an operator, a wire into one is modulation, a curl over one is an operator modulating itself, and wires that meet are summed; a ring modulation or an inversion gets a mark of its own. Below that is the same patch as an editable list, one word a row.
+  - The diagram only appears while the algorithm verifies — there is no picture of a patch that does not resolve, and half a picture would read as a working one.
+  - Each word says what it does and what it does it to. **read** sounds an operator on its own; **read ×FM** sounds it modulated by whatever the words before it produced; **feedback** taps what an operator produced one sample ago, which is how a rack modulates itself; **combine** adds, ring-modulates, inverts, duplicates or swaps what is on the stack. The **≡** figure beside each row is how many values are stacked up after it — a finished algorithm ends on exactly one, and that value is the sound.
+  - An operator no word names is badged *unwired*: it costs its bytes and makes no sound. That is also the only kind that can be removed — an operator the algorithm still names is guarded, because deleting it would leave words pointing at nothing.
+  - If the algorithm does not add up, the expression line says why and the offending row is highlighted. A rack whose algorithm does not verify is silent rather than unpredictable.
 
 ### Advanced Edit (Ixmp patches)
 

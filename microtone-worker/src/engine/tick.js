@@ -538,6 +538,16 @@ export function applyTrackerTick(eng, ts, playhead) {
     if (bg.isLayerChild) {
       const parent = bg.sourceChannel >= 0 && bg.sourceChannel < ts.voices.length
         ? ts.voices[bg.sourceChannel] : null;
+      // An FM operator outlives its rack for no one: nothing reads it once the
+      // rack is gone, and the mixer never summed it, so a detached operator
+      // would be an inaudible voice ageing forever. It dies with the note.
+      if (bg.fmOperator && (parent === null || !parent.active ||
+          parent.fmRig === null || parent.fmRig.voices[0] !== parent)) {
+        bg.active = false;
+        bg.fmOperator = false;
+        ts.backgroundVoices.splice(i, 1);
+        continue;
+      }
       if (parent === null || !parent.active) {
         // Parent ended. If it was RELEASED and its fast fadeout deactivated it in
         // the SAME tick the release fired, the sync below never ran — inherit the

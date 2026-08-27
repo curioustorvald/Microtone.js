@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FM algorithm diagram gallery (screenshot / layout tuning)</title>
+  <link rel="stylesheet" href="../../css/microtone.css" />
+  <style>
+    body { padding: 1rem 1.4rem; font-family: system-ui, sans-serif; }
+    h1 { font-size: 1rem; margin: 0 0 0.8rem; }
+    .row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.7rem; }
+    .cap { min-width: 15rem; font-family: "Roboto Mono", monospace; font-size: 0.85rem; }
+    .fm-graph-frame { flex: 0 0 auto; }
+  </style>
+</head>
+<body>
+  <!-- Every shape the layout has to get right, side by side:
+         chromium --headless=new --window-size=1000,900 --screenshot=/tmp/fmgraph.png \
+           --virtual-time-budget=8000 \
+           "http://localhost:8932/test/browser/fmgraph-visual.html?theme=dark"
+       ?theme=light for the light palette. -->
+  <h1>FM algorithm diagrams — every shape the layout has to get right</h1>
+  <div id="out"></div>
+  <script type="module">
+    import { fmWord, fmFormula, fmGraph, FmOp, FM_CLASS_OSC, FM_CLASS_MOD, FM_CLASS_FB }
+      from "../../src/doc/fmedit.js";
+    import { fmGraphSvg } from "../../src/ui/fmgraph.js";
+    import { applyTheme } from "../../src/ui/theme.js";
+
+    const theme = new URLSearchParams(location.search).get("theme");
+    if (theme) applyTheme(theme);
+
+    const OSC = (k) => fmWord(FM_CLASS_OSC, k);
+    const MOD = (k) => fmWord(FM_CLASS_MOD, k);
+    const FB = (k) => fmWord(FM_CLASS_FB, k);
+
+    const CASES = [
+      ["one operator", [OSC(0)], 1],
+      ["a two-operator chain", [OSC(1), MOD(0)], 2],
+      ["a six-deep chain (the DX7 stack)", [OSC(5), MOD(4), MOD(3), MOD(2), MOD(1), MOD(0)], 6],
+      ["two carriers", [OSC(1), MOD(0), OSC(2), FmOp.ADD], 3],
+      ["two chains summed", [OSC(3), MOD(2), OSC(1), MOD(0), FmOp.ADD], 4],
+      ["one modulator into two carriers", [OSC(2), MOD(1), OSC(2), MOD(0), FmOp.ADD], 3],
+      ["a stacked modulator pair", [OSC(2), OSC(3), FmOp.ADD, MOD(1), MOD(0)], 4],
+      ["self-feedback", [FB(0), MOD(0)], 1],
+      ["feedback into a chain", [FB(2), MOD(2), MOD(1), MOD(0)], 3],
+      ["ring modulation", [OSC(1), OSC(2), FmOp.MUL, MOD(0)], 3],
+      ["an inverted modulator", [OSC(1), FmOp.NEG, MOD(0)], 2],
+      ["three carriers", [OSC(1), MOD(0), OSC(2), FmOp.ADD, OSC(3), FmOp.ADD], 4],
+    ];
+
+    // ?from=n&count=m slices the gallery, for a zoomed screenshot of one shape.
+    const params = new URLSearchParams(location.search);
+    const from = Number(params.get("from") ?? 0);
+    const count = Number(params.get("count") ?? CASES.length);
+    const out = document.getElementById("out");
+    for (const [name, prog, n] of CASES.slice(from, from + count)) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const cap = document.createElement("div");
+      cap.className = "cap";
+      cap.textContent = `${name}\n${fmFormula(prog, n)}`;
+      cap.style.whiteSpace = "pre";
+      const frame = document.createElement("div");
+      frame.className = "fm-graph-frame";
+      const g = fmGraph(prog, n);
+      if (g === null) frame.textContent = "(does not verify)";
+      else frame.append(fmGraphSvg(g, { outLabel: "OUT" }));
+      row.append(cap, frame);
+      out.append(row);
+    }
+    document.title = "gallery ready";
+  </script>
+</body>
+</html>

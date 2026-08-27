@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FM rack smoke: create a type-4 metainstrument, wire it, play it</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+    const ok = (cond) => (cond ? "ok" : "FAIL");
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { store, instrumentsView: iv } = win.__microtone;
+        const doc = store.doc;
+        log("app loaded (module graph booted ok)");
+
+        const bank = await import("../../src/doc/bankmerge.js");
+        const fmedit = await import("../../src/doc/fmedit.js");
+        const ops = await import("../../src/doc/ops.js");
+
+        // ── build a four-operator rack out of the project's own instruments ──
+        const picks = doc.selectableInstrumentSlots()
+          .filter((s) => !doc.instruments[s].isMeta).slice(0, 4)
+          .map((slot) => ({ slot, count: 1 }));
+        const plan = bank.planCreateFm(doc, picks, "smoke rack");
+        log(`planCreateFm: ${ok(!plan.error)}${plan.error ? " — " + plan.error : ""}`);
+        store.undo.apply(ops.importBankOp(plan));
+        const slot = plan.metaSlot;
+        const rack = doc.instruments[slot];
+        log(`rack is a type-4 meta: ${ok(rack.isMeta && rack.isFm)}`);
+        log(`rack holds ${rack.metaLayers.length} operators: ${ok(rack.metaLayers.length === 4)}`);
+        log(`default algorithm verifies: ${ok(rack.fmProgram !== null)}`);
+        log(`…and reads "${fmedit.fmFormula([...rack.fmProgram], 4)}": ` +
+          ok(fmedit.fmFormula([...rack.fmProgram], 4) === "0[1[2[3]]]"));
+
+        // ── the FM tab renders in place of Layers ──
+        iv.show();
+        iv.selected = slot;
+        iv.renderTabs();
+        iv.renderPanel();
+        await waitFor(() => iv.panel.querySelector(".fm-algo"));
+        const tabLabels = [...iv.tabBar.querySelectorAll("button")].map((b) => b.textContent);
+        log(`tab bar is the FM tab: ${ok(tabLabels.length === 1 && tabLabels[0] === "FM")}`);
+        const rows = iv.panel.querySelectorAll(".meta-table tbody tr");
+        log(`operator rack painted ${rows.length} rows: ${ok(rows.length === 4)}`);
+        const words = iv.panel.querySelectorAll(".fm-word");
+        log(`algorithm painted ${words.length} words: ${ok(words.length === 4)}`);
+        const meterW = iv.panel.querySelector(".fm-meter-fill").style.width;
+        log(`memory meter reports "${meterW}": ${ok(meterW !== "" && meterW !== "0%")}`);
+        const formula = iv.panel.querySelector(".fm-formula");
+        log(`formula readout shown, not an error: ${ok(!formula.classList.contains("bad"))}`);
+        const svg = iv.panel.querySelector(".fm-graph-frame svg.fm-graph");
+        const boxes = svg ? svg.querySelectorAll(".fm-graph-box").length : 0;
+        const wires = svg ? svg.querySelectorAll(".fm-graph-wire").length : 0;
+        log(`algorithm diagram: ${boxes} boxes, ${wires} wires, one OUT: ` +
+          ok(boxes === 4 && wires === 4 && svg.querySelectorAll(".fm-graph-out").length === 1));
+
+        // ── edit a word: make operator 3 a second carrier instead ──
+        const wordCount = rack.fmProgram.length;
+        const clsSel = words[0].querySelector(".fm-word-class");
+        clsSel.value = "fb";
+        clsSel.dispatchEvent(new win.Event("change"));
+        await waitFor(() => iv.panel.querySelector(".fm-word"));
+        const after = doc.instruments[slot];
+        log(`word edit committed (program still ${after.fmProgram?.length} words): ` +
+          ok(after.fmProgram !== null && after.fmProgram.length === wordCount));
+        log(`…and it became a feedback tap: ` +
+          ok(fmedit.fmWordClass(after.fmProgram[0]) === "fb"));
+
+        // ── a broken algorithm shows the error, and no diagram ──
+        const words2 = iv.panel.querySelectorAll(".fm-word");
+        const argSel = words2[0].querySelector(".fm-word-arg");
+        const clsSel2 = words2[0].querySelector(".fm-word-class");
+        clsSel2.value = "mod";
+        clsSel2.dispatchEvent(new win.Event("change"));   // pops an empty stack
+        await waitFor(() => iv.panel.querySelector(".fm-formula"));
+        log(`broken algorithm: no diagram, formula flagged: ` +
+          ok(!iv.panel.querySelector(".fm-graph-frame") &&
+             iv.panel.querySelector(".fm-formula").classList.contains("bad")));
+        store.undo.undo();
+        iv.refresh();
+        await waitFor(() => iv.panel.querySelector(".fm-graph-frame"));
+        log(`…and the diagram comes back with the fix: ok`);
+        void argSel;
+
+        // ── undo puts the algorithm back ──
+        store.undo.undo();
+        log(`undo restored the algorithm: ` +
+          ok(fmedit.fmWordClass(doc.instruments[slot].fmProgram[0]) === "osc"));
+
+        // ── an operator the algorithm names cannot be removed ──
+        const removeBtns = [...rows].map((r) => r.querySelectorAll(".advCell .meta-act"));
+        const closeDisabled = [...rows].every((r) => {
+          const btns = [...r.querySelectorAll(".advCell .meta-act")];
+          return btns.some((b) => b.disabled);
+        });
+        log(`wired operators are guarded against removal: ${ok(closeDisabled)}`);
+
+        // ── the rack survives a save/reload round trip ──
+        const bytes = doc.toBytes();
+        const { Document } = await import("../../src/doc/document.js");
+        const { parseTaud } = await import("../../src/format/taud-parse.js");
+        const reloaded = new Document(parseTaud(bytes));
+        const back = reloaded.instruments[slot];
+        log(`rack survives serialise/parse: ` +
+          ok(back.isFm && back.metaLayers.length === 4 && back.fmProgram !== null));
+        log(`…with the same algorithm: ` +
+          ok(String([...back.fmProgram]) === String([...rack.fmProgram])));
+
+        log("RESULT: " + (out.some((l) => l.includes("FAIL")) ? "FAIL" : "PASS"));
+      } catch (e) {
+        log("EXCEPTION: " + (e && e.stack ? e.stack : e));
+        log("RESULT: FAIL");
+      }
+    })();
+  </script>
+</body>
+</html>

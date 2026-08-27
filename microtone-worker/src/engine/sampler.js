@@ -250,11 +250,46 @@ export function fetchTrackerSampleStereo(eng, voice, inst, interpMode, out) {
   return out;
 }
 
-export function fetchTrackerSample(eng, voice, inst, interpMode) {
+/**
+ * The read position a phase-modulated fetch (item 159) lands on: the voice's
+ * own position displaced by `offset` FRAMES and folded back into the waveform.
+ *
+ * Folding is what makes the displacement a PHASE. A looping voice wraps into
+ * its loop, so a modulator big enough to sweep several cycles keeps sweeping
+ * them instead of running off the end of the sample and clamping to a constant
+ * — which is the difference between FM and a click. A one-shot has no cycle to
+ * wrap into, so it clamps.
+ */
+function wrapReadPos(voice, pos, sampleLen) {
+  const mode = voice.activeLoopMode & 3;
+  const ls = voice.activeSampleLoopStart;
+  const le = voice.activeSampleLoopEnd;
+  if ((mode === 1 || mode === 2) && le > ls) {
+    const span = le - ls;
+    let p = (pos - ls) % span;
+    if (p < 0) p += span;
+    return ls + p;
+  }
+  return Math.min(Math.max(pos, 0), sampleLen - 1);
+}
+
+/**
+ * `posOffset` (item 159) displaces the READ without touching the trajectory:
+ * the sample is taken `posOffset` frames away from where the voice is, and the
+ * voice then advances from where it actually was. That separation is the whole
+ * of phase modulation — the carrier keeps its own pitch, and the modulator only
+ * says where in the waveform this one output sample is drawn from.
+ *
+ * It defaults to 0, which restores the position, the branch and the arithmetic
+ * exactly as they were: an ordinary voice fetches bit-for-bit as it always has.
+ */
+export function fetchTrackerSample(eng, voice, inst, interpMode, posOffset = 0) {
   if (inst.index === 0) return 0.0;
 
   const sampleLen = Math.max(voice.activeSampleLength, 1);
   const binMax = SAMPLE_BIN_TOTAL - 1;
+  const keepPos = voice.samplePos;
+  if (posOffset !== 0) voice.samplePos = wrapReadPos(voice, keepPos + posOffset, sampleLen);
   let sample = interpolateChannel(eng, voice, inst, interpMode, sampleLen, binMax,
     voice.activeSamplePtr, voice);
   if (voice.funkXfade > 0) {
@@ -263,6 +298,7 @@ export function fetchTrackerSample(eng, voice, inst, interpMode) {
       voice.activeSamplePtr, voice) * w + sample * (1.0 - w);
     voice.funkXfade--;
   }
+  if (posOffset !== 0) voice.samplePos = keepPos;
 
   // The crossfades run on the OUTPUT clock, once per sample however many taps
   // read through them, and keep running while the voice ramps out.

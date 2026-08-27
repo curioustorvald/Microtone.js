@@ -19,6 +19,7 @@ import {
   advancePitchRamp, advancePanRamp,
 } from "./sampler.js";
 import { applyVoiceFilter, applyTaudVoiceFx } from "./filter.js";
+import { renderFmVoice } from "./fm.js";
 import { CHAN_MODE_MATRIX } from "./inst.js";
 import {
   spatialVoiceGains, analysisVoiceGains, voiceAzimuth, voicePanByte,
@@ -47,7 +48,17 @@ const stereoPair = [0.0, 0.0];
  * the ITU angle for the sample's channel count (#998.0). Anything not
  * stereo-shaped stays mono here.
  */
-function renderVoicePair(eng, voice, inst, interpMode, out) {
+function renderVoicePair(eng, ts, voice, inst, interpMode, spt, out) {
+  // An FM rack (item 159) replaces the voice's own sample fetch, and nothing
+  // else: the filter, the voice FX and every gain below still act on the
+  // finished patch exactly as they act on a sampled one.
+  if (voice.fmRig !== null) {
+    const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
+      renderFmVoice(eng, ts, voice, interpMode, spt)));
+    out[0] = s;
+    out[1] = s;
+    return out;
+  }
   if (voice.activeChanCount !== 2) {
     const s = applyTaudVoiceFx(voice, applyVoiceFilter(voice,
       fetchTrackerSample(eng, voice, inst, interpMode)));
@@ -191,7 +202,7 @@ export function generateTrackerAudio(eng, playhead, out) {
         continue;
       }
       const voiceInst = eng.instruments[voice.instrumentId];
-      renderVoicePair(eng, voice, voiceInst, ts.interpolationMode, stereoPair);
+      renderVoicePair(eng, ts, voice, voiceInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];
       // Soundscope shows the mono sum — a stereo voice is still one voice.
@@ -265,6 +276,10 @@ export function generateTrackerAudio(eng, playhead, out) {
     }
     // Background (NNA-ghost + metainstrument layer-child) voices.
     for (const bg of ts.backgroundVoices) {
+      // An FM operator is an OPERAND, not a sound: the rack that owns it read
+      // it (and aged it) in the foreground pass above, so summing it here would
+      // put the modulators into the mix beside the note they shaped.
+      if (bg.fmOperator) continue;
       // Muting a channel must also silence the NNA ghosts and layer children it
       // spawned (item 45): fold the source channel's fader into the bg voice's
       // own, so a channel mute/solo covers everything that came from it.
@@ -272,7 +287,7 @@ export function generateTrackerAudio(eng, playhead, out) {
       const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
       if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
-      renderVoicePair(eng, bg, bgInst, ts.interpolationMode, stereoPair);
+      renderVoicePair(eng, ts, bg, bgInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];
       const instGv = bgInst.instGlobalVolume / 255.0;

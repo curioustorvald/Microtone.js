@@ -89,7 +89,8 @@ export async function showImportInstruments(store) {
       // layer children of metas start unchecked — picking the meta pulls them
       box.checked = e.layerOf.length === 0;
       box.dataset.slot = e.slot;
-      const badge = e.isMeta ? "META" : e.patchCount > 0 ? `IXMP·${e.patchCount}` : "";
+      const badge = e.isFm ? `FM·${e.layerCount}`
+        : e.isMeta ? "META" : e.patchCount > 0 ? `IXMP·${e.patchCount}` : "";
       const note = e.layerOf.length > 0 ? `layer of ${e.layerOf.map(hex3).join(" ")}` :
         e.sampleBytes > 0 ? fmtBytes(e.sampleBytes) : "";
       row.append(box, el("span", "idx", hex3(e.slot)),

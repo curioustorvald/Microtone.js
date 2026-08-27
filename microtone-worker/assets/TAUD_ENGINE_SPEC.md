@@ -105,7 +105,7 @@ Per-pattern loop state — the `S $Bx` loop counters and the Pattern-Ditto arm 
 
 ### 3.1 The 4096-TET grid
 
-A note word is an unsigned 16-bit value on a grid of **4096 steps per octave**. `0x5000` is C4 (middle C) and each `0x1000` is an octave, so `0x1000` is C0 and `0xF000` is C14. Values `0x0000`…`0x001F` are sentinels ([§5.2](#5-2-note-events)); the playable range is `0x0020`…`0xFFFF`, and the engine **MUST** clamp every computed pitch into it.
+A note word is an unsigned 16-bit value on a grid of **4096 steps per octave**. `$5000` is C4 (middle C) and each `$1000` is an octave, so `$1000` is C0 and `$F000` is C14. Values `$0000`…`$001F` are sentinels ([§5.2](#5-2-note-events)); the playable range is `$0020`…`$FFFF`, and the engine **MUST** clamp every computed pitch into it.
 
 One 12-TET semitone is `4096 ÷ 12` ≈ 341.33 units, and one cent is `4096 ÷ 1200` ≈ 3.41 units. Note words are not required to land on any particular grid — that is the entire point of the format — so an engine **MUST NOT** quantise them except where a command says so (glissando, `S $1x`).
 
@@ -115,7 +115,7 @@ A sounding voice reads its sample at
 
 ```
 playback_rate = (sampling_rate ÷ rate)
-              × 2 ^ ((note − 0x5000 + detune) ÷ 4096)
+              × 2 ^ ((note − $5000 + detune) ÷ 4096)
               × tuning_ratio
 ```
 
@@ -128,10 +128,10 @@ Because that pitch is a per-*tick* quantity and the sample position advances per
 The song table declares "note *N* sounds at *F* Hz". The engine folds that pair into a single whole-song frequency multiplier:
 
 ```
-tuning_ratio = (F ÷ 2 ^ ((N − 0x5000) ÷ 4096)) ÷ 261.6255653005986
+tuning_ratio = (F ÷ 2 ^ ((N − $5000) ÷ 4096)) ÷ 261.6255653005986
 ```
 
-with the reference denominator being 12-TET concert C4. Either field reading zero means the tracker default, C9 (`0xA000`) at 8363.0 Hz, which yields ≈ 0.99892 — about 1.87 cents flat, which is what an Amiga actually does.
+with the reference denominator being 12-TET concert C4. Either field reading zero means the tracker default, C9 (`$A000`) at 8363.0 Hz, which yields ≈ 0.99892 — about 1.87 cents flat, which is what an Amiga actually does.
 
 Two implementation requirements:
 
@@ -153,9 +153,9 @@ The global behaviour flags select how the coarse pitch-slide effects (`E`, `F`) 
 **Amiga period mode** keeps a per-voice period, seeded from the note when needed:
 
 ```
-period = 428 × 2 ^ (−(note − 0x5000) ÷ 4096)
+period = 428 × 2 ^ (−(note − $5000) ÷ 4096)
 period ← max(period − argument, 1)
-note   = round(0x5000 + 4096 × log2(428 ÷ period))
+note   = round($5000 + 4096 × log2(428 ÷ period))
 ```
 
 428 is the ProTracker period of C4 for a standard 8363 Hz sample on the NTSC clock. Fine slides use the same expression without persisting the period.
@@ -163,9 +163,9 @@ note   = round(0x5000 + 4096 × log2(428 ÷ period))
 **Linear-frequency mode** keeps a per-voice frequency:
 
 ```
-freq = 261.6255653005986 × 2 ^ ((note − 0x5000) ÷ 4096)
+freq = 261.6255653005986 × 2 ^ ((note − $5000) ÷ 4096)
 freq ← max(freq + argument, 1)
-note = round(0x5000 + 4096 × log2(freq ÷ 261.6255653005986))
+note = round($5000 + 4096 × log2(freq ÷ 261.6255653005986))
 ```
 
 This mode exists for sources whose slides are literally in Hz per tick — Monotone's PC-speaker arithmetic is the motivating case.
@@ -225,23 +225,23 @@ Everything else — note volume, channel volume, pan, envelope positions, LFO ph
 
 | Note word | Action |
 |---|---|
-| `0x0000` | No note event; see the special cases below |
-| `0x0001` | **Key off** — set the key-off state, and apply key lift if the instrument asks for it |
-| `0x0002` | **Note cut** — deactivate the voice at once, and cut its layer children |
-| `0x0003` | **Note fade** — begin the fadeout without releasing sustain |
-| `0x0004` | **Fast fade** — begin a ≈ 0.3 s fadeout (below) |
-| `0x0005`…`0x000F` | Reserved; no handler |
-| `0x0010`…`0x001F` | **Interrupt** *n* — latch bit *n* of the pending-interrupt mask; no sound |
-| `0x0020`…`0xFFFF` | A pitch — trigger, or retarget a portamento |
+| `$0000` | No note event; see the special cases below |
+| `$0001` | **Key off** — set the key-off state, and apply key lift if the instrument asks for it |
+| `$0002` | **Note cut** — deactivate the voice at once, and cut its layer children |
+| `$0003` | **Note fade** — begin the fadeout without releasing sustain |
+| `$0004` | **Fast fade** — begin a ≈ 0.3 s fadeout (below) |
+| `$0005`…`$000F` | Reserved; no handler |
+| `$0010`…`$001F` | **Interrupt** *n* — latch bit *n* of the pending-interrupt mask; no sound |
+| `$0020`…`$FFFF` | A pitch — trigger, or retarget a portamento |
 
 **Fast fade** exists to reproduce SoundFont *exclusiveClass* choking (a closed hi-hat silencing a ringing open one). It sets note-fading and overrides the voice's fadeout step so the decay completes in ≈ 0.3 s regardless of the instrument's own fadeout:
 
 ```
 ticks = max(0.3 × bpm × 0.4, 1)
-fadeout_step = clamp(round(1024 ÷ ticks), 1, 0xFFF)
+fadeout_step = clamp(round(1024 ÷ ticks), 1, $FFF)
 ```
 
-Two cases of note word `0x0000` are **not** silent, and both matter:
+Two cases of note word `$0000` are **not** silent, and both matter:
 
 - **Instrument byte plus a pitch effect** (`E`, `F` or `G`) on a channel that already has a pitch: this **triggers** the note at the voice's current pitch, so the slide has something to move. Latching the instrument and staying silent — the obvious reading — loses the note.
 - **Instrument byte alone**: latch the instrument, re-resolve its patch and re-seed the note volume from its default note volume, clear key-off and note-fading and reset the fadeout — **without** retriggering the sample. ProTracker, FT2, IT and Schism all behave this way.
@@ -283,7 +283,7 @@ Channel volume is **not** reset by a trigger. It belongs to the channel, not the
 
 A trigger takes its default position from one of two places, and either is enough to make it apply:
 
-- **The resolved patch's `default pan`**, whenever that is not the `0xFF` sentinel. A patch override needs no further permission — see below.
+- **The resolved patch's `default pan`**, whenever that is not the `$FF` sentinel. A patch override needs no further permission — see below.
 - **The base record**, but only when the pan envelope's LOOP word carries the `p` bit ("use default pan").
 
 Whichever applies, it is written to the **note-pan axis** — an offset from the channel's own direction, not a channel position (TAUD_NOTE_EFFECTS.md §3a). An instrument never writes `channel_pan`, exactly as it never writes `channel_vol`: the channel says where the part sits, the instrument says where the note sits within it. With the channel at its `$80` / front default the two coincide, which is why a file that predates the split sounds unchanged; once the pattern has moved the channel with `S $80xx`, `P`, `X` or `Z`, the instrument's whole arrangement rotates with it instead of collapsing onto the commanded point.
@@ -295,7 +295,7 @@ The two sources are mutually **exclusive** — they are the same statement at tw
 
 A patch overrides the azimuth only, and only within the front arc: a patch record holds an 8-bit pan and no elevation and no ninth bit, so the instrument's height stands whichever pan wins. The pan ENVELOPE offsets the azimuth on top of both axes and leaves the elevation where it is.
 
-**Why `p` does not gate the patch.** The `p` bit lives in the base record's pan envelope, and a patch may replace that envelope wholesale — its own `p` block carries its own LOOP word. Gating the patch's pan on `p` would therefore let a patch silently disable its own override, and would leave every SoundFont-derived bank centred: those base records carry no pan envelope at all, so `p` is clear, while the per-zone pan sits in each patch's byte 24. The patch's `0xFF` sentinel *is* its enable flag.
+**Why `p` does not gate the patch.** The `p` bit lives in the base record's pan envelope, and a patch may replace that envelope wholesale — its own `p` block carries its own LOOP word. Gating the patch's pan on `p` would therefore let a patch silently disable its own override, and would leave every SoundFont-derived bank centred: those base records carry no pan envelope at all, so `p` is clear, while the per-zone pan sits in each patch's byte 24. The patch's `$FF` sentinel *is* its enable flag.
 
 Because the ninth bit and the elevation live in bits that were previously unused and are read only in a surround song, a file written before they existed keeps its exact stereo behaviour, and its default pan lands on the front arc — which is what a pan byte has always meant.
 
@@ -307,7 +307,7 @@ The volume axis used for the lookup is the *pre-patch* seed: the volume column's
 
 **That axis is six bits in every format version.** The rectangle is instrument data, and a bank is format-neutral, so a version 3 engine **MUST** narrow its eight-bit note volume onto 0…63 (a shift right by two) before testing it — at *every* lookup, not only at the trigger. A version 3 engine that forgets on one path finds no patch there at all, since the seed a wide cell starts from is 255 and every rectangle written by an IT, XM or SoundFont converter ends at 63. The same narrowing applies to a Metainstrument's layer rectangles, which share the axis.
 
-A patch's "no override" sentinels — default pan `0xFF`, default note volume 0, auto-vibrato waveform `0xFF` — defer to the base record field by field.
+A patch's "no override" sentinels — default pan `$FF`, default note volume 0, auto-vibrato waveform `$FF` — defer to the base record field by field.
 
 ### 5.5 Metainstruments
 
@@ -326,6 +326,34 @@ Every tick thereafter, a layer child re-synchronises to its parent: pitch (paren
 **Anything the pattern says about the note, it says about all of it.** The pitch overlay is the general case of a rule that runs through the whole effect column: a metainstrument is ONE note, so a command written on its channel **MUST** reach every voice sounding it, never layer 0 alone. The overlay itself is what the row's effects did to the pitch *this tick* — vibrato, glissando and arpeggio — carried as a signed delta on top of the note the child already tracks; auto-vibrato and the pitch envelope stay out of it, because those are the instrument's own and each layer runs its own copy. A child that has detached drops the overlay, so it finishes at its own note rather than frozen mid-bend. The same rule governs the bitcrusher and overdrive ([TAUD_NOTE_EFFECTS.md §8/§9](TAUD_NOTE_EFFECTS.md)), the sample-modification command (§2/§3), Q's retrigger, the filter overrides (§5/§6) and the envelope gates (`S $7x`).
 
 Layer indices are 10 bits, so layers **MAY** live in the auxiliary instrument bin, which a pattern cell cannot reach. A layer index pointing at another Metainstrument, or at instrument 0, is skipped.
+
+#### 5.5.1 FM operator racks
+
+A **type-4** Metainstrument ([File Format §7.6](TAUD_FILE_FORMAT.md)) reads the same table as an *operator rack* and carries an RPN algorithm saying how its operators feed each other. Everything above turns on layers being **parallel**; a rack is the other arrangement, and the difference shows up in one sentence: **a rack is one voice, not one per entry.** Its operators are operands, and only the algorithm's result is a sound.
+
+An operator's **oscillator is an ordinary instrument** — sample, loop, envelopes, filter, auto-vibrato and all. That is what this is for. A single-cycle looped waveform gives textbook FM; anything longer gives something a chip could not.
+
+**Triggering.** The engine collects the operators the algorithm names by a `$00xx` or `$04xx` word AND whose rectangle contains the trigger, gating them on the same narrowed six-bit volume axis as a layer's. Operator 0 sounds on the channel's foreground voice, at the note plus its own detune; each other surviving operator takes a voice of its own, bound to the channel exactly as a layer child is and carrying the same *relative* detune — so the per-tick sync of [§5.5](#5-5-metainstruments), `Q`'s whole-instrument retrigger, and the release of the previous note all apply unchanged. If the algorithm does not verify, or operator 0 does not survive, the channel goes **silent**.
+
+An operator voice is **not** a layer child in two respects. It carries no position of its own: a rack is one signal, sitting where the channel sits, so an operator's own default pan is not read and nothing pulls the rack sideways. And it is never mixed: the mixer **MUST** skip it, because the rack that owns it already read it.
+
+**Reading an operator.** Each sounding operator is evaluated **at most once per output sample**, in the order the algorithm reaches it, through the ordinary sampler ([§8](#8-the-sampler)) — loops, interpolation, invert loop, funk repeat and the sample modifications included. Its value is that sample times its own mix gain and, for every operator except 0, its own volume envelope, fadeout, instrument global volume, initial attenuation and anti-click ramps, with its own filter applied. **Operator 0's envelope, fadeout, instrument global volume, filter and voice effects are applied by the mixer to the finished patch instead** — it is the channel's own voice, and that is what makes it the principal: its envelope is the note's shape and its sample ending is the note's end.
+
+**Phase modulation.** A `$04xx` word pops a value *m* and reads its operator at
+
+```
+read_position = position + m × cycle
+```
+
+where `cycle` is the operator's **loop length** when it loops, and its whole sample length when it does not. The read position is folded back into the loop (or clamped, for a one-shot); the voice's own trajectory is untouched, so the carrier keeps its pitch and only *where in the waveform* this one output sample is drawn from changes.
+
+Measuring the depth in cycles is what makes the mix octet read as a modulation index in the ordinary sense: at unity the modulator sweeps the carrier ±1 whole cycle, and the octet table's +24 dB reaches ±16. A modulator is scaled by its own mix octet before it ever reaches this word, so an operator's level *is* its index when it modulates and its volume when it carries — as it is on every FM instrument ever built.
+
+**The stack.** Words run in order, every word every sample; the value left on the stack at the end is the patch. `$08xx` pushes what its operator produced on the *previous* output sample, and every operator's tap advances together after the whole program has run — so a tap reads last sample's value wherever it sits, which is what lets a rack close a feedback loop in one pass. `$08xx` on an operator the algorithm does not sound reads 0.
+
+**Cost.** A rack costs one voice against the channel plus one background voice per sounding operator beyond the first, and one sample fetch per sounding operator per output sample. Unlike a layered metainstrument, none of that reaches the mix as a separate source: however many operators a rack has, it is one note in one place.
+
+**A rack does not spawn a New Note Action ghost.** A ghost is a snapshot of one voice, and a rack is a voice plus the operators that shape it; a ghost carrying only the snapshot would sound operator 0's bare sample, which is not the note that was playing and not a sound the patch can make. The incoming note takes the channel instead, and the operators go with the note that built them. Past-note actions (`S $70`…`$72`) already do not reach a metainstrument's channel, and that covers a rack for the same reason.
 
 ### 5.6 Duplicate Check
 
@@ -403,7 +431,7 @@ The tick pass runs once per tick, per voice, and is where everything continuous 
 16. **Retrigger** (`Q`): count ticks and, on reaching the interval, restart the sample at the active play start, clear key-off, reset all four envelope playheads (re-seeding the pitch and filter ones past zero-duration nodes), reset the fadeout, auto-vibrato and filter history, and apply the retrigger volume modifier.
 17. **Auto-vibrato** ([§6.1](#6-1-auto-vibrato)), added on top of the sounding pitch.
 18. **Pitch envelope** contribution ([§7.4](#7-4-pitch-and-filter-envelope-application)).
-19. Compute the final pitch, clamp it to `0x0020`…`0xFFFF`, and update the playback rate.
+19. Compute the final pitch, clamp it to `$0020`…`$FFFF`, and update the playback rate.
 20. **Filter envelope** applied to the cutoff, then refresh the filter coefficients if cutoff or resonance changed.
 21. **Fadeout**: while key-off or note-fading, subtract `fadeout_step ÷ 1024` from the fadeout multiplier, clamped at 0; at 0 the voice deactivates. A `fadeout_step` of 0 never fades.
 22. **Advance the volume and pan envelopes**, then set the per-sample envelope slope for the coming tick.
@@ -433,10 +461,10 @@ An 8-bit speed byte therefore spans the same rate range as a 4-bit nibble with 1
 
 | Waveform | Value |
 |---|---|
-| 0 — sine | A 64-entry signed sine table, amplitude ±0x7F |
-| 1 — ramp down | `0x7F − (index << 2)` |
-| 2 — square | `+0x7F` for the first half of the cycle, `−0x7F` for the second |
-| 3 — random | A fresh uniform byte, biased to −0x80…+0x7F |
+| 0 — sine | A 64-entry signed sine table, amplitude ±$7F |
+| 1 — ramp down | `$7F − (index << 2)` |
+| 2 — square | `+$7F` for the first half of the cycle, `−$7F` for the second |
+| 3 — random | A fresh uniform byte, biased to −$80…+$7F |
 
 Waveform 3 is genuinely random and is the reason some songs never render bit-identically twice ([§13](#13-determinism)).
 
@@ -491,8 +519,8 @@ The filter envelope scales the cutoff, with 0.5 as unity at the instrument's def
 ```
 IT units:  base = (default_cutoff < 255)    ? default_cutoff : 254
            cutoff = clamp(⌊base × value⌋, 0, 254)
-SF units:  base = (default_cutoff < 0xFFFF) ? default_cutoff : 13500
-           cutoff = clamp(⌊base × value⌋, 0, 0xFFFF)
+SF units:  base = (default_cutoff < $FFFF) ? default_cutoff : 13500
+           cutoff = clamp(⌊base × value⌋, 0, $FFFF)
 ```
 
 Background voices apply both identically — and **MUST** branch on the filter mode in the same way, or SoundFont ghosts will be filtered as though their cents were IT bytes.
@@ -505,9 +533,9 @@ An instrument with the key-lift flag treats key-off as a true MIDI key release: 
 
 ### 8.1 Reading a sample
 
-Sample data is unsigned 8-bit with `0x80` as zero; a byte converts to `(b − 127.5) ÷ 127.5`. Reads clamp the index into the sample and clamp the pool address into the 8 MiB pool, so a malformed pointer cannot read out of bounds.
+Sample data is unsigned 8-bit with `$80` as zero; a byte converts to `(b − 127.5) ÷ 127.5`. Reads clamp the index into the sample and clamp the pool address into the 8 MiB pool, so a malformed pointer cannot read out of bounds.
 
-If the instrument has an active **invert-loop** mask ([§8.4](#8-4-invert-loop-and-funk-repeat)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `0xFF` before conversion. The loop that indexes the mask is the one the instrument declares; funk repeat's walk does not move it.
+If the instrument has an active **invert-loop** mask ([§8.4](#8-4-invert-loop-and-funk-repeat)) and a non-empty loop region, a byte inside the loop whose mask bit is set is XOR-ed with `$FF` before conversion. The loop that indexes the mask is the one the instrument declares; funk repeat's walk does not move it.
 
 A live **sample modification** ([§8.5](#8-5-sample-modifications)) may additionally move *which* byte this read takes and change its value; [§8.5](#8-5-sample-modifications) fixes the order the two features compose in.
 
@@ -536,7 +564,7 @@ The interpolation mode comes from the global behaviour flags and applies to ever
 | 1 — none | Zero-order hold — take the sample under the integer position |
 | 2 — Amiga 500 | Zero-order hold, plus a post-mix one-pole low-pass at 4420.971 Hz and the optional LED filter |
 | 3 — Amiga 1200 | Zero-order hold, plus the optional LED filter only: the A1200's own one-pole sits at ~34 kHz, above Nyquist at any rate the engine runs at, and is bypassed |
-| 4 — SNES | The SPC700's 4-tap Gaussian, run over the DSP's signed **15-bit** sample domain (`-0x4000`…`+0x3FFF`) as the hardware does. Its partial overflow handling is preserved: of the three tap additions the second is allowed to wrap and only the third saturates, so the ROM table's bugged `0x801` phases still "chirp" exactly where the hardware does — a run of max-negative samples reads back as `+0x3FF8`. Promoting the samples to 16 bits instead makes the mid-sum wrap on *all* content past half scale, which folds loud waveforms inside out and doubles everything else |
+| 4 — SNES | The SPC700's 4-tap Gaussian, run over the DSP's signed **15-bit** sample domain (`-$4000`…`+$3FFF`) as the hardware does. Its partial overflow handling is preserved: of the three tap additions the second is allowed to wrap and only the third saturates, so the ROM table's bugged `$801` phases still "chirp" exactly where the hardware does — a run of max-negative samples reads back as `+$3FF8`. Promoting the samples to 16 bits instead makes the mid-sum wrap on *all* content past half scale, which folds loud waveforms inside out and doubles everything else |
 | 5 — NES DPCM | A 1-bit sigma-delta simulation: a 7-bit counter slews ±2 toward the target level per output sample |
 
 The Amiga LED filter is a second-order section at 3090.533 Hz with Q = 0.660225, toggled by `S $00` / `S $01` and applied to the **stereo mix**, not per voice. It is available only in the two Amiga modes.
@@ -591,8 +619,8 @@ Two positions are in play and an engine **MUST NOT** confuse them: the **touch t
 |---|---|---|
 | Address, uniform | rotate, jump | Every touched byte moves by the *same* offset. Two of the three jump spellings quantise that offset to a whole eighth or sixteenth of the domain, so a loop cut to the bar is re-dealt a slice at a time |
 | Address, per byte | scatter | Every touched byte moves by its *own* offset, drawn uniformly within the setting's fraction of the domain |
-| Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `0xFF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop-and-funk-repeat)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
-| Value, level | subtract | `b = (b − subtrahend) AND 0xFF` |
+| Value, mask | invert loop (`$1`) | Bytes whose mask bit is set are XOR-ed with `$FF`. This mask spans the **whole sample**, unlike [§8.4](#8-4-invert-loop-and-funk-repeat)'s, which spans the loop: an inverted region's touched set is not contiguous, so there is no smaller origin to index from |
+| Value, level | subtract | `b = (b − subtrahend) AND $FF` |
 
 **Rotation accumulates; the random operations do not.** A rotate adds its step to the standing offset each step, so it sweeps. A jump replaces the offset with a fresh draw over the whole domain, and a scatter replaces the whole per-byte mapping — both measured from the sample's **original** position, never from the previous throw. An engine that accumulates them turns the narrowest setting into the widest one within seconds and collapses the ladder into a single effect with a rise time.
 
@@ -676,7 +704,7 @@ y[n] = a0·x[n] + b0·clamp(y[n−1], ±2) + b1·clamp(y[n−2], ±2)
 
 ### 9.2 The SoundFont filter
 
-FluidSynth's RBJ biquad, with cutoff in absolute cents and resonance in centibels above the DC gain. Cutoff `0xFFFF` or above turns the filter off.
+FluidSynth's RBJ biquad, with cutoff in absolute cents and resonance in centibels above the DC gain. Cutoff `$FFFF` or above turns the filter off.
 
 ```
 fc  = clamp(8.176 × 2 ^ (cutoff ÷ 1200), 5, 0.45 × rate)
@@ -869,13 +897,13 @@ feedback = 1.5 × e[n−1] − 0.75 × e[n−2]
 dither   = 0.2 × (u1 − u2)                     u1, u2 uniform in [0,1)
 shaped   = clamp(x + feedback + dither ÷ 127.5, −1, 1)
 q        = clamp(round(shaped × 127.5), −128, 127)
-out      = (q + 128) & 0xFF
+out      = (q + 128) & $FF
 e[n]     = shaped − q ÷ 127.5
 ```
 
 Every arithmetic step in this loop **MUST** be evaluated in binary32, and the dither source **MUST** be the engine's own seeded generator, not the host's. Together those two rules are what make 8-bit output reproducible across implementations.
 
-The uniform values are drawn as `(xorshift32() & 0xFFFFFF) ÷ 16777216`, which is exact in binary32.
+The uniform values are drawn as `(xorshift32() & $FFFFFF) ÷ 16777216`, which is exact in binary32.
 
 ## 13. Determinism
 
@@ -890,7 +918,7 @@ Under those conditions, and with the numeric rules of [§12](#12-output-stage), 
 
 ## 14. Interrupts and the host interface
 
-Note words `0x0010`…`0x001F` are **interrupt markers**: they produce no sound and have no built-in behaviour. Processing one latches bit *n* in the playhead's pending-interrupt mask.
+Note words `$0010`…`$001F` are **interrupt markers**: they produce no sound and have no built-in behaviour. Processing one latches bit *n* in the playhead's pending-interrupt mask.
 
 The host drains the mask with a **read-to-acknowledge** call that returns and clears it. Latching accumulates, so no fire is lost between drains, but repeated fires of the same interrupt between two drains collapse into one bit — the semantics are edge-triggered and level-collapsed. A host dispatches its own callbacks from the drained mask.
 
@@ -900,7 +928,7 @@ Interrupts are how a song drives something outside itself: lighting cues, subtit
 
 A transport reset restores a well-defined starting state, and getting its scope right prevents a family of "mysteriously lingering" bugs.
 
-A **full reset** sets BPM 125, tick rate 6, global and mixing volume `0x80`, clears the tuning, restores the tone and interpolation modes from the file's global behaviour flags, re-installs the surround model, clears the Amiga filter states, deactivates every voice, empties the background pool, clears every per-voice effect and envelope state (funk repeat's loop window among it), and clears the per-instrument runtime state (invert-loop masks and filter overrides).
+A **full reset** sets BPM 125, tick rate 6, global and mixing volume `$80`, clears the tuning, restores the tone and interpolation modes from the file's global behaviour flags, re-installs the surround model, clears the Amiga filter states, deactivates every voice, empties the background pool, clears every per-voice effect and envelope state (funk repeat's loop window among it), and clears the per-instrument runtime state (invert-loop masks and filter overrides).
 
 A **play-from-row** reset is narrower and deliberately so: it resets row, tick and jump state, deactivates every voice, **empties the background pool**, clears the per-channel pattern-loop and Ditto state, reconstructs the Ditto arm state for the starting row, and returns every channel to its song-start position, volume and colouring (the bitcrusher and the overdrive among it) — but leaves the playhead's tempo and volumes alone, because a replay must keep the song's tempo.
 
@@ -914,7 +942,7 @@ A host loading a new document **MUST** perform a full reset before uploading it.
 
 The effect column is specified in full in the **Note Effects** reference, including per-effect memory cohorts, recall rules and the conversion tables for ProTracker, ScreamTracker 3, FastTracker 2 and ImpulseTracker sources. This document defines only the machinery those commands drive.
 
-Opcodes are base-36 digit values: `0`…`9` are `0x00`…`0x09` and `A`…`Z` are `0x0A`…`0x23`. A few carry engine-scope rather than voice-scope meaning and are worth naming here:
+Opcodes are base-36 digit values: `0`…`9` are `$00`…`$09` and `A`…`Z` are `$0A`…`$23`. A few carry engine-scope rather than voice-scope meaning and are worth naming here:
 
 | Opcode | Scope | Engine effect |
 |---|---|---|

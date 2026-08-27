@@ -14,14 +14,21 @@
 // layer. Splitting a shared child off into its own slot is a BANK edit, not a
 // table edit — bankmerge.planUnlinkMetaLayer.
 
-import { buildMetaRecord, makeMetaLayer, META_MAX_LAYERS } from "../engine/inst.js";
+import {
+  buildMetaRecord, makeMetaLayer, META_MAX_LAYERS, META_TYPE_LAYERED, META_TYPE_FM,
+} from "../engine/inst.js";
 
-export { META_MAX_LAYERS };
+export { META_MAX_LAYERS, META_TYPE_LAYERED, META_TYPE_FM };
 
-/** Flag byte 0 of a meta record, preserved across every rebuild. */
+/** Flag byte 0 of a meta record, preserved across every rebuild — the TYPE
+ *  nibble included, so a table edit can never turn a rack back into a stack. */
 export function metaFlags(inst) {
   const b0 = inst?.metaRaw ? inst.metaRaw[0] & 0xff : 0;
-  return { strict: (b0 & 0x01) !== 0, percussion: (b0 & 0x02) !== 0 };
+  return {
+    strict: (b0 & 0x01) !== 0,
+    percussion: (b0 & 0x02) !== 0,
+    type: (b0 >>> 4) & 0x0f,
+  };
 }
 
 /**
@@ -34,9 +41,14 @@ export function metaLayers(inst) {
     l.instIdx, l.mixOctet, l.detune, l.pitchStart, l.pitchEnd, l.volStart, l.volEnd));
 }
 
-/** Repack `layers` into a 256-byte record, keeping `inst`'s flag byte. */
-export function metaRecordOf(inst, layers) {
-  return buildMetaRecord(layers, metaFlags(inst));
+/** Repack `layers` into a 256-byte record, keeping `inst`'s flag byte — and,
+ *  for a type-4 rack, its algorithm: the table and the program are one record,
+ *  so an edit to either has to hand the other back untouched. */
+export function metaRecordOf(inst, layers, program = undefined) {
+  return buildMetaRecord(layers, {
+    ...metaFlags(inst),
+    program: program === undefined ? (inst?.fmProgram ?? null) : program,
+  });
 }
 
 /** A full-range layer at unity mix — what a freshly added layer sounds like

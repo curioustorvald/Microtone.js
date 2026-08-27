@@ -78,7 +78,7 @@ export class InstLookup {
       `<span class="dim">(${slots.length})</span></div>`;
     const rows = slots.map((s) => {
       const inst = doc.instruments[s];
-      const kind = inst.isMeta ? "M" : inst.extraPatches ? "X" : "";
+      const kind = inst.isFm ? "F" : inst.isMeta ? "M" : inst.extraPatches ? "X" : "";
       const name = esc(unescapeName(doc.instrumentName(s)) || t("instList.unnamed"));
       const sel = s === this.jam.currentInst ? " sel" : "";
       return `<div class="il-row${sel}" data-slot="${s}">` +

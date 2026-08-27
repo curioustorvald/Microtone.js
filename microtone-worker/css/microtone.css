@@ -942,6 +942,74 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
    a touch too small to read beside the ▲ ▼ ◂ ▸ text arrows. */
 .meta-table .meta-act .btn-ico { width: 1.15em; height: 1.15em; }
 
+/* FM tab (item 159): the record's memory meter, then the algorithm editor. */
+.fm-meter {
+  position: relative; width: 8rem; height: 0.55rem; border-radius: 0.3rem;
+  background: var(--panel-2); overflow: hidden; flex: none;
+}
+.fm-meter-fill {
+  display: block; height: 100%; background: var(--accent);
+  transition: width 0.12s linear;
+}
+.fm-meter-fill.tight { background: var(--err-fg); }
+.meta-bar .fm-meter-text { font-size: 0.85rem; }
+.meta-bar .meta-tally + .fm-meter { margin-left: 0.6rem; }
+.meta-table .fm-unused {
+  margin-left: 0.4rem; opacity: 0.75; font-style: italic;
+}
+
+.fm-algo { margin-top: 0.9rem; }
+.fm-algo-head {
+  display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.fm-algo-head h4 { margin: 0; }
+/* The expression readout. It is the thing most people will actually read, so
+   it gets the monospace and the accent rather than the word list below it. */
+.fm-formula {
+  font-family: "Roboto Mono", monospace; color: var(--accent-2);
+  overflow-x: auto; max-width: 100%;
+}
+.fm-formula.bad { color: var(--err-fg); font-style: italic; }
+/* The algorithm diagram. Wide chains scroll rather than squashing the panel;
+   the frame gets its own ground so the wires read against it in both themes. */
+.fm-graph-frame {
+  overflow-x: auto; max-width: 100%;
+  padding: 0.45rem 0.5rem; margin-bottom: 0.6rem;
+  background: var(--panel-2); border-radius: 0.3rem;
+}
+.fm-graph { display: block; }
+.fm-graph-wire { fill: none; stroke: var(--dim); stroke-width: 1.5; }
+.fm-graph-arrow { fill: var(--dim); }
+.fm-graph-loop { stroke: var(--accent-2); }
+.fm-graph-box {
+  fill: var(--panel); stroke: var(--accent); stroke-width: 1.5;
+}
+/* A z-1 tap is the same operator read one sample late — same box, dashed, so it
+   is legible as "this one, earlier" rather than as another operator. */
+.fm-graph-box.tap { stroke: var(--accent-2); stroke-dasharray: 3 2; }
+.fm-graph-num {
+  fill: var(--fg); font-family: "Roboto Mono", monospace; font-size: 13px;
+}
+.fm-graph-junction { fill: var(--panel); stroke: var(--accent-2); stroke-width: 1.5; }
+.fm-graph-sign { fill: var(--fg); font-size: 13px; }
+.fm-graph-out { fill: none; stroke: var(--dim); stroke-width: 1.5; }
+.fm-graph-outlabel {
+  fill: var(--dim); font-family: "Roboto Mono", monospace; font-size: 11px;
+}
+
+.fm-words { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.5rem; }
+.fm-word {
+  display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;
+  padding: 0.1rem 0.25rem; border-radius: 0.25rem;
+}
+.fm-word.bad { background: var(--err-bg); }
+.fm-word-idx { font-family: "Roboto Mono", monospace; min-width: 1.6rem; text-align: right; }
+.fm-word-class { min-width: 7.5rem; }
+.fm-word-arg { min-width: 9rem; }
+.fm-word-depth { font-family: "Roboto Mono", monospace; min-width: 2.4rem; }
+.fm-word .meta-act { margin-right: 0; }
+
 /* Per-row count stepper in the metainstrument picker. */
 .meta-step {
   padding: 0.05rem 0.4rem; font-size: 0.9rem; line-height: 1.2;
@@ -1889,9 +1957,12 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   z-index: 1;
 }
 
+/* Two rows of three (item 167): "New / Sample / Import" over "Record / Paint /
+   Meta". Equal columns rather than auto — six buttons of six widths read as a
+   pile, and the labels are short enough to share one measure. */
 .side-toolbar-inst {
   display: grid;
-  grid-template-columns: auto auto;
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
   padding: 0.35rem 0.6rem;
   border-bottom: 1px solid var(--border);
@@ -1900,6 +1971,45 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
   background: var(--panel);
   z-index: 1;
 }
+.side-toolbar-inst button {
+  padding-inline: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── "Meta…" kind chooser (popups/newmeta.js) ──
+   Two cards side by side, each a picture, a name and a paragraph: the choice
+   between summing children and modulating with them is not one a bare label
+   can make, so the explanation lives in the button itself. */
+.kind-modal { max-width: min(720px, 94vw); }
+.kind-modal > p.dim { margin: 0.4rem 0 0.9rem; line-height: 1.45; }
+.kind-cards { display: flex; gap: 0.7rem; align-items: stretch; }
+.kind-card {
+  flex: 1 1 0;
+  display: flex; flex-direction: column; align-items: center; gap: 0.2rem;
+  padding: 0.7rem 0.7rem 0.8rem; cursor: pointer; text-align: center;
+  background: var(--panel-2); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 6px; font: inherit;
+}
+.kind-card:hover, .kind-card:focus-visible {
+  color: var(--fg); border-color: var(--accent); background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kind-diagram { display: block; color: var(--accent); margin-bottom: 0.2rem; }
+.kind-card-name { font-size: 1rem; font-weight: 600; color: var(--fg); }
+.kind-card-sub { font-size: 0.78rem; opacity: 0.85; }
+/* Ragged right, unlike the app's other modal prose: the card is a ~300px
+   column, and justifying a measure that narrow opens rivers in English and
+   whole-space gaps in Korean, which has almost no break opportunities. */
+.kind-card-body {
+  margin: 0.5rem 0 0; font-size: 0.82rem; line-height: 1.45; text-align: left;
+}
+
+@media (max-width: 560px) {
+  .kind-cards { flex-direction: column; }
+}
+
 .help-cols { display: flex; gap: 2rem; }
 .help-cols dl { flex: 1; margin: 0; }
 .help-cols dt { color: var(--accent); font-family: "Roboto Mono", monospace; margin-top: 0.4rem; }

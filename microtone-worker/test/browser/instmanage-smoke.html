@@ -34,6 +34,18 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const lastDialog = () => dialogs()[dialogs().length - 1];
   const btnIn = (dlg, label) => [...dlg.querySelectorAll("button")].find((b) => b.textContent === label);
 
+  // "New metainstrument…" is now the second step of the toolbox's "Meta…"
+  // chooser (item 167): click the button, then the Layered card. Resolves the
+  // layer picker.
+  const openMetaPicker = async () => {
+    [...iv.listEl.querySelectorAll(".side-toolbar-inst button")]
+      .find((b) => b.textContent === "Meta\u2026").click();
+    for (let i = 0; i < 100 && !win.document.querySelector("dialog.kind-modal"); i++) await sleep(20);
+    win.document.querySelectorAll("dialog.kind-modal .kind-card")[0].click();
+    for (let i = 0; i < 100 && !win.document.querySelector("dialog.import-modal .meta-picker"); i++) await sleep(20);
+    return lastDialog();
+  };
+
   const baseline = doc.toBytes();
   const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
   iv.visible = true;
@@ -42,10 +54,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   // ── item 72: build a metainstrument out of existing instruments ──
   const picks = doc.selectableInstrumentSlots().filter((s) => !doc.instruments[s].isMeta).slice(0, 2);
   const selBefore = doc.selectableInstrumentSlots().length;
-  [...iv.listEl.querySelectorAll(".side-toolbar-inst button")]
-    .find((b) => b.textContent === "New metainstrument…").click();
-  for (let i = 0; i < 100 && !dialogs().some((d) => /New metainstrument/.test(d.textContent)); i++) await sleep(20);
-  const metaDlg = lastDialog();
+  const metaDlg = await openMetaPicker();
   const t1 = !!metaDlg && metaDlg.open;
   log(`New metainstrument… opens the picker: ${t1 ? "ok" : "FAIL"}`);
 
@@ -97,10 +106,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   log(`undo of the created meta is byte-exact: ${t9 ? "ok" : "FAIL"}`);
 
   // ── item 113: the same instrument N times = a unison stack over ONE copy ──
-  [...iv.listEl.querySelectorAll(".side-toolbar-inst button")]
-    .find((b) => b.textContent === "New metainstrument…").click();
-  for (let i = 0; i < 100 && !dialogs().some((d) => /New metainstrument/.test(d.textContent)); i++) await sleep(20);
-  const stackDlg = lastDialog();
+  const stackDlg = await openMetaPicker();
   const stackRow = [...stackDlg.querySelectorAll(".meta-pick-row")]
     .find((r) => Number(r.dataset.slot) === picks[0]);
   const plus = [...stackRow.querySelectorAll(".meta-step")].find((b) => b.textContent === "+");

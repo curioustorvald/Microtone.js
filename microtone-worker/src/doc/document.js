@@ -282,7 +282,9 @@ export class Document {
     const kids = new Set();
     for (const s of this.usedInstrumentSlots()) {
       const layers = this.instruments[s]?.metaLayers;
-      if (layers) for (const l of layers) kids.add(l.instIdx & 0x3ff);
+      // A muted FM operator (index 0) is a hole in a rack, not a child — the
+      // rack keeps the row so the algorithm's numbering survives (§7.6).
+      if (layers) for (const l of layers) if (l.instIdx >= 1) kids.add(l.instIdx & 0x3ff);
     }
     return kids;
   }

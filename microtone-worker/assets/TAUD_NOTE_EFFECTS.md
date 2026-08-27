@@ -486,12 +486,12 @@ The `tick_within_row mod 3` counter resets every row start (so every row begins 
 
 ```
 on row parse (K):
-    raw = (arg >> 8) & 0xFF                 # the xy nibble pair lives in the high byte
+    raw = (arg >> 8) & $FF                 # the xy nibble pair lives in the high byte
     if raw == 0: raw = memory_K
     else: memory_K = raw
     voice.vibratoActive = true              # H/U speed and depth come from memory_HU
-    hi_nib = (raw >> 4) & 0xF
-    lo_nib = raw & 0xF
+    hi_nib = (raw >> 4) & $F
+    lo_nib = raw & $F
     # Slide direction: high nibble = up, low nibble = down. Both non-zero ⇒ down wins (ST3 quirk).
     if hi_nib != 0 and lo_nib == 0:
         slide_per_tick = +hi_nib
@@ -520,12 +520,12 @@ The slide writes the per-note axis (same as D); `channel_vol` is untouched. K ha
 
 ```
 on row parse (L):
-    raw = (arg >> 8) & 0xFF
+    raw = (arg >> 8) & $FF
     if raw == 0: raw = memory_L
     else: memory_L = raw
     # Tone portamento target is set by the row's note (see §G); G's stored speed (memory_G) drives the slide.
-    hi_nib = (raw >> 4) & 0xF
-    lo_nib = raw & 0xF
+    hi_nib = (raw >> 4) & $F
+    lo_nib = raw & $F
     if hi_nib != 0 and lo_nib == 0:
         slide_per_tick = +hi_nib
     elif lo_nib != 0:
@@ -551,8 +551,8 @@ The slide writes the per-note axis (same as D); `channel_vol` is untouched. L ha
 
 ```
 on row parse (M):
-    new_vol = (arg >> 8) & 0xFF
-    if new_vol > 0x3F: new_vol = 0x3F
+    new_vol = (arg >> 8) & $FF
+    if new_vol > $3F: new_vol = $3F
     channel_vol = new_vol
     # note_vol and row_vol are NOT touched. The mixer multiplies channel_vol
     # into the per-voice gain via the volume-ramp target, so the change is
@@ -578,7 +578,7 @@ The change takes effect on tick 0 of the row (the next mixer ramp window picks i
 
 ```
 on row parse (N):
-    raw = (arg >> 8) & 0xFF
+    raw = (arg >> 8) & $FF
     if raw == 0: raw = memory_N
     else: memory_N = raw
     decode raw exactly as D does (FF / F0 / Fy / xF / 0y / x0 → fine-up-F / coarse / fine forms)
@@ -606,19 +606,19 @@ The `$FF` corner case (`P $FF00`) follows the D / N quirk: it is interpreted as
 
 ```
 on row parse (P):
-    raw = (arg >> 8) & 0xFF
+    raw = (arg >> 8) & $FF
     if raw == 0: raw = memory_P
     else: memory_P = raw
-    hi_nib = (raw >> 4) & 0xF
-    lo_nib = raw & 0xF
-    if raw == 0xFF or (hi_nib == 0xF and lo_nib == 0): apply fine-left-by-F on tick 0
-    elif hi_nib == 0xF and lo_nib != 0:                apply fine-right-by-lo_nib on tick 0
-    elif lo_nib == 0xF and hi_nib != 0:                apply fine-left-by-hi_nib on tick 0
+    hi_nib = (raw >> 4) & $F
+    lo_nib = raw & $F
+    if raw == $FF or (hi_nib == $F and lo_nib == 0): apply fine-left-by-F on tick 0
+    elif hi_nib == $F and lo_nib != 0:                apply fine-right-by-lo_nib on tick 0
+    elif lo_nib == $F and hi_nib != 0:                apply fine-left-by-hi_nib on tick 0
     elif hi_nib == 0 and lo_nib != 0:                  per-tick: channel_pan += lo_nib (right)
     elif lo_nib == 0 and hi_nib != 0:                  per-tick: channel_pan -= hi_nib (left)
 
 on every per-tick or fine step:
-    channel_pan = clamp(channel_pan ± step, 0, 0xFF)
+    channel_pan = clamp(channel_pan ± step, 0, $FF)
     row_pan     = channel_pan >> 2     # 6-bit pan value used by the mixer
 ```
 
@@ -948,11 +948,11 @@ At the very top of `applyTrackerRow`, before the per-voice reset of row-scope st
 
 ```
 raw = patternRows[V.pattern][N]                            # stored cell on row N for voice V
-isArmer = (raw.effect == 0x7 and raw.effectArg != 0)
+isArmer = (raw.effect == $7 and raw.effectArg != 0)
 
 if isArmer:
-    length  = (raw.effectArg >> 8) & 0xFF
-    repeats =  raw.effectArg       & 0xFF
+    length  = (raw.effectArg >> 8) & $FF
+    repeats =  raw.effectArg       & $FF
     if length > 0 and repeats > 0 and length <= N:
         V.dittoSourceStart = N - length
         V.dittoLength      = length
@@ -966,7 +966,7 @@ if V.dittoActive and armRow <= N <= V.dittoEndRow:
     srcRow = V.dittoSourceStart + ((N - V.dittoSourceStart) mod V.dittoLength)
     src    = patternRows[V.pattern][srcRow]
 
-    cell.note       = (raw.note != 0x0000) ? raw.note       : src.note
+    cell.note       = (raw.note != $0000) ? raw.note       : src.note
     cell.instrument = (raw.instrument != 0) ? raw.instrument : src.instrument
 
     # SEL_FINE / 0 is the canonical no-op encoding for the vol- and pan-columns;
@@ -984,7 +984,7 @@ if V.dittoActive and armRow <= N <= V.dittoEndRow:
     destOp, destArg = isArmer ? (0, 0) : (raw.effect, raw.effectArg)
     if destOp != 0:
         cell.effect, cell.effectArg = destOp, destArg
-    elif src.effect != 0x7:
+    elif src.effect != $7:
         cell.effect, cell.effectArg = src.effect, src.effectArg
     else:
         cell.effect, cell.effectArg = 0, 0
@@ -1682,11 +1682,11 @@ There is no separate "use fadeout" flag — both extremes share the same field, 
 
 **Converter unit conversion.** Source trackers each expose fadeout in their own unit; converters **MUST** scale the source value into Taud's 0..4095 field.
 
-- **IT** (`it2taud.py`): IT files store fadeout as a 16-bit field at instrument-record offset `0x14`, range 0..1024 per ITTECH (some loaders accept up to 2048). Schism's per-tick decrement is `stored / 1024` — identical to Taud's unit. **Pass-through with clamp:**
+- **IT** (`it2taud.py`): IT files store fadeout as a 16-bit field at instrument-record offset `$14`, range 0..1024 per ITTECH (some loaders accept up to 2048). Schism's per-tick decrement is `stored / 1024` — identical to Taud's unit. **Pass-through with clamp:**
   ```python
   taud_fadeout = min(it_fadeout & 0xFFFF, 0x0FFF)
   ```
-- **FT2 / XM** (`xm2taud.py`): XM files store fadeout as a 16-bit field. Spec range 0..0xFFF; MilkyTracker writes up to 32767 to encode the "cut" UI slider position (`SectionInstruments.cpp:499-500`). FT2's per-tick decrement is `stored / 32768` — to match Taud's `stored / 1024` rate, **divide source by 32 (round-to-nearest):**
+- **FT2 / XM** (`xm2taud.py`): XM files store fadeout as a 16-bit field. Spec range 0..$FFF; MilkyTracker writes up to 32767 to encode the "cut" UI slider position (`SectionInstruments.cpp:499-500`). FT2's per-tick decrement is `stored / 32768` — to match Taud's `stored / 1024` rate, **divide source by 32 (round-to-nearest):**
   ```python
   taud_fadeout = min((xm_fadeout + 16) // 32, 0x0FFF)
   ```

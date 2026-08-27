@@ -32,6 +32,7 @@ const FILES = [
   "src/engine/state.js",
   "src/engine/sampler.js",
   "src/engine/filter.js",
+  "src/engine/fm.js",   // …after sampler + filter, whose per-sample calls it makes
   "src/engine/envelope.js",
   "src/engine/trigger.js",
   "src/engine/effects.js",

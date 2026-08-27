@@ -8,6 +8,7 @@
 import { MAX_BG_VOICES, ATTACK_RAMP_SAMPLES } from "./constants.js";
 import { Voice } from "./voice.js";
 import { patchIsStereo } from "./inst.js";
+import { FmRig, fmReferencedOperators, fmSeedGains, dropFmOperators } from "./fm.js";
 import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { computePlaybackRate, startCutRamp } from "./sampler.js";
@@ -177,9 +178,15 @@ export function rowVolumeFromDefault(inst, patch = null, volMax = 0x3f) {
 /** Cap backgroundVoices to MAX_BG_VOICES, preferring to evict the oldest NON-layer ghost. */
 export function capBackgroundVoices(ts) {
   while (ts.backgroundVoices.length > MAX_BG_VOICES) {
-    const idx = ts.backgroundVoices.findIndex((v) => !v.isLayerChild);
-    if (idx >= 0) ts.backgroundVoices.splice(idx, 1);
-    else ts.backgroundVoices.shift();
+    // Plain NNA ghosts go first, then layer children. An FM operator goes LAST
+    // and, when it does go, is deactivated rather than merely dropped: its rack
+    // still holds a reference to it, and a culled operand that kept sounding
+    // would be an operand nothing was ageing any more.
+    let idx = ts.backgroundVoices.findIndex((v) => !v.isLayerChild && !v.fmOperator);
+    if (idx < 0) idx = ts.backgroundVoices.findIndex((v) => !v.fmOperator);
+    if (idx < 0) idx = 0;
+    ts.backgroundVoices[idx].active = false;
+    ts.backgroundVoices.splice(idx, 1);
   }
 }
 
@@ -187,6 +194,7 @@ export function capBackgroundVoices(ts) {
 export function releaseLayerChildren(eng, ts, vi) {
   for (const bg of ts.backgroundVoices) {
     if (!bg.isLayerChild || bg.sourceChannel !== vi) continue;
+    if (bg.fmOperator) continue; // dropFmOperators cuts these outright
     bg.isLayerChild = false;
     // A detached child runs no effects any more, so it drops back to its own
     // note rather than freezing mid-bend — the same rule the plain NNA ghost
@@ -223,6 +231,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   // byte keeps the last one, matching what the pattern shows.
   if (instId !== 0) voice.displayInst = instId;
   releaseLayerChildren(eng, ts, vi);
+  dropFmOperators(ts, vi);
   const inst = instId !== 0 ? eng.instruments[instId] : eng.instruments[voice.instrumentId];
   if (!inst.isMeta) {
     triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
@@ -237,6 +246,10 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   // the column's width: narrow a wide cell's volume to it.
   const gateVol = ts.wideCells ? rowVolOverride >> 2 : rowVolOverride;
   const seedVol = gateVol >= 0 && gateVol <= 0x3f ? gateVol : 0x3f;
+  if (inst.isFm) {
+    triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVol);
+    return;
+  }
   let layers = inst.resolveMetaLayers(noteVal, seedVol);
   // STRICT layering: drop layers whose patches don't cover the note (the gating
   // bbox is loose; strict converters emit each layer's canonical into its patches).
@@ -312,6 +325,96 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     child.noteElevation = voice.noteElevation + child.layerRelElevation;
     child.layerMixGain = META_MIX_GAIN[lk.mixOctet & 0xff];
     ts.backgroundVoices.push(child);
+  }
+  capBackgroundVoices(ts);
+}
+
+/**
+ * Sound a type-4 FM rack (item 159) on channel vi's foreground voice.
+ *
+ * The shape deliberately mirrors the layered path above — operator 0 takes the
+ * channel's own voice and the rest spawn background children carrying relative
+ * detune — because everything downstream of the trigger (the per-tick sync, Q's
+ * whole-instrument retrigger, the release of the previous note) then works on a
+ * rack for exactly the reasons it works on a stack of layers.
+ *
+ * What differs is what the children are FOR. A layer child is a sound; an
+ * operator is an operand. So an operator carries no position of its own (the
+ * rack is one signal, and it sits where the channel sits), its mix octet is
+ * applied by the rack rather than by the mixer, and it is only spawned at all
+ * when the algorithm names it.
+ */
+function triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVol) {
+  const ops = inst.metaLayers;
+  const program = inst.fmProgram;
+  const sounds = (o) =>
+    o.instIdx >= 1 && o.instIdx <= 1023 && !eng.instruments[o.instIdx].isMeta &&
+    noteVal >= o.pitchStart && noteVal <= o.pitchEnd &&
+    seedVol >= o.volStart && seedVol <= o.volEnd;
+  // No algorithm, or no principal operator, is silence — the same answer the
+  // layered path gives when no layer covers the note, and for the same reason:
+  // there is nothing here to sound, and guessing at one would be worse.
+  if (program === null || !sounds(ops[0])) {
+    voice.active = false;
+    voice.fmRig = null;
+    voice.layerMixGain = 1.0;
+    voice.layerRelDetune = 0;
+    return;
+  }
+  const referenced = fmReferencedOperators(program, ops.length);
+  const rig = new FmRig(ops.length);
+  rig.program = program;
+  fmSeedGains(rig, ops);
+
+  // The channel's pan context as it stands BEFORE operator 0 retriggers — read
+  // once, for the same reason the layered path reads it (a child's own trigger
+  // must not inherit a sibling's).
+  const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
+  const chanPanbrello = voice.panbrelloOffset;
+  const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
+  triggerNote(eng, ts, voice, clamp(noteVal + ops[0].detune, 0x20, 0xffff),
+    ops[0].instIdx, rowVolOverride);
+  // The rack applies every operator's mix level itself, operator 0's included,
+  // so the mixer's layer gain stays out of it: leaving operator 0's octet here
+  // would scale the whole finished patch by one operand's level.
+  voice.layerMixGain = 1.0;
+  voice.layerRelDetune = 0;
+  voice.layerRelPan = 0;
+  voice.layerRelElevation = 0;
+  voice.isLayerChild = false;
+  voice.metaForeground = true;
+  voice.fmRig = rig;
+  rig.voices[0] = voice;
+
+  for (let k = 1; k < ops.length; k++) {
+    if (referenced[k] === 0 || !sounds(ops[k])) continue;
+    const op = new Voice();
+    op.channelVolume = voice.channelVolume;
+    op.channelPan = chanPan;
+    op.rowPan = chanRowPan;
+    op.panbrelloOffset = chanPanbrello;
+    op.panAzimuth = chanAzimuth;
+    op.panElevation = chanElevation;
+    op.clipMode = voice.clipMode;
+    op.bitcrusherDepth = voice.bitcrusherDepth;
+    op.bitcrusherSkip = voice.bitcrusherSkip;
+    op.overdriveAmp = voice.overdriveAmp;
+    triggerNote(eng, ts, op, clamp(noteVal + ops[k].detune, 0x20, 0xffff),
+      ops[k].instIdx, rowVolOverride);
+    op.isLayerChild = true;
+    op.fmOperator = true;
+    op.sourceChannel = vi;
+    op.displayInst = voice.displayInst;
+    op.layerRelDetune = ops[k].detune - ops[0].detune;
+    op.layerMixGain = 1.0;
+    // An operand has no place of its own: the rack is one signal at the
+    // channel's position, so an operator never pulls it sideways.
+    op.layerRelPan = 0;
+    op.layerRelElevation = 0;
+    op.notePan = voice.notePan;
+    op.noteElevation = voice.noteElevation;
+    rig.voices[k] = op;
+    ts.backgroundVoices.push(op);
   }
   capBackgroundVoices(ts);
 }
@@ -496,6 +599,10 @@ export function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.pitchEnvOn = true;
   voice.filterEnvOn = true;
   voice.metaForeground = false; // triggerMetaOrNote re-sets for the meta path
+  // A rack belongs to the note that built it, so ANY fresh trigger drops it —
+  // including the ones that never go through triggerMetaOrNote (the audition
+  // path, a layer child). triggerFmRack re-hangs it after this returns.
+  voice.fmRig = null;
   if (voice.vibratoRetrig) voice.vibratoLfoPos = 0;
   if (voice.tremoloRetrig) voice.tremoloLfoPos = 0;
   if (voice.panbrelloRetrig) voice.panbrelloLfoPos = 0;
@@ -554,6 +661,14 @@ export function applyDuplicateCheck(eng, ts, channel, newInstId, newNote) {
  */
 export function maybeSpawnBackgroundForNNA(eng, ts, voice, channel) {
   if (!voice.active) return;
+  // An FM rack (item 159) does not ghost. A ghost is a snapshot of ONE voice,
+  // and a rack is a voice plus the operators that shape it — copy the snapshot
+  // alone and the ghost sounds operator 0's raw sample, which is not the note
+  // that was playing and not a sound the patch can make at all. So the new note
+  // simply takes the channel — triggerMetaOrNote's dropFmOperators, a moment
+  // later, cuts the operands with it, and the incoming note's attack ramp
+  // covers the seam the way it does for a Note Cut.
+  if (voice.fmRig !== null) return;
   const nna = voice.nnaOverride >= 0
     ? voice.nnaOverride
     : eng.instruments[voice.instrumentId].newNoteAction;
