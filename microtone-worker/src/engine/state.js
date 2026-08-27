@@ -509,6 +509,15 @@ export class Playhead {
       it.dittoSourceStart = 0;
       it.dittoLength = 0;
       it.dittoEndRow = 0;
+      // Bitcrusher (8) / Overdrive (9) — the CHANNEL's colouring, written by the
+      // song's own effects and cleared by nothing else, so a full reset owes
+      // them the same clean slate as the panning above (§15).
+      it.clipMode = 0;
+      it.bitcrusherDepth = 0;
+      it.bitcrusherSkip = 0;
+      it.bitcrusherCounter = 0;
+      it.bitcrusherHeld = 0.0;
+      it.overdriveAmp = 0;
       it.invertSpeed = 0;
       it.invertAccumulator = 0;
       it.invertWritePos = 0;

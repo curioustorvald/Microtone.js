@@ -1068,6 +1068,8 @@ The voice-FX state is preserved verbatim by the NNA-ghost copier, so the post-NN
 
 **Metainstruments.** The crusher is the CHANNEL's colouring, not one voice's, so it **MUST** reach every voice the channel is sounding: the foreground layer plus every layer-child voice on it. A crusher already in force when a metainstrument is struck **MUST** likewise be inherited by the layer children the trigger spawns — otherwise only the first layer of a kit is ever crushed, and the rest of it plays through clean.
 
+**Persistence.** Being the channel's colouring is also what scopes its lifetime: the settings survive a note, a note-off and an instrument change, and nothing but another effect-8 cell changes them. A **transport reset** is the exception — a full reset and a play-from-row reset alike **MUST** clear `bitcrusherDepth`, `bitcrusherSkip`, the hold state and the shared `clipMode`, exactly as they return the channel's panning and volume (Engine Spec §15); otherwise a song that crushed once is still crushed on the replay, for every row up to its next effect-8 cell. Effect 9's `overdriveAmp` follows the same rule.
+
 ## 9 $x0zz — Overdrive
 
 **Plain.** Amplifies the voice's post-filter signal and routes it through the shared clipper. With `x = 0` (clamp) the effect is a hard-knee soft-clipping distortion; with `x = 1` (fold) it becomes a wave-folder; with `x = 2` (wrap) it produces aggressive aliased fuzz with sawtooth-style discontinuities at the rails. Volume **MUST NOT** be re-normalised after clipping — `9 $00FF` clamp-clipped plays at roughly the same loudness as the dry voice once everything saturates. The middle nibble is reserved and **MUST** be zero.

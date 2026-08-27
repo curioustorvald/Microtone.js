@@ -42,6 +42,8 @@ function makeEngine() {
   cell(0, 0x5000, 1, EffectOp.OP_S, 0x80ff); // pan hard right
   cell(1, 0, 0, EffectOp.OP_M, 0x2000);      // channel volume $20
   cell(2, 0, 0, EffectOp.OP_S, 0x1100);      // glissando on
+  cell(3, 0, 0, EffectOp.OP_8, 0x1304);      // bitcrusher: fold, 3-bit, skip 4
+  cell(4, 0, 0, EffectOp.OP_9, 0x2020);      // overdrive amp $20 (clip mode wrap)
   eng.uploadPattern(0, pat);
 
   const cue = new Uint8Array(64);
@@ -69,7 +71,7 @@ function playRows(eng, rows) {
 
 test("a replay starts from the song's own panning, not the last play's", () => {
   const eng = makeEngine();
-  const v = playRows(eng, 3);
+  const v = playRows(eng, 5);
   // Premise: the pattern really did move the channel.
   assert.equal(v.channelPan, 0xff, "S $80FF panned the channel hard right");
   assert.equal(v.channelVolume, 0x20, "M $2000 set the channel volume");
@@ -87,6 +89,42 @@ test("a replay starts from the song's own panning, not the last play's", () => {
   assert.equal(w.glissandoOn, false);
   assert.equal(w.nnaOverride, -1);
   assert.equal(w.volEnvOn, true);
+});
+
+test("a replay starts uncrushed, whatever the last play left running", () => {
+  const eng = makeEngine();
+  const v = playRows(eng, 5);
+  // Premise: the pattern really did engage the crusher and the overdrive.
+  assert.equal(v.bitcrusherDepth, 3, "8 $1304 set the bit depth");
+  assert.equal(v.bitcrusherSkip, 4, "…and the sample-skip");
+  assert.equal(v.overdriveAmp, 0x20, "9 $2020 set the overdrive amplification");
+  assert.equal(v.clipMode, 2, "…and the clipper the two effects share");
+
+  eng.stop(0);
+  eng.setTrackerRow(0, 0); // what playFrom does before every play
+  const w = eng.playheads[0].trackerState.voices[0];
+  assert.equal(w.bitcrusherDepth, 0, "the crusher is off again");
+  assert.equal(w.bitcrusherSkip, 0);
+  assert.equal(w.bitcrusherCounter, 0, "…with its hold phase back at the start");
+  assert.equal(w.bitcrusherHeld, 0.0);
+  assert.equal(w.right.bitcrusherCounter, 0, "the stereo twin's history too");
+  assert.equal(w.right.bitcrusherHeld, 0.0);
+  assert.equal(w.overdriveAmp, 0, "and the overdrive with it");
+  assert.equal(w.clipMode, 0);
+});
+
+test("a full reset clears the crusher and the overdrive as well", () => {
+  const eng = makeEngine();
+  const v = playRows(eng, 5);
+  assert.equal(v.bitcrusherDepth, 3, "premise: the crusher was running");
+  eng.stop(0);
+  eng.resetParams(0);
+  assert.equal(v.bitcrusherDepth, 0);
+  assert.equal(v.bitcrusherSkip, 0);
+  assert.equal(v.bitcrusherCounter, 0);
+  assert.equal(v.bitcrusherHeld, 0.0);
+  assert.equal(v.overdriveAmp, 0);
+  assert.equal(v.clipMode, 0);
 });
 
 test("the pre-play reset leaves the desk's own faders alone", () => {

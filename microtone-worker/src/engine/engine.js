@@ -299,6 +299,19 @@ export class TaudEngine {
       v.spatialSlideActive = false;
       v.panbrelloOffset = 0;
       v.glissandoOn = false;
+      // Bitcrusher (8) / Overdrive (9) are channel colouring in exactly the same
+      // sense — the song writes them, a trigger deliberately leaves them, and
+      // nothing else clears them — so without this a song that crushed once was
+      // still crushed on the replay, right through the rows before its next
+      // `8 $xxxx`. right.reset() covers the stereo twin's crusher history.
+      v.clipMode = 0;
+      v.bitcrusherDepth = 0;
+      v.bitcrusherSkip = 0;
+      v.bitcrusherCounter = 0;
+      v.bitcrusherHeld = 0.0;
+      v.overdriveAmp = 0;
+      v.right.bitcrusherCounter = 0;
+      v.right.bitcrusherHeld = 0.0;
       // Per-note S $7x overrides (NNA + the four envelope switches).
       v.nnaOverride = -1;
       v.volEnvOn = true; v.panEnvOn = true; v.pitchEnvOn = true; v.filterEnvOn = true;
