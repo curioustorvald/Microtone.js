@@ -578,44 +578,58 @@ The base record can describe exactly one sample. An instrument that needs a keyb
 
 ### 7.4 Metainstrument records
 
-A Metainstrument occupies an ordinary 256-byte slot and is referenced by a pattern cell exactly like any instrument, but carries no sample of its own. Instead it triggers a list of **layers**, each an ordinary instrument sounded simultaneously at its own mix level, detune and (note × volume) sub-range.
+A **Metainstrument** is an instrument whose record carries a **table of other instruments** where an ordinary one carries a sample. It occupies an ordinary 256-byte slot and a pattern cell references it exactly like any instrument; what it sounds is built out of the instruments its table names.
+
+*Metainstrument* is the **family**, not one behaviour. Byte 0's type nibble says which **kind** this record is, and the kinds are different machines assembled from the same table:
+
+| `t` | Kind | The table is | What sounds |
+|---|---|---|---|
+| 0 | **Layered** | a list of **layers** | every layer whose rectangle contains the trigger, **in parallel**, one voice each — [below](#type-0-layered) |
+| 4 | **FM Rack** | an **operator rack**, with an RPN algorithm packed after it | **one voice**: the value the algorithm produces — [§7.6](#7-6-metainstrument-type-4-fm-operator-racks) |
+
+Every other value is **RESERVED**. A reader that does not know a type **MUST** treat the record as sounding nothing, not as type 0 — the table's *entries* have the same shape in every kind, but what they mean does not.
+
+#### The header, and the table
 
 | Offset | Type | Field |
 |---|---|---|
 | 0 | `U8` | Type and flags: `0b tttt_00Ps` |
-| 1 | `U8` | Layer count, 1…25 |
+| 1 | `U8` | Entry count — layers 1…25, operators 1…16 |
 | 2 | `U8` | Sentinel — **MUST** be `$FF` |
 | 3 | `U8` | Sentinel — **MUST** be `$FF` |
-| 4 | — | Layer records, 10 bytes each |
+| 4 | — | Entry records, 10 bytes each |
 
-Bytes 0…3 alias the base record's sample pointer, and the two `$FF` sentinels are what put `$FFFF` in its high half. In byte 0: `t` is the **type**, `P` marks the instrument as percussion, and `s` selects **strict layering** (below). Legacy files leave byte 0 as `$00`.
+Bytes 0…3 alias the base record's sample pointer, and the two `$FF` sentinels are what put `$FFFF` in its high half. In byte 0: `t` is the **type**, `P` marks the instrument as percussion, and `s` selects **strict layering** (a type-0 rule, below). Legacy files leave byte 0 as `$00`, which is why type 0 is the Layered kind.
 
-| `t` | Type | Meaning |
-|---|---|---|
-| 0 | **Layered** | The table is a list of layers, sounded in parallel. This section. |
-| 4 | **FM** | The table is an *operator rack* and the bytes after it carry the algorithm that wires it. [§7.6](#7-6-metainstrument-type-4-fm-operator-racks). |
-
-Every other value is **RESERVED**. A reader that does not know a type **MUST** treat the record as sounding nothing, not as type 0 — the table's *entries* have the same shape in every type, but what they mean does not.
-
-Each layer record:
+Each entry — a *layer* in a type-0 record, an *operator* in a type-4 one:
 
 | Offset | Type | Field |
 |---|---|---|
-| +0 | `U8` | Layer instrument index, low 8 bits |
+| +0 | `U8` | Entry instrument index, low 8 bits |
 | +1 | `U8` | Mix volume as a decibel octet ([§7.5](#7-5-the-decibel-octet-table)) |
 | +2 | `S16` | Sample detune, in 4096-TET units |
 | +4 | `U16` | Pitch range low (full range = `$0000`) |
 | +6 | `U16` | Pitch range high, inclusive (full range = `$FFFF`) |
-| +8 | `U8` | bits 0…5 = volume range low (0…63); bits 6…7 = layer instrument index bits 8…9 |
+| +8 | `U8` | bits 0…5 = volume range low (0…63); bits 6…7 = entry instrument index bits 8…9 |
 | +9 | `U8` | bits 0…5 = volume range high, inclusive; bits 6…7 **RESERVED** |
 
-The four range fields define a rectangle over the same pitch × volume space as an Ixmp patch. A layer fires only when the trigger falls inside its rectangle, which is how key- and velocity-conditional layering is expressed.
+The four range fields define a rectangle over the same pitch × volume space as an Ixmp patch. An entry fires only when the trigger falls inside its rectangle, which is how key- and velocity-conditional layering — and, in a rack, velocity-switched brightness — is expressed.
 
-- Layer rectangles **MAY** overlap; that is the entire point. Every layer whose rectangle contains the trigger sounds, each on its own voice. (Overlap within a single ordinary instrument's Ixmp patch list remains **INVALID** — layering lives here instead.)
+The two remaining fields are the ones each kind reads its own way: in a Layered record the mix octet is the layer's **mix level** and the detune is its **detune**, while in a rack they are the operator's **output level** and its **frequency ratio** ([§7.6](#7-6-metainstrument-type-4-fm-operator-racks)). The bytes are identical; the meaning is the kind's.
+
+Two rules hold for **every** kind:
+
+- **Recursion is forbidden.** An entry index **MUST** resolve to an ordinary instrument in `$001`…`$3FF`. An entry pointing at another Metainstrument, or at instrument 0, is skipped by the engine.
+- Entry indices are 10 bits, so a Metainstrument **MAY** name instruments in the auxiliary bin (`$100`…`$3FF`), which a pattern cell cannot reach.
+
+#### Type 0 — Layered
+
+The table is a list of layers, and every layer whose rectangle contains the trigger sounds **at the same time**, each on its own voice.
+
+- Layer rectangles **MAY** overlap; that is the entire point. (Overlap within a single ordinary instrument's Ixmp patch list remains **INVALID** — layering lives here instead.)
 - The same ordinary instrument **MAY** be listed several times at different detune and mix level, which reproduces SoundFont detune stacks without spending extra instrument slots.
 - Mix volume **scales** the layer's output; it multiplies with the trigger's velocity rather than replacing it. Sample detune is **added** to the trigger note and to the layer instrument's own detune.
-- **Recursion is forbidden.** A layer index **MUST** resolve to an ordinary instrument in `$001`…`$3FF`. A layer pointing at another Metainstrument, or at instrument 0, is skipped by the engine.
-- A single Metainstrument trigger costs up to *layer count* voices against the mixer's pool.
+- A single Layered trigger costs up to *layer count* voices against the mixer's pool.
 
 **Strict layering** (byte 0, bit 0) addresses a subtle failure. A layer's rectangle is a single bounding box, but the layer instrument's own Ixmp zones may cover only part of it — a drum layer holding scattered keys has a box spanning the gaps between them. Under legacy semantics a trigger landing in such a gap still fires the layer and, matching no patch, falls through to that instrument's base sample, sounding a wrong instrument (a closed hi-hat under an open one). With strict layering the engine drops the layer for that note instead. A producer setting this bit **MUST** also place each layer instrument's canonical zone in its own Ixmp patch list, so that a non-match unambiguously means "no zone covers this trigger".
 
@@ -638,14 +652,14 @@ Linear amplitude is `10^(dB ÷ 20)`. **Octet 0 means unity, not silence, in the 
 
 ### 7.6 Metainstrument type 4 — FM operator racks
 
-A type-4 Metainstrument is an **operator rack**. The 10-byte table is read exactly as in [§7.4](#7-4-metainstrument-records), but its entries are not layers sounding side by side: they are **operators**, and the bytes after the table say how they feed each other. The whole rack is **one voice**.
+A type-4 Metainstrument is an **FM Rack**: the second kind of the family defined in [§7.4](#7-4-metainstrument-records), sharing its header and its 10-byte table entry field for field. What differs is what the entries are and what follows them — they are **operators**, not layers sounding side by side, and the bytes after the table say how they feed each other. The whole rack is **one voice**.
 
 | Offset | Type | Field |
 |---|---|---|
 | 0 | `U8` | `0b 0100_00P0` — type 4, `P` = percussion |
 | 1 | `U8` | Operator count, 1…16 |
 | 2…3 | `U8`×2 | Sentinels, `$FF $FF` |
-| 4 | — | Operator records, 10 bytes each — the [§7.4](#7-4-metainstrument-records) layer layout, field for field |
+| 4 | — | Operator records, 10 bytes each — the [§7.4](#7-4-metainstrument-records) entry layout, field for field |
 | 4 + 10·*n* | `U16`… | The **algorithm**: RPN words, terminated by `$FFFF` |
 
 The operator's mix octet is its **output level**, and its sample detune is its **frequency ratio** — one octave up is `+4096`, a perfect twelfth `+6485`. Those are the two numbers an FM operator has always had; the pitch and volume rectangles are the third thing, and they gate the operator exactly as they gate a layer: an operator whose rectangle excludes the trigger is **silent** for that note, which is how key scaling and velocity-switched brightness are written.

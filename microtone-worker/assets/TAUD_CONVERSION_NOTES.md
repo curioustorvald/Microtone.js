@@ -19,7 +19,7 @@ The key words **MUST**, **SHOULD**, **MAY** and their negations are used as in [
 | Sample pool | 8 MiB total | Every sample is resampled down globally ([§1.2](#1-2-samples)) |
 | One sample | 65 535 bytes | That sample alone is resampled further |
 | Directly addressable instruments | 255 (`$01`…`$FF`) | Conversion fails, or instruments are dropped |
-| Auxiliary instruments | 768 (`$100`…`$3FF`) | Reachable only as Metainstrument layers |
+| Auxiliary instruments | 768 (`$100`…`$3FF`) | Reachable only as Metainstrument entries (layers, or a rack's operators) |
 | Channels | 32, or 64 with `xHDR` | Excess channels are dropped |
 | Pattern rows | 64 | Longer patterns are split ([§1.4](#1-4-patterns-are-single-channel)) |
 | Patterns | 32 767 | Practically bounded by `patterns × channels` |
@@ -351,7 +351,7 @@ Percussion-channel key-offs are **dropped by default**, because GM percussion ig
 
 Each preset's zones are partitioned into the fewest mutually **disjoint** layers (default cap 4, and about 93 % of big-bank presets fit in 4, 98 % in 5). Each layer becomes one ordinary Taud instrument with its zones as Ixmp patches, on a velocity axis of `round(velocity × 63 ÷ 127)`.
 
-A preset needing more than one layer becomes a **Metainstrument**: the note references the meta slot and the engine fans out one voice per matching layer. This is what makes SoundFont's simultaneous layering and detune stacks actually sound; before Metainstruments existed, overlapping zones had to be dropped. Single-layer presets stay plain instruments. Layer sub-instruments are allocated in the **auxiliary bin**, so they do not consume the 255 directly-addressable slots.
+A preset needing more than one layer becomes a **Layered Metainstrument** (type 0 — the family's other kind, the type-4 FM Rack, is never produced by a conversion): the note references the meta slot and the engine fans out one voice per matching layer. This is what makes SoundFont's simultaneous layering and detune stacks actually sound; before Metainstruments existed, overlapping zones had to be dropped. Single-layer presets stay plain instruments. Layer sub-instruments are allocated in the **auxiliary bin**, so they do not consume the 255 directly-addressable slots.
 
 By default the full zone map is kept as Ixmp patches, so imported instruments stay playable across the whole keyboard rather than only where this song happened to play them. Trimming to triggered patches is available for the smallest file — and is worth using when the untrimmed pool overflows 8 MiB, since that overflow resamples *every* sample and costs quality song-wide.
 

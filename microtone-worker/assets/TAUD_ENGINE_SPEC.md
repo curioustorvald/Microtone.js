@@ -311,25 +311,38 @@ A patch's "no override" sentinels — default pan `$FF`, default note volume 0, 
 
 ### 5.5 Metainstruments
 
-If the trigger's instrument is a Metainstrument, the engine first **releases** the channel's existing layer children: each is detached from the parent and given its own instrument's New Note Action (note off with key lift, cut, continue, or fade).
+A **Metainstrument** is an instrument whose record names other instruments instead of holding a sample ([File Format §7.4](TAUD_FILE_FORMAT.md#7-4-metainstrument-records)). The name is the **family**; the record's type nibble says which **kind**, and the two kinds sound their table in opposite ways:
+
+| Type | Kind | What the engine does with the table |
+|---|---|---|
+| 0 | **Layered** | sounds every entry whose rectangle contains the trigger, **in parallel** — one voice each. This section. |
+| 4 | **FM Rack** | reads the entries as **operators** and the words after them as an algorithm: **one voice**, whatever that algorithm produces. [§5.5.1](#5-5-1-type-4-fm-racks). |
+
+A type the engine does not know **MUST** sound nothing rather than fall back to type 0.
+
+#### Type 0 — Layered
+
+The rules below are written for the Layered kind, where they are easiest to state, but not all of them stop there: [§5.5.1](#5-5-1-type-4-fm-racks) says which a rack inherits **unchanged** — the release of the previous note, the per-tick sync of a child to its parent, and the pattern's reach over every voice sounding one note — and which are the Layered kind's own, the soundfield below being the plainest of them.
+
+If the trigger's instrument is a Layered Metainstrument, the engine first **releases** the channel's existing layer children: each is detached from the parent and given its own instrument's New Note Action (note off with key lift, cut, continue, or fade).
 
 Then it collects every layer whose rectangle contains the trigger, in record order. Under **strict layering** it additionally drops any layer whose own instrument resolves no patch at the (detuned) trigger. If nothing survives, the channel goes **silent** for this note — that is the correct outcome, not a fallback.
 
 Otherwise the first surviving layer sounds on the foreground voice and every further layer spawns a background voice bound to this channel. Each child inherits the parent's channel volume and channel pan (azimuth and elevation included) **as they stood before the foreground layer retriggered**, carries the parent's *relative* detune, and takes its own mix gain from the decibel octet table.
 
-**A metainstrument is a soundfield, and layer 0 is where it sits.** A layer's own default position ([§5.3.1](#5-3-1-the-default-position)) is not kept as an absolute place but as a **relative** one: the engine records how far the layer sits from layer 0's own position and holds that distance for the whole note. This is the pan twin of the relative detune beside it, and it has the same consequence — a note-pan SET, or anything else that moves the meta, **rotates** the whole arrangement instead of collapsing it onto one point. A layer that declares no position of its own has no opinion about where it sits relative to the centre, so its offset is zero and it simply rides wherever the meta goes.
+**A Layered metainstrument is a soundfield, and layer 0 is where it sits.** A layer's own default position ([§5.3.1](#5-3-1-the-default-position)) is not kept as an absolute place but as a **relative** one: the engine records how far the layer sits from layer 0's own position and holds that distance for the whole note. This is the pan twin of the relative detune beside it, and it has the same consequence — a note-pan SET, or anything else that moves the meta, **rotates** the whole arrangement instead of collapsing it onto one point. A layer that declares no position of its own has no opinion about where it sits relative to the centre, so its offset is zero and it simply rides wherever the meta goes.
 
 The order matters: the child inherits that channel context *before* it is triggered, so its own trigger can still move it to its own default position ([§5.3.1](#5-3-1-the-default-position)). Inheriting the parent's pan afterwards would flatten every layer onto the first one's position — audible as a SoundFont kit whose layers are meant to pan apart collapsing to a point.
 
 Every tick thereafter, a layer child re-synchronises to its parent: pitch (parent note plus relative detune **plus the parent's pitch overlay for this tick**), key-off, note-fading, channel volume, note volume, row volume, channel pan (azimuth and elevation included), and note pan **plus its own relative offset**. The two relative quantities are handled identically, and for the same reason: the pattern stays in command of the meta as a whole — a panning column or an `S $80xx` written on its channel reaches every layer — while the arrangement the instrument describes survives inside it. When the parent goes inactive the child detaches — but if the parent was *released* and its own fadeout deactivated it within the same tick, the child **MUST** inherit that release before detaching, or a chord's upper layers will ring on after the note that released them.
 
-**Anything the pattern says about the note, it says about all of it.** The pitch overlay is the general case of a rule that runs through the whole effect column: a metainstrument is ONE note, so a command written on its channel **MUST** reach every voice sounding it, never layer 0 alone. The overlay itself is what the row's effects did to the pitch *this tick* — vibrato, glissando and arpeggio — carried as a signed delta on top of the note the child already tracks; auto-vibrato and the pitch envelope stay out of it, because those are the instrument's own and each layer runs its own copy. A child that has detached drops the overlay, so it finishes at its own note rather than frozen mid-bend. The same rule governs the bitcrusher and overdrive ([TAUD_NOTE_EFFECTS.md §8/§9](TAUD_NOTE_EFFECTS.md)), the sample-modification command (§2/§3), Q's retrigger, the filter overrides (§5/§6) and the envelope gates (`S $7x`).
+**Anything the pattern says about the note, it says about all of it.** This one is the family's, not the kind's — it governs a rack's operator voices exactly as it governs a stack's layers. The pitch overlay is the general case of a rule that runs through the whole effect column: a metainstrument is ONE note, so a command written on its channel **MUST** reach every voice sounding it, never layer 0 alone. The overlay itself is what the row's effects did to the pitch *this tick* — vibrato, glissando and arpeggio — carried as a signed delta on top of the note the child already tracks; auto-vibrato and the pitch envelope stay out of it, because those are the instrument's own and each layer runs its own copy. A child that has detached drops the overlay, so it finishes at its own note rather than frozen mid-bend. The same rule governs the bitcrusher and overdrive ([TAUD_NOTE_EFFECTS.md §8/§9](TAUD_NOTE_EFFECTS.md)), the sample-modification command (§2/§3), Q's retrigger, the filter overrides (§5/§6) and the envelope gates (`S $7x`).
 
-Layer indices are 10 bits, so layers **MAY** live in the auxiliary instrument bin, which a pattern cell cannot reach. A layer index pointing at another Metainstrument, or at instrument 0, is skipped.
+Layer indices are 10 bits, so layers **MAY** live in the auxiliary instrument bin, which a pattern cell cannot reach. A layer index pointing at another Metainstrument, or at instrument 0, is skipped. Both rules belong to the family, not to this kind: a rack's operator indices are read the same way.
 
-#### 5.5.1 FM operator racks
+#### 5.5.1 Type 4 — FM racks
 
-A **type-4** Metainstrument ([File Format §7.6](TAUD_FILE_FORMAT.md)) reads the same table as an *operator rack* and carries an RPN algorithm saying how its operators feed each other. Everything above turns on layers being **parallel**; a rack is the other arrangement, and the difference shows up in one sentence: **a rack is one voice, not one per entry.** Its operators are operands, and only the algorithm's result is a sound.
+A **type-4** Metainstrument is an **FM Rack** ([File Format §7.6](TAUD_FILE_FORMAT.md)). It reads the same table as an *operator rack* and carries an RPN algorithm saying how its operators feed each other. Everything above turns on layers being **parallel**; a rack is the other arrangement, and the difference shows up in one sentence: **a rack is one voice, not one per entry.** Its operators are operands, and only the algorithm's result is a sound.
 
 An operator's **oscillator is an ordinary instrument** — sample, loop, envelopes, filter, auto-vibrato and all. That is what this is for. A single-cycle looped waveform gives textbook FM; anything longer gives something a chip could not.
 

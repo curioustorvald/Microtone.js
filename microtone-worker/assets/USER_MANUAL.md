@@ -42,7 +42,8 @@ home. If not, here is the vocabulary this manual uses:
 | **Row** | One line of a pattern. Each row holds a note, an instrument, a volume, a pan and an effect. |
 | **Tick** | The engine's time slice. Each row lasts *speed* ticks; effects update per tick. |
 | **Cue** | One entry of the song's order list: for every channel, which pattern plays next, plus optional flow commands (jump, halt, length…). A song is a sequence of cues. |
-| **Instrument** | A playable definition: a sample plus envelopes, filter, panning, NNA rules — or a *metainstrument* layering several others, or an *FM rack* wiring several into one another. |
+| **Instrument** | A playable definition: a sample plus envelopes, filter, panning, NNA rules — or a **metainstrument**, which holds a table of other instruments instead of a sample. |
+| **Metainstrument** | The family, and it has two kinds: a **Layered** metainstrument sounds its instruments side by side, an **FM Rack** wires them into each other. Both live in an ordinary instrument slot and are played by an ordinary pattern cell. |
 | **Sample** | Raw 8-bit audio data in the shared sample pool. Several instruments may use the same sample. |
 | **Note word** | A 16-bit pitch value; see the pitch system below. |
 
@@ -678,13 +679,15 @@ Both can appear on the same row and both apply — they are not fighting over on
 setting. If you want the older "everything to one spot" behaviour, put the
 channel where you want it and write the panning column on each note.
 
-**A metainstrument works the same way, one level down.** If its layers sit at
+**A Layered metainstrument works the same way, one level down.** If its layers sit at
 different places — an SF2 preset whose sub-instruments spread out, a kit built
 by hand — that spread is the instrument's, and panning the note moves the whole
 thing while the layers keep their distances from each other. The layer at the
 top of the Layers tab is the one the pan command lands on; the rest arrange
 themselves around it, exactly as detune is measured from that same layer. A
 layer with no panning of its own just goes wherever the metainstrument goes.
+An **FM Rack** is the simple case instead: however many operators it holds it is
+one signal in one place, so it goes exactly where the note is put.
 
 ### The effect column
 
@@ -1073,11 +1076,31 @@ Two rows of three: the top row fills a slot from outside the project, the bottom
 - **Import…** — merge instruments (with their samples and patches) from a `.taud` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
 - **Record…** — record from the microphone; the take opens in the Sample Lab.
 - **Paint…** — draw a waveform by hand and add it as an instrument.
-- **Meta…** — build one instrument out of several of the project's instruments. A chooser asks which kind first: **Layered**, where every child is heard and the mixer sums them, or **FM Rack**, where the children modulate each other and only operator 0 is heard. Both are described below.
+- **Meta…** — build a **metainstrument**: one instrument made out of several of the project's instruments. A chooser asks which of the two kinds first — **Layered**, where every child is heard and the mixer sums them, or **FM Rack**, where the children modulate each other and only operator 0 is heard. Both are described below.
 
 All imports are single undo steps.
 
-### Building a metainstrument
+### Metainstruments: the family, and its two kinds
+
+A **metainstrument** is an instrument whose record holds a **table of other
+instruments** where an ordinary one holds a sample. It sits in an ordinary
+instrument slot, a pattern cell plays it like anything else, and what it sounds
+is built from the instruments its table names.
+
+*Metainstrument* is the family. Which kind a particular one is comes from its
+record's type number, and there are two:
+
+| Kind | Type | Its table is | What you hear |
+|---|---|---|---|
+| **Layered** | 0 | a list of **layers** | every layer the note falls inside, sounding **at once** — a voice each |
+| **FM Rack** | 4 | an **operator rack** plus the algorithm that wires it | **one voice**: whatever the algorithm makes of them |
+
+They share the table, byte for byte — the same sub-instrument, mix, detune and
+pitch × velocity rectangle per row — and the editor gives each kind its own tab
+over it (**Layers** and **FM**). What differs is what those entries *mean*: side
+by side, or fed into one another.
+
+### Building a Layered metainstrument
 
 **Meta… → Layered** picks any number of ordinary instruments and stacks them
 into a single new one. Each pick is **copied** into a sub-instrument slot
@@ -1097,10 +1120,10 @@ note will now cost.
 
 Every layer starts at unity mix (159 = 0 dB) across the whole note and velocity
 range; spread and narrow them on the new instrument's **Layers** tab.
-Metainstruments are not offered as picks — the engine resolves a layer directly
-to a sample, so metainstruments cannot be nested.
+Metainstruments of either kind are not offered as picks — the engine resolves a
+layer directly to a sample, so metainstruments cannot be nested.
 
-### Building an FM rack
+### Building an FM Rack
 
 **Meta… → FM Rack** takes the same picker and makes something quite different
 out of it. The instruments you pick become **operators**, and instead of sounding
@@ -1140,10 +1163,10 @@ sample-pool space at all. Editing the copy's *settings* never touches the
 original, but editing the *sample* (in the Sample Lab, or by dragging its loop
 markers) changes what both play, because it is one sample.
 
-Duplicating a metainstrument copies its layer sub-instruments too, into fresh
-`$100`+ slots, so its layers can be retuned or refiltered without moving the
-original stack. Layers that shared one sub-instrument still share one copy — the
-*linked ×n* relationship survives. The copy is named after its source with a
+Duplicating a metainstrument of either kind copies its sub-instruments too — a
+stack's layers, a rack's operators — into fresh `$100`+ slots, so they can be
+retuned or refiltered without moving the original. Entries that shared one
+sub-instrument still share one copy — the *linked ×n* relationship survives. The copy is named after its source with a
 `(2)` (then `(3)`, …) suffix; rename it in the name box. One undo step.
 
 ### Renumbering an instrument
@@ -1161,12 +1184,12 @@ either way.
 - **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
-- **Layers** (metainstruments) — a metainstrument plays several sub-instruments at once, and this table is the whole editor for that stack. Each row carries an editable **mix** (0–255, 159 = 0 dB, live dB readout), a **detune** in cents with ◂ ▸ buttons that step a whole degree of the song's own notation, and the **pitch** and **velocity** bounds that decide when the layer sounds at all. The ▸ beside row 0 marks the foreground layer: the first layer covering a trigger plays on the channel itself and the rest spawn background voices, so the order here is priority — **drag a row by the handle in its # column** to change it. The handle is a button as well as a grip: focus it and ↑ ↓ move the row without a pointer.
+- **Layers** (the Layered kind) — a Layered metainstrument plays several sub-instruments at once, and this table is the whole editor for that stack. Each row carries an editable **mix** (0–255, 159 = 0 dB, live dB readout), a **detune** in cents with ◂ ▸ buttons that step a whole degree of the song's own notation, and the **pitch** and **velocity** bounds that decide when the layer sounds at all. The ▸ beside row 0 marks the foreground layer: the first layer covering a trigger plays on the channel itself and the rest spawn background voices, so the order here is priority — **drag a row by the handle in its # column** to change it. The handle is a button as well as a grip: focus it and ↑ ↓ move the row without a pointer.
   - **Add layers…** brings in more instruments (the same picker, counts and all), **Duplicate** makes another voice of the layer's own sub-instrument ready to detune, and **Chord…** does a whole chord or unison spread in one action, using the same just intervals, chords and inversions as the [chord maker](#the-chord-maker). The layer you start from is the voice nearest unison and stays where it is, so an inversion decides which note of the chord that layer plays and the rest are placed around it.
   - Duplicated layers are **linked**: they share one sub-instrument, badged *linked ×n*, so editing it moves every voice of the stack together. When one voice needs to differ, **Unlink** gives that layer its own copy.
   - Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
-  - The last layer cannot be removed (a metainstrument with no layers is not a metainstrument); delete the whole instrument instead.
-- **FM** (FM racks) — the operator table above, the algorithm below. The table reads like the Layers one, with two columns renamed for what they mean here: **level** is the operator's output level, which doubles as its modulation index when it modulates something, and **ratio** is its detune from the played note — an octave up is a 2:1 modulator, a twelfth is the inharmonic one that makes bells. The pitch and velocity bounds still gate: an operator whose bounds exclude the note falls silent for it, which is how a patch gets brighter as you play harder.
+  - The last layer cannot be removed (a metainstrument with no entries in its table is not one); delete the whole instrument instead.
+- **FM** (the FM Rack kind) — the operator table above, the algorithm below. It is the same table as the Layers tab's, because a rack is the same record read another way, with two columns renamed for what they mean here: **level** is the operator's output level, which doubles as its modulation index when it modulates something, and **ratio** is its detune from the played note — an octave up is a 2:1 modulator, a twelfth is the inharmonic one that makes bells. The pitch and velocity bounds still gate: an operator whose bounds exclude the note falls silent for it, which is how a patch gets brighter as you play harder.
   - The ▸ beside row 0 marks the **principal** operator, whose envelope is the note's own. **Drag an operator by its handle** (↑ ↓ with the handle focused) and the algorithm is renumbered with it — the patch sounds exactly the same, but this is how the principal is chosen. The algorithm's own words reorder the same way.
   - The meter in the toolbar is the real limit. The operator table and the algorithm share one 252-byte record — 10 bytes an operator, 2 a word — so more operators means less room for wiring, and the bar shows both at once.
   - **Algorithm** is the wiring, shown three ways. The line beside the heading is the patch as an expression: `0[1[2]] + 3` reads "operator 2 modulates 1 modulates 0, and 3 is a second carrier beside it". Under it is the **diagram** — the picture an FM chip's manual prints, turned on its side so the signal runs left to right into OUT. A box is an operator, a wire into one is modulation, a curl over one is an operator modulating itself, and wires that meet are summed; a ring modulation or an inversion gets a mark of its own. Below that is the same patch as an editable list, one word a row.
@@ -1181,7 +1204,7 @@ either way.
 
 An instrument may carry a list of **Ixmp patches**: per-zone sample bindings over a pitch × velocity rectangle, each optionally overriding envelopes, fadeout, filter and more. At trigger time the engine walks the list in order and the **first** patch whose rectangle contains the note wins; when none matches, the base instrument's sample plays. Advanced Edit is a whole-panel editor for this list:
 
-- **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
+- **Patch list** (left) — one row per patch plus the *base* fallback row. A ⚠ marks a patch whose rectangle overlaps an earlier one (**INVALID** per the format — use a Layered metainstrument for layering). **＋ Add**, **Duplicate**, **Delete** and **▲/▼** (match-order reorder) sit in the header; every action is one undo step.
 - **Zone map** — the patches as rectangles over pitch (x) × velocity (y), with live blobs at each sounding note's pitch/velocity and lit rectangles for zones currently playing. Click a rectangle to select its patch.
 - **Detail form** — the selected patch's rectangle, sample binding (pick any pooled sample — rate and loop follow), play/loop points, rate, detune, loop mode/sustain; pan / note-volume / vibrato-waveform overrides (unchecked = inherit from the base instrument); and the *extra block*: per-patch fadeout, filter cutoff/resonance (IT or SF2 units) and SF2 initial attenuation.
   - **Pan** — the override is a *note* pan, so a bank whose zones pan apart keeps its spread wherever the channel is pointed, and `S $80xx` rotates the lot ([note vs channel panning](#note-volume-vs-channel-volume-note-pan-vs-channel-pan)).
@@ -1390,7 +1413,7 @@ Four clean-up operations, each a single undo step:
 
 - **Cleanup patterns** — drop the patterns no cue references, renumber the survivors and rewrite the cues to match.
 - **Renumber patterns** — compact every pattern into play order, dropping the gaps.
-- **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its layers) and free the sample data only they referenced.
+- **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its sub-instruments, layers or operators) and free the sample data only they referenced.
 - **Cleanup instrument patches** — remove [Ixmp patches](#advanced-edit-ixmp-patches) that can never be triggered: patches belonging to no instrument, patches with an empty rectangle or no sample, and patches lying entirely under a higher-priority one (remember the *first* matching patch wins, so a fully covered patch is dead weight).
 
 ### Global Operations
