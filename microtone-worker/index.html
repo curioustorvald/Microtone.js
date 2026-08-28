@@ -51,6 +51,16 @@
     var theme = null;
     try { theme = localStorage.getItem("microtone-theme"); } catch (e) { /* private mode */ }
     if (["dark", "dim", "light"].indexOf(theme) < 0) theme = null; // THEMES
+    // The Analogue Warmth Edition, for the same no-flash reason. This script
+    // runs before any module, so it cannot import src/ui/warmth.js — it repeats
+    // the two conditions it can compute for itself (the calendar and the URL),
+    // and warmth.js remains the authority the app actually boots from. If you
+    // flip PUBLISHED there, flip WARMTH_PUBLISHED here too, or a published run
+    // shows one splash frame in the old palette before the app catches up.
+    var WARMTH_PUBLISHED = false;
+    var now = new Date();
+    if (WARMTH_PUBLISHED || (now.getMonth() === 3 && now.getDate() === 1) ||
+        /[?&]theme=warmth(&|$)/.test(location.search)) theme = "warmth";
     document.documentElement.dataset.theme = theme || "dim"; // DEFAULT_THEME
 
     var el = document.getElementById("splash");

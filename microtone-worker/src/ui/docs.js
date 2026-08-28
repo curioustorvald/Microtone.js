@@ -14,22 +14,37 @@
 
 import { renderMarkdown, extractToc } from "./markdown.js";
 import { applyIcons } from "./icons.js";
+import { warmthInSeason } from "./warmth.js";
 
 // ── theme (mirror src/ui/theme.js, standalone) ──
+// The date rule for the Warmth edition is NOT mirrored — it is imported, so the
+// app and the docs cannot disagree about what day it is. The rest follows
+// theme.js: THEMES is the saved-value whitelist, the roster is what the button
+// cycles, and `warmth` is never written down.
 const THEMES = ["dark", "dim", "light"]; // cycle order, as in theme.js
 const DEFAULT_THEME = "dim";
+const WARMTH = "warmth";
+const roster = () => (warmthInSeason() ? [...THEMES, WARMTH] : THEMES);
 function applyTheme(name) {
   document.documentElement.dataset.theme = name;
+  if (!THEMES.includes(name)) return;
   try { localStorage.setItem("microtone-theme", name); } catch { /* private mode */ }
 }
 function initTheme() {
+  // ?theme= exists here for the same reason it does in the app: it is the only
+  // way to see the Warmth edition out of season, and a demo that yellows the
+  // app but not its manual is half a demo.
+  const asked = new URLSearchParams(location.search).get("theme");
+  if (warmthInSeason() || asked === WARMTH) { applyTheme(WARMTH); return; }
+  if (THEMES.includes(asked)) { applyTheme(asked); return; }
   let saved = null;
   try { saved = localStorage.getItem("microtone-theme"); } catch { /* private mode */ }
   applyTheme(THEMES.includes(saved) ? saved : DEFAULT_THEME);
 }
 function cycleTheme() {
-  const i = THEMES.indexOf(document.documentElement.dataset.theme);
-  applyTheme(THEMES[(i + 1) % THEMES.length]);
+  const list = roster();
+  const i = list.indexOf(document.documentElement.dataset.theme);
+  applyTheme(list[(i + 1) % list.length]);
 }
 
 const fetchDoc = (path) => async () => {

@@ -54,10 +54,11 @@ export function spatialDotCue(el, dialR, dotR) {
 
 // A shadow is a darkening, and a dark ground swallows more of it than a light
 // one — so the dark theme gets a stronger one for the SAME apparent depth, and
-// dim, whose ground sits between the two, gets a boost between the two.
+// dim, whose ground sits between the two, gets a boost between the two. The
+// Warmth edition's yellowed case is a light ground, so it shades like `light`.
 // Resolved lazily (and refreshed on theme change) so this module still imports
 // in Node, where the pure half is unit-tested.
-const SHADOW_BOOST = { dark: 1.7, dim: 1.35, light: 1.0 };
+const SHADOW_BOOST = { dark: 1.7, dim: 1.35, light: 1.0, warmth: 1.0 };
 let shadowBoost = null;
 function themeShadowBoost() {
   if (shadowBoost === null) {

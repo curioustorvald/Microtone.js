@@ -28,6 +28,7 @@ import { emptyPatternBytes } from "../doc/patterntools.js";
 import { hex2 } from "./notenames.js";
 import { showHelp } from "./popups/help.js";
 import { showAbout } from "./popups/about.js";
+import { showWarmthSplash } from "./popups/warmth.js";
 import { showNewProject } from "./popups/newproject.js";
 import { showModal } from "./widgets/modal.js";
 import * as opfs from "../storage/opfs.js";
@@ -38,7 +39,7 @@ import { showProgress } from "./popups/progress.js";
 import { fetchDemo } from "./demos.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
 import { presetForNotation } from "./pitchtables.js";
-import { initTheme, toggleTheme, onThemeChange, THEMES } from "./theme.js";
+import { initTheme, toggleTheme, onThemeChange, currentTheme, isThemeName, WARMTH } from "./theme.js";
 import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
 import { escapeNonAscii, unescapeName } from "./names.js";
 import { loadCanvasFonts, refreshCanvasFont } from "./fonts.js";
@@ -48,9 +49,11 @@ initTheme(); // before any canvas paints (saved choice ?? OS preference)
 await initI18n(); // strings before any UI is built
 applyDom(); // translate the static index.html chrome
 {
-  // ?theme=dark|dim|light overrides for this load (and persists like the toggle)
+  // ?theme=dark|dim|light overrides for this load (and persists like the toggle).
+  // `warmth` is accepted too — that is the only way to reach the Analogue
+  // Warmth Edition out of season — but applyTheme declines to persist it.
   const t = new URLSearchParams(location.search).get("theme");
-  if (THEMES.includes(t)) {
+  if (isThemeName(t)) {
     const { applyTheme } = await import("./theme.js");
     applyTheme(t);
   }
@@ -965,6 +968,10 @@ onLangChange(() => {
 
 // ── theme toggle ──
 $("themeBtn").addEventListener("click", () => toggleTheme());
+// The Warmth edition announces itself every time it is switched on, the way
+// the plugins it parodies do. A boot INTO warmth happens before this listener
+// exists, so the bottom of the file catches that one.
+onThemeChange((name) => { if (name === WARMTH) showWarmthSplash(); });
 onThemeChange(() => {
   // repaint every canvas + refresh DOM views that cache colours implicitly
   refreshCanvasFont(); // --cv-font could be themed too
@@ -1519,3 +1526,9 @@ requestAnimationFrame(frame);
 startControlEnhancer();
 
 window.__splash?.done(); // app shell ready — fade out the boot splash (item 67)
+
+// Booted straight into the Analogue Warmth Edition (April 1st, a published
+// run, or ?theme=warmth) — all three land before the onThemeChange listener
+// above is registered, so the pitch goes out from here, after the shell is up
+// and nothing else is about to open over it.
+if (currentTheme() === WARMTH) showWarmthSplash();

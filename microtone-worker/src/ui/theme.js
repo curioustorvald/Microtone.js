@@ -4,14 +4,35 @@
 // the canvas views use every frame (getComputedStyle is too slow for per-frame
 // reads).
 //
-// THEMES is the cycle order of the ◐ button, ordered by ground lightness
-// (dark → dim → light → dark), and is also the whitelist for the saved value
-// and the ?theme= URL override. `dim` is the DEFAULT and a light-ink theme
-// like `dark`, which is what isDarkTheme() answers for anything that shades
-// against the ground.
+// THEMES is the ordinary cycle order of the ◐ button, ordered by ground
+// lightness (dark → dim → light → dark), and is also the whitelist for the
+// SAVED value: nothing outside it is ever written to localStorage. `dim` is
+// the DEFAULT and a light-ink theme like `dark`, which is what isDarkTheme()
+// answers for anything that shades against the ground.
+//
+// WARMTH is the fourth one and does not live in that list. It boots on its own
+// and joins the roster only while src/ui/warmth.js says the edition is in
+// season, it is reachable by ?theme=warmth on any day, and it is never
+// persisted — so a reader who meets it on April 1st still has their own choice
+// waiting on April 2nd. themeRoster() is the ◐ button's list; THEMES is the
+// saved-value whitelist. Keep the two apart.
+
+import { warmthInSeason } from "./warmth.js";
 
 export const THEMES = ["dark", "dim", "light"];
 export const DEFAULT_THEME = "dim";
+export const WARMTH = "warmth";
+
+/** Every theme name the DOM may carry (the ?theme= whitelist). */
+export function isThemeName(name) {
+  return THEMES.includes(name) || name === WARMTH;
+}
+
+/** What the ◐ button cycles through TODAY (see the header). Always a fresh
+ *  array: THEMES is the whitelist a caller must not be able to grow. */
+export function themeRoster() {
+  return warmthInSeason() ? [...THEMES, WARMTH] : [...THEMES];
+}
 
 const VAR_KEYS = {
   // DOM palette (also used by canvas for text/accents)
@@ -57,17 +78,25 @@ export function onThemeChange(fn) { _listeners.add(fn); }
 
 export function currentTheme() {
   const name = document.documentElement.dataset.theme;
-  return THEMES.includes(name) ? name : "dark";
+  return isThemeName(name) ? name : "dark";
 }
 
 /** True for the light-ink themes (dark and dim) — see the header note. */
+const LIGHT_GROUND = new Set(["light", WARMTH]);
 export function isDarkTheme() {
-  return currentTheme() !== "light";
+  return !LIGHT_GROUND.has(currentTheme());
 }
 
+/**
+ * Switch the theme. Only a THEMES name is remembered: `warmth` paints and
+ * repaints like any other, but writing it would replace a choice its reader
+ * never made (and would outlive the day it is on).
+ */
 export function applyTheme(name) {
   document.documentElement.dataset.theme = name;
-  try { localStorage.setItem("microtone-theme", name); } catch { /* private mode */ }
+  if (THEMES.includes(name)) {
+    try { localStorage.setItem("microtone-theme", name); } catch { /* private mode */ }
+  }
   _cache = null;
   themeColors(); // re-read eagerly
   // The address-bar tint follows the ground. The two <meta> tags are keyed to
@@ -79,17 +108,24 @@ export function applyTheme(name) {
   for (const fn of _listeners) fn(name);
 }
 
-/** Advance one step along THEMES (wraps). */
+/** Advance one step along today's roster (wraps). A theme that is not ON the
+ *  roster — `warmth` reached by ?theme= out of season — steps to its head, so
+ *  the button is always the way back out. */
 export function toggleTheme() {
-  applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]);
+  const roster = themeRoster();
+  applyTheme(roster[(roster.indexOf(currentTheme()) + 1) % roster.length]);
 }
 
 /**
  * Boot-time theme: the saved choice, else DEFAULT_THEME. The OS preference is
  * deliberately not consulted — dim is the app's look, and every visitor should
  * see the same one until they pick otherwise (2026-08-03).
+ *
+ * While the Warmth edition is in season it boots INSTEAD, over the saved
+ * choice, which stays on disk untouched for the day after.
  */
 export function initTheme() {
+  if (warmthInSeason()) { applyTheme(WARMTH); return; }
   let saved = null;
   try { saved = localStorage.getItem("microtone-theme"); } catch { /* private mode */ }
   applyTheme(THEMES.includes(saved) ? saved : DEFAULT_THEME);

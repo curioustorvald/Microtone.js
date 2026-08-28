@@ -11,6 +11,13 @@
     // grid in the old theme's colours) and the address-bar tint follows the
     // ground. With nothing saved — or something unknown — the boot theme is
     // DEFAULT_THEME, not the OS preference.
+    //
+    // Then the fourth one, `warmth` (src/ui/warmth.js): out of season it is
+    // reachable only by ?theme= and stays off the roster; in season it boots
+    // over the saved choice and joins the roster; either way it is NEVER
+    // written to localStorage, and switching to it opens the pitch. The clock
+    // is PINNED for all of this — including the legs above, which would
+    // otherwise fail for one day a year on a real April 1st.
     const out = [];
     const log = (l) => { out.push(l); document.getElementById("out").textContent = out.join("\n"); };
     (async () => {
@@ -25,7 +32,11 @@
         const doc = win.document;
         const root = doc.documentElement;
         const theme = await win.eval('import("/src/ui/theme.js")');
+        const warmth = await win.eval('import("/src/ui/warmth.js")');
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const ORDINARY = () => new Date(2026, 5, 15); // an ordinary day
+        const APRIL1 = () => new Date(2026, 3, 1);
+        warmth.setWarmthClock(ORDINARY);
 
         // ?theme=dim reached the DOM and localStorage
         const urlOk = root.dataset.theme === "dim" &&
@@ -67,10 +78,61 @@
         const fallbackOk = root.dataset.theme === theme.DEFAULT_THEME;
         log(`unknown saved theme falls back: ${fallbackOk ? "ok" : "FAIL"} (${root.dataset.theme})`);
 
+        // ── the Analogue Warmth Edition ──
+        // Out of season: not on the roster, not a boot theme, but ?theme= (which
+        // is what applyTheme does under it) still reaches it.
+        win.localStorage.setItem("microtone-theme", "light");
+        theme.initTheme();
+        const offBootOk = theme.themeRoster().length === 3 && root.dataset.theme === "light";
+        log(`out of season: off the roster, boots the saved theme: ${offBootOk ? "ok" : "FAIL"} (${root.dataset.theme}, roster ${theme.themeRoster().join("/")})`);
+
+        theme.applyTheme("warmth");
+        await sleep(50);
+        const paintOk = root.dataset.theme === "warmth" &&
+          theme.themeColors().cvBg !== "" && !theme.isDarkTheme();
+        const keepsOk = win.localStorage.getItem("microtone-theme") === "light";
+        log(`?theme=warmth paints a light-ground theme: ${paintOk ? "ok" : "FAIL"} (${theme.themeColors().cvBg})`);
+        log(`warmth never persists: ${keepsOk ? "ok" : `FAIL (${win.localStorage.getItem("microtone-theme")})`}`);
+
+        // switching it on opens the pitch, and the pitch closes
+        const pitch = doc.querySelector("dialog.warmth-splash");
+        const pitchOk = !!pitch && pitch.open && /ANALOGUE WARMTH|Analogue Warmth/i.test(pitch.textContent);
+        log(`the pitch opens with the theme: ${pitchOk ? "ok" : "FAIL"}`);
+        pitch?.querySelector(".ws-go").click();
+        await sleep(20);
+        const closeOk = !doc.querySelector("dialog.warmth-splash");
+        log(`the pitch closes: ${closeOk ? "ok" : "FAIL"}`);
+
+        // Off the roster, the button is still the way out of it.
+        doc.getElementById("themeBtn").click();
+        await sleep(20);
+        const escapeOk = root.dataset.theme === "dark";
+        log(`◐ leaves an out-of-season warmth: ${escapeOk ? "ok" : "FAIL"} (${root.dataset.theme})`);
+
+        // In season: boots over the saved choice without touching it, and the
+        // roster grows by exactly one.
+        warmth.setWarmthClock(APRIL1);
+        win.localStorage.setItem("microtone-theme", "light");
+        theme.initTheme();
+        await sleep(20);
+        const onBootOk = root.dataset.theme === "warmth" &&
+          win.localStorage.getItem("microtone-theme") === "light" &&
+          theme.themeRoster().join(",") === "dark,dim,light,warmth";
+        log(`April 1st boots it over an untouched config: ${onBootOk ? "ok" : "FAIL"} (${root.dataset.theme}, saved ${win.localStorage.getItem("microtone-theme")}, roster ${theme.themeRoster().join("/")})`);
+
+        doc.getElementById("themeBtn").click();
+        await sleep(20);
+        const wrapOk = root.dataset.theme === "dark" &&
+          win.localStorage.getItem("microtone-theme") === "dark";
+        log(`◐ wraps warmth → dark, and THAT persists: ${wrapOk ? "ok" : "FAIL"} (${root.dataset.theme}, saved ${win.localStorage.getItem("microtone-theme")})`);
+
         // leave the tree as we found it
+        warmth.setWarmthClock();
+        doc.querySelector("dialog.warmth-splash")?.remove();
         theme.applyTheme("dark");
 
-        const pass = urlOk && cycleOk && cacheOk && metaOk && defaultOk && fallbackOk;
+        const pass = urlOk && cycleOk && cacheOk && metaOk && defaultOk && fallbackOk &&
+          offBootOk && paintOk && keepsOk && pitchOk && closeOk && escapeOk && onBootOk && wrapOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

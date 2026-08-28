@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Analogue Warmth Edition visual harness (screenshot / promo shots)</title>
+  <!-- No margin and no host chrome: a promo shot should be the app, edge to
+       edge, with nothing of the harness in the frame. -->
+  <style>html, body { margin: 0; overflow: hidden; background: #000; }</style>
+</head>
+<body>
+  <!-- The joke theme (src/ui/warmth.js), laid out for a camera. Also the thing
+       to run before "publishing" the edition — these are the shots.
+
+         python3 tools/test-server.py &
+         chromium --headless=new --window-size=1400,940 --screenshot=/tmp/w.png \
+           --timeout=15000 "http://localhost:8932/test/browser/warmth-visual.html"
+
+       ?shot=splash  the pitch over the welcome screen (the default)
+       ?shot=welcome the welcome screen, pitch dismissed
+       ?shot=song    the Patterns view over a loaded corpus song
+       ?shot=inst    the Instruments view — every kind of control at once
+       ?theme=…      any other theme, to frame the same shot for comparison -->
+  <img src="/hang" hidden>
+  <iframe id="app" style="width:1400px;height:940px;border:0"></iframe>
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const shot = params.get("shot") ?? "splash";
+    const theme = params.get("theme") ?? "warmth";
+    const frame = document.getElementById("app");
+    frame.src = "../../index.html?theme=" + theme +
+      (shot === "song" ? "&load=test/corpus/WHEN.taud&view=pattern"
+       : shot === "inst" ? "&load=test/corpus/WHEN.taud&view=instruments" : "");
+
+    (async () => {
+      const win = await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          const w = frame.contentWindow;
+          // The welcome shots have no document to wait for — the shell is ready
+          // as soon as app.js has published its handle.
+          const ready = (shot === "song" || shot === "inst") ? w?.__microtone?.store.doc : w?.__microtone;
+          if (ready) { clearInterval(poll); resolve(w); }
+        }, 100);
+      });
+      await new Promise((r) => setTimeout(r, 600)); // let the pitch open
+      if (shot !== "splash") {
+        const dlg = win.document.querySelector("dialog.warmth-splash");
+        if (dlg) { dlg.close(); dlg.remove(); }
+      }
+      document.title = `warmth: ${shot} (${theme})`;
+    })();
+  </script>
+</body>
+</html>

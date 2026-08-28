@@ -205,6 +205,98 @@
   --brand2: #404758;
 }
 
+/* ── THEME: WARMTH — "Microtone: Analogue Warmth Edition" ──────────────
+ * The joke theme (src/ui/warmth.js decides when it is on; the plastic
+ * chrome that goes with these colours is the PLASTIC LAYER at the very
+ * bottom of this file). Everything here is sampled off ABS that has been
+ * yellowing since about 1989: the case is beige gone golden, the mould
+ * lines are a shade of tobacco, and the lettering is silkscreen — burnt
+ * orange for the warnings, faded ink-blue for the labels.
+ *
+ * It is a LIGHT-ground theme, so the ink ramp runs the same way round as
+ * `light` (dark ink, dark accents) — isDarkTheme() answers false for it.
+ * The one departure: the pattern grids are NOT the case colour. They are a
+ * yellow-green STN LCD sitting behind a window in it, which is why --cv-bg
+ * is greener than --panel and every grid colour is mixed against that. */
+:root[data-theme="warmth"] {
+  /* chrome — the case */
+  --bg: #c6b78c;            /* the enclosure, deepest tone */
+  --panel: #d5c8a2;         /* moulded bars and panels */
+  --panel-2: #e2d8ba;       /* keycaps: the parts fingers touch are palest */
+  --fg: #2e2a1e;            /* silkscreened lettering */
+  --fg2: #5f553c;
+  --dim: #5f553c;
+  --accent: #93330a;        /* burnt orange — the REC dot, the warnings */
+  --accent-2: #1a5478;      /* faded ink-blue — the labels round the jacks */
+  --meter: #2c6f1f;         /* the green LED, seen through tinted plastic */
+  --meter-bg: #ab9c74;
+  --border: #a08f66;        /* mould line / panel gap */
+
+  /* status colours */
+  --ok-bg: #c3d69c;   --ok-fg: #2c5416;
+  --err-bg: #e7c0a4;  --err-fg: #8a260c;
+  --rec-fg: #9c2317;  --rec-border: #b2855f;  --rec-bg: #e3bda9;
+
+  /* canvas: pattern grids — the LCD window */
+  --cv-bg: #cbc79c;
+  --cv-row-beat: #cfcba1;
+  --cv-row-bar: #c0bb8e;
+  --cv-playhead: #ddd08a;
+  --cv-cursor: #b0c0cb;     /* the cool cells are the only thing on screen
+                               that is NOT plastic — which is what makes the
+                               cursor findable on a field this warm */
+  --cv-caret: #d9bd76;
+  --cv-caret-nav: #9db4c5;
+  --cv-cue-line: #8b8058;
+  --cv-col-pan: #8b3a8e;
+  --cv-sel: #aabbcb;
+  --cv-ditto: #948d6b;
+  /* effect column: op → field 1 → field 2 → field 3, the light theme's ramp
+   * re-mixed warm (field 1 IS the accent, as it is on light). */
+  --cv-fx-op: #b02a6a;
+  --cv-fx-a1: #93330a;
+  --cv-fx-a2: #34760f;
+  --cv-fx-a3: #1a5478;
+
+  /* canvas: samples / instruments */
+  --cv-wave: #2c6f1f;
+  --cv-wave-loop: #b6c2c6;
+  --cv-wave-mid: #a49a72;
+  --cv-wave-invert: #a86a0c;
+  --cv-wave-funk: #0d7a70;
+  --cv-play-cursor: #9a5f0c;
+  --cv-wave-cursor: #a80063;
+  --cv-env-line: #1a5478;
+  --cv-env-node: #9a5f0c;
+  --cv-env-sus: #c5d1a5;
+  --cv-env-loop: #b7b18c66;
+  --cv-live: #2c6f1f;
+
+  /* sample-memory panel */
+  --cv-pool-used: #3a719c;
+  --cv-pool-shared: #82339e;
+  --cv-pool-free: #c0b58e;
+  --cv-pool-stale: #b08b52;
+
+  --brand: #a8261a;
+  --brand2: #3b3524;
+
+  /* ── the plastic itself ────────────────────────────────────────────
+   * Four tokens the PLASTIC LAYER at the bottom of the file composes from,
+   * kept here so the whole edition is one edit: the fine grain moulded into
+   * the case, the highlight/shade pair that makes an edge look bevelled,
+   * and the two states of a membrane keycap. */
+  --abs-grain:
+    repeating-linear-gradient(112deg,
+      rgba(255, 252, 236, 0.055) 0 1.5px,
+      rgba(96, 76, 34, 0.05) 1.5px 3px);
+  --abs-bevel:
+    inset 0 1px 0 rgba(255, 252, 236, 0.55),
+    inset 0 -1px 0 rgba(92, 73, 33, 0.20);
+  --abs-cap: linear-gradient(180deg, #ece2c6 0%, #e0d5b4 52%, #cec095 100%);
+  --abs-cap-down: linear-gradient(180deg, #cdbf94 0%, #ded3b1 100%);
+}
+
 /* ── CANVAS GRID FONT ──────────────────────────────────────────────────
  * The tracker-grid typeface (Timeline / Cues / Patterns canvases). Canvas
  * views read this through src/ui/fonts.js, which also force-loads the
@@ -2282,3 +2374,271 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .adv-head button:not(:last-child),
 .nota-tools button:not(:last-child),
 .wave-shapes button:not(:last-child) { margin-right: 3px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  PLASTIC LAYER — "Microtone: Analogue Warmth Edition"
+ *
+ *  The semi-skeuomorphic half of the warmth theme; its colours are the
+ *  THEME: WARMTH block near the top of this file, and src/ui/warmth.js
+ *  decides when either is on. Nothing here exists in the other three
+ *  themes, so it all hangs off [data-theme="warmth"] and lives at the END
+ *  of the stylesheet, where it can restate a rule the app set earlier
+ *  without a specificity contest.
+ *
+ *  Three moves, and no more: a moulded case (fine grain + a bevelled top
+ *  edge on every raised surface), keycaps that go down fast and come up
+ *  slow, and wells for anything the app expects you to type into. Real
+ *  1990s plastic is exactly that — highlight on the top edge, shade on
+ *  the bottom, and a texture too fine to name.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* ── keycaps ────────────────────────────────────────────────────────────
+ * Every ordinary button becomes a moulded cap. The exclusions are the
+ * buttons that are deliberately NOT objects: context-menu cells and drag
+ * grips (chromeless by design, and they say so with `background: none`),
+ * the step buttons of a spinner group (segments of one well — see below)
+ * and the pane's own close/split affordance. */
+[data-theme="warmth"] button:not(.ctx-cell, .drag-grip, .mt-step, .pane-btn) {
+  background: var(--abs-cap);
+  border-color: #9d8c62;
+  border-radius: 5px;
+  box-shadow: var(--abs-bevel), 0 1px 1.5px rgba(74, 58, 24, 0.32);
+  /* The mushy part: this is the RELEASE, and :active below overrides it with
+   * something almost instant. Down like a switch, up like a rubber dome. */
+  transition: transform 150ms cubic-bezier(0.22, 0.9, 0.28, 1),
+              box-shadow 150ms cubic-bezier(0.22, 0.9, 0.28, 1),
+              background 150ms ease-out;
+}
+[data-theme="warmth"] button:not(.ctx-cell, .drag-grip, .mt-step, .pane-btn):hover {
+  background: linear-gradient(180deg, #f1e8ce 0%, #e5dbba 52%, #d3c69b 100%);
+}
+[data-theme="warmth"] button:not(.ctx-cell, .drag-grip, .mt-step, .pane-btn):active:not(:disabled) {
+  transform: translateY(1px);
+  background: var(--abs-cap-down);
+  box-shadow: inset 0 2px 3px rgba(74, 58, 24, 0.34);
+  transition-duration: 15ms;
+}
+/* A dead key still looks moulded — it just has no dome left in it. */
+[data-theme="warmth"] button:disabled {
+  box-shadow: inset 0 -1px 0 rgba(92, 73, 33, 0.14);
+  background: linear-gradient(180deg, #ded4b6, #d3c8a5);
+}
+/* Record ARMED keeps its red cap (the blanket rule above would have painted
+ * the alarm beige). */
+[data-theme="warmth"] .rec.on {
+  background: linear-gradient(180deg, #eecab8 0%, #e3bda9 52%, #d5aa93 100%);
+}
+
+/* Tabs are caps too, but a SELECTED tab is not a pressed one — it is the
+ * panel's own surface come forward, so it loses the drop shadow and keeps
+ * only the top highlight. */
+[data-theme="warmth"] .tabs button.active {
+  background: linear-gradient(180deg, #f2ead4 0%, #e7ddc2 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 236, 0.75);
+}
+
+/* ── moulded surfaces ───────────────────────────────────────────────────
+ * Bars, panels and dialogs: the case grain, then the panel colour under
+ * it, plus a lit top edge. The grain is a gradient rather than an image —
+ * no request, no extra compositor layer over the canvases. */
+[data-theme="warmth"] .topbar,
+[data-theme="warmth"] .statusbar,
+[data-theme="warmth"] .toolbox,
+[data-theme="warmth"] .pane-head,
+[data-theme="warmth"] .tabs,
+[data-theme="warmth"] .master-strip .ms-head,
+[data-theme="warmth"] .wc-panel,
+[data-theme="warmth"] .inst-lookup,
+[data-theme="warmth"] .modal,
+[data-theme="warmth"] .ctxmenu {
+  background-image: var(--abs-grain);
+  background-color: var(--panel);
+  box-shadow: var(--abs-bevel);
+}
+[data-theme="warmth"] .modal,
+[data-theme="warmth"] .ctxmenu,
+[data-theme="warmth"] .inst-lookup {
+  /* Something lifted OFF the case, so it keeps a cast shadow as well. */
+  box-shadow: var(--abs-bevel), 0 8px 18px rgba(63, 49, 18, 0.35);
+}
+[data-theme="warmth"] .app-page {
+  background-image: var(--abs-grain);
+}
+
+/* ── wells ──────────────────────────────────────────────────────────────
+ * Anything you type into or drag inside is a recess in the case: paler
+ * ground, shadow along the TOP edge (light comes from above, so a hole is
+ * dark where a cap is bright) and no bevel of its own. */
+[data-theme="warmth"] select,
+[data-theme="warmth"] input[type="text"],
+[data-theme="warmth"] input[type="number"],
+[data-theme="warmth"] input[type="search"],
+[data-theme="warmth"] .modal-field input,
+[data-theme="warmth"] .mt-spin,
+[data-theme="warmth"] .mt-pick {
+  background: #efe8d0;
+  border-color: #9d8c62;
+  box-shadow: inset 0 1px 2.5px rgba(80, 62, 26, 0.30);
+}
+/* The spinner group IS the well, so its two step buttons are ledges cut
+   into the rim rather than caps sitting on it. */
+[data-theme="warmth"] .mt-step {
+  background: linear-gradient(180deg, #e7ddbe, #d8cca8);
+  color: var(--dim);
+}
+[data-theme="warmth"] .mt-step:hover { background: linear-gradient(180deg, #f1e8cc, #e2d7b4); }
+[data-theme="warmth"] .mt-step:active { background: #cdc09a; box-shadow: inset 0 2px 3px rgba(74, 58, 24, 0.30); }
+[data-theme="warmth"] input[type="range"] {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+[data-theme="warmth"] #meters,
+[data-theme="warmth"] .master-strip .ms-canvaswrap,
+[data-theme="warmth"] .fm-graph-frame {
+  box-shadow: inset 0 1px 3px rgba(80, 62, 26, 0.35);
+}
+
+/* ── indicators ─────────────────────────────────────────────────────────
+ * The audio badge is a window in the case with something lit behind it. */
+[data-theme="warmth"] .badge {
+  box-shadow: inset 0 1px 2px rgba(80, 62, 26, 0.35);
+  border: 1px solid #a5946a;
+}
+[data-theme="warmth"] .badge.on { text-shadow: 0 0 5px rgba(44, 111, 31, 0.45); }
+
+/* ── scrollbars ─────────────────────────────────────────────────────────
+ * A moulded rail with a cap running in it — the one place a scrollbar has
+ * ever wanted to be skeuomorphic. */
+[data-theme="warmth"] ::-webkit-scrollbar { width: 13px; height: 13px; }
+[data-theme="warmth"] ::-webkit-scrollbar-track {
+  background: #c9bb92;
+  box-shadow: inset 0 0 3px rgba(80, 62, 26, 0.35);
+}
+[data-theme="warmth"] ::-webkit-scrollbar-thumb {
+  background: var(--abs-cap);
+  border: 1px solid #9d8c62;
+  border-radius: 4px;
+}
+[data-theme="warmth"] ::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #f1e8ce, #d3c69b); }
+[data-theme="warmth"] ::-webkit-scrollbar-corner { background: #c9bb92; }
+
+/* ── the pitch (src/ui/popups/warmth.js) ────────────────────────────────
+ * A plugin splash: an oversized wordmark, a wall of claims nobody reads,
+ * five stars from nobody, a price that was never real, and the fine print
+ * doing the actual talking. It is a parody, so it is laid out like the
+ * thing it parodies — but it is styled from the theme's own tokens, and
+ * the ONLY hard-coded ink in it is the gold of the wordmark. */
+.warmth-splash {
+  max-width: min(600px, 94vw);
+  padding: 0;
+  overflow: hidden;
+  border-color: #9d8c62;
+}
+.warmth-splash::backdrop { background: rgba(52, 40, 12, 0.62); }
+.warmth-splash .ws-badge {
+  background: linear-gradient(180deg, #b5490f, #8d3207);
+  color: #ffe9c2;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 0.3rem 0;
+}
+.warmth-splash .ws-title {
+  margin: 1.1rem 1.4rem 0.2rem;
+  text-align: center;
+  line-height: 1.05;
+}
+.warmth-splash .ws-brand {
+  font-family: "Geist", sans-serif;
+  font-weight: 900;
+  font-style: oblique;
+  font-size: 2.1rem;
+  letter-spacing: -0.02em;
+  /* The gold hot-stamped lettering on the front of the case. */
+  background: linear-gradient(178deg, #8a6a1c 0%, #d8b357 40%, #f6e6b0 52%, #b98f2c 64%, #7d5d18 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.warmth-splash .ws-tm { font-size: 0.8rem; vertical-align: super; color: var(--dim); }
+.warmth-splash .ws-sub {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.warmth-splash .ws-lede {
+  margin: 0.9rem 1.4rem;
+  text-align: center;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--fg2);
+}
+.warmth-splash .ws-claims {
+  margin: 0 1.4rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.warmth-splash .ws-claims li {
+  display: flex;
+  gap: 0.55rem;
+  align-items: baseline;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+.warmth-splash .ws-tick { color: var(--meter); font-weight: 700; flex: none; }
+/* The one claim that is shouted, because that is how the source material
+   would have set it. */
+.warmth-splash .ws-shout {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.warmth-splash .ws-sub2 { display: block; color: var(--dim); font-size: 0.8rem; }
+.warmth-splash .ws-quote {
+  margin: 1.1rem 1.4rem 0;
+  padding: 0.6rem 0.8rem;
+  background: rgba(255, 252, 236, 0.5);
+  border-left: 3px solid var(--accent);
+  font-size: 0.92rem;
+  font-style: italic;
+}
+.warmth-splash .ws-stars { color: #c8901a; font-style: normal; letter-spacing: 0.1em; }
+.warmth-splash .ws-attrib { color: var(--dim); font-size: 0.78rem; font-style: normal; }
+.warmth-splash .ws-price {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.6rem;
+  margin: 1rem 1.4rem 0;
+}
+.warmth-splash .ws-was { color: var(--dim); text-decoration: line-through; }
+.warmth-splash .ws-now { font-size: 1.7rem; font-weight: 800; color: var(--accent); }
+.warmth-splash .ws-forever { color: var(--dim); font-size: 0.78rem; }
+.warmth-splash .modal-buttons { justify-content: center; margin: 1rem 1.4rem 0; }
+.warmth-splash .ws-go {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.5rem 1.6rem;
+}
+.warmth-splash .ws-fineprint {
+  margin: 1rem 0 0;
+  padding: 0.7rem 1.4rem 0.9rem;
+  background: rgba(96, 76, 34, 0.09);
+  border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  text-align: justify;
+  hyphens: auto;
+}
