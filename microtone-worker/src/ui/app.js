@@ -442,6 +442,11 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
   const choice = await showModal({
     title: t("midi.title", { name: file.name }),
     body: t("midi.body"),
+    // Value settings first, then the tick-box options: with the boxes in one
+    // column and the controls in another, the dialog reads as a form. Each
+    // option's explanation is a `hint` under it rather than a parenthesis
+    // inside its label — the label is the NAME of the setting, and a name you
+    // have to read to the end of to find the checkbox is not one.
     fields: [{
       name: "sf", label: t("midi.soundfont"), type: "select",
       value: bundledAvail ? "bundled" : "own",
@@ -458,17 +463,34 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
         ...[2, 4, 8, 16, 32, 64].map((n) => ({ value: String(n), label: String(n) })),
       ],
     }, {
+      // Item 168: quantisation is OFF by default, and the hint says what it
+      // costs — this is the one import option that rewrites the performance
+      // rather than how it is encoded, and a MIDI that was PLAYED (rather than
+      // stepped in) usually wants its timing left alone. "Auto" snaps to the
+      // subdivision the onsets already use, which is the grid the piece is
+      // written on; "row" snaps to the tracker's own rows.
+      name: "quantise", label: t("midi.quantise"), type: "select", value: "off",
+      hint: t("midi.quantiseHint"),
+      options: [
+        { value: "off", label: t("midi.quantiseOff") },
+        { value: "auto", label: t("midi.quantiseAuto") },
+        { value: "row", label: t("midi.quantiseRow") },
+        ...[4, 8, 16].map((n) => ({ value: String(n), label: t("midi.quantiseNth", { n }) })),
+      ],
+    }, {
       // Item 75: the converter keeps every preset's full zone map by default, so
       // imported instruments stay playable beyond the notes this song uses and
       // Housekeeping cleans up on demand. Ticking this restores the old
       // trim-to-triggered behaviour — worth it for a preset-heavy MIDI whose
       // untrimmed pool would overflow 8 MB (that path resamples EVERYTHING down).
       name: "trim", label: t("midi.trimPatches"), type: "checkbox", value: false,
+      hint: t("midi.trimPatchesHint"),
     }, {
       // Item 90.1: SoundFont instruments built from a stereo sample pair are
       // mixed to mono by default — stereo doubles their pool cost, and pool
       // overflow resamples the WHOLE bank down.
       name: "stereo", label: t("midi.stereoSamples"), type: "checkbox", value: false,
+      hint: t("midi.stereoSamplesHint"),
     }, {
       // The converter pools byte-identical patterns, so a repeated bar (and
       // every silent column) is ONE pattern the cue sheet points at several
@@ -477,20 +499,7 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       // when the import is a starting point for editing rather than a finished
       // song. Costs pattern slots (32767 cap), barely any file size.
       name: "nodedup", label: t("midi.keepDupPatterns"), type: "checkbox", value: false,
-    }, {
-      // Item 168: quantisation is OFF by default, and the label says what it
-      // costs — this is the one import option that rewrites the performance
-      // rather than how it is encoded, and a MIDI that was PLAYED (rather than
-      // stepped in) usually wants its timing left alone. "Auto" snaps to the
-      // subdivision the onsets already use, which is the grid the piece is
-      // written on; "row" snaps to the tracker's own rows.
-      name: "quantise", label: t("midi.quantise"), type: "select", value: "off",
-      options: [
-        { value: "off", label: t("midi.quantiseOff") },
-        { value: "auto", label: t("midi.quantiseAuto") },
-        { value: "row", label: t("midi.quantiseRow") },
-        ...[4, 8, 16].map((n) => ({ value: String(n), label: t("midi.quantiseNth", { n }) })),
-      ],
+      hint: t("midi.keepDupPatternsHint"),
     }],
     okLabel: t("common.import"),
   });

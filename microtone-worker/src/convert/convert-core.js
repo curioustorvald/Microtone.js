@@ -117,11 +117,12 @@ except SystemExit as e:
  *  cue×voice cell gets its own pattern instead of sharing one copy of each
  *  distinct bar, so editing a repeat can't change the other occurrences.
  *  `quantise` (MIDI only, item 168) opts IN to --quantise: null/"off" leaves
- *  the performance's own timing alone, which is the default; "auto" snaps note
- *  onsets to the subdivision the onsets already use, "row" to the Taud row
- *  grid, and a number to that beat subdivision. `quantiseStrength` (0..100) is
- *  how far each onset moves towards the grid — the setting that tightens
- *  sloppy playing without flattening deliberate off-grid timing. */
+ *  the performance's own timing alone, which is the default; "auto" snaps notes
+ *  to the subdivision the onsets already use, "row" to the Taud row grid, and a
+ *  number to that beat subdivision. BOTH ENDS of a note are snapped, so a
+ *  quantised note lasts a whole number of grid steps. `quantiseStrength`
+ *  (0..100) is how far each end moves towards the grid — the setting that
+ *  tightens sloppy playing without flattening deliberate off-grid timing. */
 export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null,
                             trimPatches = false, stereoSamples = false,
                             keepDuplicatePatterns = false,

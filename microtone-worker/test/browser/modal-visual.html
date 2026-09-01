@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>modal field layout (widgets/modal.js)</title>
+  <link rel="stylesheet" href="../../css/microtone.css" />
+  <style>
+    /* The dialog is the subject; give it a page to sit on that looks like the
+       app's, without booting the app. */
+    body { background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; margin: 0; padding: 1rem; }
+    #out { color: var(--dim); }
+  </style>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- The MIDI import dialog is the widest form this helper builds, so it is
+       the one worth looking at. Shoot it with:
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox \
+           --window-size=1200,900 --screenshot=/tmp/modal.png \
+           --virtual-time-budget=20000 \
+           "http://localhost:8932/test/browser/modal-visual.html"
+       ?theme=light|dark|warmth shoots the same frame in another palette. -->
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, what) => log(`${what}: ${cond ? "ok" : "FAIL"}`);
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      try {
+        const theme = new URLSearchParams(location.search).get("theme");
+        if (theme) document.documentElement.dataset.theme = theme;
+        const win = window;
+        const doc = document;
+        const { showModal } = await import("../../src/ui/widgets/modal.js");
+
+        // ?form=misc is the OTHER shape this helper builds — a text field, a
+        // number, and an option with no hint — so a change made for the import
+        // dialog cannot quietly wreck a rename box.
+        const misc = new URLSearchParams(location.search).get("form") === "misc";
+        if (misc) {
+          showModal({
+            title: "Delete instrument $0D",
+            body: "Bright BellVoice is used by 3 patterns.",
+            okLabel: "Delete",
+            fields: [
+              { name: "reassign", label: "Reassign to", type: "text", value: "",
+                placeholder: "leave empty to clear the cells" },
+              { name: "rows", label: "Rows", type: "number", value: 64, min: 1, max: 64 },
+              { name: "free", label: "Free its samples (12.4 kB)", type: "checkbox", value: true },
+            ],
+          });
+        } else
+        // The MIDI import dialog's own field list, verbatim in shape: three
+        // value settings, three options, four hints.
+        showModal({
+          title: "Import Temjin.mid",
+          body: "The MIDI is converted through a SoundFont's instruments.",
+          okLabel: "Import",
+          fields: [
+            { name: "sf", label: "Soundfont", type: "select", value: "bundled",
+              options: [{ value: "bundled", label: "Bundled GeneralUser-GS" },
+                        { value: "own", label: "Choose an .sf2 file…" }] },
+            { name: "rpb", label: "Rows/beat", type: "select", value: "auto",
+              options: [{ value: "auto", label: "Auto (from time signatures)" },
+                        { value: "8", label: "8" }] },
+            { name: "quantise", label: "Quantise timing", type: "select", value: "off",
+              hint: "Tidies sloppy playing — and erases deliberate swing, flams and grace notes along with it. Note lengths are kept.",
+              options: [{ value: "off", label: "Off — keep the timing as played" },
+                        { value: "auto", label: "Auto — the grid the piece already uses" }] },
+            { name: "trim", label: "Trim unused patches", type: "checkbox", value: false,
+              hint: "Keeps only the zones this song actually plays. Smaller bank; Housekeeping can do it later." },
+            { name: "stereo", label: "Import stereo instruments in stereo", type: "checkbox", value: false,
+              hint: "Twice the pool bytes for each one, so a large bank may end up resampled harder to fit." },
+            { name: "nodedup", label: "Keep duplicate patterns", type: "checkbox", value: true,
+              hint: "Each cue gets its own copy, so editing one leaves the rest alone." },
+          ],
+        });
+
+        const dlg = await waitFor(() => doc.querySelector("dialog.modal"));
+        const fields = [...dlg.querySelectorAll(".modal-field")];
+        ok(fields.length === (misc ? 3 : 6), `${misc ? "three" : "six"} fields (${fields.length})`);
+        ok(dlg.querySelectorAll(".modal-hint").length === (misc ? 0 : 4),
+          `${misc ? "no" : "four"} hints (${dlg.querySelectorAll(".modal-hint").length})`);
+
+        // THE ALIGNMENT CLAIM, measured rather than eyeballed: every control on
+        // a captioned field starts at the same x, and every checkbox does too.
+        const leftOf = (el) => Math.round(el.getBoundingClientRect().left);
+        const valueRows = fields.filter((f) => !f.classList.contains("modal-check"));
+        const checkRows = fields.filter((f) => f.classList.contains("modal-check"));
+        const ctrlX = [...new Set(valueRows.map((f) => leftOf(f.querySelector("select, input"))))];
+        const boxX = [...new Set(checkRows.map((f) => leftOf(f.querySelector("input"))))];
+        ok(ctrlX.length === 1, `the controls share one column (x = ${ctrlX.join(", ")})`);
+        ok(boxX.length === 1, `the boxes share one column (x = ${boxX.join(", ")})`);
+
+        // A checkbox leads with its box; a captioned field leads with its text.
+        const first = (f) => f.firstElementChild?.tagName + "." + (f.firstElementChild?.className ?? "");
+        ok(checkRows.every((f) => f.firstElementChild?.type === "checkbox"),
+          "every option row starts with its box");
+        ok(valueRows.every((f) => f.firstElementChild?.classList.contains("modal-label")),
+          `every setting row starts with its caption (${first(valueRows[0])})`);
+
+        // The hint belongs to the field above it, and is dimmer than the label.
+        const px = (el, p) => win.getComputedStyle(el).getPropertyValue(p);
+        const label = dlg.querySelector(".modal-check .modal-label");
+        const hint = dlg.querySelector(".modal-hint");
+        if (hint) {
+          ok(parseFloat(px(hint, "font-size")) < parseFloat(px(label, "font-size")),
+            `hints are set smaller than labels (${px(hint, "font-size")} vs ${px(label, "font-size")})`);
+          ok(px(hint, "color") !== px(label, "color"), "…and dimmer");
+        }
+
+        // Nothing may overflow the dialog: that is what the old one-line labels did.
+        const dr = dlg.getBoundingClientRect();
+        const overflow = [...dlg.querySelectorAll(".modal-field, .modal-hint")]
+          .filter((el) => el.getBoundingClientRect().right > dr.right + 1);
+        ok(overflow.length === 0, `nothing runs past the dialog edge (${overflow.length})`);
+
+        log(out.some((l) => l.includes("FAIL")) ? "SOME FAILED" : "ALL PASS");
+      } catch (err) {
+        log("EXCEPTION: " + (err && err.stack ? err.stack : err));
+      }
+    })();
+  </script>
+</body>
+</html>

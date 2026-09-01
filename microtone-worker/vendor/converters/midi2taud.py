@@ -37,6 +37,11 @@ Behaviour (per midi2taud.md):
     velocity 0 — are translated into Taud KEY_OFF. Percussion-channel
     key-offs are dropped by default (GM percussion ignores note-off, and
     emitting them would chop one-shot drum tails); --drum-keyoff re-enables.
+    A note only a handful of MIDI ticks long lands on the fine tick it started
+    on and would be dropped as zero-length; anything the source gave a duration
+    is held to MIN_NOTE_FT instead. This matters most for percussion, where a
+    one-tick note-on is the ordinary idiom precisely because note-off is
+    ignored. A note the source itself wrote as zero-length is still dropped.
   * The SF2 key/velocity sample-layering model is recreated faithfully. Each
     preset's zones are partitioned into the fewest mutually-DISJOINT layers
     (--max-layers cap, default 4); each layer becomes one normal Taud instrument
@@ -146,6 +151,21 @@ from taud_common import (
 )
 
 SIGNATURE = b'midi2taud/TSVM'   # 14 bytes
+
+# Shortest length, in fine ticks, a note that HAD a duration in the MIDI is
+# allowed to come out with. A note only a handful of MIDI ticks long lands on
+# the same fine tick it started on — the Taud grid is coarser than the
+# performance — and a zero-length note is dropped. That silently deleted
+# PERCUSSION above all: GM drums ignore note-off, so sequencers write drum hits
+# as the shortest note they can, one or two ticks, and a whole kit could vanish
+# from a converted song. (Measured on flourish.mid: 50 notes lost, 49 of them on
+# channel 10.) It was phase-dependent too — the same 10-tick note survived or
+# died depending on which tick it started on, because the ft conversion rounds.
+# One fine tick is the shortest length the grid can hold, and it is enough:
+# a drum keeps its trigger and no key-off (so the sample rings out in full),
+# and a melodic note's key-off rounds up to the next row through the sub-row
+# path in emit_cells.
+MIN_NOTE_FT = 1
 UNITS_PER_SEMI = 4096.0 / 12.0  # 4096-TET units per 12-TET semitone
 
 # Effect priorities for the shared per-cell effect slot. Higher wins when a
@@ -322,12 +342,17 @@ def parse_midi(path: str):
 
 class Note:
     __slots__ = ('ch', 'key', 'vel', 'start_ft', 'end_ft', 'inst_key',
-                 'bend0', 'slot', 'voice', 'drum', 'pedal_ft', 'excl_cut_ft')
-    def __init__(self, ch, key, vel, start_ft, inst_key, bend0):
+                 'bend0', 'slot', 'voice', 'drum', 'pedal_ft', 'excl_cut_ft',
+                 'start_tick')
+    def __init__(self, ch, key, vel, start_ft, inst_key, bend0, start_tick=0):
         self.ch       = ch
         self.key      = key
         self.vel      = vel
         self.start_ft = start_ft
+        # The SOURCE tick the note-on sat on. Kept only so end_note can tell a
+        # note the source itself wrote as zero-length from one the fine-tick
+        # grid collapsed (MIN_NOTE_FT).
+        self.start_tick = start_tick
         self.end_ft   = None
         self.inst_key = inst_key
         self.bend0    = bend0
@@ -429,18 +454,41 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
     timesig_ft, timesig = [], []          # ft → (numerator, denom_power)
     title = None
     max_ft = 0
+    max_tick = 0
     loop_text_start = loop_text_end = None    # FF 06/01 "loops"/"loope" ft
     loop_cc = {}                              # loop CC number → first occurrence ft
     eot_ft = None                             # latest End-of-Track ft (loop-end fallback)
 
-    def end_note(n: Note, ft: int):
-        if n.end_ft is None:
-            n.end_ft = max(ft, n.start_ft)
+    extended = [0]      # notes rescued by the MIN_NOTE_FT floor, for the log
+
+    def end_note(n: Note, ft: int, tick: int, floor: bool = True):
+        """Close `n` at fine tick `ft` (source tick `tick`).
+
+        A note the SOURCE gave a duration keeps at least MIN_NOTE_FT, even when
+        the ft conversion collapsed it onto its own start — see the constant.
+        A note the source itself wrote as zero-length (note-on and note-off on
+        the same tick) is left zero-length and dropped below, as before.
+
+        `floor=False` is the RE-STRIKE case: the note is being closed because
+        the same key sounds again, so the floor must not push its end past its
+        own successor. Two hits of one key on one fine tick are a thing the
+        grid cannot hold either way, and dropping the first is what happens to
+        any two events that land on one cell.
+        """
+        if n.end_ft is not None:
+            return
+        end = max(ft, n.start_ft)
+        if floor and tick > n.start_tick and end < n.start_ft + MIN_NOTE_FT:
+            end = n.start_ft + MIN_NOTE_FT
+            extended[0] += 1
+        n.end_ft = end
 
     for tick, _seq, ev in merged:
         ft = to_ft(tick)
         if ft > max_ft:
             max_ft = ft
+        if tick > max_tick:
+            max_tick = tick
         kind = ev[0]
 
         if kind == 'on':
@@ -448,9 +496,9 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
             st = chs[ch]
             prev = st.active.pop(key, None)
             if prev is not None:                 # re-strike: close the old one
-                end_note(prev, ft)
+                end_note(prev, ft, tick, floor=False)
             ik = ('d', st.prog) if ch == 9 else ('m', st.bank, st.prog)
-            n = Note(ch, key, vel, ft, ik, st.cur_bend)
+            n = Note(ch, key, vel, ft, ik, st.cur_bend, tick)
             st.active[key] = n
             notes.append(n)
 
@@ -463,7 +511,7 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
                     n.pedal_ft = ft
                     st.pending.append(n)
                 else:
-                    end_note(n, ft)
+                    end_note(n, ft, tick)
 
         elif kind == 'bend':
             _, ch, val14 = ev
@@ -495,7 +543,7 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
                 else:
                     st.sus = False
                     for n in st.pending:
-                        end_note(n, ft)
+                        end_note(n, ft, tick)
                     st.pending.clear()
             elif num == 100:
                 st.rpn_lsb = val
@@ -511,10 +559,10 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
                     st.range_cents = val
             elif num in (120, 123):              # all sound / notes off
                 for n in list(st.active.values()):
-                    end_note(n, ft)
+                    end_note(n, ft, tick)
                 st.active.clear()
                 for n in st.pending:
-                    end_note(n, ft)
+                    end_note(n, ft, tick)
                 st.pending.clear()
             elif num == 121:                     # reset all controllers
                 st.cur_bend = 0.0
@@ -522,7 +570,7 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
                 _curve_push(st.cc11_ft, st.cc11_val, ft, 127)
                 st.sus = False
                 for n in st.pending:
-                    end_note(n, ft)
+                    end_note(n, ft, tick)
                 st.pending.clear()
                 st.rpn_msb = st.rpn_lsb = 0x7F
 
@@ -554,15 +602,22 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
             if eot_ft is None or ft > eot_ft:
                 eot_ft = ft
 
-    # Close anything still ringing at end-of-file.
+    # Close anything still ringing at end-of-file. `max_tick` is the last event
+    # in the file, so a note still held there is a note the source never ended —
+    # it has a duration, and the MIN_NOTE_FT floor applies to it like any other.
     for st in chs:
         for n in list(st.active.values()):
-            end_note(n, max_ft)
+            end_note(n, max_ft, max_tick)
         st.active.clear()
         for n in st.pending:
-            end_note(n, max_ft)
+            end_note(n, max_ft, max_tick)
         st.pending.clear()
 
+    if extended[0]:
+        vprint(f"  info: {extended[0]} note(s) shorter than one fine tick held "
+               f"to {MIN_NOTE_FT} (they would have been dropped)")
+    # What is left here is genuinely zero-length IN THE SOURCE: a note-on and a
+    # note-off on the same tick, or a key struck twice on one fine tick.
     dropped = [n for n in notes if n.end_ft <= n.start_ft]
     if dropped:
         vprint(f"  info: dropped {len(dropped)} zero-length note(s)")
@@ -610,50 +665,110 @@ def resolve_quantise_grid(spec, division, merged, rpb: int) -> int:
 
 def quantise_notes(song: Song, rpb: int, speed: int, denom: int,
                    strength: float) -> tuple:
-    """Snap note onsets onto a 1/`denom`-of-a-beat grid, `strength` (0..1) of
-    the way there.
+    """Snap notes onto a 1/`denom`-of-a-beat grid, `strength` (0..1) of the way.
 
-    Note LENGTHS are preserved: the whole note moves, key-off included. A
-    passage played late but held for the right time therefore comes out on the
-    grid and still the right length, and a phrase's articulation — its gaps —
-    survives. Snapping the ends as well would regularise the gaps too, which is
-    a different edit and one this option is not asking for.
+    BOTH ENDS move: the onset and the key-off are each snapped, so a quantised
+    note starts on the grid and lasts a whole number of grid steps. Moving only
+    the onset would leave every release exactly as ragged as it was played,
+    which is half a job — a phrase quantised that way still has its key-offs
+    scattered across the ticks between rows.
+
+    The floor is MIN_NOTE_FT, and it is what keeps the shortest notes short: a
+    note under half a grid step has both ends land on the SAME grid point, and
+    rather than lengthen it to a full step (which would turn a drum hit or a
+    grace note into a sixteenth) it stays at the shortest length the grid can
+    hold. So notes at or above half a step come out on the grid, and the ones
+    below it come out as short as they can be — which is what they were.
 
     `strength` is the answer to the warning this option prints: at 100 the grid
-    wins outright, and at (say) 50 every onset moves half way to it, which
+    wins outright, and at (say) 50 everything moves half way to it, which
     tightens sloppy playing while leaving a deliberate push or drag audible.
+    Both ends take the same strength, so a partly-quantised note keeps a
+    proportionate amount of its own length.
 
     Runs before apply_exclusive_class, so percussion chokes are measured from
     the quantised onsets. Returns (moved, worst_shift, mean_shift) in fine
-    ticks, for the log line.
+    ticks over the ENDS THAT MOVED (onsets and key-offs counted alike), plus the
+    two accidental-overlap counts — notes shortened, and notes that collapsed
+    onto another strike of the same key and were dropped — for the log line.
     """
     step = (rpb * speed) / denom
     if step <= 0.0 or not song.notes:
-        return 0, 0, 0.0
+        return 0, 0, 0.0, 0, 0
+
+    def snap(ft: int) -> int:
+        """`ft` pulled `strength` of the way to its nearest grid point."""
+        target = round(ft / step) * step
+        return ft + int(round((target - ft) * strength))
+
     moved = 0
     total = 0
     worst = 0
     for n in song.notes:
-        target = round(n.start_ft / step) * step
-        delta = int(round((target - n.start_ft) * strength))
-        if delta < -n.start_ft:
-            delta = -n.start_ft          # never before the start of the song
-        if delta == 0:
-            continue
-        dur = n.end_ft - n.start_ft
-        n.start_ft += delta
-        n.end_ft = n.start_ft + dur
+        start = max(0, snap(n.start_ft))          # never before the song starts
+        end = max(snap(n.end_ft), start + MIN_NOTE_FT)
+        for was, now in ((n.start_ft, start), (n.end_ft, end)):
+            if was != now:
+                moved += 1
+                total += abs(now - was)
+                worst = max(worst, abs(now - was))
         if n.pedal_ft is not None:
-            n.pedal_ft = max(n.pedal_ft + delta, n.start_ft)
-        moved += 1
-        total += abs(delta)
-        worst = max(worst, abs(delta))
+            # The physical key-up rides between the two, wherever they land.
+            n.pedal_ft = min(max(n.pedal_ft + (start - n.start_ft), start), end)
+        n.start_ft, n.end_ft = start, end
+
+    # ── accidental overlaps ──────────────────────────────────────────────────
+    # Quantising puts every boundary on the grid, so an overlap it leaves is a
+    # whole number of steps — a real chord, a real pedal, a real held bass.
+    # The exception is the MIN_NOTE_FT floor: a note whose two ends collapsed
+    # onto ONE grid point is held open off-grid, and that is the only way an
+    # overlap SHORTER than a step can exist afterwards. (Measured on Temjin.mid
+    # and Cuba Baion.mid: every single sub-step overlap has a floored note as
+    # its earlier half — 1139 of 1139 and 55 of 55.) So "shorter than one step"
+    # is an exact test for "this pass caused it", and this pass cleans it up.
+    #
+    # Only within one (channel, KEY): nothing can strike one key twice at once,
+    # so an overlap there is impossible in the source and definitionally an
+    # artefact. Same channel, DIFFERENT key is left alone — 1005 of Temjin's
+    # 1139 are that, nearly all on channel 10, and they are a kick sounding
+    # under a hi-hat. Shortening those would be cutting up a drum kit, and it
+    # would buy nothing: _note_end_row frees a drum's column after ONE ROW
+    # whatever its end_ft says, and a one-fine-tick overlap between two melodic
+    # notes almost never crosses a row boundary either, so neither costs a
+    # voice column in the first place.
+    trimmed = collapsed = 0
+    runs = {}
+    for n in song.notes:
+        runs.setdefault((n.ch, n.key), []).append(n)
+    for run in runs.values():
+        # Equal onsets sort SHORTEST first, so the note that loses is the one
+        # with least to lose.
+        run.sort(key=lambda n: (n.start_ft, n.end_ft))
+        for a, b in zip(run, run[1:]):
+            overlap = a.end_ft - b.start_ft
+            if overlap <= 0 or overlap >= step:
+                continue
+            # Shorten the EARLIER note to where the later one begins. When the
+            # two begin together — which is nearly every case in practice, the
+            # floor having held a note open on the grid point its successor
+            # also landed on — there is nothing left of it, and that is the
+            # right answer too: one strike of a key is one strike, and `b` is
+            # the half of the pair with a length to keep. The filter below
+            # drops what came out empty.
+            a.end_ft = max(b.start_ft, a.start_ft)
+            if a.end_ft > a.start_ft:
+                trimmed += 1
+            else:
+                collapsed += 1
+    if collapsed:
+        song.notes = [n for n in song.notes if n.end_ft > n.start_ft]
+
     if moved:
         # extract_song left the list sorted; a move can reorder it, and both the
         # voice allocator and the cell emitter walk it in onset order.
         song.notes.sort(key=lambda n: (n.start_ft, n.ch, n.key))
         song.end_ft = max(song.end_ft, max(n.end_ft for n in song.notes))
-    return moved, worst, (total / moved if moved else 0.0)
+    return moved, worst, (total / moved if moved else 0.0), trimmed, collapsed
 
 
 # ── Auto timing (Tickspeed + RPB) ──────────────────────────────────────────────
@@ -3825,15 +3940,17 @@ def main():
                          'resampled harder to fit the 8 MB budget')
     ap.add_argument('--quantise', '--quantize', nargs='?', const='auto',
                     default=None, type=_quantise_grid, metavar='GRID',
-                    help='Snap note onsets onto a beat grid (OFF by default). '
+                    help='Snap notes onto a beat grid, both ends (OFF by default). '
                          'GRID is auto (the subdivision the onsets already use), '
                          'row (the Taud row grid), or one of '
                          + '/'.join(str(g) for g in QUANTISE_GRIDS)
                          + ' as a beat subdivision; bare --quantise means auto. '
                            'WARNING: this erases deliberate off-grid timing — '
                            'swing, flams, grace notes, humanised phrasing — '
-                           'along with the mistakes. Note lengths are kept: the '
-                           'whole note moves')
+                           'along with the mistakes. Onsets AND key-offs are '
+                           'snapped, so a note lasts a whole number of grid '
+                           'steps; anything shorter than half a step stays as '
+                           'short as the grid can hold it')
     ap.add_argument('--quantise-strength', '--quantize-strength', type=int,
                     default=100, metavar='PCT', dest='quantise_strength',
                     help='How far --quantise moves each onset towards the grid, '
@@ -3863,7 +3980,7 @@ def main():
     # performance rather than the encoding of it, and somebody who passed it
     # without -v still has to be told what it costs.
     if args.quantise is not None:
-        print("warning: --quantise snaps note onsets onto the beat grid. "
+        print("warning: --quantise snaps notes onto the beat grid, both ends. "
               "Deliberate off-grid timing — swing, flams, grace notes, "
               "humanised phrasing — is erased along with the mistakes. "
               "Lower --quantise-strength to tighten the timing without "
@@ -3911,10 +4028,15 @@ def load_midi_song(path: str, sf: SF2, args):
     if args.quantise is not None:
         denom = resolve_quantise_grid(args.quantise, division, merged, rpb)
         strength = max(0, min(100, args.quantise_strength)) / 100.0
-        moved, worst, mean = quantise_notes(song, rpb, speed, denom, strength)
+        moved, worst, mean, trimmed, collapsed = quantise_notes(
+            song, rpb, speed, denom, strength)
         vprint(f"  quantise: 1/{denom} of a beat at {round(strength * 100)}% — "
-               f"{moved}/{len(song.notes)} note(s) moved, mean {mean:.1f} / "
+               f"{moved}/{2 * len(song.notes)} note end(s) moved, mean {mean:.1f} / "
                f"max {worst} fine-tick(s)")
+        if trimmed or collapsed:
+            vprint(f"  quantise: {trimmed} accidental overlap(s) trimmed, "
+                   f"{collapsed} note(s) collapsed onto another strike of the "
+                   f"same key")
 
     # SF2 exclusiveClass percussion choking (closed hi-hat silences open hi-hat, etc.).
     apply_exclusive_class(song, sf, args.perc_force_mapping)

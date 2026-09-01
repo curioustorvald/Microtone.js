@@ -21,11 +21,23 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
       p.textContent = body;
       dlg.appendChild(p);
     }
+    // One container for every field, so the controls can share a column: with
+    // each label its own block, a select landed wherever its label happened to
+    // end and the dialog read as a ragged list of sentences. Scoped to the
+    // fields THIS helper builds — the panner and the export picker append
+    // `.modal-field` labels to layouts of their own.
+    const form = document.createElement("div");
+    form.className = "modal-form";
     const inputs = {};
     for (const f of fields) {
       const label = document.createElement("label");
       label.className = "modal-field";
-      label.append(f.label + " ");
+      // The caption is its own element rather than a bare text node: it is what
+      // gives the control column something to measure against, and on a
+      // checkbox it is what sits AFTER the box.
+      const caption = document.createElement("span");
+      caption.className = "modal-label";
+      caption.textContent = f.label ?? "";
       let input;
       if (f.type === "select") {
         input = document.createElement("select");
@@ -40,6 +52,7 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
         input = document.createElement("input");
         input.type = "checkbox";
         input.checked = !!f.value; // resolves as a boolean, not a string
+        label.classList.add("modal-check");
       } else {
         input = document.createElement("input");
         input.type = f.type ?? "text";
@@ -50,9 +63,23 @@ export function showModal({ title, fields = [], okLabel = "OK", body = null }) {
       }
       input.name = f.name;
       inputs[f.name] = input;
-      label.appendChild(input);
-      dlg.appendChild(label);
+      // A checkbox leads with its box, so a column of options can be scanned
+      // and hit down one edge; everything else leads with its caption.
+      if (f.type === "checkbox") label.append(input, caption);
+      else label.append(caption, input);
+      form.appendChild(label);
+      // `hint` is the explanation that used to be crammed into the label in
+      // brackets. Under the field and dimmed, it can be a whole sentence
+      // without pushing the control off to the right or drowning the name of
+      // the setting in it.
+      if (f.hint) {
+        const hint = document.createElement("p");
+        hint.className = "modal-hint";
+        hint.textContent = f.hint;
+        form.appendChild(hint);
+      }
     }
+    dlg.appendChild(form);
     const row = document.createElement("div");
     row.className = "modal-buttons";
     const ok = document.createElement("button");

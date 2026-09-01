@@ -1217,6 +1217,41 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   padding: 0.25rem 0.4rem;
   margin-left: 0.5rem;
 }
+/* Fields built by widgets/modal.js. One row per field, and a caption column
+   wide enough that every control starts at the same x — a dialog of settings
+   should read as a form, not as a list of sentences with a box on the end of
+   each. A caption longer than the column pushes its own control right rather
+   than widening the column for everyone; that is the rare case and the
+   readable failure. */
+.modal-form .modal-field { display: flex; align-items: center; gap: 0.5rem; }
+.modal-form .modal-label { flex: 0 0 auto; }
+.modal-form .modal-field:not(.modal-check) > .modal-label { min-width: 9.5rem; }
+/* …and they END together too: a control takes the rest of its row, so the form
+   has one flush right edge instead of a select sized to its longest option and
+   a text box sized to nothing. Checkboxes are exempt — a stretched tick box is
+   a hit target with no edges. */
+.modal-form .modal-field input, .modal-form .modal-field select {
+  margin-left: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A number is short and reads as one: stretching a row count across the dialog
+   says "type a sentence here". It still STARTS in the shared column. */
+.modal-form .modal-field input[type="number"] { flex: 0 1 7rem; }
+/* An option leads with its box, so the boxes make one column to scan and to
+   hit; its caption then takes the rest of the row and may wrap. */
+.modal-check > input[type="checkbox"] { flex: 0 0 auto; margin: 0; }
+.modal-check > .modal-label { flex: 1 1 auto; color: var(--fg); }
+/* The explanation that used to live in brackets inside the label. Indented to
+   clear the checkbox column so it reads as belonging to the field above it. */
+.modal .modal-hint {
+  margin: -0.35rem 0 0.7rem 1.55rem;
+  color: var(--dim);
+  font-size: 0.85em;
+  line-height: 1.45;
+  text-align: left;
+  hyphens: manual;
+}
 .modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
 
 /* ── icon-cell context menu (widgets/contextmenu.js) ──

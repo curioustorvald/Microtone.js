@@ -455,6 +455,180 @@ test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; 
       `expected 16-rpb (${rows16}) to far exceed 2-rpb (${rows2})`);
   });
 
+/** A minimal SMF-0 whose notes last only `len` MIDI ticks — the shape a
+ *  sequencer writes for GM percussion, which ignores note-off. Synthesised
+ *  rather than shipped as a corpus binary so the durations under test are
+ *  visible right here. One beat apart, a distinct melodic pitch each, a snare
+ *  alongside every one of them, and a final note the SOURCE itself writes as
+ *  zero-length. */
+function makeShortNoteMidi({ tpq = 480, len = 3, count = 8 } = {}) {
+  const ev = [];
+  const varlen = (n) => {
+    const b = [n & 0x7f];
+    n >>= 7;
+    while (n > 0) { b.unshift((n & 0x7f) | 0x80); n >>= 7; }
+    return b;
+  };
+  let last = 0;
+  const at = (tick, ...bytes) => { ev.push(...varlen(tick - last), ...bytes); last = tick; };
+  at(0, 0xff, 0x51, 0x03, 0x07, 0xa1, 0x20);   // 500000 µs/quarter = 120 BPM
+  at(0, 0xc0, 0x00);                            // ch0  → Grand Piano
+  at(0, 0xc9, 0x00);                            // ch9  → standard kit
+  for (let i = 0; i < count; i++) {
+    const t = i * tpq;
+    at(t, 0x90, 60 + i, 100);
+    at(t, 0x99, 38, 100);                       // snare, same instant
+    at(t + len, 0x80, 60 + i, 0);
+    at(t + len, 0x89, 38, 0);
+  }
+  const z = count * tpq;                        // zero-length: on and off together
+  at(z, 0x90, 72, 100);
+  at(z, 0x80, 72, 0);
+  at(z + tpq, 0xff, 0x2f, 0x00);
+  const head = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, (tpq >> 8) & 0xff, tpq & 0xff];
+  const trk = [0x4d, 0x54, 0x72, 0x6b,
+    (ev.length >>> 24) & 0xff, (ev.length >>> 16) & 0xff,
+    (ev.length >>> 8) & 0xff, ev.length & 0xff];
+  return new Uint8Array([...head, ...trk, ...ev]);
+}
+
+test("midi2taud keeps notes only a few MIDI ticks long (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    // 3 ticks at 480 PPQ is a fortieth of a fine tick on the grid the picker
+    // chooses here (rpb 4 x speed 6 = 24 per beat, so 20 MIDI ticks each), so
+    // every one of these notes used to round to zero length and be DROPPED —
+    // this exact file converted to "MIDI contains no playable notes". The floor
+    // holds anything the source gave a duration at one fine tick.
+    const COUNT = 8;
+    const out = runConverter(py, {
+      script: "midi2taud.py",
+      argv: buildArgv({ isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" }),
+      inputs: [
+        { path: "/in.mid", bytes: makeShortNoteMidi({ len: 3, count: COUNT }) },
+        { path: "/sf.sf2", bytes: readFileSync(sf2Path) },
+      ],
+      output: "/out.taud",
+      onLog: () => {},
+    });
+    const cells = triggerCells(parseTaud(out));
+    assert.equal(cells.length, COUNT * 2,
+      `every 3-tick note survives: ${COUNT} melodic + ${COUNT} drum`);
+
+    // The melodic run is eight ASCENDING pitches, one per beat — so this also
+    // says the rescued notes kept their own pitch and their own place, rather
+    // than being smeared onto one row.
+    const notes = [...new Set(cells.map((c) => c.note))].sort((a, b) => a - b);
+    assert.equal(notes.length, COUNT + 1, "8 melodic pitches + the snare's");
+    const melodic = notes.slice(-COUNT);
+    for (let i = 1; i < melodic.length; i++) {
+      assert.ok(melodic[i] > melodic[i - 1], "the melodic pitches ascend");
+    }
+
+    // …and a note the SOURCE wrote as zero-length is still dropped: that is an
+    // artefact, not a performance, and the floor deliberately does not rescue
+    // it. Its key 72 is an exact octave above middle C, so it would be $6000 —
+    // a ninth pitch, above all eight — and nothing may carry it.
+    assert.ok(!notes.includes(0x6000),
+      `the zero-length note produced no trigger (pitches ${notes.map((n) => n.toString(16))})`);
+  });
+
+/** A phrase played by hand: eight notes a beat apart on ONE pitch, every onset
+ *  and every release a few ticks off the grid, plus a flam — a ninth strike of
+ *  the same key two ticks after the fourth, which quantising must fold into it
+ *  rather than leave overlapping. */
+function makeRaggedMidi({ tpq = 480, count = 8 } = {}) {
+  const ev = [];
+  const varlen = (n) => {
+    const b = [n & 0x7f];
+    n >>= 7;
+    while (n > 0) { b.unshift((n & 0x7f) | 0x80); n >>= 7; }
+    return b;
+  };
+  const events = [];
+  const at = (tick, ...bytes) => events.push([tick, bytes]);
+  at(0, 0xff, 0x51, 0x03, 0x07, 0xa1, 0x20);   // 120 BPM
+  at(0, 0xc0, 0x00);
+  const slopOn = [0, 23, -17, 31, -9, 14, -28, 6];
+  const slopOff = [-19, 12, 27, -31, 8, -14, 21, -6];
+  for (let i = 0; i < count; i++) {
+    const on = Math.max(0, i * tpq + slopOn[i]);
+    at(on, 0x90, 60, 100);
+    at(on + tpq - 40 + slopOff[i], 0x80, 60, 0);
+  }
+  // The flam: two strikes of one key 30 ticks apart, each properly closed, so
+  // both survive extraction as notes in their own right. At 480 PPQ on the grid
+  // the picker chooses here they are 1.5 fine ticks apart and land on the SAME
+  // grid point, which is the overlap this pass has to fold.
+  const f = count * tpq;
+  at(f, 0x90, 60, 100);
+  at(f + 20, 0x80, 60, 0);
+  at(f + 30, 0x90, 60, 100);
+  at(f + 400, 0x80, 60, 0);
+  at((count + 1) * tpq, 0xff, 0x2f, 0x00);
+  events.sort((a, b) => a[0] - b[0]);
+  let last = 0;
+  for (const [tick, bytes] of events) { ev.push(...varlen(tick - last), ...bytes); last = tick; }
+  const head = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, (tpq >> 8) & 0xff, tpq & 0xff];
+  const trk = [0x4d, 0x54, 0x72, 0x6b,
+    (ev.length >>> 24) & 0xff, (ev.length >>> 16) & 0xff,
+    (ev.length >>> 8) & 0xff, ev.length & 0xff];
+  return new Uint8Array([...head, ...trk, ...ev]);
+}
+
+/** Every cell carrying a note event, trigger or key-off, with its S $Dx delay. */
+function noteCells(doc) {
+  const out = [];
+  for (const song of doc.songs) {
+    for (const pat of song.patterns) {
+      for (let r = 0; r < 64; r++) {
+        const o = r * 8;
+        const note = pat[o] | (pat[o + 1] << 8);
+        if (note === 0) continue;
+        const arg = pat[o + 6] | (pat[o + 7] << 8);
+        const delay = pat[o + 5] === 0x1c && ((arg >>> 12) & 0xf) === 0xd
+          ? (arg >>> 8) & 0xf : 0;
+        out.push({ note, delay, keyoff: note === 1, trigger: note >= 0x20 });
+      }
+    }
+  }
+  return out;
+}
+
+test("midi2taud --quantise snaps note ENDS too, and folds the overlaps it makes (skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    const count = 8;
+    const midi = makeRaggedMidi({ count });
+    const run = (opts) => runConverter(py, {
+      script: "midi2taud.py",
+      argv: buildArgv({ isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2",
+                        outPath: "/out.taud", ...opts }),
+      inputs: [{ path: "/in.mid", bytes: midi }, { path: "/sf.sf2", bytes: readFileSync(sf2Path) }],
+      output: "/out.taud",
+      onLog: () => {},
+    });
+
+    // Played as written, the ragged RELEASES need sub-row delays to express —
+    // that residue is the thing end-quantisation removes.
+    const played = noteCells(parseTaud(run({})));
+    assert.ok(played.some((c) => c.keyoff && c.delay > 0),
+      "premise: the unquantised import delays some key-offs into the row");
+
+    const snapped = noteCells(parseTaud(run({ quantise: "row" })));
+    assert.deepEqual(snapped.filter((c) => c.delay > 0), [],
+      "on the row grid nothing needs a delay — onsets AND key-offs land on rows");
+    assert.ok(snapped.some((c) => c.keyoff), "…and the key-offs are still there");
+
+    // The flam is a ninth strike of the SAME key two ticks after the fourth.
+    // Quantised onto one grid point it is one strike, not two overlapping ones,
+    // so the triggers come back to the eight notes of the phrase.
+    assert.equal(played.filter((c) => c.trigger).length, count + 2,
+      "premise: the phrase plus BOTH halves of the flam");
+    assert.equal(snapped.filter((c) => c.trigger).length, count + 1,
+      "the flam's two strikes folded into the one grid point they share");
+  });
+
 test("midi2taud --quantise puts every onset on a row (item 168; skips without the SF2)",
   { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
   () => {

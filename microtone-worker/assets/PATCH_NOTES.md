@@ -4,11 +4,20 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-09-02
+
+- **Fixed: MIDI imports lost their drums** — a note only a handful of MIDI ticks long rounded to zero length on the tracker grid and was thrown away, and that is exactly how percussion is written: GM kits ignore note-off, so sequencers give each hit the shortest note they can, one or two ticks. Any note the file gave a length now keeps at least the shortest length the grid can hold, and a drum hit still rings its sample out in full because it never had a key-off to begin with.
+  - Measured on one piano-and-drums MIDI: 50 notes were being dropped, 49 of them percussion. Another test file lost every note it had and refused to convert at all.
+- **Which short notes survived used to be luck of the draw.** The same two-tick hit lived or died depending on which tick of the bar it started on, because the conversion to tracker time rounds — so a drum part could come through with half its hits missing and no pattern to it. Length is now the only thing that decides, and nothing the file actually played is below the floor.
+- **A note the file writes as zero-length is still dropped** — switched on and off at the same instant. That is a sequencer artefact rather than something anyone played, and rescuing it would add clicks that were never in the music.
+- **The MIDI import dialog reads as a form now.** Its tick boxes sit in a column down the left, where they can be scanned and hit along one edge; its dropdowns share a column and a width; and what each option costs you has moved out of the label into a line of its own underneath. The name of a setting is now the name of the setting, rather than a sentence you have to read to the end of to find the checkbox.
+
 ## 2026-09-01
 
 - **Quantise timing on the MIDI import dialog.** A new option, **off by default**, that snaps every note onset onto a beat grid. A MIDI that was *played* rather than stepped in carries its performance in exactly the sub-row note delays the converter writes, so quantising throws that away — swing, flams, grace notes and any deliberate push or drag go along with the mistakes, which is why the option is off and why the label says so.
   - *Auto* snaps to the subdivision the piece already uses, *Tracker rows* snaps to the pattern grid itself (after which no note needs a delay at all), and the fractions snap to a fixed division of the beat.
-  - Note lengths are kept — the whole note moves, key-off included — so a phrase's articulation survives even where its timing does not.
+  - Both ends of every note are snapped, its start and its release, so a quantised note lasts a whole number of grid steps instead of keeping the ragged release it was played with. Notes shorter than half a step stay as short as the grid can hold them, so a drum hit or a grace note is not fattened into a sixteenth.
+  - Where that leaves two strikes of the same key on one grid point — a flam, quantised — they become the one strike they now are, rather than two notes overlapping by a hair and costing two channels for it.
 - **The Samples waveform reads out the byte under your pointer.** Move over the waveform and a hairline follows it, captioned with the byte offset under the line, that offset in hex, and the byte's own value. Bytes are the unit everything else about a sample is spelled in — loop points, `O` offsets, the ranges the sample-modification commands work over — so a number can now be read off the picture instead of estimated.
 - **Envelope Carry: a note can pick the envelope up where the last one left it.** Every envelope tab in the Instruments view gains a **Carry** box beside *Envelope present*. Tick it and a new note does not restart that envelope — the playhead stays where it was — so a slow pan sweep, a filter opening or a long decay runs across a whole phrase of repeated notes instead of resetting on each one. Each of the four envelopes decides for itself, and a zone in Advanced Edit can decide for its own copy.
   - Carry is ignored where there is nothing worth keeping: after a key-off, and on a note that changes instrument. Either would otherwise start the new note part way down the old one's release.
