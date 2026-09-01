@@ -58,6 +58,8 @@ function convert(fileName, opts = {}) {
       isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
       rpb: opts.rpb ?? null, trimPatches: opts.trimPatches === true,
       keepDuplicatePatterns: opts.keepDuplicatePatterns === true,
+      quantise: opts.quantise ?? null,
+      quantiseStrength: opts.quantiseStrength ?? 100,
     }),
     inputs,
     output: "/out.taud",
@@ -135,6 +137,39 @@ test("buildArgv opts IN to keeping duplicate patterns only when asked", () => {
   // Pattern pooling is a MIDI-converter concern — tracker argv never carries it.
   assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.mod", outPath: "/out.taud",
                                keepDuplicatePatterns: true }),
+    ["/in.mod", "/out.taud", "-v"]);
+});
+
+test("buildArgv opts IN to quantisation only when asked (item 168)", () => {
+  const base = { isMidi: true, inPath: "/in.mid", sf2Path: "/sf.sf2", outPath: "/out.taud" };
+  // Default: NO flag — the performance's own timing is what gets converted.
+  assert.deepEqual(buildArgv(base), ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: null }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: "off" }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: "auto" }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--quantise", "auto"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: "row" }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--quantise", "row"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: 16 }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--quantise", "16"]);
+  // Full strength is the converter's own default, so it is never spelled out.
+  assert.deepEqual(buildArgv({ ...base, quantise: 8, quantiseStrength: 100 }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--quantise", "8"]);
+  assert.deepEqual(buildArgv({ ...base, quantise: 8, quantiseStrength: 50 }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--quantise", "8", "--quantise-strength", "50"]);
+  // A strength with no grid is not a request to quantise.
+  assert.deepEqual(buildArgv({ ...base, quantiseStrength: 50 }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v"]);
+  // Stacks with the other MIDI options, in argparse-safe order.
+  assert.deepEqual(buildArgv({ ...base, rpb: 8, trimPatches: true, stereoSamples: true,
+                               keepDuplicatePatterns: true, quantise: "auto" }),
+    ["/in.mid", "/sf.sf2", "/out.taud", "-v", "--rpb", "8", "--trim-unused-patches",
+     "--stereo-samples", "--no-dedup-patterns", "--quantise", "auto"]);
+  // Timing quantisation is a MIDI concern — tracker argv never carries it.
+  assert.deepEqual(buildArgv({ isMidi: false, inPath: "/in.mod", outPath: "/out.taud",
+                               quantise: "auto" }),
     ["/in.mod", "/out.taud", "-v"]);
 });
 
@@ -223,6 +258,41 @@ test("it2taud under Pyodide → parseable, loadable document", () => {
   assert.ok(!msg.includes("\r"), "CR must not survive into PMsg");
   assert.ok(!/[ \t]\n/.test(msg), "trailing line padding must be trimmed");
   assert.ok(!msg.endsWith("\n"), "trailing blank lines must be trimmed");
+});
+
+/** Every {note trigger, effect opcode} pair the songs of `doc` carry, as
+ *  [[note, inst, op], …]. Taud opcodes are base-36 digit values: G = 16, L = 21,
+ *  S = 28. */
+function triggerCells(doc) {
+  const out = [];
+  for (const song of doc.songs) {
+    for (const pat of song.patterns) {
+      for (let r = 0; r < 64; r++) {
+        const o = r * 8;
+        const note = pat[o] | (pat[o + 1] << 8);
+        if (note < 0x20) continue;                // not a pitch trigger
+        out.push({ note, inst: pat[o + 2], op: pat[o + 5], arg: pat[o + 6] | (pat[o + 7] << 8) });
+      }
+    }
+  }
+  return out;
+}
+
+test("it2taud drops the instrument byte from porta-tied rows (item 169)", () => {
+  // ImpulseTracker does not reset the envelopes when a note carries both an
+  // instrument number and a tone portamento; the Taud engine deliberately DOES
+  // re-attack there (item 124), so the converter writes the passage the way an
+  // IT author's ear expects instead — without the instrument byte. TUTE.IT
+  // carries three such rows (two G, one L), and every one of them names the
+  // instrument the channel is already holding, so all three lose the byte.
+  const cells = triggerCells(parseTaud(convert("TUTE.IT")));
+  const tied = cells.filter((c) => c.op === 16 || c.op === 21);   // G, L
+  assert.ok(tied.length > 0, "premise: the file HAS porta-tied notes");
+  assert.deepEqual(tied.filter((c) => c.inst !== 0), [],
+    "no porta-tied trigger may still carry an instrument byte");
+  // The drop is surgical: ordinary triggers keep theirs.
+  assert.ok(cells.some((c) => c.op !== 16 && c.op !== 21 && c.inst !== 0),
+    "plain triggers still name their instrument");
 });
 
 test("failed conversion raises and leaves the runtime reusable", () => {
@@ -383,6 +453,29 @@ test("midi2taud --rpb pins the grid: more rows-per-beat → more rows (item 62; 
     assert.ok(rows2 > 0 && rows16 > 0, "both conversions produced rows");
     assert.ok(rows16 > rows2 * 2,
       `expected 16-rpb (${rows16}) to far exceed 2-rpb (${rows2})`);
+  });
+
+test("midi2taud --quantise puts every onset on a row (item 168; skips without the SF2)",
+  { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },
+  () => {
+    // S $Dx is the ONLY way a Taud pattern can say "this note starts part way
+    // through the row", so it is the exact residue of off-grid timing: a
+    // conversion quantised onto the row grid cannot need one, and an
+    // unquantised conversion of the same MIDI does.
+    const subRowDelays = (bytes) => triggerCells(parseTaud(bytes))
+      .filter((c) => c.op === 0x1c && ((c.arg >>> 12) & 0xf) === 0xd).length;
+
+    const played = subRowDelays(convert("M_E1M1.mid"));
+    assert.ok(played > 0, "premise: the unquantised import carries note delays");
+    assert.equal(subRowDelays(convert("M_E1M1.mid", { quantise: "row" })), 0,
+      "--quantise row leaves no sub-row timing to express");
+    // "auto" picks the subdivision the onsets already use, which is never finer
+    // than the row grid the picker chose for them.
+    assert.equal(subRowDelays(convert("M_E1M1.mid", { quantise: "auto" })), 0,
+      "--quantise auto lands on rows too");
+    // …and strength 0 is a no-op, which is what makes the strength dial safe.
+    assert.equal(subRowDelays(convert("M_E1M1.mid", { quantise: "row", quantiseStrength: 0 })),
+      played, "strength 0 moves nothing");
   });
 
 test("midi2taud --no-dedup-patterns unshares patterns without changing the song (skips without the SF2)",

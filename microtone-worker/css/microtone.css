@@ -1455,6 +1455,10 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   border-radius: 6px;
   touch-action: none;
 }
+/* The Samples-view waveform reads out the byte under the pointer (item 171),
+   so the pointer is a measuring instrument there, not a selector. The Sample
+   Lab's canvas keeps the default arrow: there the pointer drags a selection. */
+.side-detail > .wave-canvas { cursor: crosshair; }
 
 /* Paint-a-waveform modal (item 53) */
 .wavepaint-modal { max-width: min(1280px, 94vw); }

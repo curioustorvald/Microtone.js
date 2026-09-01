@@ -41,6 +41,14 @@ export function envPresent(loopWord) {
   return ((loopWord >>> 13) & 1) !== 0;
 }
 
+/** Envelope-carry test — the `c` bit at LOOP word bit 6 (item 169.1). A carried
+ *  envelope keeps its playhead across a retrigger instead of rewinding to node
+ *  0; whether the trigger is ALLOWED to carry is the caller's decision (see
+ *  triggerNote), because that depends on the voice, not on the envelope. */
+export function envCarry(loopWord) {
+  return ((loopWord >>> 6) & 1) !== 0;
+}
+
 // Reusable scratch (allocation-free per-tick walks; single-threaded per worklet).
 const volWrap = new Int32Array(2);
 const panWrap = new Int32Array(2);

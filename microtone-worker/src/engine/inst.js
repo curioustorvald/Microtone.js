@@ -80,6 +80,20 @@ export function patchIsStereo(patch) {
 }
 
 /**
+ * True when the patch says nothing about auto-vibrato and the base record's
+ * block should be used whole (item 170). The wire has one sentinel for five
+ * fields — the $FF waveform — and a patch that carries it while leaving all
+ * four numbers at zero is stating "inherit", not "no vibrato": reading its
+ * zeroes switched the instrument's own vibrato off on every note a keyboard
+ * map covered. Any non-zero number means the patch IS stating its own vibrato
+ * and only borrows the waveform.
+ */
+export function patchVibratoInherits(patch) {
+  return patch.vibratoWaveform === 0xff && patch.vibratoSpeed === 0 &&
+    patch.vibratoSweep === 0 && patch.vibratoDepth === 0 && patch.vibratoRate === 0;
+}
+
+/**
  * Parse a flat variable-length Ixmp patch blob (wire format) into patch
  * objects — the codec from AudioJSR223Delegate.kt:357-430, shared by the
  * engine upload path and the document layer. Returns [] for a short blob.

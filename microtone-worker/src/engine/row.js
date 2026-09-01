@@ -9,7 +9,7 @@ import {
   cutLayerChildren, applyVolColumn, applyPanColumn, applyPanColumnWide,
   narrowVolAxis,
 } from "./trigger.js";
-import { applyKeyLift, envPresent, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
+import { applyKeyLift, envPresent, envCarry, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
 import { startFastFade, startCutRamp } from "./sampler.js";
 import { applyEffectRow } from "./effects.js";
 
@@ -216,11 +216,18 @@ export function applyTrackerRow(eng, ts, playhead) {
         // put. Without the playhead half, a release that had already decayed
         // stayed decayed and swallowed the note.
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
+          // Envelope carry (item 169.1) applies to THIS re-attack too, and this
+          // is the row shape it was asked for: a chain of notes tied by G, each
+          // naming its instrument. Same disqualifiers as a fresh trigger — a
+          // released note, or an instrument change — read before either is
+          // overwritten below.
+          const mayCarry = !voice.keyOff && !voice.noteFading
+            && row.instrment === voice.instrumentId;
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal,
             narrowVolAxis(ts, voice.noteVolume));
-          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true, mayCarry);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -261,7 +268,8 @@ export function applyTrackerRow(eng, ts, playhead) {
 // re-attack: FT2 leaves such a row decaying, and re-arming its sustain would
 // hold a released note up for ever.
 import { applyActiveSample, rowVolumeFromDefault } from "./trigger.js";
-function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = false) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch,
+                              reAttack = false, mayCarry = false) {
   applyActiveSample(voice, newInst, newPatch);
   const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
@@ -270,9 +278,11 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   voice.noteFading = false;
   voice.fadeoutVolume = 1.0;
   if (!reAttack) return;
-  voice.envIndex = 0;
-  voice.envTimeSec = 0.0;
-  voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  if (!(mayCarry && envCarry(voice.activeVolEnvLoop))) {
+    voice.envIndex = 0;
+    voice.envTimeSec = 0.0;
+    voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  }
   // envVolMix is deliberately NOT snapped here (item 142). This re-attack does
   // not restart the sample and arms no attack ramp, so snapping the smoothed
   // envelope steps the gain mid-waveform — a tone portamento onto a note whose
@@ -280,26 +290,28 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   // per-sample glide (envVolStep, re-armed each tick) walks it to node 0
   // instead. A FRESH trigger still snaps, in triggerNote, because there the
   // sample restarts from zero and the attack ramp covers the discontinuity.
-  voice.envPanIndex = 0;
-  voice.envPanTimeSec = 0.0;
-  voice.envPan = voice.activePanEnv[0].value / 255.0;
   voice.hasPanEnv = envPresent(voice.activePanEnvLoop);
+  if (!(mayCarry && envCarry(voice.activePanEnvLoop))) {
+    voice.envPanIndex = 0;
+    voice.envPanTimeSec = 0.0;
+    voice.envPan = voice.activePanEnv[0].value / 255.0;
+  }
   // Pitch / filter envelope seeds — settle past leading zero-duration nodes.
-  if (voice.hasPitchEnv) {
+  if (!voice.hasPitchEnv) {
+    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activePitchEnvLoop))) {
     voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
       voice.activePitchEnvSustain);
     voice.envPitchIndex = pfIdxBox[0];
     voice.envPitchTimeSec = pfTimeBox[0];
-  } else {
-    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
   }
-  if (voice.hasFilterEnv) {
+  if (!voice.hasFilterEnv) {
+    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activeFilterEnvLoop))) {
     voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
       voice.activeFilterEnvSustain);
     voice.envFilterIndex = pfIdxBox[0];
     voice.envFilterTimeSec = pfTimeBox[0];
-  } else {
-    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
   }
 }
 

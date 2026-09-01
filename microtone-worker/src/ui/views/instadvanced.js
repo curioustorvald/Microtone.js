@@ -13,10 +13,10 @@
 // SNam realignment payload into the same op, so pool-order names survive.
 
 import { setInstPatchesOp } from "../../doc/ops.js";
-import { writePatchesBlob, makeInstPatch } from "../../engine/inst.js";
+import { writePatchesBlob, makeInstPatch, patchVibratoInherits } from "../../engine/inst.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
 import { encodeNameTable } from "../../doc/cleanup.js";
-import { envPresent } from "../../engine/envelope.js";
+import { envPresent, envCarry } from "../../engine/envelope.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { noteToStr, rangeToStr, hex4 } from "../notenames.js";
@@ -575,14 +575,34 @@ export class AdvancedZoneEditor {
     if (p.defaultNoteVolume !== 0) {
       nvRow.append(this.num("", p.defaultNoteVolume, 1, 255, (v) => this._field("defaultNoteVolume", Math.max(v, 1))));
     }
-    this.row(ov,
-      this.sel(t("adv.vibWave"), p.vibratoWaveform === 0xff ? "255" : String(p.vibratoWaveform & 0x07),
-        [["255", t("adv.vibInherit")], ...VIB_WAVES.map((w, i) => [String(i), w])],
-        (v) => this._field("vibratoWaveform", Number(v))),
-      this.num(t("adv.vibSpeed"), p.vibratoSpeed, 0, 255, (v) => this._field("vibratoSpeed", v)),
-      this.num(t("adv.vibSweep"), p.vibratoSweep, 0, 255, (v) => this._field("vibratoSweep", v)),
-      this.num(t("adv.vibDepth"), p.vibratoDepth, 0, 255, (v) => this._field("vibratoDepth", v)),
-      this.num(t("adv.vibRate"), p.vibratoRate, 0, 255, (v) => this._field("vibratoRate", v)));
+    // Auto-vibrato is ONE override, not five (item 170): the $FF waveform
+    // sentinel plus four zeroes is what "inherit" looks like on the wire, so
+    // the panel shows the whole block behind a single switch instead of four
+    // number boxes whose zeroes silently cancelled the base record's vibrato.
+    // Switching it on seeds from the base instrument, so ticking the box alone
+    // changes nothing audible.
+    const vibOwn = !patchVibratoInherits(p);
+    const vibRow = this.row(ov,
+      this.chk(t("adv.vibOverride"), vibOwn, (on) => this._edit((ps) => {
+        const q = ps[this.selIdx];
+        if (!q) return;
+        const base = this.inst;
+        q.vibratoWaveform = on ? (base.vibratoWaveform & 0x07) : 0xff;
+        q.vibratoSpeed = on ? base.vibratoSpeed : 0;
+        q.vibratoSweep = on ? base.vibratoSweep : 0;
+        q.vibratoDepth = on ? base.vibratoDepth : 0;
+        q.vibratoRate = on ? base.vibratoRate : 0;
+      }), t("adv.vibOverrideTitle")));
+    if (vibOwn) {
+      vibRow.append(
+        this.sel(t("adv.vibWave"), p.vibratoWaveform === 0xff ? "255" : String(p.vibratoWaveform & 0x07),
+          [["255", t("adv.vibInherit")], ...VIB_WAVES.map((w, i) => [String(i), w])],
+          (v) => this._field("vibratoWaveform", Number(v))),
+        this.num(t("adv.vibSpeed"), p.vibratoSpeed, 0, 255, (v) => this._field("vibratoSpeed", v)),
+        this.num(t("adv.vibSweep"), p.vibratoSweep, 0, 255, (v) => this._field("vibratoSweep", v)),
+        this.num(t("adv.vibDepth"), p.vibratoDepth, 0, 255, (v) => this._field("vibratoDepth", v)),
+        this.num(t("adv.vibRate"), p.vibratoRate, 0, 255, (v) => this._field("vibratoRate", v)));
+    }
 
     // Extra block ('x'): fadeout / filter / attenuation
     const ex = this.group(host, t("adv.extraGroup"));
@@ -810,6 +830,11 @@ export class AdvancedZoneEditor {
       this.num(t("env.end"), loopW & 0x1f, 0, active - 1, (v) => setWordField(kind.loopKey, 0, 0x1f, v)));
     this.row(wrap,
       this.chk(t("env.present"), envPresent(loopW), (on) => setWordBit(kind.loopKey, 13, on)),
+      // The patch's own carry bit (item 169.1): a patch that replaces the base
+      // record's envelope replaces its LOOP word too, so it must be able to say
+      // this for itself — otherwise a zone could never carry.
+      this.chk(t("env.carry"), envCarry(loopW), (on) => setWordBit(kind.loopKey, 6, on),
+        t("env.carryTitle")),
       this.chk(t("env.logTimescale"), this.logTime, (on) => { this.logTime = on; this.drawEnv(); }));
     return wrap;
   }
@@ -1112,9 +1137,10 @@ export class AdvancedZoneEditor {
 
   // ── patch list ops ─────────────────────────────────────────────────────────
 
-  /** Fresh patch bound to the base sample over the full pitch/vel range —
-   *  vibrato speed/sweep/depth/rate copy the base (no sentinel exists for
-   *  them; leaving 0 would silently kill auto-vibrato in the zone). */
+  /** Fresh patch bound to the base sample over the full pitch/vel range. The
+   *  auto-vibrato block is left at its inherit sentinel ($FF waveform, four
+   *  zeroes) — since item 170 that IS the way to say "whatever the instrument
+   *  says", and it keeps tracking the base record if that is edited later. */
   freshPatch() {
     const inst = this.inst;
     return makeInstPatch({
@@ -1123,8 +1149,6 @@ export class AdvancedZoneEditor {
       playStart: inst.samplePlayStart, loopStart: inst.sampleLoopStart,
       loopEnd: inst.sampleLoopEnd, samplingRate: inst.samplingRate,
       sampleDetune: inst.sampleDetuneSigned, loopMode: inst.loopMode & 0x07,
-      vibratoSpeed: inst.vibratoSpeed, vibratoSweep: inst.vibratoSweep,
-      vibratoDepth: inst.vibratoDepth, vibratoRate: inst.vibratoRate,
     });
   }
 

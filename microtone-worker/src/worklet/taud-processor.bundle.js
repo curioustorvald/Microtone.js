@@ -2697,6 +2697,20 @@ function patchIsStereo(patch) {
 }
 
 /**
+ * True when the patch says nothing about auto-vibrato and the base record's
+ * block should be used whole (item 170). The wire has one sentinel for five
+ * fields — the $FF waveform — and a patch that carries it while leaving all
+ * four numbers at zero is stating "inherit", not "no vibrato": reading its
+ * zeroes switched the instrument's own vibrato off on every note a keyboard
+ * map covered. Any non-zero number means the patch IS stating its own vibrato
+ * and only borrows the waveform.
+ */
+function patchVibratoInherits(patch) {
+  return patch.vibratoWaveform === 0xff && patch.vibratoSpeed === 0 &&
+    patch.vibratoSweep === 0 && patch.vibratoDepth === 0 && patch.vibratoRate === 0;
+}
+
+/**
  * Parse a flat variable-length Ixmp patch blob (wire format) into patch
  * objects — the codec from AudioJSR223Delegate.kt:357-430, shared by the
  * engine upload path and the document layer. Returns [] for a short blob.
@@ -5595,6 +5609,14 @@ function envPresent(loopWord) {
   return ((loopWord >>> 13) & 1) !== 0;
 }
 
+/** Envelope-carry test — the `c` bit at LOOP word bit 6 (item 169.1). A carried
+ *  envelope keeps its playhead across a retrigger instead of rewinding to node
+ *  0; whether the trigger is ALLOWED to carry is the caller's decision (see
+ *  triggerNote), because that depends on the voice, not on the envelope. */
+function envCarry(loopWord) {
+  return ((loopWord >>> 6) & 1) !== 0;
+}
+
 // Reusable scratch (allocation-free per-tick walks; single-threaded per worklet).
 const volWrap = new Int32Array(2);
 const panWrap = new Int32Array(2);
@@ -5897,10 +5919,13 @@ function applyActiveSample(voice, inst, patch) {
     voice.activeSamplingRate = patch.samplingRate;
     voice.activeSampleDetune = patch.sampleDetune;
     voice.activeLoopMode = patch.loopMode;
-    voice.activeVibratoSpeed = patch.vibratoSpeed;
-    voice.activeVibratoSweep = patch.vibratoSweep;
-    voice.activeVibratoDepth = patch.vibratoDepth;
-    voice.activeVibratoRate = patch.vibratoRate;
+    // Auto-vibrato: the $FF waveform sentinel defers the WHOLE block when the
+    // patch brings no numbers of its own (item 170, patchVibratoInherits).
+    const vibDefer = patchVibratoInherits(patch);
+    voice.activeVibratoSpeed = vibDefer ? inst.vibratoSpeed : patch.vibratoSpeed;
+    voice.activeVibratoSweep = vibDefer ? inst.vibratoSweep : patch.vibratoSweep;
+    voice.activeVibratoDepth = vibDefer ? inst.vibratoDepth : patch.vibratoDepth;
+    voice.activeVibratoRate = vibDefer ? inst.vibratoRate : patch.vibratoRate;
     voice.activeVibratoWaveform =
       patch.vibratoWaveform === 0xff ? inst.vibratoWaveform : patch.vibratoWaveform;
     // Ixmp 's' block (item 90). Only the stereo case is rendered; a patch with
@@ -6262,6 +6287,17 @@ function narrowVolAxis(ts, v) {
 }
 
 function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
+  // Envelope carry (LOOP word bit 6, item 169.1) is decided from the state the
+  // voice is in BEFORE this trigger touches any of it. Three things disqualify
+  // a carry, all of them IT's own (schismtracker effects.c env_reset, whose
+  // `always` argument is exactly this test): nothing was sounding, the note
+  // had been released — a carried release position starts the new note
+  // somewhere down its own decay — or the trigger changes the instrument, in
+  // which case the playhead belongs to a different envelope. Whether each of
+  // the four playheads then carries is its OWN envelope's `c` bit, resolved
+  // below once the patch has said which envelopes are active.
+  const mayCarry = voice.active && !voice.keyOff && !voice.noteFading
+    && (instId === 0 || instId === voice.instrumentId);
   if (instId !== 0) voice.instrumentId = instId;
   const inst = eng.instruments[voice.instrumentId];
   // Resolve the Ixmp patch for this trigger (volume axis = pre-patch seed).
@@ -6277,32 +6313,40 @@ function triggerNote(eng, ts, voice, noteVal, instId, volOverride) {
   voice.forward = true;
   voice.active = true;
   voice.keyOff = false;
-  voice.envIndex = 0;
-  voice.envTimeSec = 0.0;
-  voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
-  // Snap the per-sample-smoothed envelope so attacks land at node-0 immediately.
-  voice.envVolMix = voice.envVolume;
-  voice.envVolStep = 0.0;
-  voice.envPanIndex = 0;
-  voice.envPanTimeSec = 0.0;
-  voice.envPan = voice.activePanEnv[0].value / 255.0;
+  if (!(mayCarry && envCarry(voice.activeVolEnvLoop))) {
+    voice.envIndex = 0;
+    voice.envTimeSec = 0.0;
+    voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+    // Snap the per-sample-smoothed envelope so attacks land at node-0 immediately.
+    voice.envVolMix = voice.envVolume;
+    voice.envVolStep = 0.0;
+  }
+  // A carried playhead keeps envVolume / envVolMix too: they already hold the
+  // value at that node, and advanceEnvelope re-reads both from the ACTIVE
+  // envelope later in this same tick, so a patch swap under a carry costs
+  // nothing. Snapping them would step the gain mid-waveform for no reason.
   voice.hasPanEnv = envPresent(voice.activePanEnvLoop);
+  if (!(mayCarry && envCarry(voice.activePanEnvLoop))) {
+    voice.envPanIndex = 0;
+    voice.envPanTimeSec = 0.0;
+    voice.envPan = voice.activePanEnv[0].value / 255.0;
+  }
   // Pitch / filter envelope seeds — settle past leading zero-duration nodes.
-  if (voice.hasPitchEnv) {
+  if (!voice.hasPitchEnv) {
+    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activePitchEnvLoop))) {
     voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
       voice.activePitchEnvSustain);
     voice.envPitchIndex = pfIdxBox[0];
     voice.envPitchTimeSec = pfTimeBox[0];
-  } else {
-    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
   }
-  if (voice.hasFilterEnv) {
+  if (!voice.hasFilterEnv) {
+    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activeFilterEnvLoop))) {
     voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
       voice.activeFilterEnvSustain);
     voice.envFilterIndex = pfIdxBox[0];
     voice.envFilterTimeSec = pfTimeBox[0];
-  } else {
-    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
   }
   voice.fadeoutVolume = 1.0;
   // Cancel any leftover sample-end ramp — a fresh attack must not be muted.
@@ -7629,11 +7673,18 @@ function applyTrackerRow(eng, ts, playhead) {
         // put. Without the playhead half, a release that had already decayed
         // stayed decayed and swallowed the note.
         if (row.instrment !== 0 && !eng.instruments[row.instrment].isMeta) {
+          // Envelope carry (item 169.1) applies to THIS re-attack too, and this
+          // is the row shape it was asked for: a chain of notes tied by G, each
+          // naming its instrument. Same disqualifiers as a fresh trigger — a
+          // released note, or an instrument change — read before either is
+          // overwritten below.
+          const mayCarry = !voice.keyOff && !voice.noteFading
+            && row.instrment === voice.instrumentId;
           voice.instrumentId = row.instrment;
           const newInst = eng.instruments[voice.instrumentId];
           const newPatch = newInst.resolvePatch(voice.noteVal,
             narrowVolAxis(ts, voice.noteVolume));
-          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true);
+          applyInstrumentChange(eng, ts, voice, newInst, newPatch, true, mayCarry);
         }
       } else if (row.effect === EffectOp.OP_S && ((row.effectArg >>> 12) & 0xf) === 0xd) {
         // Note delay: defer trigger; NNA fires when the deferred trigger executes.
@@ -7674,7 +7725,8 @@ function applyTrackerRow(eng, ts, playhead) {
 // re-attack: FT2 leaves such a row decaying, and re-arming its sustain would
 // hold a released note up for ever.
 
-function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = false) {
+function applyInstrumentChange(eng, ts, voice, newInst, newPatch,
+                              reAttack = false, mayCarry = false) {
   applyActiveSample(voice, newInst, newPatch);
   const seedVol = rowVolumeFromDefault(newInst, newPatch, ts.volMax);
   voice.noteVolume = seedVol;
@@ -7683,9 +7735,11 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   voice.noteFading = false;
   voice.fadeoutVolume = 1.0;
   if (!reAttack) return;
-  voice.envIndex = 0;
-  voice.envTimeSec = 0.0;
-  voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  if (!(mayCarry && envCarry(voice.activeVolEnvLoop))) {
+    voice.envIndex = 0;
+    voice.envTimeSec = 0.0;
+    voice.envVolume = clamp(voice.activeVolEnv[0].value / 63.0, 0.0, 1.0);
+  }
   // envVolMix is deliberately NOT snapped here (item 142). This re-attack does
   // not restart the sample and arms no attack ramp, so snapping the smoothed
   // envelope steps the gain mid-waveform — a tone portamento onto a note whose
@@ -7693,26 +7747,28 @@ function applyInstrumentChange(eng, ts, voice, newInst, newPatch, reAttack = fal
   // per-sample glide (envVolStep, re-armed each tick) walks it to node 0
   // instead. A FRESH trigger still snaps, in triggerNote, because there the
   // sample restarts from zero and the attack ramp covers the discontinuity.
-  voice.envPanIndex = 0;
-  voice.envPanTimeSec = 0.0;
-  voice.envPan = voice.activePanEnv[0].value / 255.0;
   voice.hasPanEnv = envPresent(voice.activePanEnvLoop);
+  if (!(mayCarry && envCarry(voice.activePanEnvLoop))) {
+    voice.envPanIndex = 0;
+    voice.envPanTimeSec = 0.0;
+    voice.envPan = voice.activePanEnv[0].value / 255.0;
+  }
   // Pitch / filter envelope seeds — settle past leading zero-duration nodes.
-  if (voice.hasPitchEnv) {
+  if (!voice.hasPitchEnv) {
+    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activePitchEnvLoop))) {
     voice.envPitchValue = seedPfRole(voice.activePitchEnv, voice.activePitchEnvLoop,
       voice.activePitchEnvSustain);
     voice.envPitchIndex = pfIdxBox[0];
     voice.envPitchTimeSec = pfTimeBox[0];
-  } else {
-    voice.envPitchValue = 0.5; voice.envPitchIndex = 0; voice.envPitchTimeSec = 0.0;
   }
-  if (voice.hasFilterEnv) {
+  if (!voice.hasFilterEnv) {
+    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
+  } else if (!(mayCarry && envCarry(voice.activeFilterEnvLoop))) {
     voice.envFilterValue = seedPfRole(voice.activeFilterEnv, voice.activeFilterEnvLoop,
       voice.activeFilterEnvSustain);
     voice.envFilterIndex = pfIdxBox[0];
     voice.envFilterTimeSec = pfTimeBox[0];
-  } else {
-    voice.envFilterValue = 0.5; voice.envFilterIndex = 0; voice.envFilterTimeSec = 0.0;
   }
 }
 

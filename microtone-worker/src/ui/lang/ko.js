@@ -386,6 +386,7 @@ export default {
   "smp.delBodyPatches": "악기 {insts}개에 걸친 패치 {n}개가 제거되고, 패치 묶음 {blobs}개가 통째로 비워집니다.",
   "smp.delBodyFrees": "샘플 공간 {kb} KB를 확보합니다. 실행 취소할 수 있습니다.",
   // sample detail-info line (Samples view)
+  "smp.hoverByte": "바이트 {at} · ${hex} · 값 {v}",
   "smp.noSamples": "샘플 없음",
   "smp.noLoop": "루프 없음",
   "smp.mono": "모노",
@@ -793,6 +794,8 @@ export default {
   "env.end": "끝",
   "env.loop": "루프",
   "env.present": "엔벨로프 있음",
+  "env.carry": "이어가기",
+  "env.carryTitle": "이 채널에서 새 음이 시작될 때 엔벨로프를 0번 노드부터 다시 시작하지 않고 직전 음이 멈춘 위치에서 이어갑니다. 키오프 이후와 악기가 바뀌는 음에서는 무시됩니다.",
   "env.logTimescale": "로그 시간축",
   "env.addNode": "＋ 노드 추가",
   "env.removeNode": "－ 노드 삭제",
@@ -903,6 +906,8 @@ export default {
   "adv.panOverride": "팬",
   "adv.noteVolOverride": "노트 볼륨",
   "adv.inheritTitle": "체크 해제 = 기본 악기의 값을 상속",
+  "adv.vibOverride": "오토 비브라토 덮어쓰기",
+  "adv.vibOverrideTitle": "끄면 이 존은 악기 자체의 오토 비브라토를 그대로 씁니다. 켜면 다섯 값이 악기에서 복사되므로, 켜는 것만으로는 소리가 바뀌지 않습니다.",
   "adv.vibWave": "비브라토 파형",
   "adv.vibInherit": "상속",
   "adv.vibSpeed": "속도",
@@ -1153,7 +1158,7 @@ export default {
   "pal.fx.M.n": "채널 음량",
   "pal.fx.M.a": "$xx00 — 채널 음량 설정 (00..3F)",
   "pal.fx.N.n": "채널 음량 슬라이드",
-  "pal.fx.N.a": "$xy00 — 틱당 x 상승 / y 하강 · $xF00 미세 상승, $Fy00 미세 하강"
+  "pal.fx.N.a": "$xy00 — 틱당 x 상승 / y 하강 · $xF00 미세 상승, $Fy00 미세 하강",
   "pal.fx.O.n": "샘플 오프셋",
   "pal.fx.O.a": "$xxxx — 지정한 바이트 오프셋부터 샘플 재생",
   "pal.fx.P.n": "팬 슬라이드",
@@ -1171,7 +1176,7 @@ export default {
   "pal.fx.V.n": "전역 음량",
   "pal.fx.V.a": "$xx00 — 곡의 전역 음량 (00..FF)",
   "pal.fx.W.n": "전역 음량 슬라이드",
-  "pal.fx.W.a": "$xy00 — 틱당 x 상승 / y 하강 · $xF00 미세 상승, $Fy00 미세 하강"
+  "pal.fx.W.a": "$xy00 — 틱당 x 상승 / y 하강 · $xF00 미세 상승, $Fy00 미세 하강",
   "pal.fx.X.n": "공간 팬",
   "pal.fx.X.a": "$eeaa — 음원 배치: aa 방위각(00 왼쪽, 40 정면, 80 오른쪽, C0 뒤), ee 고도(부호 있음, 80 = −90°) · 서라운드 곡 전용",
   "pal.fx.Y.n": "팬브렐로",
@@ -1358,6 +1363,11 @@ export default {
   "midi.trimPatches": "사용하지 않는 패치 정리 (뱅크가 작아집니다. 나중에 정리 기능으로도 할 수 있습니다)",
   "midi.stereoSamples": "스테레오 악기를 스테레오로 가져오기 (풀 용량을 두 배로 사용)",
   "midi.keepDupPatterns": "중복 패턴 유지 (큐마다 별도의 사본을 가지므로, 하나를 편집해도 나머지는 그대로입니다)",
+  "midi.quantise": "박자 정렬 (연주의 흔들림을 잡아주지만, 의도한 스윙·플램·꾸밈음도 함께 지워집니다)",
+  "midi.quantiseOff": "끄기 — 연주한 타이밍 그대로",
+  "midi.quantiseAuto": "자동 — 곡이 이미 쓰고 있는 격자",
+  "midi.quantiseRow": "트래커 행",
+  "midi.quantiseNth": "박의 1/{n}",
 
   // ── autosave recovery ──
   "recover.title": "저장하지 않은 작업을 복구할까요?",

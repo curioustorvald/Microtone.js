@@ -183,6 +183,28 @@
         const roleToggleOk = hasPresent && claimed && released;
         log(`pitch env present toggle: has=${hasPresent} claimed=${claimed} released=${released} (${roleToggleOk ? "ok" : "FAIL"})`);
 
+        // Item 169.1: every envelope tab carries a Carry box that writes LOOP-word
+        // bit 6 of THAT envelope's own word, and only that one.
+        const carryChk = () => [...iv.panel.querySelectorAll("label")]
+          .find((l) => /^Carry/.test(l.textContent.trim()))?.querySelector("input");
+        iv.selected = baseSlot;
+        iv.tab = "env0";
+        iv.renderPanel();
+        const carryHas = !!carryChk();
+        const carryStart = (store.doc.instruments[baseSlot].volEnvLoop >> 6) & 1;
+        let cc = carryChk(); cc.checked = !carryStart; fire(cc, "change");
+        iv.renderPanel();
+        const volW = store.doc.instruments[baseSlot].volEnvLoop;
+        const carrySet = ((volW >> 6) & 1) !== carryStart && carryChk().checked === !carryStart;
+        // …the pan envelope's word is untouched by the volume tab's box.
+        const panUntouched = ((store.doc.instruments[baseSlot].panEnvLoop >> 6) & 1) === 0;
+        cc = carryChk(); cc.checked = !!carryStart; fire(cc, "change");
+        iv.renderPanel();
+        const carryBack = ((store.doc.instruments[baseSlot].volEnvLoop >> 6) & 1) === carryStart;
+        const carryOk = carryHas && carrySet && panUntouched && carryBack;
+        log(`env carry toggle: has=${carryHas} set=${carrySet} panClear=${panUntouched} ` +
+            `restored=${carryBack} (${carryOk ? "ok" : "FAIL"})`);
+
         // Item 92: all four envelope tabs share ONE "{label}: present/absent"
         // detail-info header format, with "present" alone carrying --accent
         // (class env-present); "absent" stays plain.
@@ -241,7 +263,7 @@
         }
 
         const pass = labelsOk && swingOk && sepOk && panSwOk && ppcOk && useDefOk && cutOk && resOk &&
-          nnaOk && detOk && logOk && roleToggleOk && envFormatOk && notOk && nameOk;
+          nnaOk && detOk && logOk && roleToggleOk && carryOk && envFormatOk && notOk && nameOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);

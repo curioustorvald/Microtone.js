@@ -37,7 +37,7 @@ import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
 import { mapSpinner } from "../widgets/spinner.js";
 import { dragGrip, focusGrip } from "../widgets/dragsort.js";
-import { envPresent } from "../../engine/envelope.js";
+import { envPresent, envCarry } from "../../engine/envelope.js";
 import { hex2, rangeToStr } from "../notenames.js";
 import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
 import { fmGraphSvg } from "../fmgraph.js";
@@ -1036,9 +1036,10 @@ export class InstrumentsView {
       l.appendChild(inp);
       return l;
     };
-    const chk = (label, checked, onChange) => {
+    const chk = (label, checked, onChange, title) => {
       const l = document.createElement("label");
       l.className = "env-ctl chk";
+      if (title) l.title = title;
       const c = document.createElement("input");
       c.type = "checkbox"; c.checked = checked;
       c.addEventListener("change", () => onChange(c.checked));
@@ -1100,6 +1101,13 @@ export class InstrumentsView {
         ? chk(t("env.present"), tabDef.roleActive, (on) => this.setRolePresent(tabDef, on))
         : chk(t("env.present"), envPresent(inst[tabDef.loopKey]),
             (on) => this.setEnvWordBit(tabDef.loopKey, 13, on)),
+      // Envelope carry (item 169.1) — LOOP-word bit 6, and the reason it sits
+      // beside "present" rather than in the loop row: it is not part of the
+      // wrap region, it decides whether a NEW NOTE inherits this playhead
+      // instead of rewinding it. A released note never carries, so this is a
+      // property of tied/repeated notes only.
+      chk(t("env.carry"), envCarry(inst[tabDef.loopKey]),
+        (on) => this.setEnvWordBit(tabDef.loopKey, 6, on), t("env.carryTitle")),
       logChk,
     ));
     return wrap;

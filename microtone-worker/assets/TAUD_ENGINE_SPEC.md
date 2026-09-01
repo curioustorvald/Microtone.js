@@ -246,7 +246,9 @@ Two cases of note word `$0000` are **not** silent, and both matter:
 - **Instrument byte plus a pitch effect** (`E`, `F` or `G`) on a channel that already has a pitch: this **triggers** the note at the voice's current pitch, so the slide has something to move. Latching the instrument and staying silent — the obvious reading — loses the note.
 - **Instrument byte alone**: latch the instrument, re-resolve its patch and re-seed the note volume from its default note volume, clear key-off and note-fading and reset the fadeout — **without** retriggering the sample. ProTracker, FT2, IT and Schism all behave this way.
 
-A pitch on a row carrying `G` (or `L`, which also takes a target) sets the portamento target instead of retriggering. If such a row also carries an instrument byte, the instrument is latched with the same no-retrigger path **and the note is re-attacked**: the four envelope playheads go back to node 0 exactly as they would on a fresh trigger ([§5.3](#5-3-trigger-sequence)), and the smoothed volume-envelope value is snapped so the attack lands there immediately. Only the sample position stays where it is.
+A pitch on a row carrying `G` (or `L`, which also takes a target) sets the portamento target instead of retriggering. If such a row also carries an instrument byte, the instrument is latched with the same no-retrigger path **and the note is re-attacked**: the four envelope playheads go back to node 0 exactly as they would on a fresh trigger ([§5.3](#5-3-trigger-sequence)) — envelope carry included, so an envelope carrying its `c` bit keeps its playhead here too ([§5.3.2](#5-3-2-envelope-carry)) — and the smoothed volume-envelope value is snapped so the attack lands there immediately. Only the sample position stays where it is.
+
+ImpulseTracker does not do this: with Compatible Gxx off, an instrument number next to a tone portamento never reaches its envelope reset at all, so the envelopes run on whether or not the instrument asked them to. That is a bug in IT, not a rule (its own source calls the surrounding conditions "a total mess"), and an engine **MUST NOT** reproduce it — the `c` bit is how a file says the same thing on purpose. A converter reading such a file should drop the redundant instrument byte instead; see TAUD_CONVERSION_NOTES.md.
 
 That re-attack is what makes such a row audible at all once the previous note has been released. Clearing key-off without rewinding the envelope re-arms a sustain onto a playhead already sitting in its release tail, and the tail then holds the new note down at whatever level the release had reached — the row appears not to trigger, while starting playback from the row before it, where there is no sounding voice for the portamento to attach to, plays it correctly. FastTracker runs its whole `retrigEnvelopeVibrato` here, and all three of its parts (playheads, sustain, fadeout) are required.
 
@@ -267,8 +269,8 @@ Triggering a note **MUST**:
 - Cancel any running portamento target.
 - Resolve the Ixmp patch and take both active views ([§4.1](#4-1-the-active-view)).
 - Set the sample position to the active play start and the direction to forward.
-- Reset the volume and pan envelope playheads to node 0 and snap the per-sample smoothed envelope value, so an attack lands on node 0 immediately rather than gliding into it.
-- Seed the pitch and filter envelope playheads past any leading zero-duration nodes ([§7.3](#7-3-the-pitch-and-filter-walker)).
+- Reset the volume and pan envelope playheads to node 0 and snap the per-sample smoothed envelope value, so an attack lands on node 0 immediately rather than gliding into it — **unless that envelope carries** ([§5.3.2](#5-3-2-envelope-carry)).
+- Seed the pitch and filter envelope playheads past any leading zero-duration nodes ([§7.3](#7-3-the-pitch-and-filter-walker)), again unless that envelope carries.
 - Reset the fadeout multiplier to 1, cancel any sample-end ramp, arm the attack ramp ([§8.6](#8-7-the-attack-ramp)), reset auto-vibrato phase and its sweep counter, and reset the NES DPCM counter and the stereo channel's DSP history.
 - Draw fresh volume- and pan-swing biases.
 - Apply the instrument's default position and pitch-pan separation, if the row carried an instrument byte ([§5.3.1](#5-3-1-the-default-position)).
@@ -299,6 +301,20 @@ A patch overrides the azimuth only, and only within the front arc: a patch recor
 
 Because the ninth bit and the elevation live in bits that were previously unused and are read only in a surround song, a file written before they existed keeps its exact stereo behaviour, and its default pan lands on the front arc — which is what a pan byte has always meant.
 
+#### 5.3.2 Envelope carry
+
+Each envelope's LOOP word carries a `c` bit (bit 6, TAUD_FILE_FORMAT §7.2). When it is set, a trigger **MUST NOT** rewind that envelope's playhead: the envelope continues from wherever the previous note on that voice left it, index and time fraction both. Carry is decided **per envelope**, from that envelope's own LOOP word, so an instrument may carry its pan sweep across a phrase while every note re-attacks its volume.
+
+Carry applies only where there is a playhead worth keeping. A trigger **MUST** rewind regardless of the bit when any of these holds, read from the voice's state *before* the trigger touches it:
+
+- the voice was not sounding — there is no previous note;
+- the note had been released (key-off, or a Note-Fade in progress) — the playhead is somewhere down a release, and carrying it would start the new note part way through its own decay;
+- the trigger changes the instrument — the playhead belongs to a different envelope.
+
+The rule is the same wherever a playhead is rewound, which includes the re-attack an instrument byte performs on a tone-portamento row ([§5.4](#5-4-patch-resolution) and the note-event table in [§5.2](#5-2-note-events)): a chain of notes tied by `G`, each naming its instrument, sounds under carry exactly like the same chain written without instrument bytes.
+
+A carried envelope keeps its current *value* too — the walker re-reads it from the active envelope later in the same tick, so a patch swap under a carry costs nothing and steps no gain.
+
 ### 5.4 Patch resolution
 
 If the instrument carries Ixmp patches, the engine walks the list **in order** and takes the **first** patch whose pitch × volume rectangle contains the trigger. When nothing matches, the base record's fields are used unchanged. Because the first match wins, patch order is significant and a fully covered patch is dead weight.
@@ -307,7 +323,7 @@ The volume axis used for the lookup is the *pre-patch* seed: the volume column's
 
 **That axis is six bits in every format version.** The rectangle is instrument data, and a bank is format-neutral, so a version 3 engine **MUST** narrow its eight-bit note volume onto 0…63 (a shift right by two) before testing it — at *every* lookup, not only at the trigger. A version 3 engine that forgets on one path finds no patch there at all, since the seed a wide cell starts from is 255 and every rectangle written by an IT, XM or SoundFont converter ends at 63. The same narrowing applies to a Metainstrument's layer rectangles, which share the axis.
 
-A patch's "no override" sentinels — default pan `$FF`, default note volume 0, auto-vibrato waveform `$FF` — defer to the base record field by field.
+A patch's "no override" sentinels — default pan `$FF`, default note volume 0, auto-vibrato waveform `$FF` — defer to the base record field by field, with one exception the format forces. **The auto-vibrato sentinel governs all five of its fields.** There is one sentinel for speed, sweep, depth, rate and waveform, so a patch carrying `$FF` *and four zeroes* is saying nothing about auto-vibrato at all and the base record's whole block applies; reading those zeroes would switch an instrument's own vibrato off on every note its keyboard map covers. A patch whose waveform is `$FF` but which states any non-zero number is stating its own vibrato and borrows only the waveform; a patch that names a waveform overrides the block outright, zeroes included.
 
 ### 5.5 Metainstruments
 
@@ -366,7 +382,7 @@ Measuring the depth in cycles is what makes the mix octet read as a modulation i
 
 **Cost.** A rack costs one voice against the channel plus one background voice per sounding operator beyond the first, and one sample fetch per sounding operator per output sample. Unlike a layered metainstrument, none of that reaches the mix as a separate source: however many operators a rack has, it is one note in one place.
 
-**A rack does not spawn a New Note Action ghost.** A ghost is a snapshot of one voice, and a rack is a voice plus the operators that shape it; a ghost carrying only the snapshot would sound operator 0's bare sample, which is not the note that was playing and not a sound the patch can make. The incoming note takes the channel instead, and the operators go with the note that built them. Past-note actions (`S $70`…`$72`) already do not reach a metainstrument's channel, and that covers a rack for the same reason.
+**A rack does not spawn a New Note Action ghost.** A ghost is a snapshot of one voice, and a rack is a voice plus the operators that shape it; a ghost carrying only the snapshot would sound operator 0's bare sample, which is not the note that was playing and not a sound the patch can make. The incoming note takes the channel instead, and the operators go with the note that built them. Past-note actions (`S $70`…`$72`) already do not reach a metainstrument's channel, and that covers a rack for the same reason.
 
 ### 5.6 Duplicate Check
 

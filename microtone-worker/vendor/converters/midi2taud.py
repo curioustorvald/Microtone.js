@@ -585,6 +585,77 @@ def extract_song(division, merged, rpb: int, speed: int) -> Song:
     return song
 
 
+# ── Quantisation (item 168; OFF unless --quantise is passed) ──────────────────
+
+# Beat subdivisions --quantise accepts as a grid. 'auto' takes the subdivision
+# the onset analyser detected — the grid the piece is actually written on —
+# and 'row' takes the Taud row grid, which is the finest timing a tracker can
+# spell without an S $Dx note delay.
+QUANTISE_GRIDS = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32)
+
+
+def resolve_quantise_grid(spec, division, merged, rpb: int) -> int:
+    """--quantise's GRID → a beat subdivision. 'row' is the row grid; 'auto' is
+    the detected onset subdivision (the row grid for SMPTE timing, which has no
+    musical beat to analyse)."""
+    if spec == 'row':
+        return max(1, rpb)
+    if spec == 'auto':
+        if division[0] != 'ppq':
+            return max(1, rpb)
+        onsets = [tick for (tick, _seq, ev) in merged if ev[0] == 'on']
+        return max(1, _detect_subdivision(onsets, division[1]))
+    return int(spec)
+
+
+def quantise_notes(song: Song, rpb: int, speed: int, denom: int,
+                   strength: float) -> tuple:
+    """Snap note onsets onto a 1/`denom`-of-a-beat grid, `strength` (0..1) of
+    the way there.
+
+    Note LENGTHS are preserved: the whole note moves, key-off included. A
+    passage played late but held for the right time therefore comes out on the
+    grid and still the right length, and a phrase's articulation — its gaps —
+    survives. Snapping the ends as well would regularise the gaps too, which is
+    a different edit and one this option is not asking for.
+
+    `strength` is the answer to the warning this option prints: at 100 the grid
+    wins outright, and at (say) 50 every onset moves half way to it, which
+    tightens sloppy playing while leaving a deliberate push or drag audible.
+
+    Runs before apply_exclusive_class, so percussion chokes are measured from
+    the quantised onsets. Returns (moved, worst_shift, mean_shift) in fine
+    ticks, for the log line.
+    """
+    step = (rpb * speed) / denom
+    if step <= 0.0 or not song.notes:
+        return 0, 0, 0.0
+    moved = 0
+    total = 0
+    worst = 0
+    for n in song.notes:
+        target = round(n.start_ft / step) * step
+        delta = int(round((target - n.start_ft) * strength))
+        if delta < -n.start_ft:
+            delta = -n.start_ft          # never before the start of the song
+        if delta == 0:
+            continue
+        dur = n.end_ft - n.start_ft
+        n.start_ft += delta
+        n.end_ft = n.start_ft + dur
+        if n.pedal_ft is not None:
+            n.pedal_ft = max(n.pedal_ft + delta, n.start_ft)
+        moved += 1
+        total += abs(delta)
+        worst = max(worst, abs(delta))
+    if moved:
+        # extract_song left the list sorted; a move can reorder it, and both the
+        # voice allocator and the cell emitter walk it in onset order.
+        song.notes.sort(key=lambda n: (n.start_ft, n.ch, n.key))
+        song.end_ft = max(song.end_ft, max(n.end_ft for n in song.notes))
+    return moved, worst, (total / moved if moved else 0.0)
+
+
 # ── Auto timing (Tickspeed + RPB) ──────────────────────────────────────────────
 
 # Candidate beat subdivisions tested by the onset analyser (per quarter note).
@@ -3638,6 +3709,22 @@ def assemble_tpif(sections: list, args) -> bytes:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _quantise_grid(text: str):
+    """--quantise GRID: 'auto', 'row', or a beat subdivision from QUANTISE_GRIDS."""
+    t = text.strip().lower()
+    if t in ('auto', 'row'):
+        return t
+    try:
+        v = int(t)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected auto, row or one of {QUANTISE_GRIDS}, got {text!r}")
+    if v not in QUANTISE_GRIDS:
+        raise argparse.ArgumentTypeError(
+            f"grid must be one of {QUANTISE_GRIDS} (or auto / row), got {v}")
+    return v
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -3736,6 +3823,23 @@ def main():
                          'of mixing them down to mono. Doubles the pool cost of '
                          'every stereo instrument, so a large bank may end up '
                          'resampled harder to fit the 8 MB budget')
+    ap.add_argument('--quantise', '--quantize', nargs='?', const='auto',
+                    default=None, type=_quantise_grid, metavar='GRID',
+                    help='Snap note onsets onto a beat grid (OFF by default). '
+                         'GRID is auto (the subdivision the onsets already use), '
+                         'row (the Taud row grid), or one of '
+                         + '/'.join(str(g) for g in QUANTISE_GRIDS)
+                         + ' as a beat subdivision; bare --quantise means auto. '
+                           'WARNING: this erases deliberate off-grid timing — '
+                           'swing, flams, grace notes, humanised phrasing — '
+                           'along with the mistakes. Note lengths are kept: the '
+                           'whole note moves')
+    ap.add_argument('--quantise-strength', '--quantize-strength', type=int,
+                    default=100, metavar='PCT', dest='quantise_strength',
+                    help='How far --quantise moves each onset towards the grid, '
+                         '0..100 (default 100 = onto it). Lower values tighten '
+                         'sloppy timing while leaving a deliberate push or drag '
+                         'audible')
     ap.add_argument('--no-project-data', action='store_true',
                     help='Omit the Project Data section — NOTE: this also '
                          'omits Ixmp, collapsing every instrument to its '
@@ -3752,6 +3856,18 @@ def main():
         sys.exit("error: --max-layers must be 1..25")
     if not (0 <= args.mixing_vol <= 255):
         sys.exit("error: --mixingvol must be 0..255")
+    if not (0 <= args.quantise_strength <= 100):
+        sys.exit("error: --quantise-strength must be 0..100")
+
+    # Not vprint: quantisation is the one option here that rewrites the
+    # performance rather than the encoding of it, and somebody who passed it
+    # without -v still has to be told what it costs.
+    if args.quantise is not None:
+        print("warning: --quantise snaps note onsets onto the beat grid. "
+              "Deliberate off-grid timing — swing, flams, grace notes, "
+              "humanised phrasing — is erased along with the mistakes. "
+              "Lower --quantise-strength to tighten the timing without "
+              "flattening it.", file=sys.stderr)
 
     if os.path.isdir(args.input):
         run_directory(args)
@@ -3787,6 +3903,18 @@ def load_midi_song(path: str, sf: SF2, args):
            f"{len(song.timesig_ft)} time-signature event(s)")
     if not song.notes:
         return None
+
+    # Timing quantisation (item 168) — opt-in, and deliberately AFTER the grid
+    # has been chosen: auto_timing reads the RAW onsets, so the subdivision it
+    # detects is the one the performance is aiming at rather than one this pass
+    # has already imposed.
+    if args.quantise is not None:
+        denom = resolve_quantise_grid(args.quantise, division, merged, rpb)
+        strength = max(0, min(100, args.quantise_strength)) / 100.0
+        moved, worst, mean = quantise_notes(song, rpb, speed, denom, strength)
+        vprint(f"  quantise: 1/{denom} of a beat at {round(strength * 100)}% — "
+               f"{moved}/{len(song.notes)} note(s) moved, mean {mean:.1f} / "
+               f"max {worst} fine-tick(s)")
 
     # SF2 exclusiveClass percussion choking (closed hi-hat silences open hi-hat, etc.).
     apply_exclusive_class(song, sf, args.perc_force_mapping)

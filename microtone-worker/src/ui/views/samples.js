@@ -135,6 +135,15 @@ export class SamplesView {
       this.exportBtn, this.newInstBtn, this.deleteBtn, this.poolBtn);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
+    // Hover hairline (item 171): the byte offset under the pointer, or -1.
+    // A waveform is the one view where "where in the sample is that click?" is
+    // the whole question, and the loop points, the offset effect (O) and the
+    // sample-mod ranges are all spelled in bytes — so the readout is the byte,
+    // not a percentage or a time.
+    this.hoverByte = -1;
+    this.hoverLane = 0;
+    this.canvas.addEventListener("pointermove", (e) => this.wavePointerMove(e));
+    this.canvas.addEventListener("pointerleave", () => this.clearWaveHover());
     this.pool = new PoolPanel(store, {
       onSelect: (idx) => {
         if (idx === this.selected || idx < 0 || idx >= this.list.length) return;
@@ -298,8 +307,35 @@ export class SamplesView {
       this.rowEls.push({ el: row, ptr: s.ptr });
     });
     this.updateInfo();
+    this.hoverByte = -1;   // a different sample under the same pointer position
     this.drawWave();
     if (this.poolOpen) this.pool.refresh(this.selected);
+  }
+
+  /** Pointer over the waveform: latch the byte offset and repaint. The whole
+   *  trace is redrawn rather than an overlay layer being kept — it is one pass
+   *  over at most `width × 8` bytes, and it is already what the play cursors
+   *  ride on sixty times a second. */
+  wavePointerMove(e) {
+    const s = this.list[this.selected];
+    if (!s || !s.len) return;
+    const r = this.canvas.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    const byte = Math.floor(((e.clientX - r.left) / r.width) * s.len);
+    const lanes = sampleSpans(s).length;
+    const lane = Math.min(lanes - 1, Math.max(0,
+      Math.floor(((e.clientY - r.top) / r.height) * lanes)));
+    const clamped = Math.min(Math.max(byte, 0), s.len - 1);
+    if (clamped === this.hoverByte && lane === this.hoverLane) return;
+    this.hoverByte = clamped;
+    this.hoverLane = lane;
+    this.drawWave();
+  }
+
+  clearWaveHover() {
+    if (this.hoverByte < 0) return;
+    this.hoverByte = -1;
+    this.drawWave();
   }
 
   /** Light the list rows of samples any voice is sounding right now. */
@@ -573,6 +609,42 @@ export class SamplesView {
         const x = (pos / s.len) * w;
         ctx.fillRect(x - 1, 0, 2, h);
       }
+    }
+
+    // Hover hairline + byte readout (item 171). Drawn LAST so it is never lost
+    // under the trace, and in the foreground ink rather than any of the four
+    // colours the picture itself already uses — a measuring line that could be
+    // mistaken for a play cursor or an inverted byte measures nothing.
+    if (this.hoverByte >= 0 && this.hoverByte < s.len) {
+      const hx = Math.round((this.hoverByte / s.len) * w) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = C.fg;
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.moveTo(hx, 0);
+      ctx.lineTo(hx, h);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const lane = Math.min(this.hoverLane, spans.length - 1);
+      const { v } = byteAt(this.hoverByte, spans[lane].ptr);
+      const label = t("smp.hoverByte", {
+        at: this.hoverByte,
+        hex: this.hoverByte.toString(16).toUpperCase(),
+        v,
+      });
+      ctx.font = "10px sans-serif";
+      const tw = ctx.measureText(label).width;
+      // Flip to the left of the line when the label would run off the canvas,
+      // so the number stays readable at the end of the sample.
+      const lx = hx + 5 + tw <= w ? hx + 5 : hx - 5 - tw;
+      const ly = lane * laneH + 4;
+      ctx.fillStyle = C.panel;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(lx - 3, ly, tw + 6, 13);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = C.fg;
+      ctx.fillText(label, lx, ly + 10);
+      ctx.restore();
     }
   }
 }

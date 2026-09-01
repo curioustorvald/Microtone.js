@@ -115,7 +115,8 @@ ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmu
 
 async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
                                             trimPatches = false, stereoSamples = false,
-                                            keepDuplicatePatterns = false } = {}) {
+                                            keepDuplicatePatterns = false,
+                                            quantise = null, quantiseStrength = 100 } = {}) {
   let sf2 = sf2Override;
   if (!sf2 && converterFor(name).isMidi) {
     $("stFile").textContent = t("midi.needSf");
@@ -126,7 +127,7 @@ async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
   try {
     const out = await convertToTaud(name, bytes,
       { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
-        onStatus: progress.log });
+        quantise, quantiseStrength, onStatus: progress.log });
     progress.done();
     return out;
   } catch (err) {
@@ -141,11 +142,13 @@ async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
 // ── document loading ──
 async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null,
                                         trimPatches = false, stereoSamples = false,
-                                        keepDuplicatePatterns = false } = {}) {
+                                        keepDuplicatePatterns = false,
+                                        quantise = null, quantiseStrength = 100 } = {}) {
   let converted = false;
   if (converterFor(name)) {
     bytes = await convertImport(name, bytes,
-      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns });
+      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
+        quantise, quantiseStrength });
     if (bytes === null) return;
     name = name.replace(/\.[^.]+$/, "") + ".taud";
     converted = true;
@@ -474,6 +477,20 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       // when the import is a starting point for editing rather than a finished
       // song. Costs pattern slots (32767 cap), barely any file size.
       name: "nodedup", label: t("midi.keepDupPatterns"), type: "checkbox", value: false,
+    }, {
+      // Item 168: quantisation is OFF by default, and the label says what it
+      // costs — this is the one import option that rewrites the performance
+      // rather than how it is encoded, and a MIDI that was PLAYED (rather than
+      // stepped in) usually wants its timing left alone. "Auto" snaps to the
+      // subdivision the onsets already use, which is the grid the piece is
+      // written on; "row" snaps to the tracker's own rows.
+      name: "quantise", label: t("midi.quantise"), type: "select", value: "off",
+      options: [
+        { value: "off", label: t("midi.quantiseOff") },
+        { value: "auto", label: t("midi.quantiseAuto") },
+        { value: "row", label: t("midi.quantiseRow") },
+        ...[4, 8, 16].map((n) => ({ value: String(n), label: t("midi.quantiseNth", { n }) })),
+      ],
     }],
     okLabel: t("common.import"),
   });
@@ -486,6 +503,7 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
       trimPatches: choice.trim === true,
       stereoSamples: choice.stereo === true,
       keepDuplicatePatterns: choice.nodedup === true,
+      quantise: choice.quantise,
     });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());

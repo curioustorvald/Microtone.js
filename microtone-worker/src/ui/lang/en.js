@@ -395,6 +395,7 @@ export default {
   "smp.delBodyPatches": "{n} instrument patch(es) across {insts} instrument(s) are dropped, clearing {blobs} patch set(s) entirely.",
   "smp.delBodyFrees": "Frees {kb} KB of sample space. This can be undone.",
   // sample detail-info line (Samples view)
+  "smp.hoverByte": "byte {at} · ${hex} · value {v}",
   "smp.noSamples": "no samples",
   "smp.noLoop": "no loop",
   "smp.mono": "mono",
@@ -808,6 +809,8 @@ export default {
   "env.end": "end",
   "env.loop": "Loop",
   "env.present": "Envelope present",
+  "env.carry": "Carry",
+  "env.carryTitle": "A new note on this channel continues this envelope from where the last one left it, instead of restarting it at node 0. Ignored after a key-off, and when the note changes instrument.",
   "env.logTimescale": "Log timescale",
   "env.addNode": "＋ Add node",
   "env.removeNode": "－ Remove node",
@@ -947,6 +950,8 @@ export default {
   "adv.panOverride": "Pan",
   "adv.noteVolOverride": "Note volume",
   "adv.inheritTitle": "Unchecked = inherit the base instrument's value",
+  "adv.vibOverride": "Auto-vibrato override",
+  "adv.vibOverrideTitle": "Off = this zone plays the instrument's own auto-vibrato. On seeds the five fields from the instrument, so switching it on changes nothing until you edit them.",
   "adv.vibWave": "Vibrato wave",
   "adv.vibInherit": "inherit",
   "adv.vibSpeed": "Speed",
@@ -1402,6 +1407,11 @@ export default {
   "midi.trimPatches": "Trim unused patches (smaller bank; Housekeeping can do this later)",
   "midi.stereoSamples": "Import stereo instruments in stereo (twice the pool bytes each)",
   "midi.keepDupPatterns": "Keep duplicate patterns (each cue gets its own copy, so editing one leaves the rest alone)",
+  "midi.quantise": "Quantise timing (tidies sloppy playing — and erases deliberate swing, flams and grace notes)",
+  "midi.quantiseOff": "Off — keep the timing as played",
+  "midi.quantiseAuto": "Auto — the grid the piece already uses",
+  "midi.quantiseRow": "Tracker rows",
+  "midi.quantiseNth": "1/{n} of a beat",
 
   // ── autosave recovery ──
   "recover.title": "Recover unsaved work?",

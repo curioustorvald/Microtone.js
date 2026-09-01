@@ -546,7 +546,7 @@ Each envelope has two 16-bit control words, at different offsets, which is what 
 |---|---|
 | 0…4 (`e`) | Loop end node index, 0…24 |
 | 5 (`b`) | Enable the loop wrap |
-| 6 (`c`) | Envelope **carry** — carry the envelope position across triggers |
+| 6 (`c`) | Envelope **carry** — a new note continues this envelope instead of rewinding it (TAUD_ENGINE_SPEC §5.3.2) |
 | 7 (`X`) | Role-specific: pan envelope = `p` ("use default pan", byte 177); pitch/filter envelope = `m` (0 = pitch, 1 = filter); volume envelope = **RESERVED** |
 | 8…12 (`s`) | Loop start node index, 0…24 |
 | 13 (`P`) | **Envelope present in the source** |
@@ -923,6 +923,8 @@ The first four fields define a rectangle over pitch × volume space. **Patch sel
 The IT and XM formats do not define a velocity axis; those converters leave the volume range at 0…63. SoundFont does, and the velocity axis is `round(velocity × 63 ÷ 127)`.
 
 **The sentinels are the only gate.** A `default pan` other than `$FF` is applied at every trigger the patch wins, whether or not the base record's pan envelope carries its `p` bit; likewise a non-zero `default note volume` and an auto-vibrato waveform other than `$FF`. A patch may bring its own pan envelope, whose LOOP word replaces the base record's, so a producer **MUST NOT** rely on `p` to enable or suppress a patch's pan — set `$FF` to defer instead.
+
+**One sentinel governs the whole auto-vibrato block.** Bytes 26…30 have a single "no override" flag between them, so byte 30 = `$FF` *with bytes 26…29 all zero* means "inherit the base record's auto-vibrato", and a decoder **MUST** read all five fields from the base record in that case. It does **not** mean "no vibrato": a patch that reads as four zeroes would silence the instrument's own vibrato on every note its keyboard map covers, which is every note. A patch whose byte 30 is `$FF` but which carries any non-zero number among bytes 26…29 is stating its own vibrato and inherits only the waveform. A patch that names a waveform overrides all five fields, zeroes included — which is how a zone says "no vibrato here". A producer with no per-zone vibrato data **SHOULD** therefore write the sentinel and four zeroes.
 
 **A zone pan is a `note_pan` offset** (TAUD_NOTE_EFFECTS.md §3a), as the base record's default pan is. This is what makes a per-zone pan usable as an ARRANGEMENT: an instrument that pans by pitch — the ordinary shape of an SF2 import — keeps its spread when the pattern places the channel somewhere, because `S $80xx` rotates the whole keyboard instead of collapsing it onto one spot. A producer wanting one note somewhere else writes the panning column on that row, which replaces the zone's seed for that note only.
 

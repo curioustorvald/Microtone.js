@@ -268,7 +268,17 @@ IT patterns may exceed 64 rows, and are split into ⌈rows ÷ 64⌉ consecutive 
 
 IT triggers a note delay *during* the current row, so a delay of `x` ticks with `x ≥ speed` never lands — the note is silently lost. The converter relocates such a note to the next row with `delay = x − speed`, but only when that next row on the same channel is empty. This recovers notes that IT itself would have dropped, which is a deliberate deviation in favour of the music.
 
-### 5.5 Effects
+### 5.5 Portamento eats the instrument byte
+
+IT does not reset an instrument's envelopes when a row carries a note, an instrument number **and** a tone portamento. With Compatible Gxx off — the ordinary case — such a row never reaches the envelope reset at all, so the envelopes carry on from the previous note whether or not the instrument's Carry flag is set. Schism's own comment on the surrounding conditions is "experimentally determined… seems like it's just a total mess"; OpenMPT carries the quirk as `kITPortamentoInstrument` / `kITEnvelopeReset` and was still correcting corners of it in 1.32.11.
+
+The Taud engine deliberately does not reproduce it: an instrument byte on a portamento row re-attacks the four playheads (TAUD_ENGINE_SPEC §5.2), which is FastTracker's rule and the one a tracker musician can predict. Envelope carry is spelled out instead, in the LOOP word's `c` bit, where it is a property of the instrument rather than an accident of the row.
+
+So the converter resolves it at conversion time: **a note tied by `G` or `L` that names the instrument the channel is already holding is written without the instrument byte**, which is what an IT author's ear expects and how the passage would be written by hand. The byte is dropped only when it names the *same* instrument — that is precisely the case where IT reloads nothing, so nothing else goes with it. A portamento row naming a *different* instrument keeps its byte: there IT does swap the sample and clear the key-off, and the Taud re-attack is much the closer of the two readings.
+
+The volume-column `Gx` counts as a portamento here whenever it will actually reach the pattern — when the main column is empty, or holds a non-zero `D` that folds into `L`. Where the vol-column porta is dropped for want of a slot the row is not tied in the output, and it keeps its instrument byte.
+
+### 5.6 Effects
 
 A–Z dispatch per the Note Effects reference, with the IT-specific readings:
 
@@ -326,6 +336,8 @@ Pinning either axis on the command line auto-fits the other; pinning both overri
 As a final step, a bend- or polyphony-heavy song with fewer than 8 rows per beat has its `rpb` doubled and its `speed` halved (leaving tempo and `F` unchanged), up to 8. The extra rows give key-offs, choke events, portamento and channel-volume effects distinct rows to land on, so fewer are lost to same-row collisions — each cell has only one effect slot.
 
 Sub-row timing is then carried by `S $Dx` note delays.
+
+**Nothing is quantised unless the operator asks.** A MIDI that was *played* rather than stepped in carries its performance in exactly those sub-row delays, and a converter that tidied them away by default would be discarding the take. An opt-in quantiser snaps note onsets onto a beat subdivision — the one the onsets already use, the row grid, or a named fraction — and its strength dial says how far each onset moves, so a light setting tightens sloppy playing while leaving a deliberate push or drag audible. Note **lengths** are preserved: the whole note moves, key-off included, so a phrase's articulation survives. Quantising runs after the grid has been chosen, because the picker reads the raw onsets and must see the timing the performance was aiming at rather than one this pass has already imposed. A converter offering this **SHOULD** warn that it erases swing, flams and grace notes along with the mistakes.
 
 Tempo changes become `T $xx00`, or the extended `T $FFxx` form above 280 BPM. Channel volume and expression (CC7 × CC11) become `M $xx00` channel-volume effects, deliberately **not** volume-column writes: the volume column is the velocity axis that selects Ixmp patches, and driving it from CC7 would change which sample plays.
 

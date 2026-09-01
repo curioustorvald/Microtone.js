@@ -115,15 +115,26 @@ except SystemExit as e:
  *  budget: that path resamples EVERY sample down, costing quality song-wide.
  *  `keepDuplicatePatterns` (MIDI only) opts IN to --no-dedup-patterns: every
  *  cue×voice cell gets its own pattern instead of sharing one copy of each
- *  distinct bar, so editing a repeat can't change the other occurrences. */
+ *  distinct bar, so editing a repeat can't change the other occurrences.
+ *  `quantise` (MIDI only, item 168) opts IN to --quantise: null/"off" leaves
+ *  the performance's own timing alone, which is the default; "auto" snaps note
+ *  onsets to the subdivision the onsets already use, "row" to the Taud row
+ *  grid, and a number to that beat subdivision. `quantiseStrength` (0..100) is
+ *  how far each onset moves towards the grid — the setting that tightens
+ *  sloppy playing without flattening deliberate off-grid timing. */
 export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null,
                             trimPatches = false, stereoSamples = false,
-                            keepDuplicatePatterns = false }) {
+                            keepDuplicatePatterns = false,
+                            quantise = null, quantiseStrength = 100 }) {
   if (!isMidi) return [inPath, outPath, "-v"];
   const argv = [inPath, sf2Path, outPath, "-v"];
   if (rpb != null && rpb !== "auto") argv.push("--rpb", String(rpb));
   if (trimPatches) argv.push("--trim-unused-patches");
   if (stereoSamples) argv.push("--stereo-samples");
   if (keepDuplicatePatterns) argv.push("--no-dedup-patterns");
+  if (quantise != null && quantise !== "off") {
+    argv.push("--quantise", String(quantise));
+    if (quantiseStrength !== 100) argv.push("--quantise-strength", String(quantiseStrength));
+  }
   return argv;
 }

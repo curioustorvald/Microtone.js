@@ -32,6 +32,11 @@ Effect support:
     commands forwarded to main effect slot when empty; dropped otherwise.
     Per-effect private memory cohorts resolved eagerly (D/K/L share;
     E/F optionally linked with G per flag bit 5).
+
+    A note tied by tone portamento (G / L, main or vol column) that names
+    the instrument the channel already holds is emitted WITHOUT the
+    instrument byte — see drop_porta_retriggers for the IT bug that makes
+    this the faithful conversion rather than a liberty.
 """
 
 import argparse
@@ -1074,6 +1079,89 @@ def resolve_it_recalls(patterns_rows: list, order_list: list,
                     last_mem[ch][key] = cell.effect_arg
 
 
+def _row_carries_tone_porta(cell: 'ITRow') -> bool:
+    """Does this IT cell reach the Taud pattern carrying a tone portamento?
+
+    Main-column G and L always do. A vol-column Gx does only when
+    build_pattern_it can find it a slot: the main column is empty (the aux
+    becomes the effect) or holds a non-zero D (the pair folds into L). Anywhere
+    else the vol-column porta is dropped for want of a slot, so the row is NOT
+    "connected" in the output and must keep its instrument byte.
+    """
+    if cell.effect in (EFF_G, EFF_L):
+        return True
+    if VC_TPORTA_LO <= cell.volcol <= VC_TPORTA_HI:
+        return cell.effect == 0 or (cell.effect == EFF_D and cell.effect_arg != 0)
+    return False
+
+
+def drop_porta_retriggers(patterns_rows: list, order_list: list,
+                          num_channels: int) -> int:
+    """Strip the instrument byte from note rows tied by tone portamento.
+
+    THE IMPULSE TRACKER BUG THIS WORKS AROUND. In IT, a row carrying a note, an
+    instrument number AND a tone portamento does not reset the instrument's
+    envelopes — the envelopes carry on from wherever the previous note left
+    them, whether or not the instrument's Carry flag is set. Schism's
+    csf_instrument_change says so outright (player/effects.c):
+
+        reset_env = (!chan->length)
+                 || (inst_column && porta && (csf->flags & SONG_COMPATGXX))
+                 || (inst_column && !porta && (NOTEFADE|KEYOFF) && ITOLDEFFECTS);
+
+    — with Compatible Gxx off, which is the ordinary case, an instrument next
+    to a porta simply never reaches env_reset. The comment above it in Schism
+    ("Conditions experimentally determined... Seems like it's just a total mess
+    though") is the state of the art on WHY. OpenMPT carries the same quirk as
+    kITPortamentoInstrument / kITEnvelopeReset and was still fixing corners of
+    it in 1.32.11 ("Envelope Carry may not resume the envelope from the correct
+    position when there is both an instrument number and tone portamento next
+    to a note").
+
+    The Taud engine deliberately does NOT reproduce it: an instrument byte on a
+    porta row re-attacks the four envelope playheads (TAUD_ENGINE_SPEC §5.4,
+    item 124), which is FastTracker's rule and the one a tracker musician can
+    predict. Envelope carry is spelled out instead, in the LOOP word's `c` bit,
+    where it is a property of the instrument rather than an accident of the row.
+
+    So the conversion happens HERE: a note tied by G or L that names the
+    instrument the channel already holds loses the instrument byte, which is
+    what an IT author's ear expects and what the same passage would be written
+    as by hand. The byte is dropped ONLY when it names the SAME instrument —
+    that is the case where IT reloads nothing at all (Schism returns early at
+    `psmp == chan->ptr_sample`, clearing KEYOFF only when the instrument
+    changed), so nothing else is lost with it. A porta row naming a DIFFERENT
+    instrument keeps its byte: there IT does swap the sample and clear the
+    key-off, and Taud's re-attack is much the closer of the two readings.
+
+    Walks in play order, so "the instrument the channel already holds" is the
+    real one — same walk, and the same across-visits caveat, as
+    resolve_it_recalls. Returns the number of instrument bytes dropped.
+    """
+    current = [0] * num_channels      # instrument each channel has loaded
+    dropped = 0
+    for order in order_list:
+        if order >= IT_ORD_END:
+            break
+        if order >= len(patterns_rows):
+            continue
+        grid, rows = patterns_rows[order]
+        for r in range(rows):
+            for ch in range(num_channels):
+                if ch >= len(grid):
+                    continue
+                cell = grid[ch][r]
+                if cell.inst == 0:
+                    continue
+                if (0 <= cell.note <= 119 and cell.inst == current[ch]
+                        and _row_carries_tone_porta(cell)):
+                    cell.inst = 0
+                    dropped += 1
+                else:
+                    current[ch] = cell.inst
+    return dropped
+
+
 # ── Pattern row-chunk splitter ────────────────────────────────────────────────
 
 def split_patterns(patterns_rows: list):
@@ -1926,6 +2014,11 @@ def _build_song_payload(h: ITHeader, patterns_rows_template: list,
     vprint(f"  [{song_label}] resolving IT recalls…")
     resolve_it_recalls(pats, virtual_orders, 64, h.link_gef,
                        old_effects=h.old_effects)
+
+    n_dropped = drop_porta_retriggers(pats, virtual_orders, 64)
+    if n_dropped:
+        vprint(f"  [{song_label}] dropped {n_dropped} instrument byte(s) from "
+               f"porta-tied rows (IT envelope-retrigger bug)")
 
     init_speed, _ = find_initial_bpm_speed(pats, virtual_orders,
                                            h.initial_speed, h.initial_tempo)

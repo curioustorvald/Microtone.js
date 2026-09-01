@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>waveform hover hairline smoke (item 171)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox --dump-dom \
+           --virtual-time-budget=45000 \
+           http://localhost:8932/test/browser/wavehover-smoke.html -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud&amp;view=samples" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, what) => log(`${what}: ${cond ? "ok" : "FAIL"}`);
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { samplesView: sv } = win.__microtone;
+        win.alert = (m) => log("alert: " + m);
+        log("app loaded");
+
+        win.__microtone.split.reveal("samples");
+        sv.show();
+        sv.selected = 0;
+        sv.refresh();
+        const smp = sv.list[0];
+        ok(!!smp && smp.len > 0, `a1 a sample is selected (${smp?.len} bytes)`);
+        ok(sv.hoverByte === -1, "a2 nothing is hovered to begin with");
+
+        const canvas = sv.canvas;
+        const r = canvas.getBoundingClientRect();
+        ok(r.width > 0 && r.height > 0, `a3 the waveform canvas is laid out (${Math.round(r.width)}×${Math.round(r.height)})`);
+        // Whatever the theme paints, the hairline has to CHANGE the canvas —
+        // this is the pixel evidence that something was drawn at all.
+        const strip = (x) => {
+          const px = canvas.getContext("2d").getImageData(
+            Math.round(x * (canvas.width / r.width)), 0, 2, canvas.height).data;
+          return Array.from(px).join(",");
+        };
+
+        const move = (fracX, fracY = 0.5) => {
+          canvas.dispatchEvent(new win.PointerEvent("pointermove", {
+            bubbles: true,
+            clientX: r.left + r.width * fracX,
+            clientY: r.top + r.height * fracY,
+          }));
+        };
+
+        const atThird = Math.floor(smp.len / 3);
+        const before = strip(r.width / 3);
+        move(1 / 3);
+        ok(Math.abs(sv.hoverByte - atThird) <= Math.ceil(smp.len / r.width) + 1,
+          `b1 a third of the way across reads byte ${sv.hoverByte} (expected ≈ ${atThird})`);
+        ok(strip(r.width / 3) !== before, "b2 …and the canvas changed where the hairline is");
+
+        // The readout has to track the pointer, not latch on the first move.
+        move(2 / 3);
+        const twoThirds = sv.hoverByte;
+        ok(twoThirds > atThird, `b3 moving right raises the offset (${atThird} → ${twoThirds})`);
+
+        // Both ends stay inside the sample: the caption is an offset into it,
+        // and the last byte is len-1, not len.
+        move(0);
+        ok(sv.hoverByte === 0, `c1 the left edge reads byte 0 (got ${sv.hoverByte})`);
+        move(1.2);
+        ok(sv.hoverByte === smp.len - 1, `c2 past the right edge clamps to the last byte (got ${sv.hoverByte})`);
+
+        canvas.dispatchEvent(new win.PointerEvent("pointerleave", { bubbles: true }));
+        ok(sv.hoverByte === -1, "d1 leaving the canvas drops the hairline");
+        ok(strip(r.width / 3) === before, "d2 …and the trace is repainted exactly as it was");
+
+        // Selecting another sample must not leave a stale offset behind, since
+        // the byte it names may not exist in the new one.
+        if (sv.list.length > 1) {
+          move(0.9);
+          sv.selected = 1;
+          sv.refresh();
+          ok(sv.hoverByte === -1, "e1 changing sample clears the hover");
+        } else {
+          log("e1 changing sample clears the hover: skipped (one sample only)");
+        }
+
+        log(out.some((l) => l.includes("FAIL")) ? "SOME FAILED" : "ALL PASS");
+      } catch (err) {
+        log("EXCEPTION: " + (err && err.stack ? err.stack : err));
+      }
+    })();
+  </script>
+</body>
+</html>
