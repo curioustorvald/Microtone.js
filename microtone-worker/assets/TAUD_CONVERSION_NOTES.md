@@ -418,7 +418,67 @@ Pointing the converter at a **directory** compiles every MIDI in it against one 
 
 The shared bank spans the **union** of every song's instruments, so the 8 MiB pool and the 255-slot budget are shared too, and overflow degrades exactly as in single-file mode. A `.tsii` plus its `.tpif` combine to precisely the `.taud` that a single-file conversion of the same MIDI would have produced — which is the property the conversion tests pin.
 
-## 8. Verifying a conversion
+## 8. AdLib and Iyagi Music Sound — `.ims` + `.bnk`
+
+**Iyagi Music Sound** is the music format of *Iyagi*, the Korean BBS terminal of the early 1990s: an AdLib `.rol` score converted to a MIDI-shaped event stream at 240 ticks per beat, played on a YM3812 (OPL2). Two things make it unlike every other source here. The song **names** its instruments instead of storing them, so a companion `.bnk` bank is not optional — without one nothing sounds. And its instruments are not samples at all but **two-operator FM patches**, which is why this is the one conversion whose output is Metainstrument type 4.
+
+### 8.1 The grid comes from the delta times
+
+ROL was a step sequencer, and the converter that turned it into an event stream only rescaled the clock — so the **greatest common divisor of every delta time IS the composer's original tick**, and `240 ÷ gcd` is the rows per beat. Every GCD observed across 1128 reference songs divides 240, so the grid is exact and no event is quantised away. Header byte 50 states the same number outright in the 59 files that set it, and it agrees with the GCD in all of them; it is a cross-check, not a shortcut, because the other 1069 leave it zero.
+
+Speed and BPM are then one equation with a free parameter — a row lasts `speed × 2.5 ÷ BPM` seconds — and the parameter is spent on making the **tick as short as the 535 BPM ceiling allows**. That is not cosmetic: the tick is the resolution of every envelope in the engine, and an OPL percussive attack of two milliseconds smeared over a 20 ms tick is a different instrument. A typical song lands near 480 BPM at speed 8, so its tick is 5 ms rather than 20. A tempo change re-solves the same equation and writes `A` and `T` on two channels of the same row.
+
+### 8.2 An OPL patch is an FM rack
+
+Each patch the song names is compiled into a type-4 Metainstrument ([File Format §7.6](TAUD_FILE_FORMAT.md)), whose operators are ordinary instruments holding one cycle of the chip's own phase table — 1024 unsigned bytes, the resolution the chip itself reads at, in each of its four wave shapes. The rest maps field for field:
+
+| OPL | Taud |
+|---|---|
+| `waveSel` | which of the four single-cycle samples the operator's instrument points at |
+| `totalLevel` (0…63, 0.75 dB a step) | the rack entry's mix octet |
+| `multiple` | the rack entry's detune, as a frequency ratio in 4096-TET units |
+| attack / decay / sustain / release / `eg` | the operator instrument's volume envelope, in real seconds |
+| `ksl` (key level scaling) and `ksr` (key rate scaling) | pitch-BANDED entries — §8.3 |
+| `feedback` | a `$08xx` z⁻¹ tap on the modulator, scaled by a DC operator |
+| `connection` | FM is `$0001 $0400`; additive is a DC gate ring-modulating the sum |
+| `am` (tremolo) | **nothing** — 1.0 dB at 3.7 Hz has no Taud analogue |
+| `vib` | the instrument's auto-vibrato, at the chip's 7 cents and ~6.08 Hz |
+
+Two of those need saying properly.
+
+**The modulator's mix octet is its modulation index.** On the chip a full-scale operator displaces the next one's phase by 4084/2 out of a 1024-step cycle — 1.994 whole cycles — and a Taud modulator at unity sweeps ±1 cycle, so a modulator's octet carries a fixed ×1.994 (octet 207 at total level 0) that a carrier's does not. Get this wrong by a factor of two and every patch comes out dull.
+
+**A constant is a DC operator.** A rack has no word that pushes a literal, so where the conversion needs to scale something by a number — the feedback tap, which the chip shifts down by `8 − feedback` — the algorithm ring-modulates by an operator whose sample is a constant `+1` and whose mix octet *is* the factor. The same trick does additive patches: operator 0's envelope belongs to the whole note, so an additive patch, whose two operators must each keep their own, makes operator 0 a DC **gate** that shapes nothing and holds open long enough for both to finish.
+
+### 8.3 Key scaling becomes key bands
+
+`ksl` attenuates an operator for playing high and `ksr` speeds its envelope up; neither has an expression in a mix octet or a list of times in seconds. What a rack *can* do is gate an entry by pitch — so an operator becomes several entries over disjoint key bands, each pointing at its own instrument carrying that band's envelope and level. Only one of them is ever inside a trigger's rectangle, so the rack still sounds one voice per operator and the cost is instrument slots rather than voices. The bands are fitted to the notes the song actually plays the patch at, which is why most patches need only one or two.
+
+### 8.4 Rhythm mode
+
+`soundMode == 1` puts five drums on channels 6…10, and three of them are not oscillators at all: the chip throws away the hi-hat's, snare's and top cymbal's phase accumulators' low bits and builds a phase out of single bits of two of them XORed against its noise LFSR. There is no rack that does that, so those three are **rendered to a looped waveform** at unit envelope and the OPL envelope is carried by the instrument record exactly as it would have been by a rack operator. The bass drum is an ordinary two-operator voice and the tom an ordinary oscillator; both stay racks and keep their pitch.
+
+The three rendered drums are baked at the driver's starting tom pitch, because channel 7 and 8's F-numbers — which is what their timbre is built from — follow the tom. A song that plays tom notes shifts them on the chip and does not here.
+
+### 8.5 Volume is logarithmic
+
+`An vv`, and the velocity byte of a note-on, both set **channel** volume 0…127 — and AdLib's volume is not a linear gain. The driver scales the operator's 6-bit *amplitude*, which is a 0.75 dB-per-step logarithmic quantity, so volume 64 is 23 dB down and not 6. Converting it as if it were linear makes every fade in the format arrive far too late and far too suddenly. The exact curve depends on the operator's own total level, so the converter tracks which patch is on the channel and writes the resulting gain into the **volume column** — leaving the effect column free for the pitch bends, which need it far more.
+
+### 8.6 Bends are the loss
+
+IMS uses 2.6 million pitch-bend events across the reference corpus. They are not an ornament: they are how the format writes portamento and vibrato. They are followed here with **fine pitch slides** (`E`/`F` with a `$F` high nibble), which fire once on tick 0 — so the pitch is exact at every row boundary and what is lost is the shape in between. On the usual 8-to-12-rows-a-beat grid that is a bend updated every 20 to 60 ms, which reads as portamento correctly and flattens a fast vibrato.
+
+### 8.7 Everything else
+
+- **Tuning is A4 at 440 Hz and the notation index is 12-TET**, which the engine reads as an exact identity — nothing is scaled at playback. The chip's own middle C is 261.719 Hz, six tenths of a cent above concert, and declaring *that* instead would make a converted note sound exactly where an AdLib card put it; the trade was made the other way, because 0.6 cents is inaudible and a song fractionally out of tune with everything it might be remixed alongside is not. Every note moves by the same amount, so nothing within the song shifts relative to anything else.
+- **A cue is a whole number of bars.** A pattern holds 64 rows and 64 is not a multiple of every bar this format produces — 12 rows a beat in 4/4 is 48, which would leave every cue straddling a bar line. A cue therefore plays the largest power-of-two count of bars that fits in a pattern, said with the `LEN` instruction (and `halt at x` on the last cue, which is one instruction rather than two sharing a cue's two words). Only a bar longer than a pattern falls back to the full 64.
+- **Interpolation is off**: an OPL operator reads its phase table with no filtering at all, and its aliasing is part of the sound.
+- **Mixing volume is 90**, which puts one converted voice at exactly the 0.249 of full scale a single full operator reached on the chip's 16-bit DAC. Matching the headroom is what keeps a song's dynamics where they were.
+- **Titles are 2-byte Johab Korean** and are decoded and written as the project name, through the `\uHHHH` escape convention names ride. The title is the only attribution these files carry and it usually holds the artist as well, so it is kept whole.
+- **Patch changes mid-note** are applied at the next trigger, not immediately as the chip does.
+- **An unresolved patch name is a silent slot with the name preserved**, never a failed conversion. Resolution is most-specific-first and case-INSENSITIVE: exact matching resolves 29 % of the corpus's references and case-folded matching 99.95 %.
+
+## 9. Verifying a conversion
 
 Some practical checks, roughly in order of how much they catch per minute spent:
 

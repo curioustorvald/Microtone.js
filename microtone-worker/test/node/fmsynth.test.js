@@ -59,6 +59,7 @@ function loadSong(eng, rows) {
     const o = c.row * 8;
     if (c.note !== undefined) { pat[o] = c.note & 0xff; pat[o + 1] = (c.note >>> 8) & 0xff; }
     if (c.inst !== undefined) pat[o + 2] = c.inst;
+    if (c.vol !== undefined) pat[o + 3] = c.vol & 0x3f;   // selector 0 = SET
   }
   eng.uploadPattern(0, pat);
   const cue = new Uint8Array(64);
@@ -336,4 +337,62 @@ test("the ADD word sums two carriers", () => {
   const summed = peak(render(both, 3));
 
   assert.ok(summed > solo, `two carriers are louder than one (${summed} vs ${solo})`);
+});
+
+// ── the note's volume, and the operator's level ──────────────────────────────
+
+/** `samples` frames of the LEFT channel, as ±1 floats. */
+function renderMono(eng, samples) {
+  const out = new Uint8Array(TRACKER_CHUNK * 2);
+  const buf = new Float64Array(samples);
+  for (let n = 0; n < samples;) {
+    eng.renderChunk(0, out);
+    for (let i = 0; i < TRACKER_CHUNK && n < samples; i++, n++) {
+      buf[n] = (out[i * 2] - 128) / 128;
+    }
+  }
+  return buf;
+}
+
+/** Amplitude at `hz`, by Goertzel over the whole buffer. */
+function tone(buf, hz, from = 0) {
+  const w = (2 * Math.PI * hz) / SAMPLING_RATE, c = 2 * Math.cos(w);
+  let s1 = 0, s2 = 0;
+  for (let i = from; i < buf.length; i++) { const s = buf[i] + c * s1 - s2; s2 = s1; s1 = s; }
+  return Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - c * s1 * s2)) / (buf.length - from);
+}
+
+test("an operator's level is its modulation index, not the note's volume", () => {
+  // The volume column must change what a rack SOUNDS LIKE not at all — only how
+  // loud it is. §5.5.1's list of what an operator's value is multiplied by
+  // leaves the note and channel volume out on purpose: the mixer applies them
+  // once, to the finished patch, through operator 0. Fold them into the
+  // operators as well and a modulator's output — which IS a phase deviation —
+  // shrinks with the volume column, so a patch played quietly plays duller too.
+  const measure = (vol) => {
+    const eng = makeEngine();
+    // Operator 1 modulates operator 0 at −6 dB: half a cycle of deviation, deep
+    // enough that most of the signal is sidebands rather than carrier.
+    eng.uploadInstrument(3, buildMetaRecord([op(1), op(2, 111)], { type: META_TYPE_FM }));
+    loadSong(eng, [{ row: 0, note: 0x5000, inst: 3, vol }]);
+    const buf = renderMono(eng, 8192);
+    const from = 1024;                            // past the attack ramp
+    const carrier = 2 * tone(buf, SAMPLING_RATE / 256, from);
+    let sq = 0;
+    for (let i = from; i < buf.length; i++) sq += buf[i] * buf[i];
+    const rms = Math.sqrt(sq / (buf.length - from));
+    // Everything that is not the carrier, over the carrier: the patch's colour.
+    return { carrier, colour: Math.sqrt(Math.max(0, rms * rms - carrier * carrier / 2)) /
+                              (carrier / Math.SQRT2) };
+  };
+  const loud = measure(63);
+  const quiet = measure(24);
+  assert.ok(loud.colour > 1, `the modulator should dominate (${loud.colour})`);
+  // Loudness follows the column…
+  const gain = quiet.carrier / loud.carrier;
+  assert.ok(Math.abs(gain - 24 / 63) < 0.05, `volume column should scale linearly (${gain})`);
+  // …and the timbre does not. Fold the column into the operators and this ratio
+  // collapses by more than half.
+  assert.ok(Math.abs(quiet.colour - loud.colour) < 0.1 * loud.colour,
+    `modulation index moved with the volume column: ${loud.colour} → ${quiet.colour}`);
 });

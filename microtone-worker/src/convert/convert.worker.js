@@ -1,7 +1,7 @@
 // Conversion worker — owns the Pyodide runtime (13 MB wasm; loaded once on
 // the first conversion, kept for the session) so the UI thread never blocks.
 //
-// in : {t:"convert", id, fileName, bytes, sf2?: {name, bytes}}
+// in : {t:"convert", id, fileName, bytes, sf2?: {name, bytes}, banks?: [{name, bytes}]}
 // out: {t:"status", id, line} stream, then {t:"done", id, bytes} | {t:"error", id, message}
 
 import {
@@ -46,14 +46,22 @@ function jobSpec(m) {
     const conv = converterFor(m.fileName);
     if (!conv) throw new Error(`no converter for ${m.fileName}`);
     if (conv.isMidi && !m.sf2) throw new Error("MIDI conversion needs a soundfont");
+    if (conv.needsBank && !(m.banks?.length)) {
+      throw new Error("AdLib conversion needs an instrument bank (.bnk)");
+    }
     const inPath = "/in." + m.fileName.toLowerCase().split(".").pop();
     const inputs = [{ path: inPath, bytes: new Uint8Array(m.bytes) }];
     if (conv.isMidi) inputs.push({ path: "/sf.sf2", bytes: new Uint8Array(m.sf2.bytes) });
+    const bankPaths = (m.banks ?? []).map((b, i) => `/bank${i}.bnk`);
+    bankPaths.forEach((path, i) => {
+      inputs.push({ path, bytes: new Uint8Array(m.banks[i].bytes) });
+    });
     return {
       label: `converting ${m.fileName}…`,
       script: conv.script,
       argv: buildArgv({
-        isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
+        isMidi: conv.isMidi, needsBank: conv.needsBank, inPath, sf2Path: "/sf.sf2",
+        bankPaths, outPath: "/out.taud",
         rpb: m.rpb ?? null, trimPatches: m.trimPatches === true,
         stereoSamples: m.stereoSamples === true,
         keepDuplicatePatterns: m.keepDuplicatePatterns === true,

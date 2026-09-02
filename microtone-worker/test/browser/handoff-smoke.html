@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>cross-page song handoff smoke</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- The handoff ends in a real .ims import: Pyodide in a worker, which
+       DEADLOCKS under --virtual-time-budget. This smoke runs in REAL time — the
+       /hang image keeps the load event pending so --dump-dom waits for
+       --timeout instead of dumping at load. Recipe:
+         python3 tools/test-server.py &   # repo file server + /hang on :8932
+         chromium --headless=new --disable-gpu --no-sandbox --timeout=180000 \
+           --dump-dom http://localhost:8932/test/browser/handoff-smoke.html
+       This page plays the SENDER (the IyagiMusic player's "remix in Microtone"
+       button) and the framed app plays the receiver. -->
+  <img src="/hang" hidden>
+  <iframe id="app" style="width:1200px;height:700px"></iframe>
+  <script type="module">
+    import { encodeHandoff } from "../../src/ui/handoff.js";
+    import { IMS_SONG, IMS_BANK } from "../fixtures/ims.js";
+
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    (async () => {
+      try {
+        // What the button builds: song + its own bank, gzipped into a fragment.
+        const hash = encodeHandoff({
+          name: "handoff.ims", song: IMS_SONG, bankName: "HANDOFF.BNK", bank: IMS_BANK,
+        });
+        log(`fragment: ${hash.length} chars`);
+        if (hash.length > 200000) throw new Error("fragment is not URL-sized");
+
+        const frame = document.getElementById("app");
+        frame.src = "../../index.html" + hash;
+
+        // The app decodes it, runs ims2taud under Pyodide, and loads the result.
+        let doc = null;
+        for (let i = 0; i < 360 && !doc; i++) {
+          await wait(500);
+          doc = frame.contentWindow?.__microtone?.store?.doc ?? null;
+        }
+        if (!doc) throw new Error("the handed-over song never loaded");
+        const song = doc.songs[0];
+        log(`loaded: songs=${doc.songs.length} voices=${song.numVoices} ` +
+            `patterns=${song.patterns.length} bpm=${song.bpm} speed=${song.tickRate} ` +
+            `name=${JSON.stringify(doc.meta.projectName)}`);
+        if (song.numVoices !== 9) throw new Error(`expected 9 OPL voices, got ${song.numVoices}`);
+
+        // The instruments really are FM racks, not silence.
+        const racks = (doc.instruments ?? []).filter((i) => i && i.isMeta && i.metaType === 4);
+        log(`FM racks: ${racks.length}`);
+        if (racks.length < 2) throw new Error("no FM racks in the handed-over song");
+
+        // The hash is spent — a reload must not import the song twice.
+        const left = frame.contentWindow.location.hash;
+        if (left) throw new Error(`hash survived: ${left}`);
+
+        log("HANDOFF OK");
+      } catch (err) {
+        log("FAIL " + (err && err.stack ? err.stack : err));
+      }
+    })();
+  </script>
+</body>
+</html>

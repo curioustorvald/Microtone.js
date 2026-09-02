@@ -55,6 +55,7 @@ node tools/compare-pcm.js out.pcm reference.pcm
 | `src/storage/` | OPFS virtual disk, import/export |
 | `vendor/` | vendored single-file ESM deps (see `vendor/VENDOR-VERSIONS.md`) |
 | `test/corpus/` | .taud conformance/demo corpus (from the TSVM repo) |
+| `test/fixtures/` | file formats built rather than committed (the .ims/.bnk pair) |
 | `tools/` | Node CLIs: render, compare, inspect, worklet-bundle |
 
 ## Provenance
@@ -64,3 +65,9 @@ Engine port keeps the Kotlin function/field names (`applyTrackerRow`,
 `tsvm/tsvm_core/src/net/torvald/tsvm/peripheral/AudioAdapter.kt` diff cleanly.
 Format reference: `tsvm/terranmon.txt` §"Taud serialisation format";
 effect semantics: `tsvm/TAUD_NOTE_EFFECTS.md`.
+
+Two banks ship with the app so an import can sound without the user hunting for
+one: `assets/GeneralUser-GS.taud.sf2.gz` (GeneralUser GS, for MIDI) and
+`assets/STANDARD.BNK.gz` (the general AdLib instrument bank the Iyagi Music
+Sound corpus resolves its patch names against, for `.ims`). Neither is used
+unless an import asks for it.

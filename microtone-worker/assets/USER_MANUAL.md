@@ -63,7 +63,7 @@ and the editor snaps entry, display and stepping to that table's degrees. See
 
 ### Opening and creating projects
 
-- **Drop a file anywhere** on the window, or use **Open…** in the top bar. `.taud` (full project) is the native format of the Microtone. Tracker modules (`.mod`, `.s3m`, `.xm`, `.it`, `.mon`) are converted on the fly.
+- **Drop a file anywhere** on the window, or use **Open…** in the top bar. `.taud` (full project) is the native format of the Microtone. Tracker modules (`.mod`, `.s3m`, `.xm`, `.it`, `.mon`) and AdLib songs (`.ims`) are converted on the fly.
 - **Import MIDI…** converts a `.mid` file through a SoundFont — see [Importing music](#importing-music).
 - **New…** opens the New Project wizard, which collects every song setting before the blank project is built:
   - **Tempo** — BPM (25–535) and speed (ticks per row, 1–127), with a live *blinkenlights* strip previewing the feel of that tempo.
@@ -1501,6 +1501,29 @@ as an unsaved project. A few options shape the conversion:
 drop them. An `.it` whose samples are stereo keeps them as
 [stereo samples](#stereo-samples) — the other formats have no stereo samples to
 begin with.
+
+### AdLib songs
+
+`.ims` files — **Iyagi Music Sound**, the music format of the Korean BBS
+terminal *Iyagi*, played on an AdLib card — open the same way, and arrive as
+**FM Racks**: every instrument the song names is compiled into the two-operator
+patch the chip played, over single-cycle samples of the chip's own waveforms,
+and is editable operator by operator ([Building an FM Rack](#building-an-fm-rack)).
+
+These songs **name** their instruments instead of storing them, so they need a
+bank file. Drop the song and its `.bnk` together — or select both in **Open…** —
+and they are matched up; without one, the general AdLib bank that ships with
+Microtone resolves nearly every patch name in circulation.
+
+The conversion sets its own tempo and speed: the row grid comes from the song's
+own timing, and the tick is made as short as the tempo register allows, because
+the tick is what the envelope resolution is. A converted song therefore shows a
+much higher BPM and a much larger speed than a tracker module would — 480 BPM at
+speed 8 is one row every 62 ms, exactly as before.
+
+What you are handed is an ordinary **A4 = 440 Hz, 12-TET** song, and its cues are
+a whole number of **bars** rather than a flat 64 rows — a song at 12 rows to the
+beat gets 48-row cues, one bar each, instead of cues that straddle the bar line.
 
 ## Microtonality in depth
 

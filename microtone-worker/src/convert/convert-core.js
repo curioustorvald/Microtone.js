@@ -13,25 +13,34 @@ export const CONVERTERS = {
   it: "it2taud.py",
   xm: "xm2taud.py",
   mon: "mon2taud.py",
+  ims: "ims2taud.py",
   mid: "midi2taud.py",
   midi: "midi2taud.py",
 };
 
+/** Extensions whose converter needs a second input: the instrument bank. */
+export const BANK_EXTS = new Set(["ims"]);
+
 export const CONVERTER_SOURCES = [
   "taud_common.py", "mod2taud.py", "s3m2taud.py", "it2taud.py",
   "xm2taud.py", "mon2taud.py", "midi2taud.py",
+  // ims2taud imports opl2taud (the OPL→FM-rack instrument compiler) and the
+  // Johab decoder its titles are written in; all three are plain stdlib.
+  "ims2taud.py", "opl2taud.py", "johab2unicode.py", "johab_symbols.py",
 ];
 
 /** Microtone.js's own SF2→bank driver (src/convert/sf2bank.py) — installed
  *  alongside the vendored converters; imports midi2taud from the same dir. */
 export const SF2BANK_SOURCE = "sf2bank.py";
 
-/** {script, isMidi} for a file name, or null when it's not a convertible type. */
+/** {script, isMidi, needsBank} for a file name, or null when it's not a
+ *  convertible type. `needsBank` marks the AdLib family, whose songs NAME their
+ *  instruments instead of storing them and so need a .BNK alongside. */
 export function converterFor(name) {
   const ext = name.toLowerCase().split(".").pop();
   const script = CONVERTERS[ext];
   if (!script) return null;
-  return { script, isMidi: script === "midi2taud.py" };
+  return { script, isMidi: script === "midi2taud.py", needsBank: BANK_EXTS.has(ext) };
 }
 
 /**
@@ -122,11 +131,21 @@ except SystemExit as e:
  *  number to that beat subdivision. BOTH ENDS of a note are snapped, so a
  *  quantised note lasts a whole number of grid steps. `quantiseStrength`
  *  (0..100) is how far each end moves towards the grid — the setting that
- *  tightens sloppy playing without flattening deliberate off-grid timing. */
-export function buildArgv({ isMidi, inPath, sf2Path, outPath, rpb = null,
+ *  tightens sloppy playing without flattening deliberate off-grid timing.
+ *  `bankPaths` (AdLib .ims only) are the .BNK files patch names resolve
+ *  against, most specific first. */
+export function buildArgv({ isMidi, needsBank = false, inPath, sf2Path,
+                            bankPaths = [], outPath, rpb = null,
                             trimPatches = false, stereoSamples = false,
                             keepDuplicatePatterns = false,
                             quantise = null, quantiseStrength = 100 }) {
+  if (needsBank) {
+    // The song's own bank first, then the general one: patch names resolve
+    // most-specific-first, and case-insensitively.
+    const argv = [inPath, outPath, "-v"];
+    for (const b of bankPaths) argv.push("-b", b);
+    return argv;
+  }
   if (!isMidi) return [inPath, outPath, "-v"];
   const argv = [inPath, sf2Path, outPath, "-v"];
   if (rpb != null && rpb !== "auto") argv.push("--rpb", String(rpb));

@@ -5465,7 +5465,14 @@ function fmEvalOperator(eng, ts, rig, k, interpMode, spt, offset) {
     const effEnvVol = v.volEnvOn ? v.envVolMix : 1.0;
     advanceVolumeRamp(v, ts.volDiv);
     advancePitchRamp(v, spt);
-    g *= effEnvVol * v.fadeoutVolume * v.currentMixVolume * v.activeAttenGain *
+    // NOT the note/channel volume, which §5.5.1's list of what an operator's
+    // value is multiplied by deliberately omits. A rack is ONE voice: the
+    // mixer applies that volume to the finished patch through operator 0, and
+    // applying it here as well would put it on the carrier twice and — worse —
+    // make an operator's modulation INDEX follow the volume column, so playing
+    // a patch quietly would also play it duller. An operator's level is its
+    // index; the note's volume belongs to the note.
+    g *= effEnvVol * v.fadeoutVolume * v.activeAttenGain *
       (inst.instGlobalVolume / 255.0);
     if (v.rampOutSamples > 0) {
       g *= v.rampOutGain;

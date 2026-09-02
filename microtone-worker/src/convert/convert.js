@@ -7,7 +7,7 @@ import { converterFor } from "./convert-core.js";
 export { converterFor };
 
 /** Extensions the import pipeline accepts, for file-picker accept lists. */
-export const CONVERT_ACCEPT = ".mod,.s3m,.it,.xm,.mon,.mid,.midi";
+export const CONVERT_ACCEPT = ".mod,.s3m,.it,.xm,.mon,.ims,.mid,.midi";
 
 let worker = null;
 let nextId = 1;
@@ -39,6 +39,8 @@ function ensureWorker() {
  * @param fileName  original name (extension selects the converter)
  * @param bytes     Uint8Array of the file
  * @param opts.sf2  {name, bytes} soundfont (required for .mid/.midi)
+ * @param opts.banks  [{name, bytes}] AdLib .BNK banks, most specific first
+ *                    (required for .ims — the song only names its patches)
  * @param opts.rpb  MIDI rows-per-beat (2/4/8/16/32/64, or null/"auto")
  * @param opts.trimPatches  MIDI: drop the Ixmp patches the song never triggers
  *                          (item 75; off = keep each preset's full zone map)
@@ -51,7 +53,7 @@ function ensureWorker() {
  * @param opts.onStatus  (line) => void progress stream
  */
 export function convertToTaud(fileName, bytes,
-                              { sf2 = null, rpb = null, trimPatches = false,
+                              { sf2 = null, banks = null, rpb = null, trimPatches = false,
                                 stereoSamples = false, keepDuplicatePatterns = false,
                                 quantise = null, quantiseStrength = 100,
                                 onStatus = null } = {}) {
@@ -66,6 +68,13 @@ export function convertToTaud(fileName, bytes,
       const sfBuf = sf2.bytes.slice().buffer;
       msg.sf2 = { name: sf2.name, bytes: sfBuf };
       transfer.push(sfBuf);
+    }
+    if (banks?.length) {
+      msg.banks = banks.map((b) => {
+        const buf = b.bytes.slice().buffer;
+        transfer.push(buf);
+        return { name: b.name, bytes: buf };
+      });
     }
     ensureWorker().postMessage(msg, transfer);
   });

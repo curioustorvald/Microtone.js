@@ -31,6 +31,9 @@ import { loadIntoEngine } from "../../src/audio/offline-render.js";
 import { TRACKER_CHUNK } from "../../src/engine/constants.js";
 import { TaudEngine } from "../../src/engine/engine.js";
 import { patchIsStereo } from "../../src/engine/inst.js";
+import { unescapeName } from "../../src/ui/names.js";
+import { IMS_BANK, IMS_SONG, IMS_SONG_12RPB, IMS_EVENTS, JOHAB_TITLE, makeIms } from "../fixtures/ims.js";
+import { cueInstructionWords } from "../../src/format/taud-parse.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const importDir = root + "test/corpus/import/";
@@ -50,12 +53,16 @@ const py = await loadConverterRuntime({
 function convert(fileName, opts = {}) {
   const conv = converterFor(fileName);
   const inPath = "/in." + fileName.toLowerCase().split(".").pop();
-  const inputs = [{ path: inPath, bytes: readFileSync(importDir + fileName) }];
+  const inputs = [{ path: inPath,
+                    bytes: opts.bytes ?? readFileSync(importDir + fileName) }];
   if (conv.isMidi) inputs.push({ path: "/sf.sf2", bytes: readFileSync(sf2Path) });
+  const bankPaths = (opts.banks ?? []).map((b, i) => `/bank${i}.bnk`);
+  bankPaths.forEach((path, i) => inputs.push({ path, bytes: opts.banks[i] }));
   return runConverter(py, {
     script: conv.script,
     argv: buildArgv({
-      isMidi: conv.isMidi, inPath, sf2Path: "/sf.sf2", outPath: "/out.taud",
+      isMidi: conv.isMidi, needsBank: conv.needsBank, inPath, sf2Path: "/sf.sf2",
+      bankPaths, outPath: "/out.taud",
       rpb: opts.rpb ?? null, trimPatches: opts.trimPatches === true,
       keepDuplicatePatterns: opts.keepDuplicatePatterns === true,
       quantise: opts.quantise ?? null,
@@ -861,3 +868,109 @@ test("sf2bank --stereo doubles the pool and marks the samples stereo (skips with
       assert.notEqual(e.chanPtrs[0], e.ptr);
     }
   });
+
+// ── AdLib / Iyagi Music Sound (item 171) ─────────────────────────────────────
+//
+// An .ims stores nothing but nine-character patch NAMES, so both halves are
+// built here rather than committed: the format is small enough that writing it
+// out documents it, and a fixture pair would only be two more opaque blobs.
+
+test("converterFor knows which formats need an instrument bank", () => {
+  assert.equal(converterFor("SONG.IMS").script, "ims2taud.py");
+  assert.ok(converterFor("SONG.IMS").needsBank);
+  assert.ok(!converterFor("song.xm").needsBank);
+  assert.ok(!converterFor("song.mid").needsBank);
+});
+
+test("buildArgv passes AdLib banks most-specific-first", () => {
+  assert.deepEqual(
+    buildArgv({ needsBank: true, inPath: "/in.ims", outPath: "/out.taud",
+                bankPaths: ["/bank0.bnk", "/bank1.bnk"] }),
+    ["/in.ims", "/out.taud", "-v", "-b", "/bank0.bnk", "-b", "/bank1.bnk"]);
+  // No bank paths is still a legal argv — the converter warns and goes silent.
+  assert.deepEqual(buildArgv({ needsBank: true, inPath: "/in.ims", outPath: "/out.taud" }),
+    ["/in.ims", "/out.taud", "-v"]);
+});
+
+test("ims2taud: an AdLib song plus its bank → a playable FM-rack document", () => {
+  const bytes = convert("song.ims", { bytes: IMS_SONG, banks: [IMS_BANK] });
+  const doc = parseTaud(bytes);
+  assert.equal(doc.kind, "taud");
+  assert.equal(doc.songs.length, 1);
+  const song = doc.songs[0];
+  // Melodic mode is nine OPL voices, and channel IS voice in this format.
+  assert.equal(song.numVoices, 9);
+  // Concert pitch, declared the one way the engine reads as an exact identity:
+  // A4 @ 440 renders without a bit disturbed, so the song is an ordinary
+  // 12-TET one to work on rather than one tuned 0.6 cents off to the chip.
+  assert.equal(song.tuningBaseNote, 0x5c00);
+  assert.equal(song.tuningFreq, 440);
+  assert.equal(tuningRatioOf(song.tuningBaseNote, song.tuningFreq), 1.0);
+  // The Johab title survives as the project name — through the \uHHHH escape
+  // convention names ride, since these titles are Korean by nature.
+  assert.equal(unescapeName(doc.meta.projectName), "검은");
+
+  // Every patch the song names becomes a type-4 FM rack whose operators live
+  // in the auxiliary bin, and whose algorithm verifies (a rack whose program
+  // does not verify is silent, so a parsed fmProgram is the real check).
+  const d = new Document(doc);
+  const insts = d.instruments;
+  const racks = insts.filter((inst) => inst && inst.isMeta && inst.metaType === 4);
+  assert.ok(racks.length >= 2, `expected a rack per patch, got ${racks.length}`);
+  for (const rack of racks) {
+    assert.ok(rack.fmProgram !== null && rack.fmProgram.length > 0);
+    assert.ok(rack.metaLayers.length >= 2);
+    for (const op of rack.metaLayers) assert.ok(op.instIdx >= 256, "operators live in the aux bin");
+  }
+});
+
+test("ims2taud: the converted song actually sounds", () => {
+  const bytes = convert("song.ims", { bytes: IMS_SONG, banks: [IMS_BANK] });
+  const doc = parseTaud(bytes);
+  const eng = new TaudEngine();
+  loadIntoEngine(eng, doc, 0);
+  eng.play(0);
+  const buf = new Float32Array(TRACKER_CHUNK * 2);
+  let peak = 0;
+  for (let i = 0; i < 400; i++) {
+    eng.renderChunk(0, buf);
+    for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  }
+  assert.ok(peak > 0.02, `converted IMS rendered silence (peak ${peak})`);
+});
+
+test("ims2taud: an unresolved patch name is a silent slot, not a failure", () => {
+  const song = makeIms({ title: JOHAB_TITLE, events: IMS_EVENTS,
+                         names: ["NOSUCH", "ALSONOT"] });
+  const bytes = convert("song.ims", { bytes: song, banks: [IMS_BANK] });
+  const doc = parseTaud(bytes);
+  assert.equal(doc.songs.length, 1);
+});
+
+test("ims2taud gives a cue a whole number of bars", () => {
+  // A pattern holds 64 rows and a bar of twelve-rows-a-beat 4/4 is 48, so a flat
+  // 64-row cue would straddle every bar line and the song would be unusable to
+  // remix. The cue plays 48 and says so with LEN; the last one says "halt at 48",
+  // which is one instruction rather than two sharing a cue's two words.
+  const doc = parseTaud(convert("song.ims", { bytes: IMS_SONG_12RPB, banks: [IMS_BANK] }));
+  const song = doc.songs[0];
+  assert.equal(doc.meta.songMeta[0].beatPri, 12, "twelve rows to the beat");
+  assert.equal(doc.meta.songMeta[0].beatSec, 48, "…and forty-eight to the bar");
+  assert.equal(doc.meta.songMeta[0].notation, 120, "displayed as 12-TET");
+  const LEN_48 = (0x02 << 8) | 47;               // rows − 1
+  const HALT_AT_48 = (0x01 << 8) | 0x40 | 48;    // the row count itself
+  const words = song.cues.map((c) => cueInstructionWords(c)[0]);
+  assert.ok(words.length >= 2, `expected several cues, got ${words.length}`);
+  for (const w of words.slice(0, -1)) assert.equal(w, LEN_48);
+  assert.equal(words[words.length - 1], HALT_AT_48);
+});
+
+test("…and leaves a 64-row cue alone when the bar already fits", () => {
+  // Eight rows a beat is 32 to the bar: two whole bars fit a pattern, so there
+  // is nothing to shorten and no LEN to write.
+  const doc = parseTaud(convert("song.ims", { bytes: IMS_SONG, banks: [IMS_BANK] }));
+  assert.equal(doc.meta.songMeta[0].beatSec, 32);
+  const words = doc.songs[0].cues.map((c) => cueInstructionWords(c)[0]);
+  for (const w of words.slice(0, -1)) assert.equal(w, 0, "no LEN on a full-length cue");
+  assert.equal(words[words.length - 1], 0x0100, "a plain HALT ends it");
+});

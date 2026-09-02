@@ -32,12 +32,20 @@ universally recognised. Then run the conversion tests.
 
 ## converters/ — canonical Taud converters (verbatim copies from tsvm)
 
-`taud_common.py` + `{mod,s3m,it,xm,mon,midi}2taud.py`, copied UNMODIFIED from
+`taud_common.py` + `{mod,s3m,it,xm,mon,midi,ims}2taud.py`, copied UNMODIFIED from
 `/home/torvald/Documents/tsvm/` (the source of truth — they keep evolving
 there). Pure stdlib; the optional `zstandard` import is absent under Pyodide
 so output falls back to gzip (`best_compress`), which every Taud loader
 sniffs fine. To sync: `cp` the files again and re-run the conversion tests —
 no porting, no patching.
+
+`ims2taud.py` (AdLib / Iyagi Music Sound, item 171) brings three files of its own
+from the same tree: `opl2taud.py`, which compiles a YM3812 patch into a Taud FM
+operator rack and is importable on its own, and `johab2unicode.py` +
+`johab_symbols.py`, which decode the 2-byte Johab Korean these songs write their
+titles in (CPython ships a `johab` codec, but Pyodide's stdlib does not carry the
+CJK codec extension, so the decoder travels with the converter). All four are
+pure stdlib and are copied the same way as the rest.
 
 ## Third-party DATA in `src/engine/` — the binaural HRIR set
 

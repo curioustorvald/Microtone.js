@@ -38,6 +38,8 @@ import { showImportProgress } from "./popups/importlog.js";
 import { showProgress } from "./popups/progress.js";
 import { fetchDemo } from "./demos.js";
 import { getSoundfont, getBundledSoundfont, pickUserSoundfont } from "./soundfont.js";
+import { resolveBanks, rememberBank } from "./adlibbank.js";
+import { decodeHandoff, handoffArmed } from "./handoff.js";
 import { presetForNotation } from "./pitchtables.js";
 import { initTheme, toggleTheme, onThemeChange, currentTheme, isThemeName, WARMTH } from "./theme.js";
 import { initI18n, applyDom, t, LANGS, changeLang, onLangChange, currentLang } from "./i18n.js";
@@ -113,20 +115,34 @@ ensureAudio({ resume: false }).catch((e) => console.warn("APP: eager audio warmu
 
 // ── import conversion (tracker/MIDI → .taud via the vendored Python converters) ──
 
-async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
+async function convertImport(name, bytes, { sf2: sf2Override = null, bank = null,
+                                            rpb = null,
                                             trimPatches = false, stereoSamples = false,
                                             keepDuplicatePatterns = false,
                                             quantise = null, quantiseStrength = 100 } = {}) {
   let sf2 = sf2Override;
-  if (!sf2 && converterFor(name).isMidi) {
+  const conv = converterFor(name);
+  if (!sf2 && conv.isMidi) {
     $("stFile").textContent = t("midi.needSf");
     sf2 = await getSoundfont();
     if (!sf2) { $("stFile").textContent = t("midi.cancelled"); return null; }
   }
+  // An AdLib song names its instruments instead of storing them, so a bank is
+  // not a nicety: the song's own .BNK when one came with it, else the bundled
+  // general bank, which resolves nearly every name in the wild.
+  let banks = null;
+  if (conv.needsBank) {
+    banks = await resolveBanks(bank);
+    if (!banks.length) {
+      $("stFile").textContent = t("status.importFailed",
+        { name, err: t("handoff.noBank") });
+      return null;
+    }
+  }
   const progress = showImportProgress(`Importing ${name}`);
   try {
     const out = await convertToTaud(name, bytes,
-      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
+      { sf2, banks, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
         quantise, quantiseStrength, onStatus: progress.log });
     progress.done();
     return out;
@@ -140,14 +156,15 @@ async function convertImport(name, bytes, { sf2: sf2Override = null, rpb = null,
 }
 
 // ── document loading ──
-async function loadBytes(name, bytes, { sf2 = null, saveToOpfs = false, rpb = null,
+async function loadBytes(name, bytes, { sf2 = null, bank = null, saveToOpfs = false,
+                                        rpb = null,
                                         trimPatches = false, stereoSamples = false,
                                         keepDuplicatePatterns = false,
                                         quantise = null, quantiseStrength = 100 } = {}) {
   let converted = false;
   if (converterFor(name)) {
     bytes = await convertImport(name, bytes,
-      { sf2, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
+      { sf2, bank, rpb, trimPatches, stereoSamples, keepDuplicatePatterns,
         quantise, quantiseStrength });
     if (bytes === null) return;
     name = name.replace(/\.[^.]+$/, "") + ".taud";
@@ -428,9 +445,12 @@ $("newBtn").addEventListener("click", () => newProject());
 // Open takes native containers + tracker files; MIDI goes through the
 // dedicated Import MIDI… button (explicit soundfont choice). Drag-drop and
 // ?load= still accept .mid via the automatic bundled-else-picker path.
-const OPEN_ACCEPT = ".taud,.tsii,.tpif," +
+// `.bnk` is here so an AdLib song and its bank can be picked TOGETHER; a bank
+// on its own is not a project and loadFileSet ignores it.
+const OPEN_ACCEPT = ".taud,.tsii,.tpif,.bnk," +
   CONVERT_ACCEPT.split(",").filter((e) => !e.startsWith(".mid")).join(",");
 $("fileInput").accept = OPEN_ACCEPT;
+$("fileInput").multiple = true;
 $("openBtn").addEventListener("click", () => $("fileInput").click());
 
 /** Pick a .mid + soundfont, convert, load. `toOpfs` (Files-tab button) also
@@ -516,15 +536,31 @@ async function importMidiInteractive({ toOpfs = false } = {}) {
     });
 }
 $("importMidiBtn").addEventListener("click", () => importMidiInteractive());
+/** Load the first file of a picked/dropped set, pairing an AdLib song with a
+ *  .BNK dropped alongside it — the two halves of one .ims arrive together far
+ *  more often than not, and the bank is what makes the song audible. */
+async function loadFileSet(files) {
+  const list = [...files];
+  const bnk = list.find((f) => /\.bnk$/i.test(f.name));
+  const bank = bnk
+    ? { name: bnk.name, bytes: new Uint8Array(await bnk.arrayBuffer()) }
+    : null;
+  const song = list.find((f) => f !== bnk);
+  if (!song) {
+    // A bank on its own is not a project: keep it for the songs to come.
+    if (bank && rememberBank(bank)) $("stFile").textContent = t("bank.remembered", { name: bank.name });
+    return;
+  }
+  await loadBytes(song.name, new Uint8Array(await song.arrayBuffer()), { bank });
+}
+
 $("fileInput").addEventListener("change", async (e) => {
-  const f = e.target.files[0];
-  if (f) await loadBytes(f.name, new Uint8Array(await f.arrayBuffer()));
+  await loadFileSet(e.target.files);
 });
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", async (e) => {
   e.preventDefault();
-  const f = e.dataTransfer.files[0];
-  if (f) await loadBytes(f.name, new Uint8Array(await f.arrayBuffer()));
+  await loadFileSet(e.dataTransfer.files);
 });
 window.addEventListener("beforeunload", (e) => {
   if (store.doc?.dirty) e.preventDefault();
@@ -1485,6 +1521,24 @@ store.on("saved", (name) => opfs.removeAutosave(name)); // clean save supersedes
     for (const a of autosaves) await opfs.removeAutosave(a.name);
   }
 })();
+
+// ── #import= handoff (item 171) ──
+// A sibling page — the IyagiMusic .ims player — sent a song over in the URL,
+// with the instrument bank the format needs alongside it. The hash is spent
+// before the import starts, so a reload does not repeat it, and the bytes go
+// down exactly the drag-and-drop path from there.
+if (handoffArmed()) {
+  try {
+    const handed = decodeHandoff(location.hash);
+    history.replaceState(null, "", location.pathname + location.search);
+    $("stFile").textContent = t("handoff.receiving", { name: handed.name });
+    loadBytes(handed.name, handed.bytes, { bank: handed.bank });
+  } catch (err) {
+    history.replaceState(null, "", location.pathname + location.search);
+    $("stFile").textContent = t("handoff.bad", { err: err.message });
+    console.error("APP: handoff failed", err);
+  }
+}
 
 // ── ?load= bootstrap (demo links; also drives the headless smoke test) ──
 const bootParams = new URLSearchParams(location.search);
