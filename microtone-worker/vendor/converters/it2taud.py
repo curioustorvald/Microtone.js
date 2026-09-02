@@ -13,8 +13,9 @@ Limits:
     - IT2.14/IT2.15 compressed samples are decoded unless --no-decompress.
     - IT instrument volume/pan/pitch-or-filter envelopes (up to 25 nodes,
       sustain & env loops) are converted directly to the new Taud 192-byte
-      instrument format. NNA actions are ignored. Each IT instrument
-      resolves to its C-5 canonical sample.
+      instrument format, NNA included. Each IT instrument resolves to
+      its C-5 canonical sample; a sample-mode file (no "use instruments"
+      flag) gets one instrument per sample, with NNA = cut.
     - Pitch and filter envelopes are emitted natively (engine-evaluated);
       auto-vibrato, fadeout, PPS/PPC, default pan, volume/pan swing, and
       initial filter cutoff/resonance are forwarded to the engine via
@@ -1711,7 +1712,13 @@ def build_sample_inst_bin_it(samples_or_proxy: list,
         # Byte 186: instrument flag — 0b 000 www nn
         #     nn = NNA (Taud encoding: 00=note off, 01=cut, 10=continue, 11=fade)
         #     www = vibrato waveform (0=sine, 1=ramp-down, 2=square, 3=random, 4=ramp-up FT2)
-        nna = idata.get('nna', 0) & 0x03
+        # The default is CUT, not the 00 the field happens to encode: the only
+        # caller that omits 'nna' is the sample-mode branch, and IT sample mode
+        # has no NNA at all — a new note replaces the channel's voice outright.
+        # Defaulting to 00 (note off) spawned a ghost per trigger that, with no
+        # volume envelope and fadeout 0, never stopped ringing. Same choice the
+        # mod/s3m/xm/mon converters make for their own NNA-less sources.
+        nna = idata.get('nna', 0b01) & 0x03
         vib_wave = idata.get('vib_wave', 0) & 0x07
         inst_bin[base + 186] = (vib_wave << 2) | nna
         # Byte 187: vibrato depth (0..255 full range).
@@ -2332,7 +2339,30 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
             for i, s in enumerate(samples)
             if s is not None
         }
-        sampleinst_raw, bin_offsets, sample_ratio, pool_order, bin_offsets_r = build_sample_inst_bin_it(proxy)
+        # An IT sample still carries three things the base record has fields for,
+        # and leaving them at their neutral defaults loses them: its own default
+        # pan (IMPS+0x2F), its auto-vibrato (Vis/Vid/Vir/Vit at IMPS+0x4C), and
+        # its New Note Action — which sample mode does not have at all, so a new
+        # note replaces the voice outright and the record must say Note Cut.
+        # The Ixmp patch builder (_it_patch_fields) already forwards the first
+        # two for the stereo-sample patches it emits from this same branch; the
+        # base record was the odd one out.
+        instr_data_by_slot = {}
+        for i, s in enumerate(samples):
+            if s is None:
+                continue
+            smp_dfp = getattr(s, 'dfp', 0)
+            instr_data_by_slot[i + 1] = {
+                'nna':        0b01,                    # Note Cut
+                'default_pan': (min(255, max(0, round((smp_dfp & 0x7F) * 255 / 64)))
+                                if (smp_dfp & 0x80) else 0x80),
+                'vib_speed':  min(255, round(getattr(s, 'av_speed', 0) * 255 / 64)),
+                'vib_depth':  min(255, round(getattr(s, 'av_depth', 0) * 255 / 64)),
+                'vib_sweep':  0,                       # FT2-only; IT uses vib_rate
+                'vib_rate':   getattr(s, 'av_sweep', 0) & 0xFF,   # IT Vir
+                'vib_wave':   getattr(s, 'av_wave',  0) & 0x07,
+            }
+        sampleinst_raw, bin_offsets, sample_ratio, pool_order, bin_offsets_r = build_sample_inst_bin_it(proxy, instr_data_by_slot)
         extras_offsets = {}
         extras_offsets_r = {}
 

@@ -260,15 +260,23 @@ IT2.14/IT2.15 **compressed samples** are decoded during conversion. The compress
 
 **Stereo samples are kept by default**: the two channels become two pool spans joined by an Ixmp `s` patch. Because a base record cannot express a stereo sample, a stereo canonical sample is treated as non-canonical and gets patches over its own keyboard runs. Downmixing to mono is available as an option.
 
-### 5.3 Pattern splitting
+### 5.3 Sample-mode files
+
+An IT file that does not set the "use instruments" flag has no instrument records at all — pattern cells name samples directly. Such a file gets one Taud instrument per sample, and every field that only an IT instrument could have fills in with its neutral value: no envelopes, no fadeout, no pitch-pan, filter off.
+
+The fields an IT **sample** carries in its own right still convert: its default volume, its default pan (`IMPS+$2F`, when the sample's own use-panning bit is set) and its auto-vibrato.
+
+**New Note Action is the one field where "neutral" is not zero.** Sample mode has no NNA: a new note replaces whatever the channel was playing, exactly as in `.mod`, `.s3m` and `.xm`. Converted samples therefore get NNA = Note Cut, so no ghost is spawned. Note Off — the value the field's zero encodes — would keep a ghost running per trigger, and with no volume envelope and a fadeout of zero it would never stop ringing.
+
+### 5.4 Pattern splitting
 
 IT patterns may exceed 64 rows, and are split into ⌈rows ÷ 64⌉ consecutive Taud patterns. `B` and `C` targets are remapped onto the new cue indices; an `S $Bx` pattern loop crossing a chunk boundary is warned about, since a Taud loop cannot span cues.
 
-### 5.4 Note delays past the row
+### 5.5 Note delays past the row
 
 IT triggers a note delay *during* the current row, so a delay of `x` ticks with `x ≥ speed` never lands — the note is silently lost. The converter relocates such a note to the next row with `delay = x − speed`, but only when that next row on the same channel is empty. This recovers notes that IT itself would have dropped, which is a deliberate deviation in favour of the music.
 
-### 5.5 Portamento eats the instrument byte
+### 5.6 Portamento eats the instrument byte
 
 IT does not reset an instrument's envelopes when a row carries a note, an instrument number **and** a tone portamento. With Compatible Gxx off — the ordinary case — such a row never reaches the envelope reset at all, so the envelopes carry on from the previous note whether or not the instrument's Carry flag is set. Schism's own comment on the surrounding conditions is "experimentally determined… seems like it's just a total mess"; OpenMPT carries the quirk as `kITPortamentoInstrument` / `kITEnvelopeReset` and was still correcting corners of it in 1.32.11.
 
@@ -278,7 +286,7 @@ So the converter resolves it at conversion time: **a note tied by `G` or `L` tha
 
 The volume-column `Gx` counts as a portamento here whenever it will actually reach the pattern — when the main column is empty, or holds a non-zero `D` that folds into `L`. Where the vol-column porta is dropped for want of a slot the row is not tied in the output, and it keeps its instrument byte.
 
-### 5.6 Effects
+### 5.7 Effects
 
 A–Z dispatch per the Note Effects reference, with the IT-specific readings:
 

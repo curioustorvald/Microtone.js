@@ -268,6 +268,47 @@ test("it2taud under Pyodide → parseable, loadable document", () => {
   assert.ok(!msg.endsWith("\n"), "trailing blank lines must be trimmed");
 });
 
+test("it2taud carries NNA, and sample-mode files get Note Cut", () => {
+  // Instrument mode: TUTE.IT's six instruments are IT NNA 2,2,2,1,3,0 —
+  // note off, continue and fade all present. IT numbers them 0=cut,
+  // 1=continue, 2=off, 3=fade; Taud numbers them 0=off, 1=cut, 2=continue,
+  // 3=fade, so the mapping is a permutation, not a copy.
+  const instMode = new Document(parseTaud(convert("TUTE.IT")));
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((s) => instMode.instruments[s].newNoteAction),
+    [0, 0, 0, 2, 3, 1]);
+
+  // Sample mode: the same file with the header's "use instruments" flag
+  // cleared. IT has no NNA there at all — a new note replaces the channel's
+  // voice — so every slot must read Note Cut (1). It used to read Note Off,
+  // which spawns a ghost per trigger that a sample with no volume envelope
+  // and no fadeout never stops. Its default pan and auto-vibrato come from
+  // the sample header too, so plant both on sample 1 and follow them across.
+  const it = Buffer.from(readFileSync(importDir + "TUTE.IT"));
+  it.writeUInt16LE(it.readUInt16LE(0x2c) & ~0x04, 0x2c);      // flags: no instruments
+  const smpPtr = it.readUInt32LE(0xc0 + it.readUInt16LE(0x20) // OrdNum
+                                     + 4 * it.readUInt16LE(0x22));  // + InsNum ptrs
+  it[smpPtr + 0x2f] = 0x80 | 48;   // default pan, "use" bit set
+  it[smpPtr + 0x4c] = 16;          // auto-vibrato speed  (Vis)
+  it[smpPtr + 0x4d] = 32;          // auto-vibrato depth  (Vid)
+  it[smpPtr + 0x4e] = 200;         // auto-vibrato rate   (Vir)
+  it[smpPtr + 0x4f] = 2;           // auto-vibrato square (Vit)
+
+  const smpMode = new Document(parseTaud(convert("TUTE.IT", { bytes: it })));
+  const used = smpMode.usedInstrumentSlots();
+  assert.ok(used.length > 0, "premise: sample mode still yields a playable song");
+  for (const slot of used) {
+    assert.equal(smpMode.instruments[slot].newNoteAction, 1, `slot ${slot} must cut`);
+  }
+  const one = smpMode.instruments[1];
+  assert.equal(one.defaultPan, Math.round(48 * 255 / 64), "samplewise default pan");
+  assert.equal(one.vibratoSpeed, Math.round(16 * 255 / 64));
+  assert.equal(one.vibratoDepth, Math.round(32 * 255 / 64));
+  assert.equal(one.vibratoRate, 200);
+  assert.equal(one.vibratoWaveform, 2);
+  // Everything else stays neutral: no instrument record means no envelopes.
+  assert.equal(one.defaultCutoff, 0xff, "no filter in sample mode");
+});
+
 /** Every {note trigger, effect opcode} pair the songs of `doc` carry, as
  *  [[note, inst, op], …]. Taud opcodes are base-36 digit values: G = 16, L = 21,
  *  S = 28. */

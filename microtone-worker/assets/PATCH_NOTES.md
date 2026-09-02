@@ -4,6 +4,14 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-09-03
+
+Impulse Tracker songs come in two shapes — one that names instruments and one that names samples directly — and the sample-shaped ones were importing with three of the sample's own properties thrown away. All three are fixed. Instrument-shaped `.it` files were always correct and import exactly as before.
+
+- **Fixed: notes piled up and rang on forever.** A sample-mode file has no New Note Action at all: a new note simply replaces whatever the channel was playing. The importer was giving every sample Note Off instead, so each trigger left the old note running in the background — and a bare sample has no volume envelope and no fadeout to ever make it stop. Sample-mode imports are now Note Cut, which is what the tracker does.
+- **Fixed: the stereo image collapsed to the centre.** An IT sample can set its own default panning, and the importer was ignoring it and centring everything. One 33-sample song from 1998 had 17 samples panned in the original; all 17 now arrive where they were put.
+- **Fixed: samples lost their auto-vibrato.** The per-sample vibrato speed, depth, rate and waveform now come across, the same as they already did for instrument-mode songs.
+
 ## 2026-09-02
 
 - **이야기 뮤직 사운드를 FM 랙 그대로.** Microtone now opens **Iyagi Music Sound** files (`.ims`) — the music format of *Iyagi*, the Korean BBS terminal of the early 1990s, which played through an AdLib card. Every instrument the song names is compiled into an **FM Rack**: two operators wired the way the chip wired them, over single-cycle samples of the chip's own four waveforms, with its envelopes in real seconds and its feedback closed through a z⁻¹ tap. What opens is not a recording of the song but the song, editable operator by operator.
