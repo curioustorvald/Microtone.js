@@ -80,7 +80,7 @@ export function convertToTaud(fileName, bytes,
   });
 }
 
-function sf2Request(msg, onStatus) {
+function bankRequest(msg, onStatus) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject, onStatus });
@@ -90,7 +90,7 @@ function sf2Request(msg, onStatus) {
 
 /** List an .sf2's presets: [{bank, program, name}] (bank 128 = drum kits). */
 export async function listSf2Presets(sf2Bytes, { onStatus = null } = {}) {
-  const out = await sf2Request({ t: "sf2", mode: "list", bytes: sf2Bytes.slice().buffer }, onStatus);
+  const out = await bankRequest({ t: "sf2", mode: "list", bytes: sf2Bytes.slice().buffer }, onStatus);
   return JSON.parse(new TextDecoder().decode(out));
 }
 
@@ -100,8 +100,28 @@ export async function listSf2Presets(sf2Bytes, { onStatus = null } = {}) {
  * song's BPM (fadeout steps are tempo-relative).
  */
 export function buildSf2Bank(sf2Bytes, selection, { bpm = 125, stereo = false, onStatus = null } = {}) {
-  return sf2Request(
+  return bankRequest(
     { t: "sf2", mode: "build", bytes: sf2Bytes.slice().buffer, selection, bpm, stereo },
+    onStatus,
+  );
+}
+
+/** List an AdLib .BNK's patches: [{index, name}], bank order. `index` is what
+ *  buildBnkBank's selection addresses by (BNK names are not unique). */
+export async function listBnkPresets(bnkBytes, { onStatus = null } = {}) {
+  const out = await bankRequest({ t: "bnk", mode: "list", bytes: bnkBytes.slice().buffer }, onStatus);
+  return JSON.parse(new TextDecoder().decode(out));
+}
+
+/**
+ * Build a .tsii instrument bank from selected patch indices (from
+ * listBnkPresets) via the canonical opl2taud machinery — each patch becomes
+ * an ordinary two-operator FM rack. `bpm` should be the destination song's
+ * BPM (auto-vibrato speed is tempo-relative).
+ */
+export function buildBnkBank(bnkBytes, selection, { bpm = 125, onStatus = null } = {}) {
+  return bankRequest(
+    { t: "bnk", mode: "build", bytes: bnkBytes.slice().buffer, selection, bpm },
     onStatus,
   );
 }

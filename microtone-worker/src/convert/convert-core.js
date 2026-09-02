@@ -33,6 +33,10 @@ export const CONVERTER_SOURCES = [
  *  alongside the vendored converters; imports midi2taud from the same dir. */
 export const SF2BANK_SOURCE = "sf2bank.py";
 
+/** Microtone.js's own BNK→bank driver (src/convert/bnkbank.py) — installed
+ *  alongside the vendored converters; imports opl2taud from the same dir. */
+export const BNKBANK_SOURCE = "bnkbank.py";
+
 /** {script, isMidi, needsBank} for a file name, or null when it's not a
  *  convertible type. `needsBank` marks the AdLib family, whose songs NAME their
  *  instruments instead of storing them and so need a .BNK alongside. */

@@ -90,6 +90,24 @@
         const sf2Ok = store.doc.instrumentName(gpSlot) === "Grand Piano";
         log(`sf2 import: "${store.doc.instrumentName(gpSlot)}" at $${gpSlot.toString(16)} → ${sf2Ok ? "ok" : "FAIL"}`);
 
+        // AdLib .BNK instrument import: same worker, opl2taud this time. Uses
+        // the app's own bundled bank (assets/STANDARD.BNK.gz) via adlibbank.js
+        // so the leg needs no extra fixture.
+        const abm = await win.eval('import("/src/ui/adlibbank.js")');
+        const bnk = await abm.getBundledBank();
+        const bnkPatches = await conv.listBnkPresets(bnk.bytes);
+        log(`bnk patches listed: ${bnkPatches.length} (${bnkPatches[0]?.name})`);
+        const bnkTsii = await conv.buildBnkBank(bnk.bytes, [bnkPatches[0].index],
+          { bpm: store.doc.songs[0].bpm });
+        const bnkSrc = new docm.Document(fmt.parseTaud(bnkTsii));
+        const bnkTop = bnkSrc.usedInstrumentSlots().filter((s) => s <= 255);
+        const bnkPlan = bm.planImport(store.doc, bnkSrc, bnkTop);
+        if (bnkPlan.error) throw new Error("bnk plan: " + bnkPlan.error);
+        store.undo.apply(ops.importBankOp(bnkPlan));
+        const fmSlot = bnkPlan.slotMap.get(bnkTop[0]);
+        const bnkOk = bnkPatches.length > 0 && store.doc.instruments[fmSlot].isFm;
+        log(`bnk import: "${store.doc.instrumentName(fmSlot)}" at $${fmSlot.toString(16)}, isFm: ${store.doc.instruments[fmSlot].isFm} → ${bnkOk ? "ok" : "FAIL"}`);
+
         // .tpif leg: serialise the loaded doc's song domain as a .tpif (kind
         // flip through toBytes), then reload it via loadBytes — exercises the
         // combine-with-resident-bank branch. Grand Piano (imported above)
@@ -107,7 +125,7 @@
         log(`tpif reload over resident bank: ${store.fileName}, pats ${store.doc.songs[0].patterns.length}/${patsBefore}, ` +
             `gp: "${store.doc.instrumentName(gpSlot)}" → ${tpOk ? "ok" : "FAIL"}`);
 
-        log(xmOk && itOk && midOk && sf2Ok && tpOk ? "ALL PASS" : "FAILURES");
+        log(xmOk && itOk && midOk && sf2Ok && bnkOk && tpOk ? "ALL PASS" : "FAILURES");
       } catch (err) {
         log("ERROR: " + err.message + "\n" + err.stack);
       }

@@ -16,8 +16,8 @@ import { fileURLToPath } from "node:url";
 
 import { loadPyodide } from "../../vendor/pyodide/pyodide.js";
 import {
-  CONVERTER_SOURCES, SF2BANK_SOURCE, converterFor, loadConverterRuntime,
-  runConverter, buildArgv,
+  CONVERTER_SOURCES, SF2BANK_SOURCE, BNKBANK_SOURCE, converterFor,
+  loadConverterRuntime, runConverter, buildArgv,
 } from "../../src/convert/convert-core.js";
 import { parseTaud } from "../../src/format/taud-parse.js";
 import { CUE_EMPTY, NUM_PATTERNS_MAX } from "../../src/format/taud-const.js";
@@ -44,6 +44,7 @@ for (const name of CONVERTER_SOURCES) {
   sources[name] = await readFile(root + "vendor/converters/" + name);
 }
 sources[SF2BANK_SOURCE] = await readFile(root + "src/convert/" + SF2BANK_SOURCE);
+sources[BNKBANK_SOURCE] = await readFile(root + "src/convert/" + BNKBANK_SOURCE);
 const py = await loadConverterRuntime({
   loadPyodide,
   indexURL: root + "vendor/pyodide/",
@@ -402,6 +403,47 @@ test("sf2bank: list presets + build bank + merge into a project (skips without t
     undo.undo();
     assert.ok(Buffer.from(dest.toBytes()).equals(before), "undo byte-exact");
   });
+
+test("bnkbank: list patches + build bank + merge into a project", () => {
+  const bnk = { path: "/in.bnk", bytes: IMS_BANK };
+
+  const listOut = runConverter(py, {
+    script: BNKBANK_SOURCE,
+    argv: ["list", "/in.bnk", "/out.json"],
+    inputs: [bnk],
+    output: "/out.json",
+    onLog: () => {},
+  });
+  const patches = JSON.parse(Buffer.from(listOut).toString());
+  assert.deepEqual(patches, [{ index: 0, name: "LEAD" }, { index: 1, name: "bass" }]);
+
+  const sel = JSON.stringify([0, 1]);
+  const tsii = runConverter(py, {
+    script: BNKBANK_SOURCE,
+    argv: ["build", "/in.bnk", "/sel.json", "/out.tsii", "--bpm", "125"],
+    inputs: [bnk, { path: "/sel.json", bytes: new TextEncoder().encode(sel) }],
+    output: "/out.tsii",
+    onLog: () => {},
+  });
+  const src = new Document(parseTaud(tsii));
+  assert.equal(src.kind, "tsii");
+  const topLevel = src.usedInstrumentSlots().filter((s) => s <= 255);
+  assert.equal(topLevel.length, 2, "one rack slot per selected patch");
+  assert.equal(src.instrumentName(topLevel[0]), "LEAD");
+  assert.equal(src.instrumentName(topLevel[1]), "bass");
+
+  // merge into a real project through the same pipeline the UI uses
+  const dest = new Document(parseTaud(readFileSync(root + "test/corpus/WHEN.taud")));
+  const before = Buffer.from(dest.toBytes());
+  const undo = new UndoStack(dest);
+  const plan = planImport(dest, src, topLevel);
+  assert.ok(!plan.error, plan.error);
+  undo.apply(importBankOp(plan));
+  const lead = plan.slotMap.get(topLevel[0]);
+  assert.equal(dest.instrumentName(lead), "LEAD");
+  undo.undo();
+  assert.ok(Buffer.from(dest.toBytes()).equals(before), "undo byte-exact");
+});
 
 test("midi2taud with GeneralUser-GS → parseable document (skips without the SF2)",
   { skip: !existsSync(sf2Path) && "GeneralUser-GS.sf2 not present in repo root" },

@@ -1080,7 +1080,7 @@ Two rows of three: the top row fills a slot from outside the project, the bottom
 
 - **New…** — pick presets from the bundled GeneralUser-GS SoundFont (or your own `.sf2`) and merge them in.
 - **Sample…** — build instruments from any audio file (`.wav`, `.mp3`, `.ogg`, `.flac`, …). The audio is decoded to mono and opens in the [Sample Lab](#the-sample-lab) for cropping, EQ and chopping before it is committed to the engine's 8-bit format.
-- **Import…** — merge instruments (with their samples and patches) from a `.taud` or `.sf2` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets.
+- **Import…** — merge instruments (with their samples and patches) from a `.taud`, `.sf2` or `.bnk` file. A checkbox picker lets you choose which; SF2 drum kits are the bank-128 presets. An AdLib `.bnk` needs no song alongside it — each patch you pick becomes a two-operator [FM Rack](#metainstruments-the-family-and-its-two-kinds), playable across the whole keyboard.
 - **Record…** — record from the microphone; the take opens in the Sample Lab.
 - **Paint…** — draw a waveform by hand and add it as an instrument.
 - **Meta…** — build a **metainstrument**: one instrument made out of several of the project's instruments. A chooser asks which of the two kinds first — **Layered**, where every child is heard and the mixer sums them, or **FM Rack**, where the children modulate each other and only operator 0 is heard. Both are described below.

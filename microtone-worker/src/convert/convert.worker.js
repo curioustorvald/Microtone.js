@@ -2,11 +2,13 @@
 // the first conversion, kept for the session) so the UI thread never blocks.
 //
 // in : {t:"convert", id, fileName, bytes, sf2?: {name, bytes}, banks?: [{name, bytes}]}
+//    | {t:"sf2", id, mode:"list"|"build", bytes, selection?, bpm?, stereo?}
+//    | {t:"bnk", id, mode:"list"|"build", bytes, selection?, bpm?}
 // out: {t:"status", id, line} stream, then {t:"done", id, bytes} | {t:"error", id, message}
 
 import {
-  CONVERTER_SOURCES, SF2BANK_SOURCE, converterFor, loadConverterRuntime,
-  runConverter, buildArgv,
+  CONVERTER_SOURCES, SF2BANK_SOURCE, BNKBANK_SOURCE, converterFor,
+  loadConverterRuntime, runConverter, buildArgv,
 } from "./convert-core.js";
 
 const VENDOR = new URL("../../vendor/", import.meta.url);
@@ -27,6 +29,7 @@ function ensureRuntime(onStatus) {
       await Promise.all([
         ...CONVERTER_SOURCES.map((n) => fetchSource(n, new URL(`converters/${n}`, VENDOR))),
         fetchSource(SF2BANK_SOURCE, new URL(SF2BANK_SOURCE, import.meta.url)),
+        fetchSource(BNKBANK_SOURCE, new URL(BNKBANK_SOURCE, import.meta.url)),
       ]);
       return loadConverterRuntime({
         loadPyodide,
@@ -71,23 +74,44 @@ function jobSpec(m) {
       output: "/out.taud",
     };
   }
-  // m.t === "sf2": the sf2bank driver — list presets or build a bank
-  const inputs = [{ path: "/sf.sf2", bytes: new Uint8Array(m.bytes) }];
+  if (m.t === "sf2") {
+    // the sf2bank driver — list presets or build a bank
+    const inputs = [{ path: "/sf.sf2", bytes: new Uint8Array(m.bytes) }];
+    if (m.mode === "list") {
+      return {
+        label: "reading soundfont presets…",
+        script: SF2BANK_SOURCE,
+        argv: ["list", "/sf.sf2", "/out.json"],
+        inputs,
+        output: "/out.json",
+      };
+    }
+    inputs.push({ path: "/sel.json", bytes: new TextEncoder().encode(JSON.stringify(m.selection)) });
+    return {
+      label: `building bank (${m.selection.length} presets)…`,
+      script: SF2BANK_SOURCE,
+      argv: ["build", "/sf.sf2", "/sel.json", "/out.tsii", "--bpm", String(m.bpm ?? 125),
+             ...(m.stereo ? ["--stereo"] : [])],
+      inputs,
+      output: "/out.tsii",
+    };
+  }
+  // m.t === "bnk": the bnkbank driver — list patches or build a bank
+  const inputs = [{ path: "/in.bnk", bytes: new Uint8Array(m.bytes) }];
   if (m.mode === "list") {
     return {
-      label: "reading soundfont presets…",
-      script: SF2BANK_SOURCE,
-      argv: ["list", "/sf.sf2", "/out.json"],
+      label: "reading AdLib bank patches…",
+      script: BNKBANK_SOURCE,
+      argv: ["list", "/in.bnk", "/out.json"],
       inputs,
       output: "/out.json",
     };
   }
   inputs.push({ path: "/sel.json", bytes: new TextEncoder().encode(JSON.stringify(m.selection)) });
   return {
-    label: `building bank (${m.selection.length} presets)…`,
-    script: SF2BANK_SOURCE,
-    argv: ["build", "/sf.sf2", "/sel.json", "/out.tsii", "--bpm", String(m.bpm ?? 125),
-           ...(m.stereo ? ["--stereo"] : [])],
+    label: `building bank (${m.selection.length} patches)…`,
+    script: BNKBANK_SOURCE,
+    argv: ["build", "/in.bnk", "/sel.json", "/out.tsii", "--bpm", String(m.bpm ?? 125)],
     inputs,
     output: "/out.tsii",
   };
@@ -95,7 +119,7 @@ function jobSpec(m) {
 
 self.onmessage = (e) => {
   const m = e.data;
-  if (m.t !== "convert" && m.t !== "sf2") return;
+  if (m.t !== "convert" && m.t !== "sf2" && m.t !== "bnk") return;
   const status = (line) => self.postMessage({ t: "status", id: m.id, line });
   queue = queue.then(async () => {
     try {
