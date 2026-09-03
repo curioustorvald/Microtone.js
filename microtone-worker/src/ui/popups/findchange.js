@@ -17,6 +17,13 @@
 //
 // The whole edit is one setCellsBytesOp: one undo step, however many patterns
 // it crossed.
+//
+// The same dialog opens in FIND mode (item 177): the Change half is put away
+// and OK hands the compiled PREDICATE back instead of applying anything, which
+// is how the find bar borrows the whole condition vocabulary — every term,
+// every operator, every operand readout — without a second editor for it. The
+// predicate is remembered across both modes on purpose: "find these" and then
+// "change the ones I just found" is one thought.
 
 import {
   VP_OPS, TERM_OPS, ACTION_OPS,
@@ -58,44 +65,70 @@ const clone = (q) => JSON.parse(JSON.stringify(q));
  *        the Patterns toolbar does, a right-click on a block does not
  * @returns Promise<boolean> — true when the document changed
  */
-export function showFindChange(store, { cells, scope, titleArg = "", allowSong = false }) {
+export function showFindChange(store, opts) {
+  return openQueryDialog(store, { ...opts, mode: "change" });
+}
+
+/**
+ * Open the same dialog as a CRITERIA editor (item 177): no actions, no Apply,
+ * and the answer is the predicate.
+ *
+ * @param predicate the conditions to start from — the find bar's current ones,
+ *        so opening the editor never loses what the quick controls hold
+ * @param cells the cells the live count is measured over (the bar's scope)
+ * @returns Promise<predicate|null> — null when cancelled
+ */
+export function showFindQuery(store, opts) {
+  return openQueryDialog(store, { ...opts, mode: "find" });
+}
+
+function openQueryDialog(store, {
+  cells, scope, titleArg = "", allowSong = false, mode = "change", predicate = null,
+}) {
+  const findOnly = mode === "find";
   return new Promise((resolve) => {
     const doc = store.doc;
-    if (!doc) { resolve(false); return; }
+    if (!doc) { resolve(findOnly ? null : false); return; }
     const wide = doc.wideCells === true;
-    const query = lastQuery ? clone(lastQuery) : defaultQuery();
+    const query = findOnly
+      ? { predicate: clone(predicate ?? lastQuery?.predicate ?? defaultQuery().predicate),
+          actions: [] }
+      : (lastQuery ? clone(lastQuery) : defaultQuery());
     let target = "here";
 
     const dlg = document.createElement("dialog");
     dlg.className = "modal findchange-modal";
     // A block on the Timeline crosses patterns, so the title names one only
     // when the caller is sure which it is.
-    const title = titleArg ? t("find.title", { pat: titleArg }) : t("find.titlePlain");
+    const title = findOnly
+      ? t("find.queryTitle")
+      : (titleArg ? t("find.title", { pat: titleArg }) : t("find.titlePlain"));
     dlg.innerHTML = `
       <h3>${esc(title)}</h3>
-      <p class="dim fc-lead">${esc(t("find.lead"))}</p>
+      <p class="dim fc-lead">${esc(t(findOnly ? "find.queryLead" : "find.lead"))}</p>
       <div class="fc-block">
         <div class="fc-legend">${esc(t("find.findHead"))}
           <span class="dim">${esc(t("find.findHint"))}</span></div>
         <div class="fc-conds"></div>
         <button type="button" class="fc-addcond">${esc(t("find.addCond"))}</button>
       </div>
-      <div class="fc-block">
+      ${findOnly ? "" : `<div class="fc-block">
         <div class="fc-legend">${esc(t("find.changeHead"))}
           <span class="dim">${esc(t("find.changeHint"))}</span></div>
         <div class="fc-acts"></div>
         <button type="button" class="fc-addact">${esc(t("find.addAct"))}</button>
-      </div>
+      </div>`}
       <div class="fc-foot">
-        <label class="fc-scope-l">${esc(t("find.scope"))}
+        ${findOnly ? `<span class="dim fc-scope-l">${esc(t("find.scopeIs", { scope }))}</span>`
+          : `<label class="fc-scope-l">${esc(t("find.scope"))}
           <select class="fc-scope">
             <option value="here">${esc(t("find.scopeHere", { scope }))}</option>
             ${allowSong ? `<option value="song">${esc(t("find.scopeSong"))}</option>` : ""}
-          </select></label>
+          </select></label>`}
         <span class="fc-count"></span>
       </div>
       <div class="modal-buttons">
-        <button type="button" class="fc-ok">${esc(t("common.apply"))}</button>
+        <button type="button" class="fc-ok">${esc(t(findOnly ? "find.doFind" : "common.apply"))}</button>
         <button type="button" class="fc-cancel">${esc(t("common.cancel"))}</button>
       </div>`;
     document.body.appendChild(dlg);
@@ -221,8 +254,10 @@ export function showFindChange(store, { cells, scope, titleArg = "", allowSong =
           </div>
         </div>`).join("") ||
         `<p class="dim fc-empty">${esc(t("find.noConds"))}</p>`;
-      actsEl.innerHTML = query.actions.map((a, ai) => actionHtml(a, ai)).join("") ||
-        `<p class="dim fc-empty">${esc(t("find.noActs"))}</p>`;
+      if (actsEl) {
+        actsEl.innerHTML = query.actions.map((a, ai) => actionHtml(a, ai)).join("") ||
+          `<p class="dim fc-empty">${esc(t("find.noActs"))}</p>`;
+      }
       refresh();
     }
 
@@ -317,10 +352,16 @@ export function showFindChange(store, { cells, scope, titleArg = "", allowSong =
         el.querySelector(".fc-condcount").textContent =
           n === null ? "" : t("find.condCount", { n });
       }
-      countEl.textContent = t("find.count",
-        { matched: res.matched, total: res.total, changed: res.writes.length });
-      countEl.classList.toggle("fc-none", res.writes.length === 0);
-      okBtn.disabled = res.writes.length === 0;
+      // In find mode there is nothing to write, so the readout counts what the
+      // predicate SELECTS and OK asks only that there is a predicate at all: a
+      // search that currently matches nothing is still a search worth keeping
+      // (the next edit may well make it match).
+      countEl.textContent = findOnly
+        ? t("find.countFound", { matched: res.matched, total: res.total })
+        : t("find.count", { matched: res.matched, total: res.total, changed: res.writes.length });
+      const none = findOnly ? res.matched === 0 : res.writes.length === 0;
+      countEl.classList.toggle("fc-none", none);
+      okBtn.disabled = findOnly ? compiled.predicate.length === 0 : none;
       return res;
     }
 
@@ -389,16 +430,21 @@ export function showFindChange(store, { cells, scope, titleArg = "", allowSong =
         query.actions.splice(+btn.closest(".fc-act").dataset.ai, 1);
         render();
       } else if (btn.classList.contains("fc-ok")) {
-        finish(apply());
+        // The predicate goes back the way it came in: as the RAW rows, with
+        // their operands still text. Handing back the compiled form would make
+        // the caller's numbers un-editable — parseFieldValue would read a
+        // compiled `4660` back as `$4660` (item 177).
+        if (findOnly) finish(clone(query.predicate));
+        else finish(apply());
       } else if (btn.classList.contains("fc-cancel")) {
-        finish(false);
+        finish(findOnly ? null : false);
       }
     });
     dlg.addEventListener("keydown", (e) => {
       e.stopPropagation(); // no piano/transport keys while the dialog is up
       if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); okBtn.click(); }
     });
-    dlg.addEventListener("cancel", () => finish(false));
+    dlg.addEventListener("cancel", () => finish(findOnly ? null : false));
 
     /** The model row a control belongs to — a term or an action. */
     function rowFor(el) {
@@ -416,11 +462,16 @@ export function showFindChange(store, { cells, scope, titleArg = "", allowSong =
       return true;
     }
 
-    function finish(changed) {
-      lastQuery = clone(query);
+    function finish(result) {
+      // Find mode carries no actions, so it writes back only its half — the
+      // Change dialog's action list is left exactly as it was.
+      lastQuery = findOnly
+        ? { predicate: clone(query.predicate),
+            actions: lastQuery ? clone(lastQuery.actions) : defaultQuery().actions }
+        : clone(query);
       dlg.close();
       dlg.remove();
-      resolve(changed);
+      resolve(result);
     }
 
     render();

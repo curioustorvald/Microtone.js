@@ -445,7 +445,7 @@ export default {
   "pool.legendStale": "leftover",
   "pool.noteOverlap": "{n} sample(s) overlap another sample's bytes — {b} of the pool is claimed more than once, so editing one of them rewrites the other.",
   "pool.noteOutside": "{n} sample(s) point outside the 8 MB pool ({list}) — junk instrument records, which every module conversion leaves a few of. They play nothing; Housekeeping drops them.",
-  "pool.noteHoles": "{n} gap(s) below the high-water mark, {b} in total (largest {largest}) — a new sample is fitted into the first one it fits.",
+  "pool.noteHoles": "{n} gap(s) below the high-water mark, {b} in total (largest {largest}) — a new sample is fitted into the first one it fits. Project \u2192 Housekeeping \u2192 Defragment sample memory closes them up into one run at the top.",
   "pool.noteStale": "{b} of the free pool still holds the audio of something deleted — Housekeeping sweeps it, and it costs project size until then.",
   "pool.notePacked": "Packed end to end from 0: {n} span(s), no gaps, nothing shared.",
   // ── Pool regions + map view (item 175) ──
@@ -794,6 +794,15 @@ export default {
   "inst.tabZones": "Zones",
   "inst.tabLayers": "Layers",
   "inst.tabFm": "FM",
+  "inst.tabMetaOptions": "Options",
+  "meta.optsFlags": "Record flags",
+  "meta.optsLeadLayered": "A Layered metainstrument of {n} layer(s). These two bits describe the record as a whole; the layers themselves are on the Layers tab.",
+  "meta.optsLeadFm": "An FM Rack of {n} operator(s). These bits describe the record as a whole; the rack and its algorithm are on the FM tab.",
+  "meta.optsByte": "flag byte {byte}",
+  "meta.optsLayeredOnly": "Layered records only \u2014 an FM rack has no layers to drop",
+  "meta.percussionHint": "Transpose and retune leave this instrument's notes alone, and it exports to a stem of its own. Playback is unaffected \u2014 the engine ignores the flag.",
+  "meta.strict": "Strict layering",
+  "meta.strictHint": "Drop a layer whose own zones do not cover the note, instead of letting it fall through to that instrument's base sample \u2014 which is what sounds a closed hi-hat under an open one.",
 
   // ── instrument editor: envelope-tab header text ──
   // {label} is the tab name (Vol env / Pitch env / …); {state} is a <b> tag
@@ -912,6 +921,9 @@ export default {
   "meta.detuneTitle": "Layer detune in cents. 100 ¢ is a 12-TET semitone; a few cents is a chorus spread.",
   "meta.detuneDownTitle": "Down one degree of the song's notation",
   "meta.detuneUpTitle": "Up one degree of the song's notation",
+  "meta.fixed": "fixed",
+  "meta.fixedTitle": "Fixed pitch: this layer sounds one note whatever key is played, and the field beside it becomes that note. The pitch range still decides which keys reach the layer.",
+  "meta.fixedNoteTitle": "The note this layer sounds, whatever key is played. Type it as a word ($5000) or as a name (C-4); \u2212 and + step degrees of the song's notation.",
   "meta.pitchLoTitle": "Lowest note this layer sounds on (0 = no lower bound)",
   "meta.pitchHiTitle": "Highest note this layer sounds on ($FFFF = no upper bound)",
   "meta.velLoTitle": "Lowest note volume this layer sounds at (0‥63)",
@@ -1185,6 +1197,32 @@ export default {
   "find.vpan.fineUp": "fine right",
   "find.vpan.fineDown": "fine left",
   "find.vpan.none": "blank",
+
+  "find.queryTitle": "Find \u2014 criteria",
+  "find.queryLead": "Every term inside a condition has to hold, and any one condition matching is enough. The bar then walks the cells that match, in order.",
+  "find.scopeIs": "Searching {scope}",
+  "find.doFind": "Find",
+  "find.countFound": "{matched} of {total} cells match",
+
+  // ── the find bar (item 177) ──
+  "fb.label": "Find",
+  "fb.fieldTitle": "Which column to test",
+  "fb.opTitle": "How to test it",
+  "fb.valTitle": "The value to look for, in the column's own base ($ for hex, # for decimal)",
+  "fb.valNoteTitle": "The note to look for \u2014 a word ($5000) or a name (C-4)",
+  "fb.prevTitle": "Previous match (Shift+Enter)",
+  "fb.nextTitle": "Next match (Enter)",
+  "fb.criteria": "Criteria\u2026",
+  "fb.criteriaTitle": "Build a fuller search: several terms ANDed, several conditions ORed, ranges and modulo",
+  "fb.closeTitle": "Close the find bar (Esc)",
+  "fb.at": "{n} of {total}",
+  "fb.total": "{total} match(es)",
+  "fb.none": "no matches",
+  "fb.noCriteria": "type something to look for",
+  "fb.summary": "{conds} condition(s), {terms} term(s) \u2014 edit them in Criteria\u2026",
+  "fb.summaryAll": "no conditions \u2014 edit them in Criteria\u2026",
+  "fb.scopePatterns": "every pattern in this song",
+  "fb.scopeSong": "this song, in play order",
 
   // ── command palette (Timeline/Patterns bottom bar) ──
   "pal.note": "note",
@@ -1518,6 +1556,10 @@ export default {
   "clean.patternsConfirm": "Remove {removed} unused pattern(s) and merge {merged} duplicate(s), then renumber the rest? Cues are rewritten. This can be undone.",
   "clean.bankConfirm": "Remove {insts} unused instrument(s) and {patches} unreachable patch(es), freeing {bytes} sample bytes? This can be undone.",
   "clean.ixmpConfirm": "Remove {patches} unreachable patch(es) across {insts} instrument(s), clearing {blobs} patch set(s) entirely and freeing {bytes} sample bytes? This can be undone.",
+  "clean.defrag": "Defragment sample memory",
+  "clean.defragTitle": "Slide every sample down against the start of the pool, closing the gaps that deleting and replacing samples leave behind — the free space ends up as one run instead of many pieces. Nothing about the music changes.",
+  "clean.defragPacked": "The sample pool is already packed \u2014 there are no gaps below the last sample.",
+  "clean.defragConfirm": "Move {moved} of samples down, closing {freed} of gaps? The largest free run grows from {was} to {now}, and {insts} instrument(s) and {regions} recording(s) are repointed. Nothing about the music changes. This can be undone.",
 
   // ── global operations (project view) ──
   "glob.title": "Global Operations",

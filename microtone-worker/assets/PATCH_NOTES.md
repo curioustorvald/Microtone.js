@@ -4,6 +4,35 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-09-04
+
+A metainstrument now has a second sub-tab, **Options**, holding the two flags its record has always carried and nothing has ever been able to set.
+
+- **Percussion** keeps Transpose and Retune off this instrument's notes and gives it its own stem on export — the same flag an ordinary instrument has had in its General tab all along, and it reads the same way here. It changes nothing about playback.
+- **Strict layering** (Layered records only) drops a layer whose own zones do not cover the note, instead of letting it fall through to that instrument's base sample — which is what makes a closed hi-hat ring under an open one in an imported kit. Converted SoundFont kits arrive with it already set; now you can see that, and turn it off to hear the difference.
+- Both are one undo step each, and neither touches the layer table or a rack's algorithm. The flag byte is quoted in hex beside them, for when something needs reporting.
+
+**Ctrl+F** finds things. Pick a column, pick a test, type a value, and Enter walks the cursor from one match to the next — the tracker equivalent of the find bar every other program has had for thirty years.
+
+- From the **Timeline** it searches the whole song in play order, across every channel, so a match is a place the cursor simply goes. A pattern placed in six cues is found in all six.
+- From **Patterns** it searches the pattern bank instead, and the column follows the match to whichever pattern it is in — which is the only way to reach a pattern no cue has placed yet.
+- **Enter** goes to the next match, **Shift+Enter** to the previous one, and both wrap round the end. The count beside the box reads *3 of 17*, so you know both where you are and whether there is anything to find. **Esc** puts the bar away and hands the keys back to the grid.
+- Values are read in the column's own base — hex, like the grid — with `#` for decimal, and the note column also takes names, so `C-4` and `$5000` are the same search. The bar reads back what it parsed, beside the box.
+- One test covers nearly everything worth searching for. For more, **Criteria…** opens the Find & Change conditions editor without its Change half: several terms ANDed, alternatives ORed, ranges, *every fourth row*. The criteria are shared with Find & Change, so finding a set of cells and then changing them is one thought rather than two typings.
+
+A metainstrument layer can now be **non-melodic**: tick *fixed* beside its detune and the layer sounds one note whatever key is played, with the field beside the box becoming that note — an absolute pitch, typed as `$5000` or as `C-4`.
+
+- This is for the layers that are a *sound* rather than a pitch: the click of a hammer, a breath, a bar of noise under the low keys. Before it, that took one sample per key.
+- The layer's **pitch range still decides which keys reach it** — the flag only fixes what it plays when one does — and its mix, velocity range and everything else work exactly as before. A chord stack built off a fixed layer becomes a chord of absolute pitches.
+- Ticking and unticking the box keeps the note the row was showing, so nothing jumps while you make up your mind.
+
+**Defragment sample memory**, in Project → Housekeeping, slides every sample down against the start of the pool and closes the gaps that deleting and replacing samples leave behind.
+
+- The other Housekeeping buttons free memory; this is the only one that moves any. What it buys is the free space as **one run** instead of a dozen pieces too small to import into — the reason a project can refuse a 60 KB sample while reporting 3 MB free.
+- The confirmation says how much moves, how much closes up, and how big the largest free run becomes, so you can see whether it was worth pressing before you press it.
+- Every instrument, patch and loaded recording that pointed into the moved memory is repointed with it, and samples that share bytes travel together: a defragmented project renders identically, note for note. One undo step.
+- A sample pointing outside the pool stops it, since those addresses are not ours to move — run *Cleanup instruments & samples* first, which drops the junk records that claim them.
+
 ## 2026-09-03
 
 The marker editor in Instruments can now find a loop for you. Set the loop mode to forward or ping-pong, pick how much of a click you will accept, and it searches the sample for the region that plays cleanest at that setting — then writes the two numbers into the loop start and loop end you were about to type yourself.

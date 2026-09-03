@@ -383,6 +383,8 @@ By default the full zone map is kept as Ixmp patches, so imported instruments st
 
 Stereo SF2 samples are mixed to mono by default; an option keeps them as genuine stereo pairs at double the pool cost.
 
+SoundFont's **`keynum`** generator — a zone that overrides the played key, so it always sounds one pitch — has a home in the target now: a type-0 layer's **fixed-pitch** flag ([File Format §7.4](TAUD_FILE_FORMAT.md#7-4-metainstrument-records)) says exactly that, with the layer's detune field carrying the absolute note. The converter does **not** read it yet, so a `keynum` zone imports as an ordinary pitched layer and plays that part of the patch transposed by whatever key strikes it. It is worth knowing which way the error runs: too high up the keyboard, and audible mostly on the fixed clicks and thumps such zones are used for.
+
 **Far-loop samples** get special treatment. A looped sample whose loop point sits past the 65 535-frame cap even at 32 kHz — multi-second sustain instruments in large banks — would otherwise force the whole sample to be resampled down until it fits, muffling it. By default such a sample instead gets a *synthesised* loop at 32 kHz plus a 10-second decay: the genuine sustain loop is traded for full bandwidth. An option restores the real loop and accepts the muffling.
 
 ### 7.5 The ADSR mapping

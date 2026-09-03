@@ -1093,6 +1093,13 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .note-glyph { vertical-align: middle; }
 .meta-table .rngCell .meta-num,
 .meta-table .velCell .meta-num { width: 4em; margin-right: 0.25rem; }
+/* The fixed-pitch switch (item 179) sits under the field it re-reads, small
+   enough not to compete with it and close enough to belong to it. */
+.meta-table .meta-fixed {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  margin-left: 0.5rem; font-size: 0.8rem; color: var(--dim);
+}
+.meta-table .meta-fixed input { margin: 0; }
 .meta-table .meta-act {
   padding: 0.1rem 0.4rem; margin-right: 0.2rem; font-size: 0.85rem;
 }
@@ -1235,6 +1242,40 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .cmd-palette button.active { color: var(--accent); border-color: var(--accent); }
 .pal-label { color: var(--accent); font-size: 0.8rem; margin-right: 0.3rem; }
 .pal-hint { color: var(--dim); font-size: 0.82rem; margin-left: 0.4rem; }
+
+/* ── the find bar (item 177) ──
+   Sits between the command palette and the status line: the same ground and
+   the same compact type, because it is the same kind of thing — a strip of
+   controls for whatever the grid above is doing. */
+.find-bar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.3rem 0.8rem;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.fb-label { color: var(--accent); font-size: 0.8rem; margin-right: 0.3rem; }
+.fb-quick { display: inline-flex; gap: 0.3rem; align-items: center; }
+.find-bar select, .find-bar input {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.85rem;
+}
+.find-bar .fb-val { width: 8em; font-family: "Roboto Mono", monospace; }
+.find-bar button { padding: 0.15rem 0.55rem; font-size: 0.85rem; }
+.find-bar .fb-step { min-width: 1.8rem; }
+/* The two readouts share the space left over, and the count is pinned to the
+   right of it so it does not jitter as the parse text grows. */
+.fb-read { font-size: 0.8rem; min-width: 6em; }
+.fb-count { font-size: 0.8rem; margin-left: auto; margin-right: 0.3rem; }
+.fb-count.fb-none { color: var(--dim); }
+.fb-summary { font-size: 0.82rem; }
+.fb-and { color: var(--dim); font-size: 0.85rem; }
 
 /* ── modal dialogs ── */
 .modal {
@@ -1680,6 +1721,9 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   width: 100%;
 }
 .slider-row .sl-buttons { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2px; justify-self: start; }
+/* A flag whose effect is not guessable from its name says what it does across
+   the columns the value controls would have used. */
+.slider-row .sl-hint { grid-column: 3 / -1; font-size: 0.82rem; line-height: 1.3; }
 .slider-row .sl-buttons button { padding: 0.15rem 0.6rem; font-size: 0.85rem; color: var(--dim); }
 .slider-row .sl-buttons button.active { color: var(--accent); border-color: var(--accent); }
 .slider-row .sl-check { grid-column: 2 / -1; display: flex; align-items: center; gap: 0.35rem; color: var(--fg); justify-self: start; }

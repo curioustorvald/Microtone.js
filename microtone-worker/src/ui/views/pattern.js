@@ -231,6 +231,16 @@ class PatternPane {
     this.invalidate();
   }
 
+  /** Put the cursor on (pat, row) and scroll it into view — Find's "take me
+   *  there" (item 177). The pane follows the pattern as well as the row: a
+   *  match in another pattern is still a place in this song. */
+  goTo(pat, row) {
+    this.setPattern(pat);
+    this.cursor.row = clampInt(row, 0, 63);
+    this._followCursor();
+    this.invalidate();
+  }
+
   // ── row-range selection + clipboard ──
   /**
    * Right-click menu: the clipboard, and only the clipboard — a Taud pattern is
@@ -1017,6 +1027,7 @@ export class PatternView {
   set sel(v) { this.active.sel = v; this.active.invalidate(); }
   pattern() { return this.active.pattern(); }
   setPattern(i) { return this.active.setPattern(i); }
+  goTo(pat, row) { return this.active.goTo(pat, row); }
   duplicate() { return this.active.duplicate(); }
   findChangeOp() { return this.active.findChangeOp(); }
   applyPatternBytes(fn) { return this.active.applyPatternBytes(fn); }

@@ -17,7 +17,9 @@ import {
   CHORD_GROUPS, applyChordPreset, chordPresetLabel, chordPresetsFor,
   maxInversion, voiceUnits, UNITS_PER_OCTAVE,
 } from "../../doc/chord.js";
-import { metaLayers, metaRecordOf, stackLayer, clampDetune, META_MAX_LAYERS } from "../../doc/metaedit.js";
+import {
+  metaLayers, metaRecordOf, stackLayer, clampDetune, clampLayerPitch, META_MAX_LAYERS,
+} from "../../doc/metaedit.js";
 import { setMetaRecordOp } from "../../doc/ops.js";
 import { ANCHOR_NOTE } from "../pitchtables.js";
 import { noteGlyphCanvas } from "../noteglyph.js";
@@ -140,14 +142,19 @@ export function showChordStack(store, metaSlot, layerIdx) {
       preview.replaceChildren();
       const rows = [{ d: 0, root: true }, ...use.map((o) => ({ d: o, root: false }))];
       for (const r of rows) {
-        const units = clampDetune(base.detune + r.d);
+        const units = clampLayerPitch(base, base.detune + r.d);
         const line = el("div", "meta-chord-voice" + (r.root ? " root" : ""));
         // Painted in the song's own notation, like every other note readout —
         // a stack built from degrees of a 31-TET table must not report itself
         // in 12-EDO letter names.
         const noteEl = el("span", "meta-chord-note");
         noteEl.appendChild(
-          noteGlyphCanvas(Math.min(Math.max(ANCHOR_NOTE + units, 0x20), 0xffff), pitchPreset));
+          // A fixed-pitch base layer (item 179) holds a note word, not an
+        // offset — the stack it seeds is a chord of absolute pitches, so the
+        // preview reads the value itself rather than middle C plus it.
+        noteGlyphCanvas(
+          Math.min(Math.max(base.fixedPitch ? units : ANCHOR_NOTE + units, 0x20), 0xffff),
+          pitchPreset));
         line.append(noteEl, el("span", "dim", r.root ? t("meta.chordRoot") : signedCents(r.d)));
         preview.appendChild(line);
       }
@@ -177,7 +184,7 @@ export function showChordStack(store, metaSlot, layerIdx) {
     okBtn.addEventListener("click", (e) => {
       e.preventDefault();
       const offsets = chordOffsets(presetId, pitchPreset, inversion)
-        .map((o) => clampDetune(base.detune + o));
+        .map((o) => clampLayerPitch(base, base.detune + o));
       const next = stackLayer(layers, layerIdx, offsets);
       const added = next.length - layers.length;
       if (added <= 0) { finish(null); return; }

@@ -611,11 +611,11 @@ Each entry — a *layer* in a type-0 record, an *operator* in a type-4 one:
 | +4 | `U16` | Pitch range low (full range = `$0000`) |
 | +6 | `U16` | Pitch range high, inclusive (full range = `$FFFF`) |
 | +8 | `U8` | bits 0…5 = volume range low (0…63); bits 6…7 = entry instrument index bits 8…9 |
-| +9 | `U8` | bits 0…5 = volume range high, inclusive; bits 6…7 **RESERVED** |
+| +9 | `U8` | bits 0…5 = volume range high, inclusive; bit 6 = **fixed pitch** (type 0 only, below); bit 7 **RESERVED** |
 
 The four range fields define a rectangle over the same pitch × volume space as an Ixmp patch. An entry fires only when the trigger falls inside its rectangle, which is how key- and velocity-conditional layering — and, in a rack, velocity-switched brightness — is expressed.
 
-The two remaining fields are the ones each kind reads its own way: in a Layered record the mix octet is the layer's **mix level** and the detune is its **detune**, while in a rack they are the operator's **output level** and its **frequency ratio** ([§7.6](#7-6-metainstrument-type-4-fm-operator-racks)). The bytes are identical; the meaning is the kind's.
+The two remaining fields are the ones each kind reads its own way: in a Layered record the mix octet is the layer's **mix level** and the detune is its **detune**, while in a rack they are the operator's **output level** and its **frequency ratio** ([§7.6](#7-6-metainstrument-type-4-fm-operator-racks)). The bytes are identical; the meaning is the kind's. Byte +9's bit 6 belongs to the Layered kind alone: in every other kind it is **RESERVED**, a reader **MUST** ignore it, and a writer **MUST** write 0.
 
 Two rules hold for **every** kind:
 
@@ -630,6 +630,12 @@ The table is a list of layers, and every layer whose rectangle contains the trig
 - The same ordinary instrument **MAY** be listed several times at different detune and mix level, which reproduces SoundFont detune stacks without spending extra instrument slots.
 - Mix volume **scales** the layer's output; it multiplies with the trigger's velocity rather than replacing it. Sample detune is **added** to the trigger note and to the layer instrument's own detune.
 - A single Layered trigger costs up to *layer count* voices against the mixer's pool.
+
+**Fixed pitch** (entry byte +9, bit 6) makes a layer **non-melodic**: it sounds the same pitch whatever note triggered it, and its sample detune field is then not an offset but that pitch — an **unsigned** `U16` note word on the ordinary 4096-TET grid ([note words](#note-words)), the same units a pattern cell writes. A reader **MUST** read the field as unsigned when the bit is set and as `S16` when it is not; a value below `$0020` is in the cell's sentinel space and is clamped to it.
+
+What the flag does *not* change is which triggers reach the layer: the rectangle still gates it, so a fixed-pitch layer can be given a key range like any other and simply plays its own note within it. Nor does it change the layer instrument's own patch resolution — the zone that sounds is the one covering the pitch the layer *plays*, not the one the trigger struck.
+
+This is how a layer that carries a **sound** rather than a note is written: a key click, a breath, a noise bed under the low register. Without it the same effect costs a one-note sample per key, since a layer's only pitch is the trigger's.
 
 **Strict layering** (byte 0, bit 0) addresses a subtle failure. A layer's rectangle is a single bounding box, but the layer instrument's own Ixmp zones may cover only part of it — a drum layer holding scattered keys has a box spanning the gaps between them. Under legacy semantics a trigger landing in such a gap still fires the layer and, matching no patch, falls through to that instrument's base sample, sounding a wrong instrument (a closed hi-hat under an open one). With strict layering the engine drops the layer for that note instead. A producer setting this bit **MUST** also place each layer instrument's canonical zone in its own Ixmp patch list, so that a non-match unambiguously means "no zone covers this trigger".
 
@@ -1039,5 +1045,6 @@ A writer producing a file that any conforming reader will accept must satisfy al
 | 2026-07-29 | Song table byte 28: the `ss` surround model flag |
 | 2026-08-08 | An Ixmp patch's `default pan` no longer needs the base record's pan-envelope `p` bit — its `$FF` sentinel is the only gate |
 | 2026-08-08 | Panning splits into two axes like volume: instrument and Ixmp pans and the panning column write `note_pan`, S $80xx / P / X / 4 / Z write `channel_pan`, and the mixer adds them |
+| 2026-09-04 | Metainstrument type-0 layers: the **fixed-pitch** flag (entry byte +9, bit 6), which reads the detune field as an absolute unsigned note word |
 | 2026-08-28 | Metainstrument type 4 — FM operator racks: the layer table read as operators, with an RPN algorithm packed after it |
 | 2026-09-03 | `SRgn` — sample-pool regions: long recordings living in the pool that no instrument claims |

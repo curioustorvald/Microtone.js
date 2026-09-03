@@ -1,0 +1,189 @@
+<!doctype html><meta charset="utf-8"><title>Find (item 177)</title>
+<pre id="out">running…</pre>
+<img src="/hang" hidden>
+<iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:700px"></iframe>
+<script type="module">
+// Item 177 — Ctrl+F, the find bar, and the walk under it.
+//
+// The walk itself is Node-tested (test/node/patternfind.test.js); what needs a
+// browser is everything around it: that the chord opens the bar in the two
+// grids and nowhere else, that typing a value updates the count, that Enter and
+// Shift+Enter take the CURSOR to the match (the Timeline's row × channel, the
+// Patterns pane's pattern × row), that Escape puts it away, and that Criteria…
+// opens the same dialog with its Change half gone and hands a predicate back.
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fails = 0;
+const check = (ok, name, extra = "") => {
+  if (!ok) fails++;
+  log(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
+};
+window.addEventListener("error", (e) => log("ERROR " + e.message));
+
+(async () => {
+ try {
+  const app = document.getElementById("app");
+  await new Promise((r) => app.addEventListener("load", r));
+  const win = app.contentWindow;
+  for (let i = 0; i < 200 && !win.__microtone; i++) await sleep(50);
+  const M = win.__microtone;
+  if (!M) { log("no __microtone"); return; }
+  for (let i = 0; i < 200 && !M.store.song; i++) await sleep(50);
+  const doc = win.document;
+  const { store, findBar, patternView } = M;
+  const { setCellOp, setCueWordOp } = await win.eval('import("/src/doc/ops.js")');
+
+  const bar = () => doc.getElementById("findBar");
+  const isOpen = () => !bar().hidden;
+  const q = (sel) => bar().querySelector(sel);
+  const fire = (el, type) => el.dispatchEvent(new win.Event(type, { bubbles: true }));
+  const key = (target, k, opts = {}) => target.dispatchEvent(
+    new win.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
+  const ctrlF = (target = win) => key(target, "f", { ctrlKey: true });
+
+  // A note nothing else in the song carries, in one pattern, placed on two
+  // channels of two cues: a search with a known answer.
+  const MARK = 0x1234;
+  const pat = store.song.patterns.length; // an arbitrary unplaced number (item 48)
+  store.undo.apply(setCellOp(store.songIndex, pat, 8, { note: MARK, instrment: 1 }));
+  store.undo.apply(setCellOp(store.songIndex, pat, 40, { note: MARK, instrment: 1 }));
+  store.undo.apply(setCueWordOp(store.songIndex, 0, 4, pat));
+  store.undo.apply(setCueWordOp(store.songIndex, 2, 9, pat));
+  await sleep(30);
+
+  // ── opening ─────────────────────────────────────────────────────────────
+  win.__microtone.split.reveal("timeline");
+  await sleep(50);
+  check(!isOpen(), "the bar starts out of the way");
+  ctrlF();
+  await sleep(30);
+  check(isOpen(), "Ctrl+F opens it on the Timeline");
+  check(doc.activeElement === q(".fb-val"), "…with the caret in the value box");
+  check(!!q(".fb-field") && !!q(".fb-op"), "…and a column + operator beside it");
+
+  // ── typing ──────────────────────────────────────────────────────────────
+  const field = q(".fb-field");
+  check([...field.options].some((o) => o.value === "note"), "the column list is the query's");
+  field.value = "note"; fire(field, "change");
+  await sleep(20);
+  const val = q(".fb-val");
+  val.value = "1234"; fire(val, "input");
+  await sleep(30);
+  check(/\$1234/.test(q(".fb-read").textContent),
+    "the readout says what it parsed", q(".fb-read").textContent);
+  // Two marked rows, two placements: four events in the song.
+  check(/4 match/.test(q(".fb-count").textContent),
+    "the count finds every placement of every marked row", q(".fb-count").textContent);
+
+  // ── stepping, on the Timeline ───────────────────────────────────────────
+  store.cursor.row = 0; store.cursor.ch = 0;
+  key(q(".fb-val"), "Enter");
+  await sleep(40);
+  const first = { row: store.cursor.row, ch: store.cursor.ch };
+  check(first.ch === 4 && first.row === 8,
+    "Enter takes the cursor to the first match", JSON.stringify(first));
+  check(/1 of 4/.test(q(".fb-count").textContent),
+    "…and the count says which one it is on", q(".fb-count").textContent);
+  key(q(".fb-val"), "Enter");
+  await sleep(40);
+  const second = { row: store.cursor.row, ch: store.cursor.ch };
+  check(second.ch === 4 && second.row === 40,
+    "…again to the second row of the same placement", JSON.stringify(second));
+  key(q(".fb-val"), "Enter");
+  await sleep(40);
+  const third = { row: store.cursor.row, ch: store.cursor.ch };
+  check(third.ch === 9 && third.row > second.row,
+    "…then on to the other cue that plays it", JSON.stringify(third));
+  key(q(".fb-val"), "Enter", { shiftKey: true });
+  await sleep(40);
+  check(store.cursor.row === second.row && store.cursor.ch === second.ch,
+    "Shift+Enter goes back");
+  store.cursor.row = 0; store.cursor.ch = 0;
+  key(q(".fb-val"), "Enter", { shiftKey: true });
+  await sleep(40);
+  check(/4 of 4/.test(q(".fb-count").textContent),
+    "…and stepping back from the top wraps to the last match",
+    q(".fb-count").textContent);
+
+  // The bar's own keys stay its own: a piano key typed into it must not jam.
+  const notesBefore = store.doc.patternAt(store.songIndex, pat)[8].note;
+  key(q(".fb-val"), "z");
+  await sleep(20);
+  check(store.doc.patternAt(store.songIndex, pat)[8].note === notesBefore,
+    "a letter typed in the box does not reach the grid");
+
+  // ── the Patterns view walks the bank instead ────────────────────────────
+  win.__microtone.split.reveal("pattern");
+  await sleep(80);
+  ctrlF();
+  await sleep(30);
+  check(isOpen(), "Ctrl+F opens it on Patterns too");
+  patternView.setPattern(0);
+  patternView.cursor.row = 0;
+  key(q(".fb-val"), "Enter");
+  await sleep(40);
+  check(patternView.patIdx === pat && patternView.cursor.row === 8,
+    "Enter moves the pane to the matching pattern and row",
+    `pat ${patternView.patIdx} row ${patternView.cursor.row}`);
+  key(q(".fb-val"), "Enter");
+  await sleep(40);
+  check(patternView.patIdx === pat && patternView.cursor.row === 40,
+    "…then to the next row of it", `row ${patternView.cursor.row}`);
+
+  // ── criteria… ───────────────────────────────────────────────────────────
+  q(".fb-crit").click();
+  let dlg = null;
+  for (let i = 0; i < 100 && !dlg; i++) { dlg = doc.querySelector("dialog.findchange-modal"); await sleep(20); }
+  check(!!dlg, "Criteria… opens the query dialog");
+  check(!!dlg.querySelector(".fc-conds"), "…with the conditions half");
+  check(!dlg.querySelector(".fc-acts"), "…and no Change half");
+  check(!dlg.querySelector(".fc-scope"), "…and no Apply-to scope select");
+  const okBtn = dlg.querySelector(".fc-ok");
+  check(okBtn.textContent === "Find", "…and OK reads Find", okBtn.textContent);
+  check(/1234/.test(dlg.querySelector(".fc-term .fc-val")?.value ?? ""),
+    "…starting from what the bar was holding");
+  // Add a second term (AND) and accept: the bar can no longer show it in one
+  // row, so it must report what it holds rather than misrepresent it.
+  dlg.querySelector(".fc-addterm").click();
+  await sleep(30);
+  const t2 = dlg.querySelectorAll(".fc-term")[1];
+  const t2field = t2.querySelector(".fc-field");
+  t2field.value = "inst"; fire(t2field, "change");
+  await sleep(20);
+  const t2val = doc.querySelectorAll("dialog.findchange-modal .fc-term")[1].querySelector(".fc-val");
+  t2val.value = "1"; fire(t2val, "input");
+  await sleep(30);
+  doc.querySelector("dialog.findchange-modal .fc-ok").click();
+  await sleep(80);
+  check(!doc.querySelector("dialog.findchange-modal"), "Find closes the dialog");
+  check(findBar.predicate[0].length === 2, "the bar took the two-term condition");
+  check(!q(".fb-summary").hidden && /2 term/.test(q(".fb-summary").textContent),
+    "…and says so instead of showing half of it", q(".fb-summary").textContent);
+  check(/2 match|of 2/.test(q(".fb-count").textContent),
+    "…still finding the pattern's two marked rows (the bank walk)",
+    q(".fb-count").textContent);
+
+  // ── closing ─────────────────────────────────────────────────────────────
+  key(q(".fb-val") ?? bar(), "Escape");
+  await sleep(30);
+  check(!isOpen(), "Escape puts the bar away");
+
+  // …and a view with nowhere to go does not get one.
+  win.__microtone.split.reveal("timeline");
+  await sleep(50);
+  ctrlF();
+  await sleep(30);
+  check(isOpen(), "reopened on the Timeline");
+  win.__microtone.split.reveal("samples");
+  await sleep(80);
+  check(!isOpen(), "…and it closes itself when the view has no grid");
+  ctrlF();
+  await sleep(30);
+  check(!isOpen(), "Ctrl+F on the Samples view is left to the browser");
+
+  while (store.undo.canUndo()) store.undo.undo();
+  log(fails === 0 ? "RESULT: PASS item 177 find bar" : `RESULT: FAIL (${fails})`);
+ } catch (e) { log("THROW: " + (e && e.stack || e)); }
+})();
+</script>

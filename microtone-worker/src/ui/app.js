@@ -23,6 +23,7 @@ import { JamKeyboard } from "./jam.js";
 import { InstLookup } from "./instlookup.js";
 import { SUB_NOTE } from "./edit.js";
 import { CommandPalette } from "./palette.js";
+import { FindBar } from "./findbar.js";
 import { setCellOp } from "../doc/ops.js";
 import { emptyPatternBytes } from "../doc/patterntools.js";
 import { hex2 } from "./notenames.js";
@@ -1207,6 +1208,40 @@ for (const topic of ["cursor", "edit", "view", "doc"]) {
   store.on(topic, () => palette.refresh());
 }
 
+// ── Find (item 177) ──
+// The bar owns the criteria and the walk; going to a match is the views' own
+// business, because only they know what "there" means — an absolute song row
+// and channel on the Timeline, a pattern and a row in Patterns. Every copy of
+// the view follows (a split shows the same music twice, and "take me there"
+// means both panes), exactly as Goto does.
+const findBar = new FindBar($("findBar"), store, {
+  view: () => store.view,
+  goSong: (m) => {
+    store.cursor.row = m.row;
+    store.cursor.ch = m.ch;
+    eachView("timeline", (v) => v.centreRow(m.row));
+    store.emit("cursor");
+    updateStatus();
+  },
+  goPattern: (m) => {
+    const pat = viewNamed("pattern");
+    if (!pat) return;
+    pat.goTo(m.pat, m.row);
+    store.emit("cursor");
+    updateStatus();
+  },
+  // …and where the walk starts from: the ACTIVE pane's pattern and row, since
+  // that is the one the keyboard is in.
+  patternCursor: () => {
+    const pat = viewNamed("pattern");
+    return pat ? { pat: pat.patIdx, row: pat.cursor.row } : null;
+  },
+  // The bar is a text field: while it has focus the grid sees no keys at all,
+  // so closing it has to give them back.
+  focusGrid: () => document.activeElement?.blur?.(),
+});
+store.on("cursor", () => { if (findBar.open) findBar.paintCount(); });
+
 // The grid views that support block selection + clipboard (item 17; Cues added
 // later — it keeps its own cue-word clipboard, store.cueClipboard).
 function selView() {
@@ -1284,6 +1319,16 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openGoto();
     return;
+  }
+  // Ctrl/Cmd+F — the find bar (item 177). Only the two grids have somewhere to
+  // go, so elsewhere the key is left to the browser's own find, which is the
+  // right tool for a DOM view's text.
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    if (store.view === "timeline" || store.view === "pattern") {
+      e.preventDefault();
+      findBar.show();
+      return;
+    }
   }
   // Ctrl/Cmd+A — block-select the whole column (Timeline: the cursor's single
   // voice; Patterns: the active pane's pattern). Item 47.5.
@@ -1565,7 +1610,7 @@ if (bootParams.has("load")) {
 // 148.1). Unsplit — which is how the smoke tests run — they answer exactly the
 // single instance they always did.
 window.__microtone = {
-  store, jam, instLookup, masterStrip, split, loadBytes, playCursor, paneViews,
+  store, jam, instLookup, masterStrip, split, loadBytes, playCursor, paneViews, findBar,
   get timeline() { return viewNamed("timeline"); },
   get cuesView() { return viewNamed("cues"); },
   get patternView() { return viewNamed("pattern"); },

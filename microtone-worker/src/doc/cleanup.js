@@ -11,7 +11,7 @@
 // remap must preserve it.
 
 import { CUE_EMPTY, PATTERN_SIZE, SAMPLEBIN_SIZE } from "../format/taud-const.js";
-import { writePatchesBlob, buildMetaRecord } from "../engine/inst.js";
+import { writePatchesBlob, buildMetaRecord, layerNote } from "../engine/inst.js";
 import { EffectOp } from "../engine/tables.js";
 import { rowVolumeFromDefault, narrowVolAxis } from "../engine/trigger.js";
 import { sampleSpans } from "./document.js";
@@ -565,9 +565,12 @@ function expandMetaDemands(doc, demands) {
       let layers = inst.resolveMetaLayers(note, seedVol);
       if (inst.metaStrict) {
         layers = layers.filter((l) => doc.instruments[l.instIdx & 0x3ff]
-          ?.resolvePatch(clampNote(note + l.detune), seedVol) != null);
+          ?.resolvePatch(clampNote(layerNote(l, note)), seedVol) != null);
       }
-      for (const l of layers) addDemand(demands, l.instIdx & 0x3ff, clampNote(note + l.detune), vol);
+      // What the layer SOUNDS — a fixed-pitch layer (item 179) demands its own
+      // note whatever key reached it, so pruning must keep the zone THAT lands
+      // in rather than the one under the trigger.
+      for (const l of layers) addDemand(demands, l.instIdx & 0x3ff, clampNote(layerNote(l, note)), vol);
     };
     for (const k of d.pairs) emit(pairNote(k), pairVol(k));
     for (const note of d.wildVolNotes) for (const v of VOL_SWEEP) emit(note, v);

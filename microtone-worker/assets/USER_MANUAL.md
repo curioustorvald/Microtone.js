@@ -213,6 +213,7 @@ a fine slide's argument to zero empties the cell, since "shift by nothing" and
 | **PageUp / PageDown** | ±16 rows |
 | **Home / End** | Start / end of the song |
 | **Ctrl+G** | Go to a `cue:row` (cue in hex) |
+| **Ctrl+F** | Find cells by what they contain ([below](#find-ctrl-f)) |
 | **wheel / Shift+wheel** | Scroll rows / channels |
 
 ### Mute and solo
@@ -796,6 +797,31 @@ panning column is a whole angle, so *shift* reaches a full turn, the centre it
 widens about is **front**, and a move past hard left carries on round behind you
 instead of stopping there — on a circle, hard left is a direction, not an edge.
 
+### Find (Ctrl+F)
+
+**Ctrl+F** opens a find bar under the grid. Pick a column, pick a test, type a
+value, and **Enter** takes the cursor to the next cell that matches;
+**Shift+Enter** to the previous one. Both wrap round the end, the count beside
+the box says *3 of 17*, and **Esc** puts the bar away and hands the keys back to
+the grid.
+
+What it searches is whichever grid you opened it from, in that grid's own terms:
+
+- from the **Timeline**, the song in **play order** — every cue, every row, every channel that has a pattern — so a match is a place the cursor simply goes. One pattern placed in six cues is found in all six.
+- from **Patterns**, the **pattern bank** in ascending order, and the pane follows the match to whichever pattern it is in. This is the only way to reach a pattern no cue has placed yet.
+
+The value is read in the column's own base — **hex**, like everywhere else —
+with `#` for decimal, and the note column also takes names (`C-4`). The bar
+reads back what it parsed (`$5000 C-4`) beside the box, so the base is never
+something to remember.
+
+One test covers nearly every search worth making. For more than one —
+conditions ANDed, alternatives ORed, ranges, *every fourth row* — the
+**Criteria…** button opens the full editor described below, without its Change
+half; the bar then reports what it is holding rather than showing you half of
+it. The criteria are shared with Find & Change, so *find these* and then
+*change the ones I just found* is one thought and not two typings.
+
 ### Find & Change (advanced pattern edit)
 
 Every tool above answers one fixed question — *scale these volumes*, *replace
@@ -1000,7 +1026,7 @@ knowing about, because none of them are visible from the list:
 
 - **Overlapping samples.** Two rows can be different windows onto one recording: the same bytes with different lengths, loop points or rates. Editing either one rewrites the other, which is why the Sample Lab refuses to *change the length* of a sample whose bytes another sample overlaps. A stereo sample's own two channels are not an overlap — it is one sample occupying two spans.
 - **Samples pointing outside the pool.** Almost every module conversion leaves a few junk instrument records behind, usually up at the top of the slot range, whose sample pointers land far outside 8 MB. They appear in the list looking like ordinary samples and they play nothing. [Housekeeping](#housekeeping) drops them.
-- **Gaps.** Deleting a sample, or replacing one with something that no longer fits its old span, leaves a hole. A new sample is fitted into the first hole big enough for it, so holes are reused rather than wasted — but a pool full of small holes can refuse a large sample while showing plenty free, and the panel gives you the largest run so you can see that coming.
+- **Gaps.** Deleting a sample, or replacing one with something that no longer fits its old span, leaves a hole. A new sample is fitted into the first hole big enough for it, so holes are reused rather than wasted — but a pool full of small holes can refuse a large sample while showing plenty free, and the panel gives you the largest run so you can see that coming. **Defragment sample memory** in [Housekeeping](#housekeeping) closes them all up into one run at the top.
 - **Leftover audio.** Freeing bytes does not always blank them, and bytes nothing points at still travel inside the project file. Housekeeping sweeps them.
 
 ### The map: the pool as one long waveform
@@ -1275,6 +1301,7 @@ either way.
 - **Layers** (the Layered kind) — a Layered metainstrument plays several sub-instruments at once, and this table is the whole editor for that stack. Each row carries an editable **mix** (0–255, 159 = 0 dB, live dB readout), a **detune** in cents with ◂ ▸ buttons that step a whole degree of the song's own notation, and the **pitch** and **velocity** bounds that decide when the layer sounds at all. The ▸ beside row 0 marks the foreground layer: the first layer covering a trigger plays on the channel itself and the rest spawn background voices, so the order here is priority — **drag a row by the handle in its # column** to change it. The handle is a button as well as a grip: focus it and ↑ ↓ move the row without a pointer.
   - **Add layers…** brings in more instruments (the same picker, counts and all), **Duplicate** makes another voice of the layer's own sub-instrument ready to detune, and **Chord…** does a whole chord or unison spread in one action, using the same just intervals, chords and inversions as the [chord maker](#the-chord-maker). The layer you start from is the voice nearest unison and stays where it is, so an inversion decides which note of the chord that layer plays and the rest are placed around it.
   - Duplicated layers are **linked**: they share one sub-instrument, badged *linked ×n*, so editing it moves every voice of the stack together. When one voice needs to differ, **Unlink** gives that layer its own copy.
+  - **fixed** beside the detune makes the layer **non-melodic**: it sounds one note whatever key is played, and the field beside the box stops being a detune and becomes that note — an absolute pitch, typed as a word (`$5000`) or a name (`C-4`), with ◂ ▸ still stepping degrees of the song's notation. This is how a layer that is a *sound* rather than a *pitch* is written: the click of a hammer, a breath, a bar of noise under the low keys. The pitch bounds still decide which keys reach the layer — the flag only fixes what it plays when one does — and everything else about it, mix and velocity bounds included, works as before. Ticking or unticking the box keeps the note the row was showing, so nothing jumps.
   - Each row's **Edit…** button opens that layer instrument in its own editor, with the same General / envelope / Zones tabs any instrument gets (its Advanced Edit lives on the Zones tab, as usual) — this is how you reach the sub-instruments of MIDI-imported instruments, whose layers are not listed on the left. A breadcrumb above the name walks back to the metainstrument that owns it.
   - The last layer cannot be removed (a metainstrument with no entries in its table is not one); delete the whole instrument instead.
 - **FM** (the FM Rack kind) — the operator table above, the algorithm below. It is the same table as the Layers tab's, because a rack is the same record read another way, with two columns renamed for what they mean here: **level** is the operator's output level, which doubles as its modulation index when it modulates something, and **ratio** is its detune from the played note — an octave up is a 2:1 modulator, a twelfth is the inharmonic one that makes bells. The pitch and velocity bounds still gate: an operator whose bounds exclude the note falls silent for it, which is how a patch gets brighter as you play harder.
@@ -1282,6 +1309,9 @@ either way.
   - The meter in the toolbar is the real limit. The operator table and the algorithm share one 252-byte record — 10 bytes an operator, 2 a word — so more operators means less room for wiring, and the bar shows both at once.
   - **Algorithm** is the wiring, shown three ways. The line beside the heading is the patch as an expression: `0[1[2]] + 3` reads "operator 2 modulates 1 modulates 0, and 3 is a second carrier beside it". Under it is the **diagram** — the picture an FM chip's manual prints, turned on its side so the signal runs left to right into OUT. A box is an operator, a wire into one is modulation, a curl over one is an operator modulating itself, and wires that meet are summed; a ring modulation or an inversion gets a mark of its own. Below that is the same patch as an editable list, one word a row.
   - The diagram only appears while the algorithm verifies — there is no picture of a patch that does not resolve, and half a picture would read as a working one.
+- **Options** (both metainstrument kinds) — the record's own flag byte, which describes the whole instrument rather than any one entry in its table. It is quoted in hex beside the description, because that is what the file holds and what a bug report has to say.
+  - **Percussion** stops **Transpose** and **Retune** from moving this instrument's notes, and gives it a stem of its own on export. Playback is unaffected — the engine ignores the flag, exactly as it does the same flag on an ordinary instrument.
+  - **Strict layering** (Layered records only; greyed out on a rack, which has no layers to drop) changes what happens when a trigger falls inside a layer's rectangle but outside that layer instrument's own zones. Normally the layer sounds anyway and, matching no zone, falls through to the instrument's base sample — which is how a closed hi-hat ends up ringing under an open one. With strict layering the engine drops the layer for that note instead. Producers of Layered kits set it *and* give each layer instrument its own canonical zone, so that "no zone matches" unambiguously means "this layer has nothing to say about this note".
   - **An edit that does not verify is held in the editor, not written into the song.** Half-finished algorithms are normal — you cannot rewire a rack without passing through states that do not add up — so the words stay on screen and editable, marked in red under a banner, while the rack in the song goes on playing the last algorithm that worked. Repair the highlighted row and the whole held edit is applied as one undo step. Leave the FM tab and it is dropped, and the working rack is what you come back to.
   - A rack **already in the song** whose algorithm does not verify — a file from an older build, or from another tool — plays nothing, and says so under the same banner. Its operators are listed as usual; only the algorithm has to be written again.
   - Each word says what it does and what it does it to. **read** sounds an operator on its own; **read ×FM** sounds it modulated by whatever the words before it produced; **feedback** taps what an operator produced one sample ago, which is how a rack modulates itself; **combine** adds, ring-modulates, inverts, duplicates or swaps what is on the stack. The **≡** figure beside each row is how many values are stacked up after it — a finished algorithm ends on exactly one, and that value is the sound.
@@ -1497,12 +1527,13 @@ than by bending the whole song around it.
 
 ### Housekeeping
 
-Four clean-up operations, each a single undo step:
+Five clean-up operations, each a single undo step:
 
 - **Cleanup patterns** — drop the patterns no cue references, renumber the survivors and rewrite the cues to match.
 - **Renumber patterns** — compact every pattern into play order, dropping the gaps.
 - **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its sub-instruments, layers or operators) and free the sample data only they referenced. [Recordings loaded into memory](#long-recordings-in-memory) are never touched: nothing claims them by design, and they are source material rather than leftovers.
 - **Cleanup instrument patches** — remove [Ixmp patches](#advanced-edit-ixmp-patches) that can never be triggered: patches belonging to no instrument, patches with an empty rectangle or no sample, and patches lying entirely under a higher-priority one (remember the *first* matching patch wins, so a fully covered patch is dead weight).
+- **Defragment sample memory** — slide every sample down against the start of the pool, closing the [gaps](#sample-memory) that deleting and replacing samples leave behind. The other four free memory; this one is the only one that moves any. What it buys is the free space as **one run** instead of a dozen pieces too small to import into, and the confirmation says how big that run becomes before you commit. Every instrument, patch and recording that pointed into the moved memory is repointed with it, so nothing about the music changes — a defragmented project renders identically. Samples that overlap each other travel together, and a sample pointing *outside* the pool stops it: run **Cleanup instruments & samples** first, which drops the junk records that claim those addresses.
 
 ### Global Operations
 

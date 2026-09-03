@@ -11,8 +11,9 @@ import {
   importBankOp, compositeOp,
 } from "../../doc/ops.js";
 import {
-  metaLayers, metaRecordOf, duplicateLayer, removeLayer, moveLayer, patchLayer,
-  linkCount, clampDetune, META_MAX_LAYERS,
+  metaLayers, metaRecordOf, metaFlags, metaRecordWithFlags,
+  duplicateLayer, removeLayer, moveLayer, patchLayer,
+  linkCount, clampDetune, fixedPitchFields, META_MAX_LAYERS,
 } from "../../doc/metaedit.js";
 import {
   fmOperators, fmProgramOf, fmRecordOf, fmValidate, fmBudget, fmFormula, fmGraph,
@@ -43,6 +44,9 @@ import { noteGlyphCanvas, rangeGlyphCanvas } from "../noteglyph.js";
 import { fmGraphSvg } from "../fmgraph.js";
 import { ANCHOR_NOTE, stepNoteInTable } from "../pitchtables.js";
 import { UNITS_PER_OCTAVE } from "../../doc/chord.js";
+// A fixed-pitch layer's field takes a note WORD, and the query parser is
+// already the app's one place that reads "$5000" and "C-4" as the same thing.
+import { parseFieldValue } from "../../doc/patternquery.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { isStereoSample } from "../../doc/document.js";
@@ -275,9 +279,15 @@ export class InstrumentsView {
     const inst = this.store.doc?.instruments[this.selected];
     const metaTab = inst?.isFm ? ["fm", t("inst.tabFm")] : ["meta", t("inst.tabLayers")];
     const tabs = inst?.isMeta
-      ? [metaTab]
+      ? [metaTab, ["metaopts", t("inst.tabMetaOptions")]]
       : [["general", t("inst.tabGeneral")], ["env0", t("inst.tabVolEnv")], ["env1", t("inst.tabPanEnv")],
          ["pitch", t("inst.tabPitch")], ["filter", t("inst.tabFilter")], ["zones", t("inst.tabZones")]];
+    // A tab this instrument has not got is snapped to its first one, in either
+    // direction: a metainstrument has no envelopes and an ordinary instrument
+    // has no layer table, so simply keeping `this.tab` across a selection
+    // change would leave the panel drawing nothing.
+    const keys = tabs.map(([k]) => k);
+    if (!keys.includes(this.tab)) this.tab = keys[0];
     for (const [key, label] of tabs) {
       const b = document.createElement("button");
       b.textContent = label;
@@ -285,8 +295,6 @@ export class InstrumentsView {
       b.addEventListener("click", () => { this.tab = key; this.renderTabs(); this.renderPanel(); });
       this.tabBar.appendChild(b);
     }
-    if (inst?.isMeta) this.tab = metaTab[0];
-    else if (this.tab === "meta" || this.tab === "fm") this.tab = "general";
   }
 
   renderPanel() {
@@ -319,6 +327,7 @@ export class InstrumentsView {
     else if (this.tab === "zones") this.renderZones(inst);
     else if (this.tab === "meta") this.renderMeta(inst);
     else if (this.tab === "fm") this.renderFm(inst);
+    else if (this.tab === "metaopts") this.renderMetaOptions(inst);
   }
 
   setField(key, value) {
@@ -822,18 +831,30 @@ export class InstrumentsView {
   }
 
   /** label · checkbox (with on/off text) row. */
-  checkRow(label, checked, onChange) {
+  /** A labelled checkbox. `opts.hint` writes a line of explanation across the
+   *  row's remaining columns — worth the space for a flag whose effect is not
+   *  guessable from its name — and `opts.disabled` greys one out where it does
+   *  not apply, which says more than leaving it out would. */
+  checkRow(label, checked, onChange, { hint = "", disabled = false, title = "" } = {}) {
     const row = document.createElement("div");
     row.className = "slider-row check";
     const lab = document.createElement("span");
     lab.className = "sl-label"; lab.textContent = label;
+    if (title) lab.title = title;
     const wrap = document.createElement("label");
     wrap.className = "sl-check";
+    if (title) wrap.title = title;
     const c = document.createElement("input");
-    c.type = "checkbox"; c.checked = checked;
+    c.type = "checkbox"; c.checked = checked; c.disabled = disabled;
     c.addEventListener("change", () => onChange(c.checked));
     wrap.append(c, document.createTextNode(checked ? t("inst.on") : t("inst.off")));
     row.append(lab, wrap);
+    if (hint) {
+      const h = document.createElement("span");
+      h.className = "sl-hint";
+      h.textContent = hint;
+      row.append(h);
+    }
     return row;
   }
 
@@ -1549,7 +1570,9 @@ export class InstrumentsView {
    * is the row's drag handle — the tables reorder differently (a rack has to
    * renumber its algorithm), so each caller builds its own.
    */
-  metaEntryRow(entry, i, { commit, links = 1, lead = false, leadTitle = "", grip = null }) {
+  metaEntryRow(entry, i, {
+    commit, links = 1, lead = false, leadTitle = "", grip = null, allowFixed = false,
+  }) {
     const doc = this.store.doc;
     const preset = this.store.pitchPreset;
     const tr = document.createElement("tr");
@@ -1613,13 +1636,26 @@ export class InstrumentsView {
     // That is the same one-control shape as every other value in the app
     // (item 156): the pair of arrows this cell used to carry beside the box
     // ARE the spinner's buttons now, with the mapping doing the units.
+    //
+    // A FIXED-PITCH layer (item 179) puts a note word in the same field, so the
+    // same control reads it as one: an absolute pitch typed as `$5000` or as
+    // `C-4`, stepping by the same degrees of the same table. Cents would be
+    // nonsense there — the layer is not offset from anything.
+    const fixed = allowFixed && entry.fixedPitch === true;
     const detCell = tr.querySelector(".detCell");
     const centsIn = document.createElement("input");
     centsIn.className = "meta-num";
-    centsIn.title = t("meta.detuneTitle");
+    centsIn.title = t(fixed ? "meta.fixedNoteTitle" : "meta.detuneTitle");
     centsIn.dataset.mtDecTitle = t("meta.detuneDownTitle");
     centsIn.dataset.mtIncTitle = t("meta.detuneUpTitle");
-    mapSpinner(centsIn, {
+    mapSpinner(centsIn, fixed ? {
+      toDisplay: (note) => annHex4(note),
+      fromDisplay: (text) => {
+        const v = parseFieldValue("note", text);
+        return clampN(v === null ? ANCHOR_NOTE : v, 0x20, 0xffff);
+      },
+      step: (note, dir) => stepNoteInTable(clampN(note, 0x20, 0xffff), preset, dir),
+    } : {
       toDisplay: (units) => `${centsOfUnits(units).toFixed(1)} ¢`,
       fromDisplay: (text) => {
         const c = Number.parseFloat(String(text).replace("−", "-"));
@@ -1635,9 +1671,23 @@ export class InstrumentsView {
     // with them. The raw 4096-TET units stay as text beside the glyph.
     const detAnn = Object.assign(document.createElement("span"), { className: "dim meta-det-ann" });
     detAnn.append(
-      noteGlyphCanvas(clampN(ANCHOR_NOTE + entry.detune, 0x20, 0xffff), preset),
+      noteGlyphCanvas(clampN(fixed ? entry.detune : ANCHOR_NOTE + entry.detune, 0x20, 0xffff), preset),
       ` · ${entry.detune}`);
     detCell.append(centsIn, detAnn);
+    // The flag itself. It lives beside the field it re-reads, because that is
+    // the only thing it changes: the rectangle above still decides which keys
+    // reach this layer.
+    if (allowFixed) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = fixed;
+      box.addEventListener("change", () => commit(fixedPitchFields(entry, box.checked)));
+      const lab = document.createElement("label");
+      lab.className = "meta-fixed";
+      lab.title = t("meta.fixedTitle");
+      lab.append(box, document.createTextNode(t("meta.fixed")));
+      detCell.append(lab);
+    }
 
     // Gating rectangle. The new-meta hint has always told people to "narrow
     // them on the Layers tab"; until item 113 there was nothing here to narrow.
@@ -1697,6 +1747,7 @@ export class InstrumentsView {
       const { tr, advCell } = this.metaEntryRow(l, i, {
         commit: (fields) => commit(patchLayer(layers, i, fields)),
         links,
+        allowFixed: true, // a rack's entries have no such flag (§7.4)
         lead: i === 0,
         leadTitle: t("meta.foregroundTitle"),
         // Order is priority here, so it is dragged rather than stepped: the
@@ -1738,6 +1789,49 @@ export class InstrumentsView {
     table.appendChild(tbody);
     this.panel.appendChild(table);
     this.restoreGrip("meta", table);
+  }
+
+  /**
+   * The metainstrument's OPTIONS tab — the record's own flag byte, which has
+   * nowhere else to live: the Layers/FM tab is the entry TABLE, and these two
+   * bits describe the record as a whole.
+   *
+   * Both are declared here rather than hand-written, because the byte has room
+   * for more and the next one should be one line of this list plus its two
+   * strings — not another block of DOM.
+   */
+  renderMetaOptions(inst) {
+    const slot = this.selected;
+    const flags = metaFlags(inst);
+    const raw = inst.metaRaw?.[0] ?? 0;
+
+    const head = document.createElement("div");
+    head.className = "detail-info";
+    head.textContent = t(inst.isFm ? "meta.optsLeadFm" : "meta.optsLeadLayered",
+      { n: inst.metaLayers?.length ?? 0 }) + ` · ${t("meta.optsByte", { byte: annHex2(raw) })}`;
+    this.panel.appendChild(head);
+
+    // field   the metaFlags key the checkbox writes
+    // fm      whether the flag means anything in a type-4 rack (§7.4: the
+    //         strict bit is the Layered kind's, the percussion bit the
+    //         family's) — a flag that does not apply is shown greyed rather
+    //         than hidden, so its absence is never a puzzle
+    const FLAGS = [
+      { field: "percussion", label: "inst.percussion", hint: "meta.percussionHint", fm: true },
+      { field: "strict", label: "meta.strict", hint: "meta.strictHint", fm: false },
+    ];
+    const setFlag = (field, on) => {
+      this.store.undo.apply(setMetaRecordOp(slot, metaRecordWithFlags(inst, { [field]: on })));
+      this.refresh();
+    };
+    this.group(t("meta.optsFlags"), ...FLAGS.map((f) => {
+      const off = inst.isFm && !f.fm;
+      return this.checkRow(t(f.label), flags[f.field], (on) => setFlag(f.field, on), {
+        hint: t(f.hint),
+        disabled: off,
+        title: off ? t("meta.optsLayeredOnly") : "",
+      });
+    }));
   }
 
   /**

@@ -436,7 +436,7 @@ export default {
   "pool.legendStale": "잔여 데이터",
   "pool.noteOverlap": "샘플 {n}개가 다른 샘플의 바이트와 겹칩니다 — 풀의 {b}가 두 번 이상 점유되어, 한쪽을 편집하면 다른 쪽도 바뀝니다.",
   "pool.noteOutside": "샘플 {n}개가 8 MB 풀 바깥을 가리킵니다 ({list}) — 모듈 변환이 남기는 쓰레기 악기 레코드입니다. 소리가 나지 않으며 정리 기능이 제거합니다.",
-  "pool.noteHoles": "최고 사용 지점 아래에 빈 구간 {n}개, 합계 {b} (최대 {largest}) — 새 샘플은 들어갈 수 있는 첫 구간에 배치됩니다.",
+  "pool.noteHoles": "최고 사용 지점 아래에 빈 구간 {n}개, 합계 {b} (최대 {largest}) — 새 샘플은 들어갈 수 있는 첫 구간에 배치됩니다. 프로젝트 \u2192 정리 \u2192 샘플 메모리 조각 모음을 실행하면 빈틈이 위쪽 한 구간으로 합쳐집니다.",
   "pool.noteStale": "여유 공간 중 {b}에 삭제된 샘플의 오디오가 남아 있습니다 — 정리 기능이 지우며, 그전까지는 프로젝트 용량을 차지합니다.",
   "pool.notePacked": "0부터 빈틈없이 배치됨: 구간 {n}개, 빈 공간 없음, 공유 없음.",
   // ── 풀 레코딩 + 맵 뷰 (item 175) ──
@@ -780,6 +780,15 @@ export default {
   "inst.tabZones": "구역",
   "inst.tabLayers": "레이어",
   "inst.tabFm": "FM",
+  "inst.tabMetaOptions": "옵션",
+  "meta.optsFlags": "레코드 플래그",
+  "meta.optsLeadLayered": "레이어 {n}개짜리 레이어드 메타악기입니다. 아래 두 비트는 레코드 전체를 설명하며, 레이어 자체는 레이어 탭에 있습니다.",
+  "meta.optsLeadFm": "오퍼레이터 {n}개짜리 FM 랙입니다. 아래 비트는 레코드 전체를 설명하며, 랙과 알고리즘은 FM 탭에 있습니다.",
+  "meta.optsByte": "플래그 바이트 {byte}",
+  "meta.optsLayeredOnly": "레이어드 레코드 전용 \u2014 FM 랙에는 떨어뜨릴 레이어가 없습니다",
+  "meta.percussionHint": "조옮김과 조율 변경이 이 악기의 음을 건드리지 않고, 내보내기에서 독자적인 스템을 받습니다. 재생에는 영향이 없습니다 \u2014 엔진은 이 플래그를 읽지 않습니다.",
+  "meta.strict": "엄격한 레이어링",
+  "meta.strictHint": "레이어 자신의 존이 그 음을 덮지 않으면 해당 악기의 기본 샘플로 넘어가는 대신 레이어를 떨어뜨립니다 \u2014 열린 하이햇 아래에서 닫힌 하이햇이 울리는 문제를 막아 줍니다.",
 
   // ── instrument editor: envelope-tab header text ──
   "inst.envPitch": "피치 엔벨로프",
@@ -917,6 +926,9 @@ export default {
   "meta.detuneTitle": "레이어 디튠(센트). 100 ¢가 12-TET 반음이고, 몇 센트면 코러스 정도입니다.",
   "meta.detuneDownTitle": "곡 기보법의 한 음도 아래로",
   "meta.detuneUpTitle": "곡 기보법의 한 음도 위로",
+  "meta.fixed": "고정",
+  "meta.fixedTitle": "고정 음높이: 어떤 건반을 눌러도 이 레이어는 한 음만 냅니다. 옆의 입력란은 그 음이 됩니다. 어떤 건반이 이 레이어에 닿는지는 여전히 음역이 정합니다.",
+  "meta.fixedNoteTitle": "건반과 무관하게 이 레이어가 내는 음. 음 워드($5000)나 음이름(C-4)으로 입력하세요. \u2212 와 + 는 곡 기보법의 음도 단위로 움직입니다.",
   "meta.pitchLoTitle": "이 레이어가 울리는 가장 낮은 음 (0 = 하한 없음)",
   "meta.pitchHiTitle": "이 레이어가 울리는 가장 높은 음 ($FFFF = 상한 없음)",
   "meta.velLoTitle": "이 레이어가 울리는 가장 낮은 음량 (0‥63)",
@@ -1139,6 +1151,32 @@ export default {
   "find.vpan.fineUp": "미세 오른쪽",
   "find.vpan.fineDown": "미세 왼쪽",
   "find.vpan.none": "비움",
+
+  "find.queryTitle": "찾기 \u2014 조건",
+  "find.queryLead": "한 조건 안의 항목은 모두 성립해야 하고, 조건 중 하나만 맞아도 충분합니다. 그 다음 막대가 맞는 셀들을 차례로 훑습니다.",
+  "find.scopeIs": "{scope} 검색 중",
+  "find.doFind": "찾기",
+  "find.countFound": "{total}개 셀 중 {matched}개 일치",
+
+  // ── 찾기 막대 (항목 177) ──
+  "fb.label": "찾기",
+  "fb.fieldTitle": "검사할 칼럼",
+  "fb.opTitle": "검사 방법",
+  "fb.valTitle": "찾을 값. 칼럼 고유의 진법으로 입력합니다($는 16진수, #는 10진수)",
+  "fb.valNoteTitle": "찾을 음 \u2014 워드($5000)나 음이름(C-4)",
+  "fb.prevTitle": "이전 일치 (Shift+Enter)",
+  "fb.nextTitle": "다음 일치 (Enter)",
+  "fb.criteria": "조건\u2026",
+  "fb.criteriaTitle": "더 자세한 검색: 여러 항목 AND, 여러 조건 OR, 범위와 나머지 연산",
+  "fb.closeTitle": "찾기 막대 닫기 (Esc)",
+  "fb.at": "{total}개 중 {n}번째",
+  "fb.total": "일치 {total}개",
+  "fb.none": "일치 없음",
+  "fb.noCriteria": "찾을 내용을 입력하세요",
+  "fb.summary": "조건 {conds}개, 항목 {terms}개 \u2014 조건\u2026 에서 편집",
+  "fb.summaryAll": "조건 없음 \u2014 조건\u2026 에서 편집",
+  "fb.scopePatterns": "이 곡의 모든 패턴",
+  "fb.scopeSong": "이 곡, 재생 순서대로",
 
   // ── command palette (Timeline/Patterns bottom bar) ──
   "pal.note": "노트",
@@ -1472,6 +1510,10 @@ export default {
   "clean.ixmp": "악기 패치 정리",
   "clean.ixmpTitle": "절대 트리거될 수 없는 패치를 제거합니다: 악기가 없는 패치, 빈 패치, 우선순위가 높은 패치에 완전히 가려진 패치, 그리고 어떤 패턴도 실제로 연주하지 않는 패치 — 그 패치만 참조하던 샘플 데이터도 함께 비웁니다",
   "clean.ixmpConfirm": "악기 {insts}개에서 도달할 수 없는 패치 {patches}개를 제거하고 패치 집합 {blobs}개를 완전히 비우며 샘플 {bytes}바이트를 비울까요? 실행 취소할 수 있습니다.",
+  "clean.defrag": "샘플 메모리 조각 모음",
+  "clean.defragTitle": "모든 샘플을 풀 앞쪽으로 당겨서, 샘플을 지우거나 교체하며 생긴 빈틈을 메웁니다. 남는 공간이 여러 조각이 아니라 하나의 연속 구간이 됩니다. 음악은 전혀 달라지지 않습니다.",
+  "clean.defragPacked": "샘플 풀은 이미 빈틈 없이 채워져 있습니다.",
+  "clean.defragConfirm": "샘플 {moved}을(를) 앞으로 옮겨 빈틈 {freed}을(를) 메울까요? 가장 큰 빈 구간이 {was}에서 {now}로 늘어나고, 악기 {insts}개와 녹음 {regions}개의 참조가 갱신됩니다. 음악은 달라지지 않으며, 되돌릴 수 있습니다.",
 
   // ── 전역 작업 (프로젝트 뷰) ──
   "glob.title": "전역 작업",

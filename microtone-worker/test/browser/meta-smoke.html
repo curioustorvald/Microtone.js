@@ -45,7 +45,8 @@
 
         // The whole table as one string — the undo leg compares against it.
         const snapshot = () => layers().map((l) =>
-          [l.instIdx, l.mixOctet, l.detune, l.pitchStart, l.pitchEnd, l.volStart, l.volEnd].join(":")
+          [l.instIdx, l.mixOctet, l.detune, l.pitchStart, l.pitchEnd, l.volStart, l.volEnd,
+           l.fixedPitch ? "F" : "-"].join(":")
         ).join("|");
         const pristine = snapshot();
 
@@ -203,6 +204,92 @@
         acts(1).find((b) => b.title.includes("Remove")).click();
         await sleep(30);
         check("remove drops a layer", layers().length === beforeRemove - 1);
+
+        // ── item 179: the fixed-pitch flag ──
+        // The switch changes what the field beside it MEANS, so what is checked
+        // is the pair: the box, the value it carries over, and the record bit.
+        const fixedBox = () => rows()[0].querySelector(".meta-fixed input");
+        check("every layer row carries a fixed-pitch switch",
+          rows().every((_, r) => !!rows()[r].querySelector(".meta-fixed input")));
+        const detBefore = layers()[0].detune;
+        fixedBox().click();
+        await sleep(40);
+        check("ticking it sets the flag on that layer", layers()[0].fixedPitch === true);
+        check("…carrying the pitch the row was showing (middle C + the detune)",
+          layers()[0].detune === 0x5000 + detBefore);
+        check("…and only that layer", layers().slice(1).every((l) => !l.fixedPitch));
+        check("the field now reads an absolute note word",
+          /^\$[0-9A-F]{4}$/.test(nums(0)[1].value));
+        check("…and the flag is in the record, byte +9 bit 6",
+          (doc.instruments[metaSlot].metaRaw[4 + 9] & 0x40) !== 0);
+        check("…with the volume range beside it intact",
+          (doc.instruments[metaSlot].metaRaw[4 + 9] & 0x3f) === layers()[0].volEnd);
+
+        // Typing a note NAME into it is the same as typing the word.
+        nums(0)[1].value = "C-4";
+        fire(nums(0)[1]);
+        await sleep(20);
+        check("a note NAME is accepted in the fixed-pitch field", layers()[0].detune === 0x5000);
+
+        // …and untick puts the offset back, with the note still where it was.
+        fixedBox().click();
+        await sleep(40);
+        check("unticking it clears the flag", layers()[0].fixedPitch === false);
+        check("…and reads the value back as an offset from middle C", layers()[0].detune === 0);
+        check("the field is back to cents", /¢/.test(nums(0)[1].value));
+
+        // The layer table as the flag edits find it — nothing on the Options tab
+        // may disturb it.
+        const afterLayers = snapshot();
+
+        // ── the Options sub-tab: the record's own flag byte ──
+        // Written as TOGGLES rather than against fixed values: a converted
+        // metainstrument arrives with strict layering already on (flourish's
+        // does), and a leg that assumed $00 would be testing the corpus.
+        const tabBtns = () => [...instrumentsView.tabBar.querySelectorAll("button")];
+        check("a metainstrument has two sub-tabs", tabBtns().length === 2);
+        check("…Layers first", tabBtns()[0].textContent === "Layers");
+        check("…then Options", tabBtns()[1].textContent === "Options");
+        tabBtns()[1].click();
+        await sleep(40);
+        const boxes = () => [...panel().querySelectorAll(".slider-row.check input")];
+        check("the Options tab is showing", instrumentsView.tab === "metaopts");
+        check("…with the two record flags", boxes().length === 2);
+        check("…named", [...panel().querySelectorAll(".sl-label")].map((e) => e.textContent)
+          .join("|") === "Percussion|Strict layering");
+        check("…each explaining what it does",
+          panel().querySelectorAll(".sl-hint").length === 2);
+        check("…and the flag byte quoted for a bug report",
+          /flag byte \$[0-9A-F]{2}/.test(panel().querySelector(".detail-info").textContent));
+
+        const rec0 = () => doc.instruments[metaSlot].metaRaw[0];
+        const bit = (m) => (rec0() & m) !== 0;
+        check("…which is the byte the record really holds",
+          panel().querySelector(".detail-info").textContent
+            .includes("$" + rec0().toString(16).toUpperCase().padStart(2, "0")));
+        const percWas = bit(0x02), strictWas = bit(0x01);
+        check("the boxes start on what the record says",
+          boxes()[0].checked === percWas && boxes()[1].checked === strictWas);
+
+        boxes()[0].click();
+        await sleep(50);
+        check("the Percussion box drives byte 0 bit 1", bit(0x02) === !percWas);
+        check("…which is what a retuner reads",
+          doc.instruments[metaSlot].isPercussion === !percWas);
+        check("…and the layer table is untouched", snapshot() === afterLayers);
+        check("…and the box comes back on the new state", boxes()[0].checked === !percWas);
+
+        boxes()[1].click();
+        await sleep(50);
+        check("the Strict layering box drives bit 0", bit(0x01) === !strictWas);
+        check("…which the trigger reads",
+          doc.instruments[metaSlot].metaStrict === !strictWas);
+        check("…and the other flag stands where it was put", bit(0x02) === !percWas);
+
+        store.undo.undo();
+        await sleep(50);
+        check("undo takes back the last flag alone",
+          bit(0x01) === strictWas && bit(0x02) === !percWas);
 
         // ── undo the lot, back to exactly where we started ──
         while (store.undo.canUndo()) store.undo.undo();

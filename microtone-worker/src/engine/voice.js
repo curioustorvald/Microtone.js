@@ -120,6 +120,11 @@ export class Voice {
     // ── Metainstrument layering ──
     this.isLayerChild = false;
     this.layerRelDetune = 0;
+    // A NON-MELODIC layer's own note (item 179), or -1 for the ordinary kind
+    // that tracks the parent. The per-tick sync reads it instead of deriving a
+    // pitch from the parent's, which is the whole of "always the same pitch
+    // regardless of the keyed note" once the trigger has run.
+    this.layerFixedNote = -1;
     // How far this layer sits from the meta's centre (layer 0), in note-axis
     // units — the pan twin of layerRelDetune, re-added by the per-tick sync so
     // the arrangement ROTATES with the note rather than collapsing (item 118).

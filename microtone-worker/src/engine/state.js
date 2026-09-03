@@ -538,6 +538,7 @@ export class Playhead {
       it.metaForeground = false;
       it.noteFading = false;
       it.layerMixGain = 1.0; it.isLayerChild = false; it.layerRelDetune = 0;
+      it.layerFixedNote = -1;
       it.layerRelPan = 0; it.layerRelElevation = 0;
       it.layerPitchMod = 0; it.pitchModDelta = 0;
       it.fmRig = null; it.fmOperator = false;

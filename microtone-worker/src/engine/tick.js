@@ -562,8 +562,16 @@ export function applyTrackerTick(eng, ts, playhead) {
         }
         bg.isLayerChild = false;
         bg.layerPitchMod = 0;
+        bg.layerFixedNote = -1;
       } else {
-        bg.noteVal = clamp(parent.noteVal + bg.layerRelDetune, 0x20, 0xffff);
+        // A NON-MELODIC layer (item 179) holds its own note: it is not sitting
+        // at an interval from the parent, it is sitting at a pitch. Everything
+        // else below still follows the parent — the pitch OVERLAY included, so
+        // a vibrato written on the channel still bends it. What the flag takes
+        // away is the keyed note, not the pattern's reach over the note.
+        bg.noteVal = bg.layerFixedNote >= 0
+          ? bg.layerFixedNote
+          : clamp(parent.noteVal + bg.layerRelDetune, 0x20, 0xffff);
         bg.layerPitchMod = parent.pitchModDelta;
         bg.basePitch = bg.noteVal;
         bg.amigaPeriod = -1.0;

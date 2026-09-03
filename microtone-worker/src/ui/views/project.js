@@ -5,6 +5,7 @@
 import {
   setSongScalarOp, setTuningOp, retuneOp, remapPatternsOp, cleanupBankOp,
   changeInstrumentOp, bulkNotesOp, upgradeCellFormatOp, setProjectStringOp,
+  importBankOp,
 } from "../../doc/ops.js";
 import { tuningRatioOf } from "../../engine/tables.js";
 import {
@@ -14,6 +15,7 @@ import {
   planCleanupPatterns, planMergeDuplicatePatterns, planRenumberPatterns, applyPatternOrder,
   encodeNameTable, planBankCleanup, planIxmpCleanup,
 } from "../../doc/cleanup.js";
+import { planPoolDefrag } from "../../doc/pooldefrag.js";
 import {
   pitchTablePresets, presetForNotation, retuneAllPatterns, surveyTuning,
   transposeAllPatterns, transposeUnitKeys,
@@ -25,6 +27,13 @@ import {
   decodeProjectString, encodeProjectString, escapeNonAscii, unescapeName,
 } from "../names.js";
 import { t } from "../i18n.js";
+
+/** Byte counts as a person reads them — the pool is measured in megabytes. */
+function fmtSize(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(2) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+  return n + " B";
+}
 
 // Tuning references, transcribed from terranmon.txt:3316-3324 ("Known standard
 // tunings") with the tracker default at the head — that is what every converted
@@ -431,6 +440,7 @@ export class ProjectView {
       hbtn(t("clean.renumber"), t("clean.renumberTitle"), () => this.renumberPatterns()),
       hbtn(t("clean.bank"), t("clean.bankTitle"), () => this.cleanupBank()),
       hbtn(t("clean.ixmp"), t("clean.ixmpTitle"), () => this.cleanupIxmp()),
+      hbtn(t("clean.defrag"), t("clean.defragTitle"), () => this.defragPool()),
     );
     this.root.appendChild(houseBar);
 
@@ -592,6 +602,32 @@ export class ProjectView {
       bytes: plan.freedSampleBytes,
     }))) return;
     store.undo.apply(cleanupBankOp(plan));
+    store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
+  }
+
+  /**
+   * Slide the sample pool down against 0 (item 178), closing every gap the
+   * project's edits have left in it.
+   *
+   * Housekeeping's other three buttons FREE memory; this one is the only one
+   * that moves any, and what it buys is a single free run at the top instead of
+   * the same bytes scattered in pieces too small to import into. It changes
+   * nothing about the music, so the confirm quotes the one number that decides
+   * whether it was worth pressing: how big the free run becomes.
+   */
+  defragPool() {
+    const store = this.store;
+    const plan = planPoolDefrag(store.doc);
+    if (plan.error) { alert(plan.error); return; }
+    if (plan.noop) { alert(t("clean.defragPacked")); return; }
+    const r = plan.report;
+    if (!confirm(t("clean.defragConfirm", {
+      moved: fmtSize(r.movedBytes), freed: fmtSize(r.freedBytes),
+      was: fmtSize(r.wasLargestRun), now: fmtSize(r.largestRun),
+      insts: r.instruments, regions: r.regions,
+    }))) return;
+    store.undo.apply(importBankOp(plan));
     store.emit("edit", [{ kind: "bank" }]);
     this.refresh();
   }

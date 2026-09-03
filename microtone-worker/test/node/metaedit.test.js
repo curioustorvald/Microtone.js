@@ -8,10 +8,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { TaudInst, META_MAX_LAYERS } from "../../src/engine/inst.js";
+import {
+  TaudInst, META_MAX_LAYERS, META_TYPE_FM, buildMetaRecord, makeMetaLayer,
+} from "../../src/engine/inst.js";
 import { setMetaBytesOp, setMetaRecordOp, importBankOp } from "../../src/doc/ops.js";
 import {
-  metaLayers, metaRecordOf, defaultLayer, linkCount,
+  metaLayers, metaRecordOf, metaFlags, metaRecordWithFlags, defaultLayer, linkCount,
   duplicateLayer, removeLayer, moveLayer, patchLayer, appendLayers, repointLayer,
   stackLayer,
 } from "../../src/doc/metaedit.js";
@@ -374,4 +376,64 @@ test("stackLayer: linked copies at the given detunes, capped", () => {
 
   const flood = stackLayer(layers, 0, new Array(50).fill(100));
   assert.equal(flood.length, META_MAX_LAYERS, "the cap still holds");
+});
+
+// ── the record's own flags (strict layering, percussion) ───────────────────
+// A full-range operator at unity, for the rack case.
+const op = (slot) => makeMetaLayer(slot, 159, 0, 0x0000, 0xffff, 0, 63);
+
+// Byte 0 is `0b tttt_00Ps`. Both bits are edited on their own, without the
+// layer table or a rack's algorithm being able to notice.
+
+test("metaRecordWithFlags sets and clears each bit, keeping the other", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(buildMetaRecord([
+    makeMetaLayer(1, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(2, 100, -341, 0x1000, 0x8000, 3, 60),
+  ]));
+  assert.deepEqual(metaFlags(inst), { strict: false, percussion: false, type: 0 });
+
+  const perc = new TaudInst(0);
+  perc.loadRecord(metaRecordWithFlags(inst, { percussion: true }));
+  assert.deepEqual(metaFlags(perc), { strict: false, percussion: true, type: 0 });
+  assert.equal(perc.isPercussion, true, "the getter every retuner asks reads it");
+
+  const both = new TaudInst(0);
+  both.loadRecord(metaRecordWithFlags(perc, { strict: true }));
+  assert.deepEqual(metaFlags(both), { strict: true, percussion: true, type: 0 });
+  assert.equal(both.metaStrict, true);
+
+  const off = new TaudInst(0);
+  off.loadRecord(metaRecordWithFlags(both, { percussion: false }));
+  assert.deepEqual(metaFlags(off), { strict: true, percussion: false, type: 0 });
+  assert.equal(off.isPercussion, false);
+});
+
+test("…and the layer table is byte-identical across a flag edit", () => {
+  const layers = [
+    makeMetaLayer(0x101, 159, 0, 0x0000, 0xffff, 0, 63),
+    makeMetaLayer(0x3ff, 0, -12345, 0x1234, 0x5678, 3, 60),
+  ];
+  const inst = new TaudInst(0);
+  inst.loadRecord(buildMetaRecord(layers));
+  const before = buildMetaRecord(layers);
+  const after = metaRecordWithFlags(inst, { percussion: true, strict: true });
+  assert.equal(after[0], 0x03, "only byte 0 carries the flags");
+  assert.deepEqual(Array.from(after.slice(1)), Array.from(before.slice(1)),
+    "every other byte of the record is the one it was");
+});
+
+test("a rack keeps its type and its algorithm when a flag is flipped", () => {
+  const inst = new TaudInst(0);
+  inst.loadRecord(buildMetaRecord(
+    [op(1), op(2)], { type: META_TYPE_FM, program: [0x0001, 0x0400] })); // op1 modulates op0
+  assert.equal(inst.isFm, true);
+  const program = inst.fmProgram.slice();
+
+  const next = new TaudInst(0);
+  next.loadRecord(metaRecordWithFlags(inst, { percussion: true }));
+  assert.equal(next.isFm, true, "still a rack — the type nibble is not a flag");
+  assert.equal(metaFlags(next).percussion, true);
+  assert.deepEqual(next.fmProgram, program, "the algorithm rides along untouched");
+  assert.equal(next.metaLayers.length, 2);
 });

@@ -43,13 +43,42 @@ window.addEventListener("error", (e) => log("ERROR: " + e.message));
   const patUndone = store.undo.undoStack.length === d0 &&
     store.doc.songs[store.songIndex].patterns.length === patsBefore;
 
+  // ── item 178: defragment the sample pool ──
+  // Nothing in the corpus is fragmented (they all come out of a converter
+  // packed), so a sample is deleted out of the middle first — which is exactly
+  // how a real project acquires a hole.
+  const { planDeleteSample } = await win.eval('import("/src/doc/cleanup.js")');
+  const { cleanupBankOp } = await win.eval('import("/src/doc/ops.js")');
+  const { poolMap } = await win.eval('import("/src/doc/poolmap.js")');
+  const hasDefrag = labels.includes("Defragment sample memory");
+  // A packed pool has nothing to do, and says so rather than writing an undo
+  // step for a no-op (the corpus comes out of a converter packed end to end).
+  const dPacked = store.undo.undoStack.length;
+  pv.defragPool();
+  await sleep(20);
+  const packedNoop = store.undo.undoStack.length === dPacked;
+  const census = store.doc.sampleList();
+  store.undo.apply(cleanupBankOp(planDeleteSample(store.doc, census[Math.floor(census.length / 2)])));
+  const holesBefore = poolMap(store.doc, { scanBytes: false }).stats.holeCount;
+  const d1 = store.undo.undoStack.length;
+  const poolBefore = Uint8Array.from(store.doc.sampleBin);
+  pv.defragPool();
+  await sleep(50);
+  const defragStep = store.undo.undoStack.length === d1 + 1;
+  const holesAfter = poolMap(store.doc, { scanBytes: false }).stats.holeCount;
+  if (defragStep) store.undo.undo();
+  await sleep(20);
+  const poolBack = store.doc.sampleBin.every((v, i) => v === poolBefore[i]);
+
   win.confirm = origConfirm;
   pv.hide();
 
   log(`buttons present: ${hasBtns}`);
   log(`pattern cleanup (${patsBefore}→${patsAfter} patterns) removed=${removedUnused} undo=${patUndone}`);
-  const ok = hasBtns && patStep && removedUnused && patUndone;
-  log(ok ? "PASS item 60 Project housekeeping (patterns)" : "FAIL");
+  log(`defrag button=${hasDefrag} packedNoop=${packedNoop} holes ${holesBefore}→${holesAfter} step=${defragStep} undo=${poolBack}`);
+  const ok = hasBtns && patStep && removedUnused && patUndone &&
+    hasDefrag && packedNoop && holesBefore > 0 && holesAfter === 0 && defragStep && poolBack;
+  log(ok ? "PASS item 60 Project housekeeping (patterns) + item 178 defrag" : "FAIL");
  } catch (e) { log("THROW: " + (e && e.stack || e)); }
 })();
 </script>

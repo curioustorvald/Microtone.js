@@ -38,7 +38,8 @@ export function metaFlags(inst) {
  */
 export function metaLayers(inst) {
   return (inst?.metaLayers ?? []).map((l) => makeMetaLayer(
-    l.instIdx, l.mixOctet, l.detune, l.pitchStart, l.pitchEnd, l.volStart, l.volEnd));
+    l.instIdx, l.mixOctet, l.detune, l.pitchStart, l.pitchEnd, l.volStart, l.volEnd,
+    l.fixedPitch === true));
 }
 
 /** Repack `layers` into a 256-byte record, keeping `inst`'s flag byte — and,
@@ -48,6 +49,23 @@ export function metaRecordOf(inst, layers, program = undefined) {
   return buildMetaRecord(layers, {
     ...metaFlags(inst),
     program: program === undefined ? (inst?.fmProgram ?? null) : program,
+  });
+}
+
+/**
+ * The record `inst` would have with some of its byte-0 FLAGS changed and
+ * everything else — the whole entry table, and a rack's algorithm — kept.
+ * `fields` is a metaFlags-shaped patch: {strict?, percussion?}.
+ *
+ * The type nibble is NOT patchable through here on purpose: turning a stack
+ * into a rack is not a flag, it is a different record with a different meaning
+ * for every entry in it.
+ */
+export function metaRecordWithFlags(inst, fields) {
+  const { type } = metaFlags(inst);
+  return buildMetaRecord(metaLayers(inst), {
+    ...metaFlags(inst), ...fields, type,
+    program: inst?.fmProgram ?? null,
   });
 }
 
@@ -73,7 +91,7 @@ export function duplicateLayer(layers, i, detune = null) {
   if (i < 0 || i >= layers.length || layers.length >= META_MAX_LAYERS) return layers;
   const src = layers[i];
   const copy = makeMetaLayer(src.instIdx, src.mixOctet, detune === null ? src.detune : detune,
-    src.pitchStart, src.pitchEnd, src.volStart, src.volEnd);
+    src.pitchStart, src.pitchEnd, src.volStart, src.volEnd, src.fixedPitch === true);
   return [...layers.slice(0, i + 1), copy, ...layers.slice(i + 1)];
 }
 
@@ -113,6 +131,42 @@ export const DETUNE_MAX = 0x7fff;
 export const clampDetune = (d) =>
   Math.min(Math.max(Math.round(d) || 0, DETUNE_MIN), DETUNE_MAX);
 
+/** The lowest playable note word — below it lies the pattern cell's sentinel
+ *  space, which is not a pitch a layer can sound. */
+export const FIXED_PITCH_MIN = 0x0020;
+export const FIXED_PITCH_MAX = 0xffff;
+
+/** Middle C — the note an ordinary layer's zero detune sounds when the trigger
+ *  is C4, and therefore the pitch the flag switch pivots on. Kept here rather
+ *  than imported from the UI's pitch tables: this module is document-layer. */
+export const FIXED_PITCH_ANCHOR = 0x5000;
+
+/**
+ * Fit a value to whichever thing layer `l`'s detune field IS: a signed offset
+ * on an ordinary layer, an unsigned note word on a fixed-pitch one (item 179).
+ * Every edit that writes the field goes through this, so "up a fifth" means the
+ * same gesture on both kinds and neither can be clamped by the other's range.
+ */
+export function clampLayerPitch(l, v) {
+  return l?.fixedPitch
+    ? Math.min(Math.max(Math.round(v) || 0, FIXED_PITCH_MIN), FIXED_PITCH_MAX)
+    : clampDetune(v);
+}
+
+/**
+ * The field patch that turns layer `l` fixed-pitch on or off, carrying the
+ * pitch it was SHOWING across the switch: an ordinary layer's detune is read
+ * against middle C (which is what the Layers tab's glyph beside it has always
+ * drawn), so the note under the cursor does not jump when the flag is flipped.
+ * Feed it to patchLayer, like every other cell edit in the table.
+ */
+export function fixedPitchFields(l, fixed) {
+  const detune = fixed
+    ? Math.min(Math.max(FIXED_PITCH_ANCHOR + l.detune, FIXED_PITCH_MIN), FIXED_PITCH_MAX)
+    : clampDetune((l.detune & 0xffff) - FIXED_PITCH_ANCHOR);
+  return { fixedPitch: fixed, detune };
+}
+
 /**
  * Insert one copy of layer `i` after it per entry of `detunes` (absolute layer
  * detune values) — a chord or unison stack off a single layer. Copies are
@@ -124,8 +178,8 @@ export function stackLayer(layers, i, detunes) {
   const src = layers[i];
   const room = Math.max(0, META_MAX_LAYERS - layers.length);
   const copies = detunes.slice(0, room).map((d) => makeMetaLayer(
-    src.instIdx, src.mixOctet, clampDetune(d),
-    src.pitchStart, src.pitchEnd, src.volStart, src.volEnd));
+    src.instIdx, src.mixOctet, clampLayerPitch(src, d),
+    src.pitchStart, src.pitchEnd, src.volStart, src.volEnd, src.fixedPitch === true));
   return [...layers.slice(0, i + 1), ...copies, ...layers.slice(i + 1)];
 }
 

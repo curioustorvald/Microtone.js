@@ -240,9 +240,33 @@ export function writePatchesBlob(patches) {
   return Uint8Array.from(out);
 }
 
-/** One layer of a Metainstrument. mixOctet is the raw PSO-dB octet (159 = unity). */
-export function makeMetaLayer(instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart, volEnd) {
-  return { instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart, volEnd };
+/**
+ * One layer of a Metainstrument. mixOctet is the raw PSO-dB octet (159 = unity).
+ *
+ * `fixedPitch` is the type-0 NON-MELODIC flag (item 179, §7.4 byte +9 bit 6):
+ * the layer sounds one pitch whatever key was struck, and `detune` stops being
+ * a signed offset and becomes that pitch — an UNSIGNED 4096-TET note word, the
+ * same units a pattern cell writes. Everything else about the layer is
+ * unchanged, the gating rectangle included: which keys reach the layer is still
+ * a question the rectangle answers, and only what it then sounds is fixed.
+ */
+export function makeMetaLayer(instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart, volEnd,
+                              fixedPitch = false) {
+  return { instIdx, mixOctet, detune, pitchStart, pitchEnd, volStart, volEnd, fixedPitch };
+}
+
+/** Layer byte +9, bit 6 — the type-0 fixed-pitch flag. RESERVED in every other
+ *  kind: a type-4 rack's entries read the bit as nothing at all. */
+export const META_LAYER_FIXED_PITCH = 0x40;
+
+/**
+ * The note word a layer sounds for a trigger at `noteVal`, before clamping — a
+ * fixed-pitch layer's own absolute pitch, or the trigger displaced by the
+ * layer's detune. The one place the flag changes an arithmetic, so every reader
+ * (trigger, audition probe, editor preview) goes through it.
+ */
+export function layerNote(layer, noteVal) {
+  return layer.fixedPitch ? (layer.detune & 0xffff) : noteVal + layer.detune;
 }
 
 /** Layers a 256-byte metainstrument record can hold: byte 0 flags + byte 1
@@ -411,7 +435,11 @@ export function buildMetaRecord(layers, {
     b[o + 7] = (l.pitchEnd >>> 8) & 0xff;
     // Layer inst index bits 8..9 ride in the vol-start byte's top two bits.
     b[o + 8] = (l.volStart & 0x3f) | (((idx >>> 8) & 0x3) << 6);
-    b[o + 9] = l.volEnd & 0x3f;
+    // …and the fixed-pitch flag in the vol-end byte's bit 6, which is where a
+    // type-0 layer says its pitch is its own (item 179). A rack's entries never
+    // carry it: the bit is RESERVED in every kind but Layered, and `fixedPitch`
+    // is false on every operator the editor builds.
+    b[o + 9] = (l.volEnd & 0x3f) | (!fm && l.fixedPitch ? META_LAYER_FIXED_PITCH : 0);
     o += 10;
   }
   if (fm) {
@@ -626,7 +654,12 @@ export class TaudInst {
         const instIdx = (b[o] & 0xff) | (((b[o + 8] >>> 6) & 0x3) << 8);
         const mixOctet = b[o + 1] & 0xff;
         const detRaw = (b[o + 2] & 0xff) | ((b[o + 3] & 0xff) << 8);
-        const detune = detRaw >= 0x8000 ? detRaw - 0x10000 : detRaw;
+        // A fixed-pitch layer's detune field is an unsigned NOTE WORD, not a
+        // signed offset (item 179), so the sign conversion has to know which it
+        // is looking at. The flag is the Layered kind's alone: in a rack those
+        // bits are reserved and the field stays a frequency ratio.
+        const fixedPitch = !fm && (b[o + 9] & META_LAYER_FIXED_PITCH) !== 0;
+        const detune = fixedPitch ? detRaw : (detRaw >= 0x8000 ? detRaw - 0x10000 : detRaw);
         const pStart = (b[o + 4] & 0xff) | ((b[o + 5] & 0xff) << 8);
         const pEnd = (b[o + 6] & 0xff) | ((b[o + 7] & 0xff) << 8);
         const vStart = b[o + 8] & 0x3f;
@@ -637,7 +670,7 @@ export class TaudInst {
         // compacting the rack would rewire the algorithm under it.
         if (usable || fm) {
           const layer = makeMetaLayer(usable ? instIdx : 0, mixOctet, detune,
-            pStart, pEnd, vStart, vEnd);
+            pStart, pEnd, vStart, vEnd, fixedPitch);
           layer.rawOffset = o; // metaRaw byte offset of this layer (editors target it)
           layers.push(layer);
         }

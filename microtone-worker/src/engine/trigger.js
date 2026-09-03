@@ -7,7 +7,7 @@
 
 import { MAX_BG_VOICES, ATTACK_RAMP_SAMPLES } from "./constants.js";
 import { Voice } from "./voice.js";
-import { patchIsStereo, patchVibratoInherits } from "./inst.js";
+import { patchIsStereo, patchVibratoInherits, layerNote } from "./inst.js";
 import { FmRig, fmReferencedOperators, fmSeedGains, dropFmOperators } from "./fm.js";
 import { META_MIX_GAIN, attenGainOf, EffectOp, clamp } from "./tables.js";
 import { envPresent, envCarry, applyKeyLift, seedPfRole, pfIdxBox, pfTimeBox } from "./envelope.js";
@@ -240,6 +240,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     triggerNote(eng, ts, voice, noteVal, instId, rowVolOverride);
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
+    voice.layerFixedNote = -1;
     voice.layerRelPan = 0;
     voice.layerRelElevation = 0;
     voice.isLayerChild = false;
@@ -254,16 +255,22 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     return;
   }
   let layers = inst.resolveMetaLayers(noteVal, seedVol);
+  // What each layer SOUNDS, which for a fixed-pitch layer (item 179) is its own
+  // note and not the trigger's. The gating above still asked about the trigger:
+  // the rectangle says which keys reach the layer, the flag says what it plays
+  // when one does.
+  const pitchOf = (l) => clamp(layerNote(l, noteVal), 0x20, 0xffff);
   // STRICT layering: drop layers whose patches don't cover the note (the gating
   // bbox is loose; strict converters emit each layer's canonical into its patches).
   if (inst.metaStrict) {
     layers = layers.filter((l) =>
-      eng.instruments[l.instIdx].resolvePatch(clamp(noteVal + l.detune, 0x20, 0xffff), seedVol) !== null);
+      eng.instruments[l.instIdx].resolvePatch(pitchOf(l), seedVol) !== null);
   }
   if (layers.length === 0) { // no layer sounds this note: silence
     voice.active = false;
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
+    voice.layerFixedNote = -1;
     return;
   }
   const l0 = layers[0];
@@ -274,7 +281,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   const chanPan = voice.channelPan, chanRowPan = voice.rowPan;
   const chanPanbrello = voice.panbrelloOffset;
   const chanAzimuth = voice.panAzimuth, chanElevation = voice.panElevation;
-  triggerNote(eng, ts, voice, clamp(noteVal + l0.detune, 0x20, 0xffff), l0.instIdx, rowVolOverride);
+  triggerNote(eng, ts, voice, pitchOf(l0), l0.instIdx, rowVolOverride);
   // Layer 0 IS the meta's position — the centre the other layers sit around, in
   // pan exactly as it already is in pitch (layerRelDetune below). A layer that
   // says nothing about panning has no opinion about where it sits relative to
@@ -286,6 +293,7 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
   const l0Elevation = l0HasPan ? notePanSeedBox[1] : 0;
   voice.layerMixGain = META_MIX_GAIN[l0.mixOctet & 0xff];
   voice.layerRelDetune = 0;
+  voice.layerFixedNote = -1;
   voice.layerRelPan = 0;
   voice.layerRelElevation = 0;
   voice.isLayerChild = false;
@@ -308,11 +316,19 @@ export function triggerMetaOrNote(eng, ts, voice, vi, noteVal, instId, rowVolOve
     child.bitcrusherDepth = voice.bitcrusherDepth;
     child.bitcrusherSkip = voice.bitcrusherSkip;
     child.overdriveAmp = voice.overdriveAmp;
-    triggerNote(eng, ts, child, clamp(noteVal + lk.detune, 0x20, 0xffff), lk.instIdx, rowVolOverride);
+    triggerNote(eng, ts, child, pitchOf(lk), lk.instIdx, rowVolOverride);
     child.isLayerChild = true;
     child.sourceChannel = vi;
     child.displayInst = voice.displayInst; // export/display tap: the meta SLOT, not the layer's inst
-    child.layerRelDetune = lk.detune - l0.detune;
+    // How far this layer sits from layer 0 on the note axis, measured BEFORE
+    // the clamp so an extreme detune keeps its true interval. With both layers
+    // melodic that is exactly `lk.detune - l0.detune`, which is what it was
+    // before item 179; written as a difference of NOTES it also holds when
+    // layer 0 is the fixed-pitch one.
+    child.layerRelDetune = layerNote(lk, noteVal) - layerNote(l0, noteVal);
+    // …and a fixed-pitch child tracks no parent at all: the per-tick sync holds
+    // it at this note instead of re-deriving one (tick.js).
+    child.layerFixedNote = lk.fixedPitch ? pitchOf(lk) : -1;
     // The pan twin of layerRelDetune (item 118): how far this layer sits from
     // the meta's centre, held across the whole note by the per-tick sync so a
     // note-pan SET ROTATES the arrangement instead of collapsing it onto one
@@ -362,6 +378,7 @@ function triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVo
     voice.fmRig = null;
     voice.layerMixGain = 1.0;
     voice.layerRelDetune = 0;
+    voice.layerFixedNote = -1;
     return;
   }
   const referenced = fmReferencedOperators(program, ops.length);
@@ -382,6 +399,7 @@ function triggerFmRack(eng, ts, voice, vi, noteVal, inst, rowVolOverride, seedVo
   // would scale the whole finished patch by one operand's level.
   voice.layerMixGain = 1.0;
   voice.layerRelDetune = 0;
+  voice.layerFixedNote = -1;
   voice.layerRelPan = 0;
   voice.layerRelElevation = 0;
   voice.isLayerChild = false;

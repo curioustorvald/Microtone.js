@@ -17,7 +17,7 @@ import {
   CELL_BYTES, CELL_BYTES_WIDE, PATTERN_BYTES, PATTERN_BYTES_WIDE,
 } from "./constants.js";
 import { tuningRatioOf } from "./tables.js";
-import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch } from "./inst.js";
+import { TaudInst, parsePatchesBlob, writePatchesBlob, makeInstPatch, layerNote } from "./inst.js";
 import { PlayCue, TaudPlayData, Playhead } from "./state.js";
 import { makeXorshift32 } from "./rng.js";
 import { SURROUND_STEREO, foldAzimuthToPan, voiceAzimuth, voiceElevation } from "./spatial.js";
@@ -475,7 +475,8 @@ export class TaudEngine {
     let layers = inst.resolveMetaLayers(note, 0x3f);
     if (inst.metaStrict) {
       layers = layers.filter((l) => {
-        let n = note + l.detune;
+        // The pitch the layer SOUNDS — a fixed-pitch layer's own (item 179).
+        let n = layerNote(l, note);
         n = n < 0x20 ? 0x20 : n > 0xffff ? 0xffff : n;
         return this.instruments[l.instIdx].resolvePatch(n, 0x3f) !== null;
       });
