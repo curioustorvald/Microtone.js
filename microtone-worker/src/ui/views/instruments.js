@@ -36,6 +36,9 @@ import { TOTAL_VOICES } from "../../engine/constants.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
+import {
+  envActiveCount, envAddNode, envRemoveNode, envFollowTailSustain, envClampWrap,
+} from "../../doc/envedit.js";
 import { mapSpinner } from "../widgets/spinner.js";
 import { dragGrip, focusGrip } from "../widgets/dragsort.js";
 import { envPresent, envCarry } from "../../engine/envelope.js";
@@ -1055,7 +1058,7 @@ export class InstrumentsView {
     this.panel.appendChild(canvas);
     this.envCanvas = { canvas, env, tabDef, inst, head };
 
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     this.selectedNode = Math.min(Math.max(this.selectedNode, 0), active - 1);
     this.drawEnvGraph();
 
@@ -1072,12 +1075,6 @@ export class InstrumentsView {
     this.panel.appendChild(this.buildEnvControls(inst, tabDef, env, active));
   }
 
-  /** Active node count: nodes 0..N where N is the first zero-duration
-   *  (terminator) node, capped at 25 (the physical slot count). */
-  envActiveCount(env) {
-    for (let i = 0; i < 24; i++) if (env[i].offset === 0) return i + 1;
-    return 25;
-  }
 
   setEnvWordBit(key, bit, on) {
     const cur = this.store.doc.instruments[this.selected][key];
@@ -1105,40 +1102,72 @@ export class InstrumentsView {
     this.store.undo.apply(setInstFieldOp(this.selected, key, nw & 0xffff));
   }
 
-  /** Insert a node after `sel`: split its segment (interior) or extend the tail. */
+  /** Insert a node after `sel`: split its segment (interior) or extend the tail.
+   *  One undo step, carrying two things the node array alone cannot say (item
+   *  181): the envelope is PRESENT, and a sustain point on the old tail
+   *  follows the new one. */
   addEnvNode(tabDef, env, sel, max) {
-    const active = this.envActiveCount(env);
-    if (active >= 25) return;
-    const nodes = env.map((n) => ({ value: n.value, offset: n.offset }));
-    if (sel >= active - 1) {
-      // Extend the envelope: give the last node a span, append a terminator.
-      nodes[active - 1] = { value: env[active - 1].value, offset: minifloatFromDouble(0.1) };
-      nodes[active] = { value: env[active - 1].value, offset: 0 };
-      this.selectedNode = active;
-    } else {
-      const total = minifloatToDouble(env[sel].offset);
-      const half = minifloatFromDouble(total / 2);
-      const midVal = Math.round((env[sel].value + env[sel + 1].value) / 2);
-      for (let i = 24; i > sel + 1; i--) nodes[i] = { value: nodes[i - 1].value, offset: nodes[i - 1].offset };
-      nodes[sel].offset = half;
-      nodes[sel + 1] = { value: Math.min(Math.max(midVal, 0), max),
-        offset: minifloatFromDouble(Math.max(total - minifloatToDouble(half), 0)) };
-      this.selectedNode = sel + 1;
-    }
-    this.store.undo.apply(setEnvArrayOp(this.selected, tabDef.key, nodes));
+    const res = envAddNode(env, sel, max);
+    if (res === null) return;
+    const active = envActiveCount(env);
+    this.selectedNode = res.selected;
+    const ops = [];
+    // A claim ARMS the sustain along with the presence bit: the envelope is
+    // being built by this very click, so it arrives holding its tail rather
+    // than needing two more boxes found first.
+    const presenceOp = this.envPresenceClaimOp(tabDef);
+    const arm = presenceOp !== null;
+    const susOp = res.appended
+      ? this.envSustainFollowOp(tabDef, active - 1, active, arm)
+      : (arm ? this.envSustainFollowOp(tabDef, -1, -1, true) : null);
+    if (susOp !== null) ops.push(susOp);
+    ops.push(setEnvArrayOp(this.selected, tabDef.key, res.nodes));
+    if (presenceOp !== null) ops.push(presenceOp);
+    this.store.undo.apply(ops.length === 1 ? ops[0] : compositeOp(ops));
   }
 
-  /** Delete node `sel` (node 0 is anchored at t=0 and cannot be removed). */
+  /** Delete node `sel` (node 0 is anchored at t=0 and cannot be removed), and
+   *  pull any wrap index that pointed past the new tail back into range. */
   removeEnvNode(tabDef, env, sel) {
-    const active = this.envActiveCount(env);
-    if (sel === 0 || active <= 1) return;
-    const nodes = env.map((n) => ({ value: n.value, offset: n.offset }));
-    // Merge the removed segment into the previous node so later timing is kept.
-    const merged = minifloatToDouble(env[sel - 1].offset) + minifloatToDouble(env[sel].offset);
-    nodes[sel - 1].offset = minifloatFromDouble(merged);
-    for (let i = sel; i < 24; i++) nodes[i] = { value: env[i + 1].value, offset: env[i + 1].offset };
-    this.selectedNode = Math.max(sel - 1, 0);
-    this.store.undo.apply(setEnvArrayOp(this.selected, tabDef.key, nodes));
+    const res = envRemoveNode(env, sel);
+    if (res === null) return;
+    this.selectedNode = res.selected;
+    const ops = [setEnvArrayOp(this.selected, tabDef.key, res.nodes)];
+    const inst = this.store.doc.instruments[this.selected];
+    for (const key of [tabDef.susKey, tabDef.loopKey]) {
+      const clamped = envClampWrap(inst[key], res.active);
+      if (clamped !== (inst[key] & 0xffff)) {
+        ops.push(setInstFieldOp(this.selected, key, clamped));
+      }
+    }
+    this.store.undo.apply(ops.length === 1 ? ops[0] : compositeOp(ops));
+  }
+
+  /** The op that marks this tab's envelope present, or null when it already
+   *  is. A node array is only read when the LOOP word's P bit is set — the
+   *  format's sole presence signal — so adding a node has to say so, or the
+   *  work is silently ignored on every tab but Volume (whose envelope the
+   *  engine runs unconditionally, which is exactly why the asymmetry was
+   *  invisible). On a Pitch/Filter tab it is the ROLE CLAIM — P bit plus the
+   *  m-bit — the same claim a first node-drag performs. */
+  envPresenceClaimOp(tabDef) {
+    const cur = this.store.doc.instruments[this.selected][tabDef.loopKey];
+    if (tabDef.role) {
+      if (tabDef.roleActive) return null;
+      const nw = ((cur | 0x2000) & ~0x80) | (tabDef.role === "filter" ? 0x80 : 0);
+      return setInstFieldOp(this.selected, tabDef.loopKey, nw & 0xffff);
+    }
+    if (envPresent(cur)) return null;
+    return setInstFieldOp(this.selected, tabDef.loopKey, (cur | 0x2000) & 0xffff);
+  }
+
+  /** The op that walks an enabled sustain point from `oldLast` to `newLast` —
+   *  and, when `arm` is set, switches the sustain on first so a just-claimed
+   *  envelope's points move too (doc/envedit.js). Null when nothing changes. */
+  envSustainFollowOp(tabDef, oldLast, newLast, arm = false) {
+    const cur = this.store.doc.instruments[this.selected][tabDef.susKey];
+    const nw = envFollowTailSustain(cur, oldLast, newLast, arm);
+    return nw === (cur & 0xffff) ? null : setInstFieldOp(this.selected, tabDef.susKey, nw);
   }
 
   /** Spinner/checkbox control panel below the envelope graph. */
@@ -1269,7 +1298,7 @@ export class InstrumentsView {
     // cumulative time axis; span only the ACTIVE envelope (to its terminator).
     const times = [0];
     for (let i = 0; i < 24; i++) times.push(times[i] + minifloatToDouble(env[i].offset));
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     const total = Math.max(times[active - 1], 0.25);
     return { w, h, times, total };
   }
@@ -1331,7 +1360,7 @@ export class InstrumentsView {
     shade(inst[tabDef.loopKey], C.envLoop);
 
     // polyline + nodes (active nodes only — up to the terminator)
-    const activeCount = this.envActiveCount(env);
+    const activeCount = envActiveCount(env);
     ctx.strokeStyle = C.envLine;
     ctx.beginPath();
     for (let i = 0; i < activeCount; i++) {
@@ -1379,7 +1408,7 @@ export class InstrumentsView {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const { w, times, total } = this.envGeometry();
-    const active = this.envActiveCount(this.envCanvas.env);
+    const active = envActiveCount(this.envCanvas.env);
     let best = -1, bestD = 12;
     for (let i = 0; i < active; i++) {
       const nx = 10 + this.envTimeFrac(times[i], total) * (w - 20) * ENV_TIME_FRAC;

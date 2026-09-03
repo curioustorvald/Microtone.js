@@ -5,7 +5,7 @@ microtone-worker/test/reference/
 microtone-worker/test/corpus/
 .DS_Store
 CLAUDE.*
-microtone-worker/vendor/converters/__pycache__
+__pycache__/
 *.sf2
 *.taud.sf2
 microtone-worker/favicon/

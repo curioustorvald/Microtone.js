@@ -18,6 +18,9 @@ import { TOTAL_VOICES } from "../../engine/constants.js";
 import { encodeNameTable } from "../../doc/cleanup.js";
 import { envPresent, envCarry } from "../../engine/envelope.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
+import {
+  envActiveCount, envAddNode, envRemoveNode, envFollowTailSustain, envClampWrap,
+} from "../../doc/envedit.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { noteToStr, rangeToStr, hex4 } from "../notenames.js";
 import { themeColors } from "../theme.js";
@@ -773,14 +776,9 @@ export class AdvancedZoneEditor {
     });
   }
 
-  envActiveCount(env) {
-    for (let i = 0; i < 24; i++) if (env[i].offset === 0) return i + 1;
-    return 25;
-  }
-
   buildEnvControls(p, kind) {
     const env = p[kind.key];
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     this.selNode = clampN(this.selNode, 0, active - 1);
     const selN = this.selNode;
     const node = env[selN];
@@ -840,39 +838,40 @@ export class AdvancedZoneEditor {
   }
 
   addEnvNode(kind, env, selN) {
-    const active = this.envActiveCount(env);
-    if (active >= 25) return;
+    const res = envAddNode(env, selN, kind.max);
+    if (res === null) return;
+    const active = envActiveCount(env);
     this._edit((ps) => {
       const q = ps[this.selIdx];
       const e = q?.[kind.key];
       if (!e) return;
-      if (selN >= active - 1) {
-        e[active - 1].offset = minifloatFromDouble(0.1);
-        e[active] = { value: e[active - 1].value, offset: 0 };
-        this.selNode = active;
-      } else {
-        const total = minifloatToDouble(e[selN].offset);
-        const half = minifloatFromDouble(total / 2);
-        const midVal = clampN(Math.round((e[selN].value + e[selN + 1].value) / 2), 0, kind.max);
-        for (let i = 24; i > selN + 1; i--) e[i] = { value: e[i - 1].value, offset: e[i - 1].offset };
-        e[selN].offset = half;
-        e[selN + 1] = { value: midVal,
-          offset: minifloatFromDouble(Math.max(total - minifloatToDouble(half), 0)) };
-        this.selNode = selN + 1;
+      for (let i = 0; i < res.nodes.length; i++) {
+        e[i] = { value: res.nodes[i].value, offset: res.nodes[i].offset };
       }
+      // A sustain point holding on the old tail follows the new one (item 181).
+      if (res.appended) {
+        q[kind.susKey] = envFollowTailSustain(q[kind.susKey], active - 1, active);
+      }
+      // A patch block always carries its P bit — setEnvBlock stamps it when the
+      // override is switched on — so there is no presence to claim here.
+      this.selNode = res.selected;
     });
   }
 
   removeEnvNode(kind, env, selN) {
-    const active = this.envActiveCount(env);
-    if (selN === 0 || active <= 1) return;
+    const res = envRemoveNode(env, selN);
+    if (res === null) return;
     this._edit((ps) => {
-      const e = ps[this.selIdx]?.[kind.key];
+      const q = ps[this.selIdx];
+      const e = q?.[kind.key];
       if (!e) return;
-      const merged = minifloatToDouble(e[selN - 1].offset) + minifloatToDouble(e[selN].offset);
-      e[selN - 1].offset = minifloatFromDouble(merged);
-      for (let i = selN; i < 24; i++) e[i] = { value: e[i + 1].value, offset: e[i + 1].offset };
-      this.selNode = Math.max(selN - 1, 0);
+      for (let i = 0; i < res.nodes.length; i++) {
+        e[i] = { value: res.nodes[i].value, offset: res.nodes[i].offset };
+      }
+      // Wrap indices that pointed past the new tail come back into range.
+      q[kind.susKey] = envClampWrap(q[kind.susKey], res.active);
+      q[kind.loopKey] = envClampWrap(q[kind.loopKey], res.active);
+      this.selNode = res.selected;
     });
   }
 
@@ -902,7 +901,7 @@ export class AdvancedZoneEditor {
     const w = canvas.clientWidth;
     const times = [0];
     for (let i = 0; i < 24; i++) times.push(times[i] + minifloatToDouble(env[i].offset));
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     const total = Math.max(times[active - 1], 0.25);
     return { w, times, total };
   }
@@ -954,7 +953,7 @@ export class AdvancedZoneEditor {
     shade(p[kind.susKey], C.envSus);
     shade(p[kind.loopKey], C.envLoop);
 
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     ctx.strokeStyle = C.envLine;
     ctx.beginPath();
     for (let i = 0; i < active; i++) {
@@ -999,7 +998,7 @@ export class AdvancedZoneEditor {
     const rect = this.envCanvas.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const { w, times, total } = this.envGeometry(env);
-    const active = this.envActiveCount(env);
+    const active = envActiveCount(env);
     let best = -1, bestD = 12;
     for (let i = 0; i < active; i++) {
       const nx = 10 + this.envTimeFrac(times[i], total) * (w - 20) * ENV_TIME_FRAC;

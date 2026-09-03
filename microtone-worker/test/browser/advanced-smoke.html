@@ -265,8 +265,32 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
       `seeded=${seeded} back=${backToInherit}): ${t19 ? "ok" : "FAIL"}`);
   store.undo.undo(); store.undo.undo();  // revert both vibrato edits
 
+  // Item 181 — the patch editor's node buttons, on the same shared arithmetic
+  // as the base editor's (doc/envedit.js). Appending a node moves the count up,
+  // and removing the TAIL moves it back down; the tail case used to leave the
+  // count where it was, having zeroed the last node's value instead.
+  const { envActiveCount } = await import("../../src/doc/envedit.js");
+  rows()[0].click();
+  [...iv.panel.querySelectorAll(".adv-envtabs button")]
+    .find((b) => b.textContent === "Filter").click();
+  // The undo chain above put the override back to "defer", so claim it again.
+  const ovChk2 = [...iv.panel.querySelectorAll(".adv-envbox label")]
+    .find((l) => /overrides the/.test(l.textContent))?.querySelector("input");
+  ovChk2.checked = true; fire(ovChk2, "change");
+  const patchEnv = () => doc.instruments[slot].extraPatches[0].filterEnv;
+  const envBtn = (label) => [...iv.panel.querySelectorAll(".env-controls button")]
+    .find((b) => b.textContent.trim() === label);
+  const nStart = envActiveCount(patchEnv());
+  envBtn("＋")?.click();
+  const nAdded = envActiveCount(patchEnv());
+  envBtn("－")?.click();                        // selNode is the appended tail
+  const nBack = envActiveCount(patchEnv());
+  const t20 = nAdded === nStart + 1 && nBack === nStart;
+  log(`patch env node add/remove (${nStart}→${nAdded}→${nBack}): ${t20 ? "ok" : "FAIL"}`);
+  store.undo.undo(); store.undo.undo(); store.undo.undo();  // node edits + the override
+
   const pass = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 &&
-    t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19;
+    t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20;
   log(pass ? "RESULT: PASS" : "RESULT: FAIL");
  } catch (err) {
   log(`RESULT: ERROR ${err.message}\n${err.stack}`);

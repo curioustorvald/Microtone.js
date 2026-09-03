@@ -6,6 +6,15 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-09-04
 
+The envelope editor's two node buttons now do what they say, on every tab.
+
+- **Fixed: ＋ Add node on the Pan, Pitch or Filter tab produced nothing you could hear.** A node array is only read when *Envelope present* is ticked, and nothing ticked it — while the Volume tab, whose envelope always runs, worked; adding a node now ticks the box for you, in the same undo step (and on Pitch or Filter it claims that role, as a first node-drag already did).
+- **Fixed: the last node could not be removed at all.** The last node is what marks the end of an envelope, so deleting it left the node count exactly where it was and quietly zeroed the final level instead — which on a volume envelope is an instant note cut.
+- **Fixed: a Sustain point holding the final level stopped holding it as soon as you added a node.** An enabled sustain point sitting on the last node now follows the end of the envelope, and a sustain range ending there grows to take the new node in.
+- The click that brings an envelope into existence now switches **Sustain** on as well, with its start and end on the new last node — a new envelope holds its final level until key-off straight away, instead of needing two more boxes found first.
+- Sustain and loop points left pointing past the end are pulled back in when an envelope gets shorter, so the record can no longer disagree with the spinners showing it.
+- The per-zone envelope overrides in **Advanced Edit** run on the same rules as the instrument's own tabs now — they had their own copy of all of this, with the same faults.
+
 An instrument's own **Vibrato** now sounds like the tracker it came from. It has always been there, in the Instruments tab under Vibrato, and it has never been audible — the deepest setting the Depth slider offers moved the pitch by about a tenth of what Impulse Tracker moves it, and some imported instruments moved it not at all.
 
 - **Fixed: Depth did almost nothing.** Depth 255 is now ±1 semitone, the same as Impulse Tracker's own maximum, and the response is even all the way down — the calibration had it a factor of eleven too shallow.

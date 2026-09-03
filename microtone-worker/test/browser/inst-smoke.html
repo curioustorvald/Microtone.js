@@ -235,6 +235,94 @@
         }
         log(`item92 env header format: ${envFormatLog.join(" ")} (${envFormatOk ? "ok" : "FAIL"})`);
 
+        // Item 181 — the envelope node buttons. Three things one click has to
+        // carry: "＋ Add node" claims PRESENCE (a node array is only read when
+        // the LOOP word's P bit is set, so on every tab but Volume the work
+        // was silently ignored), "－ Remove node" actually SHORTENS the
+        // envelope when the tail is selected, and an enabled sustain point
+        // sitting on the tail follows the appended node. One undo step each.
+        const { envActiveCount } = await import("../../src/doc/envedit.js");
+        const panInst = () => store.doc.instruments[baseSlot];
+        const panCount = () => envActiveCount(panInst().panEnvelopes);
+        const envBtn = (re) => [...iv.panel.querySelectorAll("button")]
+          .find((b) => re.test(b.textContent));
+        iv.selected = baseSlot;
+        iv.tab = "env1";                       // Pan: presence is the P bit itself
+        iv.renderPanel();
+        const presentChk = () => [...iv.panel.querySelectorAll("label")]
+          .find((l) => /Envelope present/.test(l.textContent))?.querySelector("input");
+        let pc = presentChk();
+        if (pc.checked) { pc.checked = false; fire(pc, "change"); iv.renderPanel(); }
+        const addFrom = panCount();
+        // Park a DISABLED sustain on the tail: claiming presence has to arm it
+        // and walk it to the appended node, all in the one click.
+        iv.setEnvWordField("panEnvSustainWord", 8, 0x1f, addFrom - 1);
+        iv.setEnvWordField("panEnvSustainWord", 0, 0x1f, addFrom - 1);
+        iv.setEnvWordBit("panEnvSustainWord", 5, false);
+        iv.renderPanel();
+        const susBefore = panInst().panEnvSustainWord;
+        envBtn(/Add node/).click();
+        iv.renderPanel();
+        const addClaimed = (panInst().panEnvLoop & 0x2000) !== 0 && presentChk().checked === true;
+        const addGrew = panCount() === addFrom + 1;
+        const armW = panInst().panEnvSustainWord;
+        const armOk = ((armW >> 5) & 1) === 1 && ((armW >> 8) & 0x1f) === addFrom &&
+          (armW & 0x1f) === addFrom;
+        store.undo.undo();                     // ONE step takes claim AND arm with it
+        iv.renderPanel();
+        const addUndoOk = panCount() === addFrom && (panInst().panEnvLoop & 0x2000) === 0 &&
+          panInst().panEnvSustainWord === susBefore;
+
+        // Removing the tail: the count must drop. This is the reported bug —
+        // it used to stay put and zero the tail's VALUE instead.
+        envBtn(/Add node/).click(); iv.renderPanel();
+        envBtn(/Add node/).click(); iv.renderPanel();
+        const remFrom = panCount();
+        iv.selectedNode = remFrom - 1;
+        iv.renderPanel();
+        envBtn(/Remove node/).click();
+        iv.renderPanel();
+        const remOk = panCount() === remFrom - 1;
+
+        // An enabled sustain on the tail follows an appended node…
+        const last = panCount() - 1;
+        iv.setEnvWordField("panEnvSustainWord", 8, 0x1f, last);
+        iv.setEnvWordField("panEnvSustainWord", 0, 0x1f, last);
+        iv.setEnvWordBit("panEnvSustainWord", 5, true);
+        iv.selectedNode = last;
+        iv.renderPanel();
+        envBtn(/Add node/).click();
+        iv.renderPanel();
+        const susW = panInst().panEnvSustainWord;
+        const susFollowOk = ((susW >> 8) & 0x1f) === last + 1 && (susW & 0x1f) === last + 1;
+        // …and comes back into range when the tail it followed is removed.
+        iv.selectedNode = panCount() - 1;
+        iv.renderPanel();
+        envBtn(/Remove node/).click();
+        iv.renderPanel();
+        const susW2 = panInst().panEnvSustainWord;
+        const susClampOk = ((susW2 >> 8) & 0x1f) <= panCount() - 1 &&
+          (susW2 & 0x1f) <= panCount() - 1;
+        // On a Pitch/Filter tab the same claim is the ROLE claim — P bit plus
+        // the m-bit — on whichever physical slot the tab resolved to.
+        iv.tab = "pitch";
+        iv.renderPanel();
+        let ppc = presentChk();
+        if (ppc.checked) { ppc.checked = false; fire(ppc, "change"); iv.renderPanel(); }
+        envBtn(/Add node/).click();
+        iv.renderPanel();
+        const pfWords = () => [panInst().pfEnvLoop, panInst().pf2EnvLoop];
+        const roleClaimOk = presentChk().checked === true &&
+          pfWords().some((w) => (w & 0x2000) !== 0 && (w & 0x80) === 0);
+        store.undo.undo();
+        iv.renderPanel();
+        const roleUndoOk = presentChk().checked === false;
+        const env181Ok = addClaimed && addGrew && armOk && addUndoOk && remOk && susFollowOk &&
+          susClampOk && roleClaimOk && roleUndoOk;
+        log(`item181 env nodes: claim=${addClaimed} grew=${addGrew} susArm=${armOk} ` +
+            `undo1=${addUndoOk} remove=${remOk} susFollow=${susFollowOk} susClamp=${susClampOk} ` +
+            `roleClaim=${roleClaimOk} roleUndo=${roleUndoOk} (${env181Ok ? "ok" : "FAIL"})`);
+
         // Notation-aware entry: a 5-TET project (NOT a 12-TET superset) → a jam
         // key snaps to a 5-TET degree, and the note differs from plain 12-EDO.
         const p5 = presetForNotation(50);
@@ -263,7 +351,8 @@
         }
 
         const pass = labelsOk && swingOk && sepOk && panSwOk && ppcOk && useDefOk && cutOk && resOk &&
-          nnaOk && detOk && logOk && roleToggleOk && carryOk && envFormatOk && notOk && nameOk;
+          nnaOk && detOk && logOk && roleToggleOk && carryOk && envFormatOk && env181Ok &&
+          notOk && nameOk;
         log(pass ? "RESULT: PASS" : "RESULT: FAIL");
       } catch (err) {
         log(`RESULT: ERROR ${err.message}\n${err.stack}`);
