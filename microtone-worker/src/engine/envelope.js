@@ -12,7 +12,9 @@
 //    terminator semantics — and is NOT seeded that way.
 
 import { minifloatToDouble } from "./minifloat.js";
-import { lfoSample } from "./tables.js";
+import {
+  lfoSample, AUTOVIB_PHASE_STEPS, AUTOVIB_DEPTH_MUL, AUTOVIB_DEPTH_SHIFT,
+} from "./tables.js";
 import { startRampOut } from "./sampler.js";
 
 /**
@@ -278,10 +280,14 @@ export function advanceAutoVibrato(voice, inst) {
   voice.autoVibTicksSinceTrigger++;
 
   // 0=sine, 1=ramp-down, 2=square, 3=random, 4=ramp-up (negated ramp-down).
+  // `phase >> 2` re-enters lfoSample at the position its own `>> 2` completes,
+  // making the index ⌊phase ÷ 16⌋ over the 1024-step scale (tables.js).
   const wave = voice.activeVibratoWaveform;
-  const rawSample = wave === 4 ? -lfoSample(voice.autoVibPhase, 1)
-                               : lfoSample(voice.autoVibPhase, wave & 3);
-  const pitchDelta = (rawSample * rampDepth) >> 10;
-  voice.autoVibPhase = (voice.autoVibPhase + voice.activeVibratoSpeed * 2) & 0xff;
+  const pos = voice.autoVibPhase >> 2;
+  const rawSample = wave === 4 ? -lfoSample(pos, 1) : lfoSample(pos, wave & 3);
+  // Depth: byte 255 (= IT Vid 64) → ±341/4096 octave = ±1 semitone, as IT.
+  const pitchDelta = (rawSample * rampDepth * AUTOVIB_DEPTH_MUL) >> AUTOVIB_DEPTH_SHIFT;
+  voice.autoVibPhase =
+    (voice.autoVibPhase + voice.activeVibratoSpeed) & (AUTOVIB_PHASE_STEPS - 1);
   return pitchDelta;
 }

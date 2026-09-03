@@ -6,6 +6,15 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-09-04
 
+An instrument's own **Vibrato** now sounds like the tracker it came from. It has always been there, in the Instruments tab under Vibrato, and it has never been audible — the deepest setting the Depth slider offers moved the pitch by about a tenth of what Impulse Tracker moves it, and some imported instruments moved it not at all.
+
+- **Fixed: Depth did almost nothing.** Depth 255 is now ±1 semitone, the same as Impulse Tracker's own maximum, and the response is even all the way down — the calibration had it a factor of eleven too shallow.
+- **Fixed: many imported IT instruments played no vibrato at all.** The two commonest speeds in Impulse Tracker samples landed exactly where the wave is flat, so the pitch never moved; every speed now sweeps, and a full cycle takes as many ticks as the original tracker took.
+- **Fixed: imported XM instruments took minutes to fade their vibrato in.** FastTracker starts at full depth unless the instrument asks for a sweep, and that instruction was being read as a very slow ramp instead.
+- Imported songs can therefore sound different wherever they use instrument vibrato — deeper, and at the speed their original tracker meant.
+- AdLib and OPL imports keep the chip's own ~6 Hz, 7-cent vibrato, now placed eight times more precisely against the song's tempo.
+- Speed, Sweep, Rate and Wave are unchanged in meaning: Sweep is FastTracker's ramp-in in ticks, Rate is Impulse Tracker's, and setting neither means full depth from the first tick.
+
 A metainstrument now has a second sub-tab, **Options**, holding the two flags its record has always carried and nothing has ever been able to set.
 
 - **Percussion** keeps Transpose and Retune off this instrument's notes and gives it its own stem on export — the same flag an ordinary instrument has had in its General tab all along, and it reads the same way here. It changes nothing about playback.

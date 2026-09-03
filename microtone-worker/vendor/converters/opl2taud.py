@@ -640,11 +640,12 @@ VIBRATO_CENTS = 7.0
 
 def vibrato_fields(bpm: float):
     """(speed, depth) for the instrument record at a given tempo.  The phase runs
-    256 steps advanced by speed×2 per TICK, so the rate is tempo-dependent and the
-    caller has to know the song's BPM; the depth is not."""
+    1024 steps advanced by speed per TICK, so the rate is tempo-dependent and the
+    caller has to know the song's BPM; the depth is not.  Depth inverts the
+    engine's `(lfo × depth × 43) >> 12` against the ±127 LFO."""
     ticks_per_second = bpm * 2.0 / 5.0
-    speed = round(128.0 * VIBRATO_HZ / ticks_per_second) if ticks_per_second else 0
-    depth = round(VIBRATO_CENTS * 4096.0 / 1200.0 * 1024.0 / 127.0)
+    speed = round(1024.0 * VIBRATO_HZ / ticks_per_second) if ticks_per_second else 0
+    depth = round(VIBRATO_CENTS * 4096.0 / 1200.0 * 4096.0 / (127.0 * 43.0))
     return max(1, min(255, speed)), max(1, min(255, depth))
 
 

@@ -919,8 +919,14 @@ def _xm_sample_to_proxy(inst: XMInstrument, samp: XMSample,
     # (~20 s). Stored 32767 (Milky cut sentinel) → Taud 1024 (1-tick cut). See terranmon.txt
     # byte 172/173 and TAUD_NOTE_EFFECTS.md §1 "Volume Fadeout".
     p.fadeout     = min(0xFFF, (int(inst.fadeout & 0xFFFF) + 16) // 32)
-    p.vib_speed   = inst.vib_rate          # XM rate ↔ Taud "speed"
-    p.vib_depth   = (inst.vib_depth * 2) & 0xFF  # LoaderXM.cpp:217 scaling
+    # Auto-vibrato. XM's rate (0..63) is the LFO speed and its depth (0..15)
+    # measures the same as IT's Vid unit for unit — openmpt123 renders XM
+    # depth 15 and IT Vid 15 at the same ±25 cents — so both fields take the
+    # same ×4 into Taud's 0..255 bytes that it2taud gives Vis / Vid. XM has no
+    # IT-style ramp acceleration: byte 188 stays 0 and the ramp-in comes from
+    # the FT2 sweep (byte 176) alone.
+    p.vib_speed   = min(255, (inst.vib_rate & 0xFF) * 4)
+    p.vib_depth   = min(255, (inst.vib_depth & 0xFF) * 4)
     p.vib_sweep   = inst.vib_sweep & 0xFF
     p.vib_wave    = inst.vib_type & 0x07
 
@@ -1119,11 +1125,14 @@ def build_sample_inst_bin_xm(proxies: list) -> tuple:
         # Filter cutoff/resonance: XM has no filters → off.
         inst_bin[base + 182] = 0xFF
         inst_bin[base + 183] = 0xFF
-        # Auto-vibrato (XM instrument-level)
+        # Auto-vibrato (XM instrument-level; already scaled ×4 at parse time).
+        # Byte 188 is IT's ramp ACCELERATION and XM has no such field — writing
+        # the speed there turned FT2's "sweep 0 = full depth at once" into a
+        # ramp thousands of ticks long.
         inst_bin[base + 175] = s.vib_speed & 0xFF
         inst_bin[base + 176] = s.vib_sweep & 0xFF
         inst_bin[base + 187] = s.vib_depth & 0xFF
-        inst_bin[base + 188] = s.vib_speed & 0xFF
+        inst_bin[base + 188] = 0
         # Inst flag byte: 0bb wwwnn — wwww=vib waveform, nn=NNA
         inst_bin[base + 186] = ((s.vib_wave & 0x07) << 2) | (s.nna & 0x03)
         # SUSTAIN words at 189/191/193.

@@ -228,7 +228,7 @@ taud_fadeout = min((xm_fadeout + 16) ÷ 32, $0FFF)
 
 XM values 1…15 round to Taud 0 — those originals ran over eleven minutes at 50 Hz and were effectively "no fade" anyway. XM 32 becomes Taud 1 (≈ 20 s). MilkyTracker writes 32767 to encode its "cut" slider, which becomes Taud 1024, a one-tick cut.
 
-Auto-vibrato maps with XM's own scaling: rate becomes Taud's "speed", depth doubles into the 0…255 range, sweep and waveform pass through.
+Auto-vibrato: XM's rate becomes Taud's "speed" and both it and the depth take the same ×4 into the 0…255 bytes that IT's `Vis` and `Vid` take — an XM depth of 15 and an IT `Vid` of 15 sound the same ±25 cents, so the two formats share one scale. Sweep and waveform pass through, and the rate byte (188) stays 0: that field is IT's ramp acceleration, XM has no equivalent, and a value there would turn FT2's "sweep 0 = full depth at once" into a ramp thousands of ticks long.
 
 ### 4.5 NNA
 
@@ -265,6 +265,8 @@ IT2.14/IT2.15 **compressed samples** are decoded during conversion. The compress
 An IT file that does not set the "use instruments" flag has no instrument records at all — pattern cells name samples directly. Such a file gets one Taud instrument per sample, and every field that only an IT instrument could have fills in with its neutral value: no envelopes, no fadeout, no pitch-pan, filter off.
 
 The fields an IT **sample** carries in its own right still convert: its default volume, its default pan (`IMPS+$2F`, when the sample's own use-panning bit is set) and its auto-vibrato.
+
+**`Vir` = 0 means the sample has no auto-vibrato**, however deep its `Vid`. IT's rate field is the only thing that lifts the depth accumulator off zero, so a sample that names a speed and a depth but leaves the rate at zero is silent in IT and in OpenMPT. Taud reads a record with both ramp fields at zero as full depth from the first tick — the FT2 convention, and the one the instrument editor needs — so the conversion carries that silence as a depth of 0 rather than as the rate it came from.
 
 **New Note Action is the one field where "neutral" is not zero.** Sample mode has no NNA: a new note replaces whatever the channel was playing, exactly as in `.mod`, `.s3m` and `.xm`. Converted samples therefore get NNA = Note Cut, so no ghost is spawned. Note Off — the value the field's zero encodes — would keep a ghost running per trigger, and with no volume envelope and a fadeout of zero it would never stop ringing.
 

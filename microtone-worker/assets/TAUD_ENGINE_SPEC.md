@@ -486,13 +486,19 @@ elif rate ≠ 0:  ramp = min((t × rate) >> 8, depth)          (IT: ramp acceler
 else:           ramp = depth
 ```
 
-with `t` the ticks since the trigger. The pitch delta is `(lfo × ramp) >> 10`, and the phase advances by `speed × 2` modulo 256. Waveform 4 (ramp up, FT2 only) is the negation of waveform 1.
+with `t` the ticks since the trigger. The pitch delta is `(lfo × ramp × 43) >> 12`, and the phase advances by `speed` modulo 1024. Waveform 4 (ramp up, FT2 only) is the negation of waveform 1.
+
+**Both bytes are the source tracker's field × 4.** IT's `Vis` and `Vid` and XM's rate and depth are 6-bit; the record widens them, and every number in this section is written for the widened scale. Depth 255 — the record's maximum, and IT's `Vid` 64 — is ±1 semitone, ±341 units of 4096-TET; the `× 43 >> 12` is that calibration and the response is linear below it. Speed 255 is a cycle every four ticks, speed 4 one every 256. A producer that writes the source field unscaled therefore sounds a quarter of the intended depth at a quarter of the intended rate — not a rounding difference, an audibly different instrument.
+
+A record whose ramp fields are both zero plays at full depth from the first tick, which is FT2's reading of a zero sweep. **IT's is the opposite**: its `Vir` is the only thing that lifts the depth off zero, so an IT sample with `Vir` = 0 plays no auto-vibrato at all however deep its `Vid`. That one is a converter's job — the depth it writes is 0 — because an editor needs the FT2 reading: an instrument given a speed and a depth and nothing else has to sound.
 
 ### 6.2 The LFO
 
-Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator, but not one phase scale. The command LFOs (`H`, `U`, `R`, `Y`) run a **1088-step** phase advanced by `speed` per tick and indexed `⌊phase ÷ 17⌋`; auto-vibrato, whose rate comes from the instrument record rather than an effect byte, keeps the 256-step phase advanced by `speed × 2` and indexed `(phase >> 2) & 63`.
+Vibrato, tremolo, panbrello and auto-vibrato share one waveform generator, but not one phase scale. The command LFOs (`H`, `U`, `R`, `Y`) run a **1088-step** phase advanced by `speed` per tick and indexed `⌊phase ÷ 17⌋`; auto-vibrato, whose rate comes from the instrument record rather than an effect byte, runs a **1024-step** phase advanced by `speed` and indexed `⌊phase ÷ 16⌋`.
 
 `1088 = 64 × 17`, and the 17 is the same 17 that a **nibble-repeat** multiplies by — the mapping every 4-bit source field uses to reach a Taud byte. The step count is deliberately not a power of two, because carrying that factor is what makes a converted speed byte reproduce the source tracker's oscillator *exactly* instead of approximately. A tracker advances an 8-bit phase by `speed × 4` and indexes `(phase >> 2) & 63`, so at tick `t` its index is `x·t mod 64`. A converted byte `17x` advances by `17x` through 1088 and indexes `⌊phase ÷ 17⌋` = `(17·x·t mod 1088) ÷ 17` = `x·t mod 64` — the same table entry, on the same tick, indefinitely. A power-of-two 1024 would have been 17/16 = 6.25% fast.
+
+Auto-vibrato's 1024 is the same reasoning at the other scale. A tracker advances a 256-step phase by its `Vis` and indexes `(phase >> 2) & 63`, so a record byte of `4·Vis` over 1024 steps indexes `(4·Vis·t mod 1024) >> 4` = `(Vis·t mod 256) >> 2` — the same table entry, on the same tick, indefinitely. The phase **MUST** be at least this long: a 256-step phase advanced by `speed × 2` steps a widened byte clean over the table, and every multiple of 64 then lands only on entries 0 and 32, which are both zero — silence, at the two speeds (`Vis` 16 and 32) an IT sample is most likely to carry.
 
 An 8-bit speed byte therefore spans the same rate range as a 4-bit nibble with 17× the resolution: 1088 ticks per cycle at `$01`, 4.27 at `$FF` — and `$FF` is exactly where a source tracker's `$F` lands. Both the division and the modulo run once per voice per **tick**, never per sample, so neither costs anything worth a power-of-two compromise.
 

@@ -431,6 +431,29 @@ function advanceLfoPhase(pos, speed) {
   return (pos + speed) % LFO_PHASE_STEPS;
 }
 
+// ── Auto-vibrato's phase (the instrument record's own LFO) ───────────────
+// 1024 steps advanced by the speed byte, indexed ⌊phase ÷ 16⌋. The source
+// trackers run a 256-step phase advanced by their 0…64 speed field and index
+// `(phase >> 2) & 63`, so a full cycle is `256 ÷ speed` ticks; a record byte
+// is that field × 4 (IT `Vis` 0…64 → 0…255), and 4× the phase length keeps
+// `(4·speed·t mod 1024) >> 4` = `(speed·t mod 256) >> 2` — the same table
+// entry on the same tick, exactly.
+//
+// A 256-step phase advanced by `speed × 2` (what this was) could not carry
+// the widened byte at all: every multiple of 64 stepped only between table
+// entries 0 and 32, which are both zero, so the most ordinary IT speeds
+// (`Vis` 16 and 32 → bytes 64 and 128) played no vibrato whatsoever.
+const AUTOVIB_PHASE_STEPS = 1024;
+
+// Auto-vibrato depth calibration. IT plays `Vid` 64 — its maximum — as ±1
+// semitone (openmpt123 measures ±99.6 cents; `Vid` 32 → ±51.6, `Vid` 15 →
+// ±25.6, i.e. linear), and a record byte is `Vid × 4`, so byte 255 has to
+// reach 4096÷12 = 341 units of 4096-TET. `(lfo × depth × 43) >> 12` lands on
+// 340 with the ±127 LFO. The old `>> 10` reached 31 — a tenth of IT's
+// deepest wobble at the record's own maximum.
+const AUTOVIB_DEPTH_MUL = 43;
+const AUTOVIB_DEPTH_SHIFT = 12;
+
 /** Sample a command LFO's 1088-step phase (H, U, R, Y). */
 function lfoSampleWide(pos, wave) {
   // `idx << 2` re-enters lfoSample at the position its own `>> 2` undoes, so
@@ -438,7 +461,7 @@ function lfoSampleWide(pos, wave) {
   return lfoSample(Math.trunc(pos / LFO_STEPS_PER_ENTRY) << 2, wave);
 }
 
-/** LFO sample for auto-vibrato; pos is the 256-step phase accumulator. */
+/** LFO sample; `pos` indexes `(pos >> 2) & 63` (see the two callers' scales). */
 
 function lfoSample(pos, wave) {
   const idx = (pos >>> 2) & 0x3f;
@@ -5892,11 +5915,15 @@ function advanceAutoVibrato(voice, inst) {
   voice.autoVibTicksSinceTrigger++;
 
   // 0=sine, 1=ramp-down, 2=square, 3=random, 4=ramp-up (negated ramp-down).
+  // `phase >> 2` re-enters lfoSample at the position its own `>> 2` completes,
+  // making the index ⌊phase ÷ 16⌋ over the 1024-step scale (tables.js).
   const wave = voice.activeVibratoWaveform;
-  const rawSample = wave === 4 ? -lfoSample(voice.autoVibPhase, 1)
-                               : lfoSample(voice.autoVibPhase, wave & 3);
-  const pitchDelta = (rawSample * rampDepth) >> 10;
-  voice.autoVibPhase = (voice.autoVibPhase + voice.activeVibratoSpeed * 2) & 0xff;
+  const pos = voice.autoVibPhase >> 2;
+  const rawSample = wave === 4 ? -lfoSample(pos, 1) : lfoSample(pos, wave & 3);
+  // Depth: byte 255 (= IT Vid 64) → ±341/4096 octave = ±1 semitone, as IT.
+  const pitchDelta = (rawSample * rampDepth * AUTOVIB_DEPTH_MUL) >> AUTOVIB_DEPTH_SHIFT;
+  voice.autoVibPhase =
+    (voice.autoVibPhase + voice.activeVibratoSpeed) & (AUTOVIB_PHASE_STEPS - 1);
   return pitchDelta;
 }
 

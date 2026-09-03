@@ -1311,10 +1311,13 @@ def _it_patch_fields(s):
     smp_dfp  = getattr(s, 'dfp', 0)
     default_pan = (min(255, max(0, round((smp_dfp & 0x7F) * 255 / 64)))
                    if (smp_dfp & 0x80) else IXMP_PAN_NO_OVERRIDE)
+    # Vir 0 = IT never ramps the depth in, i.e. no vibrato at all (see the
+    # base-record branch); Taud reads a zero ramp field as full depth at once.
+    av_sweep = getattr(s, 'av_sweep', 0) & 0xFF
     return (ls, le, loop_mode, default_pan, dnv,
             min(255, round(getattr(s, 'av_speed', 0) * 255 / 64)),
-            min(255, round(getattr(s, 'av_depth', 0) * 255 / 64)),
-            getattr(s, 'av_sweep', 0) & 0xFF,
+            0 if av_sweep == 0 else min(255, round(getattr(s, 'av_depth', 0) * 255 / 64)),
+            av_sweep,
             getattr(s, 'av_wave',  0) & 0x07)
 
 
@@ -2244,8 +2247,15 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
             # Taud byte 187 (Vibrato Depth) is full 0..255: rescale Vid 0..64 → 0..255.
             # Taud byte 188 (Vibrato Rate) is IT Vir verbatim.
             # Taud byte 176 (Vibrato Sweep) is FT2-only — leave 0 for IT.
+            #
+            # Vir 0 means the depth accumulator never leaves zero, so IT plays
+            # NO auto-vibrato however deep Vid is (openmpt123 renders such a
+            # sample dead flat). Taud reads a zero ramp field as "full depth at
+            # once" — the FT2 sweep convention, and the one the instrument
+            # editor needs — so the silence has to be carried as depth 0.
             vib_speed_taud = min(255, round(src_smp.av_speed * 255 / 64))
-            vib_depth_taud = min(255, round(src_smp.av_depth * 255 / 64))
+            vib_depth_taud = (0 if (src_smp.av_sweep & 0xFF) == 0
+                              else min(255, round(src_smp.av_depth * 255 / 64)))
             # IT NNA (0=cut, 1=continue, 2=note off, 3=note fade) →
             # Taud NNA  (00=note off, 01=cut, 10=continue, 11=fade).
             it_to_taud_nna = (0b01, 0b10, 0b00, 0b11)
@@ -2357,7 +2367,9 @@ def assemble_taud(h: ITHeader, samples: list, instruments: list,
                 'default_pan': (min(255, max(0, round((smp_dfp & 0x7F) * 255 / 64)))
                                 if (smp_dfp & 0x80) else 0x80),
                 'vib_speed':  min(255, round(getattr(s, 'av_speed', 0) * 255 / 64)),
-                'vib_depth':  min(255, round(getattr(s, 'av_depth', 0) * 255 / 64)),
+                # Vir 0 = IT never ramps the depth in, i.e. no vibrato at all.
+                'vib_depth':  (0 if (getattr(s, 'av_sweep', 0) & 0xFF) == 0
+                               else min(255, round(getattr(s, 'av_depth', 0) * 255 / 64))),
                 'vib_sweep':  0,                       # FT2-only; IT uses vib_rate
                 'vib_rate':   getattr(s, 'av_sweep', 0) & 0xFF,   # IT Vir
                 'vib_wave':   getattr(s, 'av_wave',  0) & 0x07,

@@ -417,8 +417,8 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `$FFFF` — a va
 | 172 | `U8` | Volume fadeout, low 8 bits |
 | 173 | `U8` | Fadeout high nibble + filter interpretation mode (below) |
 | 174 | `U8` | Volume swing, 0…255 |
-| 175 | `U8` | Auto-vibrato speed |
-| 176 | `U8` | Auto-vibrato sweep |
+| 175 | `U8` | Auto-vibrato speed — the source tracker's 0…64 field × 4 (a full LFO cycle is 1024 ÷ speed ticks) |
+| 176 | `U8` | Auto-vibrato sweep — FT2 convention, ticks to reach full depth |
 | 177 | `U8` | Default pan value, 0…255 (enabled by the pan LOOP word's `p` bit). In surround/spatial mode, the positive half of the azimuth |
 | 178 | `U16` | Pitch-pan centre, as a 4096-TET note word |
 | 180 | `S8` | Pitch-pan separation, −128…127 |
@@ -427,8 +427,8 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `$FFFF` — a va
 | 183 | `U8` | Default resonance — 0…254, 255 = off |
 | 184 | `S16` | Sample detune, in 4096-TET units |
 | 186 | `U8` | Instrument flag: NNA, vibrato waveform |
-| 187 | `U8` | Auto-vibrato depth, 0…255 |
-| 188 | `U8` | Auto-vibrato rate, 0…255 |
+| 187 | `U8` | Auto-vibrato depth, 0…255 — the source tracker's 0…64 field × 4; 255 is ±1 semitone |
+| 188 | `U8` | Auto-vibrato rate, 0…255 — IT convention, ramp acceleration |
 | 189 | `U16` | Volume envelope SUSTAIN word |
 | 191 | `U16` | Panning envelope SUSTAIN word |
 | 193 | `U16` | Pitch/filter envelope SUSTAIN word, slot 1 |
