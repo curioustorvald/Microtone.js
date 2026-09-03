@@ -924,6 +924,28 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
    clamped to a couple of lines; "Read all" has the rest. The clamp needs
    display:-webkit-box, which would take the marker off an <li>, so it lives on
    a wrapper span (welcome.js) and the item stays a list item. */
+/* The newest patch-notes section's own headline, above its bullets. Brighter
+   and a shade larger than the list under it: the list is the detail, this is
+   the sentence that says what the release was. Clamped like the items are, so
+   a long headline cannot push the panel open. */
+.wc-lead {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  margin: 0 0 0.55rem;
+  color: var(--fg);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.wc-lead strong { font-weight: 600; }
+
+.wc-lead code { color: var(--accent); font-size: 0.92em; }
+
+.wc-lead a { color: var(--accent-2); }
+
 .wc-news-list { margin: 0; padding-left: 1.15rem; }
 .wc-news-list li {
   margin-bottom: 0.4rem;

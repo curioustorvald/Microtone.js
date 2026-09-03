@@ -82,7 +82,7 @@
 
         // ── What's new: the newest PATCH_NOTES.md section, live ──
         const notesMd = await (await fetch("../../assets/PATCH_NOTES.md")).text();
-        const { firstSection, topLevelBullets } =
+        const { firstSection, firstParagraph, topLevelBullets } =
           await win.eval('import("/src/ui/markdown.js")');
         const section = firstSection(notesMd);
         const items = [...host.querySelectorAll(".wc-news-list li")];
@@ -92,6 +92,22 @@
           items[0].textContent.startsWith(firstBullet.slice(0, 30)) &&
           items.every((li) => li.querySelector(".wc-clamp")); // marker kept off the clamp
         log(`What's new = PATCH_NOTES "${section.title}" (${items.length} items): ${newsOk ? "ok" : "FAIL"}`);
+
+        // ── the section's own HEADLINE leads the panel (the paragraph before
+        //    its list). Sections written as bare bullet lists have none, and
+        //    the panel is then bullets only, exactly as it always was.
+        const lead = firstParagraph(section.body);
+        const leadEl = host.querySelector(".wc-news-body .wc-lead");
+        const leadOk = lead === ""
+          ? !leadEl
+          : !!leadEl && leadEl.tagName === "P" &&
+            leadEl.textContent.startsWith(lead.replace(/[*`]/g, "").slice(0, 30)) &&
+            // before the bullets, and it takes one bullet's place
+            (leadEl.compareDocumentPosition(host.querySelector(".wc-news-list")) &
+              Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+            items.length <= 3;
+        log(`What's new headline: lead="${lead.slice(0, 40)}" el=${!!leadEl} ` +
+            `items=${items.length} (${leadOk ? "ok" : "FAIL"})`);
 
         // ── support banner replaced the topbar buttons (item 104.3) ──
         const links = [...host.querySelectorAll(".wc-banner a")].map((a) => a.href);

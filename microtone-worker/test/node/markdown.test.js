@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  renderMarkdown, extractToc, slug, firstSection, topLevelBullets,
+  renderMarkdown, extractToc, slug, firstSection, firstParagraph, topLevelBullets,
 } from "../../src/ui/markdown.js";
 
 test("slug: stable, ascii-kebab, non-empty", () => {
@@ -134,6 +134,23 @@ test("topLevelBullets: markers stripped, nested items dropped", () => {
   assert.deepEqual(topLevelBullets("```\n- in code\n```\n- real"), ["real"]);
 });
 
+test("firstParagraph: a section's headline, or nothing when it has none", () => {
+  assert.equal(firstParagraph("A headline.\n\n- one\n- two\n"), "A headline.");
+  // Soft-wrapped prose joins into one line; the list still ends it.
+  assert.equal(firstParagraph("One line\nand its wrap.\n\n- one\n"), "One line and its wrap.");
+  // A bullet straight after the heading means the section has no headline —
+  // every patch-notes section written before 2026-09-03 looks like this.
+  assert.equal(firstParagraph("- one\n- two\n"), "");
+  assert.equal(firstParagraph("\n\n- one\n"), "", "leading blank lines are skipped");
+  // Anything that opens a block other than a paragraph counts as "none".
+  assert.equal(firstParagraph("### Detail\n\ntext\n"), "");
+  assert.equal(firstParagraph("| a | b |\n"), "");
+  assert.equal(firstParagraph("> quoted\n"), "");
+  assert.equal(firstParagraph("```\ncode\n```\n"), "");
+  // A list on the line right after the prose ends it without a blank line.
+  assert.equal(firstParagraph("Headline.\n- one\n"), "Headline.");
+});
+
 test("PATCH_NOTES.md: the newest section yields a renderable teaser", () => {
   const md = readFileSync(fileURLToPath(new URL("../../assets/PATCH_NOTES.md", import.meta.url)), "utf8");
   const sec = firstSection(md);
@@ -143,6 +160,15 @@ test("PATCH_NOTES.md: the newest section yields a renderable teaser", () => {
   const html = renderMarkdown(bullets.slice(0, 5).map((b) => `- ${b}`).join("\n"));
   assert.match(html, /^<ul><li>/, "renders as one flat list");
   assert.ok(!html.includes("<h2"), "no heading leaks into the excerpt");
+  // The welcome panel leads with the section's headline where there is one,
+  // and renders it as a paragraph above that list.
+  const lead = firstParagraph(sec.body);
+  if (lead !== "") {
+    const withLead = renderMarkdown([lead, "", ...bullets.slice(0, 4).map((b) => `- ${b}`)].join("\n"));
+    assert.match(withLead, /^<p>/, "the headline renders as the first paragraph");
+    assert.ok(withLead.includes("<ul><li>"), "and the bullets still follow it");
+    assert.ok(!lead.startsWith("-"), "a headline is prose, not a bullet");
+  }
 });
 
 // Item 997: the three Taud reference specifications. They are heavily
