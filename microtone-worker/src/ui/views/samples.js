@@ -19,13 +19,30 @@ import {
 import { encodeU8Wav } from "../../audio/wavwrite.js";
 import { download } from "../../storage/import-export.js";
 import { sanitiseName } from "../../audio/stem-export.js";
-import { planDuplicateSample, duplicateInstrumentName } from "../../doc/bankmerge.js";
+import {
+  planDuplicateSample, duplicateInstrumentName,
+  planDeleteRegion, planRenameRegion, planRegionSlice,
+} from "../../doc/bankmerge.js";
 import { planDeleteSample } from "../../doc/cleanup.js";
 import { importBankOp, cleanupBankOp } from "../../doc/ops.js";
+import {
+  regionSpans, regionBytes, wholeMemoryRegion, POOL_SIZE, DEFAULT_RATE,
+} from "../../doc/sampleregions.js";
 import { showModal } from "../widgets/modal.js";
 import { t } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
 import { PoolPanel } from "./poolpanel.js";
+import { PoolWave } from "./poolwave.js";
+
+/** The map view (item 175.1) is off by default and remembered per browser —
+ *  the same treatment the memory panel's toggle gets. */
+const MAP_PREF_KEY = "microtone-samplemap";
+function loadMapPref() {
+  try { return localStorage.getItem(MAP_PREF_KEY) === "1"; } catch { return false; }
+}
+function saveMapPref(v) {
+  try { localStorage.setItem(MAP_PREF_KEY, v ? "1" : "0"); } catch { /* private mode */ }
+}
 
 /** The memory panel is off by default and remembered per browser. */
 const POOL_PREF_KEY = "microtone-poolpanel";
@@ -50,16 +67,25 @@ export class SamplesView {
     this.cb = callbacks;
     this.selected = 0;
     this.list = [];
+    // Pool regions (item 175) share the list with the census: they are the
+    // OTHER thing the pool holds, and the one the samples below them are cut
+    // out of. -1 means a census row is selected, which is the ordinary state.
+    this.regions = [];
+    this.selRegion = -1;
     this.root = document.createElement("div");
     this.root.className = "split-view";
     this.listEl = document.createElement("div");
     this.listEl.className = "side-list";
     this.right = document.createElement("div");
-    this.right.className = "side-detail";
+    // `smp-detail` makes the pane a flex column so the map can stretch to the
+    // bottom of it (item 175) — the Instruments view shares `side-detail` and
+    // is deliberately left as a block flow.
+    this.right.className = "side-detail smp-detail";
     this.info = document.createElement("div");
     this.info.className = "detail-info";
     // Live funk-repeat state (item 164) — its own line so the static one above
-    // is not rebuilt sixty times a second.
+    // is not rebuilt sixty times a second. It lives UNDER the waveform (item
+    // 175.4), so its coming and going never moves the canvas.
     this.funkInfo = document.createElement("div");
     this.funkInfo.className = "detail-info funk-info";
     this.toolbar = document.createElement("div");
@@ -131,8 +157,34 @@ export class SamplesView {
     this.poolBtn.textContent = t("pool.toggle");
     this.poolBtn.title = t("pool.toggleTitle");
     this.poolBtn.addEventListener("click", () => this.togglePool());
+    // "Map" (item 175.1) swaps the one-line waveform for the pool drawn across
+    // as many lines as it takes. It is the only way to SEE a recording longer
+    // than a screen, and the way a window is dragged out of one.
+    this.mapBtn = document.createElement("button");
+    this.mapBtn.className = "smp-pool";
+    this.mapBtn.textContent = t("pw.toggle");
+    this.mapBtn.title = t("pw.toggleTitle");
+    this.mapBtn.addEventListener("click", () => this.toggleMap());
     this.toolbar.append(this.editBtn, this.paintBtn, this.chordBtn, this.dupBtn,
-      this.exportBtn, this.newInstBtn, this.deleteBtn, this.poolBtn);
+      this.exportBtn, this.newInstBtn, this.deleteBtn, this.mapBtn, this.poolBtn);
+
+    // ── the region toolbar: the same row, for the other kind of selection ──
+    this.regionBar = document.createElement("div");
+    this.regionBar.className = "smp-toolbar";
+    this.rgnRenameBtn = document.createElement("button");
+    this.rgnRenameBtn.textContent = t("rgn.rename");
+    this.rgnRenameBtn.title = t("rgn.renameTitle");
+    this.rgnRenameBtn.addEventListener("click", () => this.renameRegion());
+    this.rgnExportBtn = document.createElement("button");
+    setIconLabel(this.rgnExportBtn, "download", t("smp.export"), { after: true });
+    this.rgnExportBtn.title = t("rgn.exportTitle");
+    this.rgnExportBtn.addEventListener("click", () => this.exportRegion());
+    this.rgnDeleteBtn = document.createElement("button");
+    this.rgnDeleteBtn.textContent = t("smp.delete");
+    this.rgnDeleteBtn.title = t("rgn.deleteTitle");
+    this.rgnDeleteBtn.addEventListener("click", () => this.deleteRegion());
+    this.regionBar.append(this.rgnRenameBtn, this.rgnExportBtn, this.rgnDeleteBtn);
+
     this.canvas = document.createElement("canvas");
     this.canvas.className = "wave-canvas";
     // Hover hairline (item 171): the byte offset under the pointer, or -1.
@@ -155,21 +207,71 @@ export class SamplesView {
     this.poolOpen = loadPoolPref();
     this.pool.element.hidden = !this.poolOpen;
     this.poolBtn.classList.toggle("on", this.poolOpen);
-    this.right.append(this.info, this.funkInfo, this.toolbar, this.canvas, this.pool.element);
+    // The map: the pool as a wrapped waveform (item 175.1). Clicking a claim in
+    // it selects that census row, so the map navigates the list exactly as the
+    // address-line panel does; a dragged window becomes an instrument.
+    this.poolWave = new PoolWave(store, {
+      onSelectSample: (idx) => this.selectSample(idx),
+      onSlice: (sel) => this.sliceToInstrument(sel),
+    });
+    this.mapOpen = loadMapPref();
+    this.mapBtn.classList.toggle("on", this.mapOpen);
+    // The funk-repeat readout sits BELOW the waveform (item 175.4): it comes and
+    // goes with the effect, and a line that appears and disappears above the
+    // canvas shifts the picture the reader is watching down and up again.
+    this.right.append(this.info, this.toolbar, this.regionBar, this.canvas,
+      this.poolWave.element, this.funkInfo, this.pool.element);
     this.root.append(this.listEl, this.right);
     host.appendChild(this.root);
     this.visible = false;
 
-    store.on("doc", () => { this.selected = 0; if (this.visible) this.refresh(); });
+    store.on("doc", () => { this.selected = 0; this.selRegion = -1; if (this.visible) this.refresh(); });
     store.on("edit", (tags) => {
-      // bank import/undo changes the census; inst edits move loop points
-      if (this.visible && tags?.some?.((t) => t.kind === "bank" || t.kind === "inst")) this.refresh();
+      // bank import/undo changes the census; inst edits move loop points; an
+      // SRgn write changes which regions the list and the map know about.
+      if (this.visible && tags?.some?.((t) =>
+        t.kind === "bank" || t.kind === "inst" ||
+        (t.kind === "section" && t.fourcc === "SRgn"))) this.refresh();
     });
     new ResizeObserver(() => {
       if (!this.visible) return;
       this.drawWave();
+      if (this.mapVisible()) this.poolWave.relayout();
       if (this.poolOpen) this.pool.draw();
     }).observe(this.right);
+  }
+
+  /** True while the wrapped map is the picture on screen: always for a region
+   *  (which cannot be drawn on one line), and by the toggle for a sample. */
+  mapVisible() {
+    return this.selRegion >= 0 || this.mapOpen;
+  }
+
+  /** The selected region, or null when a census row is selected. */
+  selectedRegion() {
+    return this.selRegion >= 0 ? (this.regions[this.selRegion] ?? null) : null;
+  }
+
+  /** Select census row `idx` (from the map, the memory panel or the list). */
+  selectSample(idx) {
+    if (idx < 0 || idx >= this.list.length) return;
+    if (idx === this.selected && this.selRegion < 0) return;
+    this.selected = idx;
+    this.selRegion = -1;
+    this.refresh();
+    this.rowEls?.find((r) => r.index === idx)?.el.scrollIntoView({ block: "nearest" });
+  }
+
+  /** Swap the one-line waveform for the wrapped map, and remember the choice. */
+  toggleMap() {
+    this.mapOpen = !this.mapOpen;
+    saveMapPref(this.mapOpen);
+    this.mapBtn.classList.toggle("on", this.mapOpen);
+    this.refresh();
+    if (this.mapOpen && this.selRegion < 0) {
+      const s = this.list[this.selected];
+      if (s) this.poolWave.scrollToByte(s.ptr);
+    }
   }
 
   /** Show/hide the sample-memory panel, and remember the choice. */
@@ -278,6 +380,134 @@ export class SamplesView {
     this.refresh();
   }
 
+  // ── pool regions (item 175) ───────────────────────────────────────────────
+
+  /** The census rows that are windows INTO `region` — the instruments that
+   *  have already been cut out of it. */
+  regionWindows(region) {
+    const spans = regionSpans(region);
+    return (this.list ?? []).filter((e) =>
+      sampleSpans(e).some((sp) => spans.some((rs) =>
+        sp.ptr >= rs.ptr && sp.ptr + sp.len <= rs.ptr + rs.len)));
+  }
+
+  /** Load a long recording straight into the pool (item 175) and select it. */
+  async loadRegion() {
+    const { importRegion } = await import("../popups/importregion.js");
+    const region = await importRegion(this.store);
+    if (!region) return;
+    this.refresh();
+    const at = this.regions.findIndex((r) => r.ptr === region.ptr && r.len === region.len);
+    if (at >= 0) { this.selRegion = at; this.refresh(); }
+  }
+
+  async renameRegion() {
+    const region = this.selectedRegion();
+    if (!region || region.synthetic) return;
+    const cur = unescapeName(region.name);
+    const res = await showModal({
+      title: t("rgn.renameTitle"),
+      fields: [{ name: "name", label: t("inst.sampleImportName"), value: cur }],
+      okLabel: t("common.ok"),
+    });
+    if (!res) return;
+    const plan = planRenameRegion(this.store.doc,
+      region, new TextEncoder().encode(escapeNonAscii(res.name ?? "")));
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(importBankOp(plan));
+    this.store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
+  }
+
+  /** Free a region's bytes. The windows already cut out of it survive — they
+   *  are instruments now, and deleting the source is not deleting them. */
+  async deleteRegion() {
+    const region = this.selectedRegion();
+    if (!region || region.synthetic) return;
+    const windows = this.regionWindows(region);
+    const plan = planDeleteRegion(this.store.doc, region);
+    if (plan.error) { alert(plan.error); return; }
+    const bodyParts = [t("rgn.delBodyFrees", {
+      human: fmtSize(plan.samples.reduce((n, w) => n + w.bytes.length, 0)),
+    })];
+    if (windows.length > 0) {
+      bodyParts.push(t("rgn.delBodyKeeps", {
+        n: windows.length,
+        list: windows.slice(0, 6).map((e) => String(e.index).padStart(3, "0")).join(", "),
+      }));
+    }
+    const res = await showModal({
+      title: t("rgn.delTitle", { name: unescapeName(region.name) || t("rgn.namePlaceholder") }),
+      body: bodyParts.join(" "),
+      okLabel: t("smp.delOk"),
+    });
+    if (!res) return;
+    this.store.undo.apply(importBankOp(plan));
+    this.store.emit("edit", [{ kind: "bank" }]);
+    this.selRegion = Math.max(-1, Math.min(this.selRegion, this.regions.length - 2));
+    this.refresh();
+  }
+
+  /** Download a region as a WAV — every channel, bit-exact out of the pool. */
+  exportRegion() {
+    const region = this.selectedRegion();
+    const doc = this.store.doc;
+    if (!region || !doc?.sampleBin) return;
+    const chans = regionSpans(region).map((sp) =>
+      doc.sampleBin.subarray(sp.ptr, sp.ptr + sp.len));
+    // The implicit recording declares no rate, so the file gets the engine's
+    // own — it is a dump of memory, and every sample in it is at its own pitch
+    // anyway.
+    const bytes = encodeU8Wav(chans, region.rate || DEFAULT_RATE);
+    download(bytes, `${sanitiseName(
+      region.synthetic ? "sample memory" : unescapeName(region.name), "region")}.wav`);
+  }
+
+  /**
+   * Cut the map's dragged window into a fresh instrument (item 175). No pool
+   * bytes move: the instrument claims the recording's own bytes, so editing it
+   * later edits the recording — which is the point of working this way.
+   */
+  async sliceToInstrument({ ptr, len, region, rate }) {
+    const doc = this.store.doc;
+    if (!doc || len <= 0) return;
+    // Name it after where it came from: the recording plus the offset into it,
+    // or — cutting out of plain memory — the sample the window starts inside,
+    // which is what "the whole pool" is mostly made of.
+    const under = region ? null : this.list.find((e) =>
+      sampleSpans(e).some((sp) => ptr >= sp.ptr && ptr < sp.ptr + sp.len));
+    const base = region
+      ? `${unescapeName(region.name) || t("rgn.namePlaceholder")} ${ptr - region.ptr}`
+      : under
+        ? `${unescapeName(under.name) || `sample ${under.index}`} ${ptr - under.ptr}`
+        : `memory ${ptr}`;
+    const res = await showModal({
+      title: t("pw.sliceModalTitle"),
+      body: t("pw.sliceBody", { len, human: fmtSize(len), rate }),
+      fields: [
+        { name: "name", label: t("inst.sampleImportName"), value: base },
+        { name: "loop", label: t("pw.sliceLoop"), type: "checkbox", value: false,
+          hint: t("pw.sliceLoopHint") },
+      ],
+      okLabel: t("common.create"),
+    });
+    if (!res) return;
+    const nameBytes = new TextEncoder().encode(escapeNonAscii(res.name || base));
+    // A window cut out of plain pool bytes is planned against a region of one:
+    // the plan only ever reads ptr, len, rate and channel count off it.
+    const src = region ?? { ptr, len, rate, chan: 1, name: "" };
+    const plan = planRegionSlice(doc, src, {
+      from: ptr - src.ptr, len, nameBytes, loop: !!res.loop,
+    });
+    if (plan.error) { alert(plan.error); return; }
+    this.store.undo.apply(importBankOp(plan));
+    this.store.emit("edit", [{ kind: "bank" }]);
+    this.refresh();
+    const at = this.list.findIndex((e) => e.ptr === plan.ptr && e.len === plan.sliceLen);
+    if (at >= 0) this.selectSample(at);
+    this.cb.onNewInstrument?.(plan.slot);
+  }
+
   exportSample() {
     const s = this.list?.[this.selected];
     const doc = this.store.doc;
@@ -293,23 +523,115 @@ export class SamplesView {
     this.rowEls = [];
     if (!doc) return;
     this.list = doc.sampleList();
+    // The display list of recordings: the whole occupied pool FIRST — the
+    // implicit recording every project has, including every project made
+    // before SRgn existed — then whatever the document actually declares. The
+    // synthetic one is a view: it reserves nothing, is never written, and
+    // holds index 0 so adding or dropping a real recording cannot shuffle it
+    // out from under the selection.
+    const whole = wholeMemoryRegion(this.list.flatMap(sampleSpans), doc.sampleRegions());
+    this.regions = [...(whole ? [whole] : []), ...doc.sampleRegions()];
+    if (this.selRegion >= this.regions.length) this.selRegion = -1;
+
+    // "Load recording…" sits over the list, where the Instruments view keeps
+    // the buttons that fill a slot from outside the project.
+    const bar = document.createElement("div");
+    bar.className = "side-toolbar-inst";
+    const loadBtn = document.createElement("button");
+    loadBtn.textContent = t("rgn.load");
+    loadBtn.title = t("rgn.loadTitle");
+    loadBtn.addEventListener("click", () => this.loadRegion());
+    bar.appendChild(loadBtn);
+    this.listEl.appendChild(bar);
+
+    const head = (text) => {
+      const h = document.createElement("div");
+      h.className = "side-head";
+      h.textContent = text;
+      this.listEl.appendChild(h);
+    };
+
+    // Regions first: they are the source material, and the samples under them
+    // are cut out of them.
+    if (this.regions.length > 0) {
+      head(t("rgn.listHead"));
+      this.regions.forEach((r, i) => {
+        const row = document.createElement("div");
+        row.className = "side-row rgn" + (r.synthetic ? " whole" : "") +
+          (i === this.selRegion ? " sel" : "");
+        row.innerHTML =
+          `<span class="dot"></span>` +
+          `<span class="idx">${r.synthetic ? escape(t("rgn.allTag")) : "R" + String(r.index).padStart(2, "0")}</span>` +
+          `<span class="name">${escape(r.synthetic ? t("rgn.allName")
+            : (unescapeName(r.name) || t("rgn.namePlaceholder")))}</span>` +
+          (r.chan > 1 ? `<span class="smp-tag">\u00d7${r.chan}</span>` : "") +
+          `<span class="dim">${fmtSize(regionBytes(r))}</span>`;
+        row.addEventListener("click", () => {
+          this.selRegion = i;
+          this.refresh();
+        });
+        this.listEl.appendChild(row);
+      });
+      head(t("rgn.listSamples"));
+    }
+
     this.list.forEach((s, i) => {
       const row = document.createElement("div");
-      row.className = "side-row" + (i === this.selected ? " sel" : "");
+      row.className = "side-row" +
+        (i === this.selected && this.selRegion < 0 ? " sel" : "");
       row.innerHTML =
         `<span class="dot"></span>` +
         `<span class="idx">${String(i).padStart(3, "0")}</span>` +
         `<span class="name">${escape(unescapeName(s.name) || "(unnamed)")}</span>` +
         (isStereoSample(s) ? `<span class="smp-tag">${escape(t("smp.stereoTag"))}</span>` : "") +
         `<span class="dim">${(s.len / 1024).toFixed(1)}K</span>`;
-      row.addEventListener("click", () => { this.selected = i; this.refresh(); });
+      row.addEventListener("click", () => {
+        this.selected = i;
+        this.selRegion = -1;
+        this.refresh();
+      });
       this.listEl.appendChild(row);
-      this.rowEls.push({ el: row, ptr: s.ptr });
+      this.rowEls.push({ el: row, ptr: s.ptr, index: i });
     });
+
+    const region = this.selectedRegion();
+    this.toolbar.hidden = region !== null;
+    this.regionBar.hidden = region === null;
+    // Nothing declares the implicit recording, so there is nothing to rename
+    // and nothing that deleting it could free — the samples in it are the
+    // Samples list's own business.
+    const synthetic = region?.synthetic === true;
+    this.rgnRenameBtn.disabled = synthetic;
+    this.rgnDeleteBtn.disabled = synthetic;
+    this.rgnRenameBtn.title = synthetic ? t("rgn.wholeNoEdit") : t("rgn.renameTitle");
+    this.rgnDeleteBtn.title = synthetic ? t("rgn.wholeNoEdit") : t("rgn.deleteTitle");
+    // A region can never be drawn on one line, so selecting one IS the map.
+    this.canvas.hidden = this.mapVisible();
+    this.poolWave.element.hidden = !this.mapVisible();
+    this.mapBtn.disabled = region !== null;
+
     this.updateInfo();
     this.hoverByte = -1;   // a different sample under the same pointer position
-    this.drawWave();
-    if (this.poolOpen) this.pool.refresh(this.selected);
+    if (this.mapVisible()) {
+      this.poolWave.setScope(region
+        ? { kind: "region", ptr: region.ptr, len: regionBytes(region) }
+        : { kind: "pool", ptr: 0, len: POOL_SIZE });
+      this.poolWave.refresh(this.selRegion < 0 ? this.selected : -1);
+      // The map FOLLOWS the list: picking a row while the whole pool is on
+      // screen has to bring that row into view, or selecting sample 20 leaves
+      // you looking at address 0. Only on a real selection change, and
+      // scrollToByte is a no-op when the row is already visible — so clicking a
+      // claim in the map never scrolls the map out from under the pointer.
+      const follow = region ? `r${this.selRegion}` : `s${this.selected}`;
+      if (follow !== this._mapFollow) {
+        this._mapFollow = follow;
+        const s = region ? null : this.list[this.selected];
+        if (s) this.poolWave.scrollToByte(s.ptr);
+      }
+    } else {
+      this.drawWave();
+    }
+    if (this.poolOpen) this.pool.refresh(this.selRegion < 0 ? this.selected : -1);
   }
 
   /** Pointer over the waveform: latch the byte offset and repaint. The whole
@@ -356,7 +678,7 @@ export class SamplesView {
    * read off a 30-pixel block.
    */
   updateFunkReadout() {
-    const s = this.list[this.selected];
+    const s = this.selRegion < 0 ? this.list[this.selected] : null;
     const fws = s ? collectFunkWindows(this.store.audio, s) : [];
     if (!fws.length) {
       if (this.funkInfo.textContent !== "") this.funkInfo.textContent = "";
@@ -381,6 +703,30 @@ export class SamplesView {
   }
 
   updateInfo() {
+    const region = this.selectedRegion();
+    if (region?.synthetic) {
+      // No rate and no name to print: a hundred samples at a hundred rates have
+      // no single rate between them, which is exactly why a window cut out of
+      // here takes the rate of whatever sample it lands in.
+      const total = regionBytes(region);
+      this.info.innerHTML =
+        `<b>${escape(t("rgn.allName"))}</b> · ${escape(t("rgn.wholeKind"))} · ` +
+        `0x0–0x${region.len.toString(16).toUpperCase()} · ` +
+        `${escape(t("rgn.infoBytes", { n: total, human: fmtSize(total) }))} · ` +
+        `${escape(t("rgn.wholeHolds", { n: this.regionWindows(region).length }))}`;
+      return;
+    }
+    if (region) {
+      const total = regionBytes(region);
+      this.info.innerHTML =
+        `<b>${escape(unescapeName(region.name) || escape(t("rgn.namePlaceholder")))}</b> · ` +
+        `${escape(t("rgn.infoKind"))} · ptr 0x${region.ptr.toString(16).toUpperCase()} · ` +
+        `${escape(t("rgn.infoBytes", { n: total, human: fmtSize(total) }))} · ` +
+        `${escape(t("rgn.infoChans", { n: region.chan }))} · ${region.rate} Hz@C4 · ` +
+        `${escape(t("rgn.infoSeconds", { s: (region.len / Math.max(1, region.rate)).toFixed(1) }))} · ` +
+        `${escape(t("rgn.infoWindows", { n: this.regionWindows(region).length }))}`;
+      return;
+    }
     const s = this.list[this.selected];
     if (!s) { this.info.textContent = t("smp.noSamples"); return; }
     const loopModes = [t("smp.noLoop"), t("smp.loopForward"), t("smp.loopPingpong"), t("smp.loopOneshot")];
@@ -400,11 +746,17 @@ export class SamplesView {
     const audio = this.store.audio;
     // Refresh the invert-loop masks of the shown sample's instruments so the
     // waveform overlay tracks the live S$Fx inversion (reply lands next frame).
-    if (audio?.isPlaying()) {
+    if (audio?.isPlaying() && this.selRegion < 0) {
       const s = this.list[this.selected];
       if (s) for (const inst of s.users) audio.requestInvertMask(inst);
     }
-    if (audio?.isPlaying() || audio?.snapshot) this.drawWave();
+    if (this.mapVisible()) {
+      // Only the overlay layer moves per frame — the trace is megabytes of
+      // pool and has no business in the frame loop.
+      if (audio?.isPlaying() || audio?.snapshot) this.poolWave.frame();
+    } else if (audio?.isPlaying() || audio?.snapshot) {
+      this.drawWave();
+    }
     this.updateFunkReadout();
     this.updateLiveDots();
     // Only the tick layer — the map itself is arithmetic over the census and
@@ -687,6 +1039,13 @@ function collectFunkWindows(audio, s) {
     out.push({ window, pending, len, mode });
   }
   return out;
+}
+
+/** Byte counts as a person reads them — a region is usually megabytes. */
+function fmtSize(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(2) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+  return n + " B";
 }
 
 function escape(s) {

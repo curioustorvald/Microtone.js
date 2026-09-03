@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>pool regions + map view smoke (item 175)</title>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <!-- worker-less page: the virtual-time --dump-dom recipe applies
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox --dump-dom \
+           --virtual-time-budget=45000 \
+           http://localhost:8932/test/browser/region-smoke.html
+       WHEN is the smallest packed corpus file — the pool has one run of
+       claims and a clean tail, which is where a region has to be able to land. -->
+  <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:900px"></iframe>
+  <script type="module">
+    const out = [];
+    const log = (line) => {
+      out.push(line);
+      console.log("SMOKE: " + line);
+      document.getElementById("out").textContent = out.join("\n");
+    };
+    const ok = (cond, what) => log(`${what}: ${cond ? "ok" : "FAIL"}`);
+    const waitFor = (fn, ms = 8000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+
+    (async () => {
+      try {
+        const frame = document.getElementById("app");
+        const win = await waitFor(() => {
+          const w = frame.contentWindow;
+          return w && w.__microtone?.store.doc ? w : null;
+        });
+        const { store, samplesView: sv, instrumentsView: iv } = win.__microtone;
+        try {
+          win.localStorage.removeItem("microtone-samplemap");
+          win.localStorage.removeItem("microtone-poolpanel");
+        } catch { /* private mode */ }
+        log("app loaded");
+
+        const bank = await import("../../src/doc/bankmerge.js");
+        const ops = await import("../../src/doc/ops.js");
+        const regions = await import("../../src/doc/sampleregions.js");
+
+        // Switch the app to the Samples tab for real — the map's scroller is
+        // measured below, and a pane that was never laid out measures zero.
+        win.document.querySelector('#tabs button[data-view="samples"]').click();
+        sv.mapOpen = false;
+        sv.selRegion = -1;
+        sv.show();
+
+        // ── BEFORE any recording exists: the pool is still one, implicitly ──
+        // This is the state every project made before SRgn is in, and the whole
+        // feature has to work in it.
+        ok(store.doc.sampleRegions().length === 0, "z1 this corpus song declares no recording");
+        sv.refresh();
+        const implicit = [...sv.listEl.querySelectorAll(".side-row.rgn")];
+        ok(implicit.length === 1 && implicit[0].classList.contains("whole"),
+          `z2 …and the list offers the whole pool as one anyway (${implicit.length} row)`);
+        ok(implicit[0].textContent.includes("all sample memory"), "z3 …named for what it is");
+        implicit[0].dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+        ok(sv.selRegion === 0 && sv.selectedRegion()?.synthetic === true,
+          "z4 selecting it works");
+        ok(!sv.poolWave.element.hidden && sv.canvas.hidden, "z5 …and shows the map");
+        ok(sv.poolWave.scope.len === Math.max(...store.doc.sampleList()
+          .filter((e) => e.ptr + e.len <= 8388608).map((e) => e.ptr + e.len)),
+          `z6 …scoped to the occupied pool (${sv.poolWave.scope.len})`);
+        ok(sv.rgnRenameBtn.disabled && sv.rgnDeleteBtn.disabled,
+          "z7 nothing declares it, so there is nothing to rename or delete");
+        ok(sv.info.textContent.includes("everything the pool holds"),
+          "z8 the info line says so: " + JSON.stringify(sv.info.textContent.slice(0, 70)));
+        // Cutting out of it works, and takes the rate of the sample it lands in.
+        const host = store.doc.sampleList()[2];
+        const zSlice = bank.planRegionSlice(store.doc,
+          { ptr: host.ptr, len: 2000, rate: host.rate, chan: 1, name: "" },
+          { from: 0, len: 2000, nameBytes: new TextEncoder().encode("cut from memory") });
+        ok(!zSlice.error, "z9 a window cuts out of plain pool bytes: " + (zSlice.error ?? "no error"));
+        ok(zSlice.insts[0].record[6] + (zSlice.insts[0].record[7] << 8) === host.rate,
+          "z10 …at the rate of the sample it lands in");
+        sv.selRegion = -1;
+        sv.refresh();
+
+        // ── a region that no instrument could ever claim ──
+        const LEN = 200000;                    // > 3× the 65535 length ceiling
+        const pcm = new Uint8Array(LEN);
+        for (let i = 0; i < LEN; i++) pcm[i] = 128 + Math.round(100 * Math.sin(i / 40));
+        const nameBytes = new TextEncoder().encode("long break");
+        const plan = bank.planImportRegion(store.doc, { channels: [pcm], rate: 16000, nameBytes });
+        ok(!plan.error, "a1 a 200 000-byte recording plans into the pool: " + (plan.error ?? "no error"));
+        const highWaterBefore = Math.max(...store.doc.sampleList().map((e) => e.ptr + e.len));
+        store.undo.apply(ops.importBankOp(plan));
+        store.emit("edit", [{ kind: "bank" }]);
+
+        const list = store.doc.sampleRegions();
+        ok(list.length === 1, `a2 the document has one region (${list.length})`);
+        ok(list[0].len === LEN && list[0].rate === 16000 && list[0].chan === 1,
+          `a3 …with the right geometry (${list[0].len}, ${list[0].rate} Hz, ${list[0].chan} ch)`);
+        ok(list[0].ptr >= highWaterBefore, "a4 …placed clear of every existing sample");
+        ok(store.doc.sampleBin[list[0].ptr + 1000] === pcm[1000],
+          "a5 …and its bytes are really in the pool");
+        ok(store.doc.sampleList().every((e) =>
+          e.ptr + e.len <= list[0].ptr || e.ptr >= list[0].ptr + LEN),
+          "a6 no census row claims any of it — that is what makes it a region");
+
+        // ── the allocator must not walk over it ──
+        const hit = new Uint8Array(4096).fill(9);
+        const imp = bank.planSampleImport(store.doc,
+          { pcm: hit, rate: 32000, nameBytes: new TextEncoder().encode("hit") });
+        ok(!imp.error, "b1 an ordinary sample still imports: " + (imp.error ?? "no error"));
+        const landed = imp.samples[0].ptr;
+        ok(landed + 4096 <= list[0].ptr || landed >= list[0].ptr + LEN,
+          `b2 …and lands OUTSIDE the region (${landed} vs ${list[0].ptr}..${list[0].ptr + LEN})`);
+        ok(regions.largestFreeRun(store.doc.sampleList().flatMap(
+          (e) => [{ ptr: e.ptr, len: e.len }]), list) < 8388608 - LEN,
+          "b3 the free-run figure the import dialog quotes counts the region as used");
+
+        // ── the list, and selecting the region ──
+        sv.refresh();
+        const rows = [...sv.listEl.querySelectorAll(".side-row.rgn")];
+        ok(rows.length === 2, `c1 the list carries the recording plus the implicit one (${rows.length})`);
+        ok(rows[1].textContent.includes("long break"), "c2 …the declared one under its own name");
+        rows[1].dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+        ok(sv.selRegion === 1 && sv.selectedRegion()?.synthetic !== true,
+          "c3 clicking it selects the declared recording");
+        ok(!sv.poolWave.element.hidden && sv.canvas.hidden,
+          "c4 …and the picture becomes the map (a region cannot fit on one line)");
+        ok(sv.info.textContent.includes("recording in memory"),
+          "c5 the info line says what it is: " + JSON.stringify(sv.info.textContent.slice(0, 80)));
+        ok(sv.toolbar.hidden && !sv.regionBar.hidden,
+          "c6 the toolbar swaps to the region's own");
+
+        // ── the map itself ──
+        const pw = sv.poolWave;
+        ok(pw.scope.kind === "region" && pw.scope.ptr === list[0].ptr,
+          "d1 the map is scoped to the region");
+        ok(pw.rows > 1, `d2 …and needs more than one line for it (${pw.rows} lines)`);
+        ok(pw.bytesPerRow * pw.rows >= LEN, "d3 …enough lines to cover every byte");
+        ok(pw.canvas.width > 0 && pw.canvas.height > 0, "d4 the map canvas has a size");
+        ok(pw.spacer.offsetHeight > pw.scroll.clientHeight,
+          "d5 the scroller is taller than its window, so the lines really scroll");
+        // hairline readout
+        const r = pw.overlay.getBoundingClientRect();
+        pw.overlay.dispatchEvent(new win.PointerEvent("pointermove", {
+          clientX: r.left + 200, clientY: r.top + 20, bubbles: true,
+        }));
+        ok(pw.hoverByte >= list[0].ptr, `d6 hovering reads a byte address (${pw.hoverByte})`);
+        ok(pw.readout.textContent.includes("long break"),
+          "d7 …and names the recording it is in: " + JSON.stringify(pw.readout.textContent));
+
+        // ── drag a window out and cut an instrument from it ──
+        // A real pointer drag first, so the selection path itself is exercised.
+        const pd = (type, x) => pw.overlay.dispatchEvent(new win.PointerEvent(type, {
+          clientX: r.left + x, clientY: r.top + 20, bubbles: true, pointerId: 1,
+        }));
+        pd("pointerdown", 120);
+        pd("pointermove", 400);
+        pd("pointerup", 400);
+        ok(pw.sel && pw.sel.to > pw.sel.from,
+          `e0 dragging over the map selects a byte range (${pw.sel?.from}..${pw.sel?.to})`);
+        ok(pw.selLabel.textContent.length > 0, "e0b …and the bar says how big it is");
+
+        const from = list[0].ptr + 1000;
+        pw.sel = { from, to: from + 8000 };
+        pw.syncSelection();
+        ok(!pw.sliceBtn.disabled, "e1 an 8000-byte window can be cut");
+        pw.sel = { from, to: from + 100000 };
+        pw.syncSelection();
+        ok(pw.sliceBtn.disabled, "e2 …a 100 000-byte one cannot (the length field is 16-bit)");
+        pw.sel = { from, to: from + 8000 };
+        pw.syncSelection();
+
+        const slice = bank.planRegionSlice(store.doc, list[0],
+          { from: 1000, len: 8000, nameBytes: new TextEncoder().encode("break 1") });
+        ok(!slice.error, "e3 the slice plans: " + (slice.error ?? "no error"));
+        store.undo.apply(ops.importBankOp(slice));
+        store.emit("edit", [{ kind: "bank" }]);
+        const cut = store.doc.instruments[slice.slot];
+        ok(cut.samplePtr === from && cut.sampleLength === 8000,
+          `e4 the instrument claims exactly those bytes (${cut.samplePtr}, ${cut.sampleLength})`);
+        ok(cut.samplingRate === 16000, "e5 …at the recording's own rate");
+        ok(slice.samples.length === 0, "e6 …and no pool byte was copied to do it");
+        const row = store.doc.sampleList().find((e) => e.ptr === from && e.len === 8000);
+        ok(!!row, "e7 the census gains a row for the window");
+
+        // ── deleting the recording leaves the window alone ──
+        const del = bank.planDeleteRegion(store.doc, list[0]);
+        ok(!del.error, "f1 the region plans a delete: " + (del.error ?? "no error"));
+        const zeroed = del.samples.reduce((n, w) => n + w.bytes.length, 0);
+        ok(zeroed > 0 && zeroed <= LEN - 8000,
+          `f2 …freeing everything except the window cut out of it (${zeroed} of ${LEN})`);
+        store.undo.apply(ops.importBankOp(del));
+        store.emit("edit", [{ kind: "bank" }]);
+        ok(store.doc.sampleRegions().length === 0, "f3 the region is gone");
+        ok(store.doc.sampleBin[from + 10] === pcm[1010],
+          "f4 …and the window's audio survived it");
+        store.undo.undo();
+        store.emit("edit", [{ kind: "bank" }]);
+        ok(store.doc.sampleRegions().length === 1, "f5 undo puts the recording back");
+        ok(store.doc.sampleBin[list[0].ptr + 1] === pcm[1],
+          "f6 …bytes and all");
+
+        // ── it survives a save/reload ──
+        const { parseTaud } = await import("../../src/format/taud-parse.js");
+        const { Document } = await import("../../src/doc/document.js");
+        const reloaded = new Document(parseTaud(store.doc.toBytes()));
+        const rr = reloaded.sampleRegions();
+        ok(rr.length === 1 && rr[0].ptr === list[0].ptr && rr[0].len === LEN &&
+          rr[0].rate === 16000 && rr[0].name === "long break",
+          "g1 SRgn round-trips through the file: " + JSON.stringify(rr[0] ?? null));
+
+        // ── Housekeeping keeps it ──
+        const cleanup = await import("../../src/doc/cleanup.js");
+        const hk = cleanup.planBankCleanup(reloaded);
+        ok(hk.image[rr[0].ptr + 1000] === pcm[1000],
+          "g2 Housekeeping's pool sweep spares a recording nothing claims");
+
+        // ── the Instruments view's "From the list" picker (item 175.2) ──
+        iv.selected = slice.slot;
+        iv.show();
+        iv.renderPanel();
+        const pick = [...iv.panel.querySelectorAll("select.sl-pick")][0];
+        ok(!!pick, "h1 the Sample group has a picker");
+        ok(pick.value === `s${from}:8000`,
+          `h2 …showing the row this instrument's own pointer lands on (${pick.value})`);
+        ok([...pick.querySelectorAll("optgroup")].length === 1,
+          "h3 …with the recordings in memory in their own group");
+        const other = store.doc.sampleList().find((e) => e.ptr !== from);
+        pick.value = `s${other.ptr}:${other.len}`;
+        pick.dispatchEvent(new win.Event("change", { bubbles: true }));
+        const after = store.doc.instruments[slice.slot];
+        ok(after.samplePtr === other.ptr && after.sampleLength === other.len,
+          `h4 choosing another row repoints the record (${after.samplePtr}, ${after.sampleLength})`);
+        ok(after.samplingRate === other.rate, "h5 …and takes its rate with it");
+        store.undo.undo();
+        ok(store.doc.instruments[slice.slot].samplePtr === from,
+          "h6 …in one undo step");
+
+        // ── the play-start spinner (item 175.3) ──
+        iv.renderPanel();
+        const labels = [...iv.panel.querySelectorAll(".sl-label")].map((e) => e.textContent);
+        ok(labels.includes("Play start"),
+          "i1 the Sample group has a Play start spinner: " +
+          JSON.stringify(labels.filter((l) => /Sample|start|Loop|Rate|list/.test(l))));
+
+        // ── the Map toggle over an ordinary SAMPLE (item 175.1) ──
+        win.document.querySelector('#tabs button[data-view="samples"]').click();
+        sv.selRegion = -1;
+        sv.selected = 0;
+        sv.mapOpen = false;
+        sv.refresh();
+        ok(!sv.canvas.hidden && sv.poolWave.element.hidden,
+          "k1 a sample shows the one-line waveform");
+        ok(!sv.mapBtn.disabled, "k2 …and the Map toggle is live");
+        sv.toggleMap();
+        ok(sv.canvas.hidden && !sv.poolWave.element.hidden, "k3 Map swaps the picture");
+        ok(sv.poolWave.scope.kind === "pool",
+          "k4 …scoped to the whole pool, since a sample is not a recording");
+        ok(win.localStorage.getItem("microtone-samplemap") === "1", "k5 …and remembers it");
+        ok(sv.poolWave.selected === 0, "k6 the map knows which row is selected");
+        sv.toggleMap();
+        ok(!sv.canvas.hidden && sv.poolWave.element.hidden, "k7 …and back again");
+        // A region always shows the map, whatever the toggle says.
+        sv.selRegion = 1;
+        sv.refresh();
+        ok(sv.canvas.hidden && sv.mapBtn.disabled,
+          "k8 a recording overrides the toggle — it cannot fit on one line");
+
+        // ── the map follows the list, and never jumps under a click ──
+        sv.selRegion = -1;
+        sv.mapOpen = true;
+        sv.selected = 0;
+        sv.refresh();
+        // Zoom in far enough that the pool really is taller than the window —
+        // at the auto-fit zoom a small corpus song needs no scrolling at all,
+        // and the assertion below would pass without proving anything.
+        sv.poolWave.setZoom(2);
+        sv.poolWave.scroll.scrollTop = 0;
+        sv.poolWave.draw();
+        ok(sv.poolWave.rows > 20, `l0 zoomed in, the pool is ${sv.poolWave.rows} lines tall`);
+        const far = store.doc.sampleList().length - 1;
+        sv.selectSample(far);
+        const farRow = Math.floor((store.doc.sampleList()[far].ptr) / sv.poolWave.bytesPerRow);
+        const shownTop = sv.poolWave.topRow();
+        const rowsVisible = Math.ceil(sv.poolWave.viewH() /
+          (sv.poolWave.spacer.offsetHeight / sv.poolWave.rows));
+        ok(farRow >= shownTop && farRow < shownTop + rowsVisible,
+          `l1 selecting the last sample scrolls the map to it (row ${farRow}, top ${shownTop}, ${rowsVisible} on screen)`);
+        const held = sv.poolWave.scroll.scrollTop;
+        sv.selectSample(far);
+        sv.refresh();
+        ok(sv.poolWave.scroll.scrollTop === held,
+          "l2 …and re-selecting what is already on screen does not move it");
+        sv.mapOpen = false;
+        sv.selected = 0;
+        sv.refresh();
+
+        // ── the strip: adjacent claims have to be TELLABLE APART ──
+        // A packed pool puts every sample edge to edge; drawn as one flat
+        // underline the whole line was a single blue bar. Counting colour runs
+        // across the ribbon lane is the assertion that they are blocks.
+        const { LAYOUT } = await import("../../src/ui/views/poolwave.js");
+        sv.selRegion = -1;
+        sv.selected = 0;
+        sv.mapOpen = true;
+        sv.refresh();
+        sv.poolWave.setZoom(11);          // coarse: the whole song on a line or two
+        sv.poolWave.scroll.scrollTop = 0;
+        sv.poolWave.draw();
+        const dpr = win.devicePixelRatio || 1;
+        const g = sv.poolWave.canvas.getContext("2d");
+        const laneY = Math.round((LAYOUT.WAVE_H + LAYOUT.RIBBON_H / 2) * dpr);
+        const strip = g.getImageData(Math.round(LAYOUT.GUTTER_W * dpr), laneY,
+          sv.poolWave.canvas.width - Math.round(LAYOUT.GUTTER_W * dpr), 1).data;
+        let runs = 0;
+        for (let i = 4; i < strip.length; i += 4) {
+          const d = Math.abs(strip[i] - strip[i - 4]) + Math.abs(strip[i + 1] - strip[i - 3]) +
+            Math.abs(strip[i + 2] - strip[i - 2]);
+          if (d > 24) runs++;
+        }
+        const onLine = store.doc.sampleList().filter((e) =>
+          e.ptr < sv.poolWave.bytesPerRow).length;
+        ok(onLine >= 8, `m0 the first line really is packed with samples (${onLine})`);
+        ok(runs >= onLine, `m1 the strip breaks into blocks, not one bar (${runs} edges, ${onLine} samples)`);
+        ok(LAYOUT.RIBBON_H >= 10,
+          `m2 …deep enough to hold the row number inside it (${LAYOUT.RIBBON_H}px)`);
+
+        // ── the block palette, in every theme ──
+        // Only CONSECUTIVE entries can touch, so those are the pairs that have
+        // to be far apart; and none of the five may be mistaken for one of the
+        // three hues that MEAN something on this canvas.
+        const rgb = (css) => {
+          const m = /^#?([0-9a-f]{6})$/i.exec(css.trim());
+          return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : null;
+        };
+        const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        const root = win.document.documentElement;
+        const wasTheme = root.dataset.theme;
+        for (const th of ["dark", "dim", "light", "warmth"]) {
+          root.dataset.theme = th;
+          const cs = win.getComputedStyle(root);
+          const v = (n) => cs.getPropertyValue(n).trim();
+          const hues = [0, 1, 2, 3, 4].map((i) => rgb(v(`--cv-pool-c${i}`)));
+          ok(hues.every(Boolean), `n1.${th} all five block colours resolve`);
+          if (!hues.every(Boolean)) continue;
+          let worstAdj = Infinity, worstPair = "";
+          for (let i = 0; i < 5; i++) {
+            const d = dist(hues[i], hues[(i + 1) % 5]);
+            if (d < worstAdj) { worstAdj = d; worstPair = `c${i}/c${(i + 1) % 5}`; }
+          }
+          ok(worstAdj >= 60,
+            `n2.${th} consecutive colours stay apart (worst ${worstPair} = ${worstAdj.toFixed(0)})`);
+          let worstRes = Infinity, worstName = "";
+          for (const [name, val] of [["accent", v("--accent")], ["trace", v("--cv-wave")],
+            ["recording", v("--cv-pool-region")], ["cursor", v("--cv-wave-cursor")]]) {
+            const r = rgb(val);
+            if (!r) continue;
+            for (const h of hues) {
+              const d = dist(h, r);
+              if (d < worstRes) { worstRes = d; worstName = name; }
+            }
+          }
+          ok(worstRes >= 60,
+            `n3.${th} …and clear of what the other colours mean (nearest ${worstName} = ${worstRes.toFixed(0)})`);
+        }
+        if (wasTheme) root.dataset.theme = wasTheme; else delete root.dataset.theme;
+
+        // ── the map fills the pane, rather than a fixed eight lines ──
+        // What sits below it is the funk-repeat line (which keeps its own
+        // reserved height so nothing shifts) and the pane's own padding.
+        const gapUnder = sv.right.getBoundingClientRect().bottom -
+          sv.poolWave.scroll.getBoundingClientRect().bottom;
+        ok(gapUnder < 44,
+          `m3 the scroller runs to the bottom of the pane, bar the funk line and the padding (${gapUnder.toFixed(1)}px)`);
+        ok(sv.poolWave.viewH() > LAYOUT.ROW_H * 8,
+          `m4 …so it shows more than the old fixed eight lines (${sv.poolWave.viewH()}px)`);
+        // …and it TRACKS the pane: a taller window is a taller map.
+        const wasH = sv.poolWave.viewH();
+        const wasRows = sv.poolWave.canvas.height;
+        frame.style.height = "1400px";
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await new Promise((r) => setTimeout(r, 60));
+        ok(sv.poolWave.viewH() > wasH + 300,
+          `m5 growing the window grows the map (${wasH} → ${sv.poolWave.viewH()}px)`);
+        ok(sv.poolWave.canvas.height > wasRows,
+          "m6 …and it paints the extra lines rather than leaving them blank");
+        frame.style.height = "900px";
+        await new Promise((r) => setTimeout(r, 60));
+        sv.mapOpen = false;
+        sv.refresh();
+
+        // ── the funk readout sits under the waveform (item 175.4) ──
+        const kids = [...sv.right.children];
+        ok(kids.indexOf(sv.funkInfo) > kids.indexOf(sv.canvas),
+          "j1 the funk-repeat line is below the waveform");
+
+        log("DONE " + (out.some((l) => l.includes("FAIL")) ? "with FAILURES" : "all ok"));
+      } catch (err) {
+        log("EXCEPTION " + (err?.stack ?? err));
+      }
+    })();
+  </script>
+</body>
+</html>

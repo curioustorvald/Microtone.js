@@ -190,11 +190,13 @@ async function loadBytes(name, bytes, { sf2 = null, bank = null, saveToOpfs = fa
       store.doc.ixmp = parsed.ixmp.map((e) => ({ instId: e.instId, count: e.count, blob: Uint8Array.from(e.blob) }));
       store.doc._instruments = null; // re-decode from the new image
       store.doc._instrumentsEdited = false;
-      // Carry the bank's name tables + Ixmp sections over; keep song sections.
+      // Carry the bank's name tables + Ixmp/SRgn sections over; keep song
+      // sections. SRgn travels with the bank because a region names POOL bytes,
+      // and the pool is exactly what a .tsii replaces (item 175).
       store.doc.projSections = store.doc.projSections.filter(
-        (s) => !["INam", "SNam", "Ixmp"].includes(s.fourcc));
+        (s) => !["INam", "SNam", "Ixmp", "SRgn"].includes(s.fourcc));
       for (const s of parsed.projSections) {
-        if (["INam", "SNam", "Ixmp"].includes(s.fourcc)) {
+        if (["INam", "SNam", "Ixmp", "SRgn"].includes(s.fourcc)) {
           store.doc.projSections.push({ fourcc: s.fourcc, payload: Uint8Array.from(s.payload) });
         }
       }

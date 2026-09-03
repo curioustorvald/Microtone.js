@@ -73,6 +73,31 @@
   --cv-pool-shared: #d08bff; /* bytes MORE THAN ONE census row claims */
   --cv-pool-free: #262b35;   /* unclaimed and swept */
   --cv-pool-stale: #7a4a3a;  /* unclaimed, still holding old audio */
+  --cv-pool-region: #3f8f63;  /* a long recording loaded into memory (item 175) */
+  /* Pool-map block colours (item 175). The map's strip draws one labelled block
+   * per sample, and a packed pool puts hundreds of them edge to edge — so the
+   * blocks are coloured by census row rather than all alike. The census is
+   * sorted by pool pointer and numbered in that order, which means NEIGHBOURING
+   * blocks always hold consecutive numbers and therefore never share a colour.
+   * All five stay clear of the three hues that MEAN something on this canvas:
+   * amber (the selected row), green (the trace, and a loaded recording) and the
+   * hot pink of the play cursor.
+   *
+   * The ORDER matters more than the set: only CONSECUTIVE entries can ever end
+   * up touching, so the cycle is arranged blue → rose → cyan → violet → slate,
+   * which puts the widest jump between every pair that can share an edge. Two
+   * colours further apart in the cycle may sit closer in the eye; they can
+   * never sit closer on the screen.
+   *
+   * The FIFTH is the odd one out on purpose: four hues is as many as this arc
+   * holds at a saturation that still reads, so c4 separates by LIGHTNESS
+   * instead — near-white on the dark grounds, near-black on the light ones.
+   * Lightness is the channel that survives a three-pixel block. */
+  --cv-pool-c0: #4a7fb5;     /* blue */
+  --cv-pool-c1: #b8566e;     /* rose */
+  --cv-pool-c2: #2f95a8;     /* cyan */
+  --cv-pool-c3: #8f5fc9;     /* violet */
+  --cv-pool-c4: #b9c2cf;     /* pale — see the note on the fifth */
 
   --brand: #ff4362;
   --brand2: #eeeeee;
@@ -138,6 +163,12 @@
   --cv-pool-shared: #d08bff;
   --cv-pool-free: #343a48;
   --cv-pool-stale: #8a5545;
+  --cv-pool-region: #4a9d70;
+  --cv-pool-c0: #5a8fc4;
+  --cv-pool-c1: #c8667e;
+  --cv-pool-c2: #3fa5b8;
+  --cv-pool-c3: #9f70d8;
+  --cv-pool-c4: #c3ccd8;
 
   --brand: #ff4362;
   --brand2: #eeeeee;
@@ -200,6 +231,12 @@
   --cv-pool-shared: #8f36bd;
   --cv-pool-free: #dde1e9;
   --cv-pool-stale: #c9a877;
+  --cv-pool-region: #2f7d55;
+  --cv-pool-c0: #3d78b0;
+  --cv-pool-c1: #a63e5c;
+  --cv-pool-c2: #0e6f96;
+  --cv-pool-c3: #7a4bb8;
+  --cv-pool-c4: #2b303c;
 
   --brand: #f20046;
   --brand2: #404758;
@@ -277,6 +314,12 @@
   --cv-pool-shared: #82339e;
   --cv-pool-free: #c0b58e;
   --cv-pool-stale: #b08b52;
+  --cv-pool-region: #6f8a4a;
+  --cv-pool-c0: #3a719c;
+  --cv-pool-c1: #97374f;
+  --cv-pool-c2: #17657c;
+  --cv-pool-c3: #6b4a9c;
+  --cv-pool-c4: #33384a;
 
   --brand: #a8261a;
   --brand2: #3b3524;
@@ -1477,6 +1520,24 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   border-radius: 2px;
   color: var(--accent2, var(--accent));
 }
+/* Recordings in memory (item 175) head the Samples list under their own
+ * headings, and wear the region colour so they cannot be mistaken for the
+ * samples below them. The implicit "all sample memory" row is a VIEW of what
+ * the other rows already are, so its index tag is dimmed rather than coloured. */
+.side-head {
+  padding: 0.35rem 0.6rem 0.15rem;
+  color: var(--dim);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+.side-row.rgn .idx { color: var(--cv-pool-region); }
+.side-row.rgn.whole .idx { color: var(--dim); }
+
 .badge-sm { color: var(--accent-2); font-size: 0.75rem; }
 .side-detail { flex: 1; overflow-y: auto; padding: 0.8rem; }
 .detail-info { margin-bottom: 0.6rem; color: var(--dim); font-size: 0.9rem; }
@@ -1626,6 +1687,13 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .slider-row input.sl-num.wide { width: 100%; }
 .slider-row input.sl-range { width: 100%; accent-color: var(--accent); }
 .slider-row.noslider { grid-template-columns: 10rem 9rem minmax(4.5rem, 1fr); }
+/* item 175.2 — "From the list" under Sample ptr. The picker spans the value
+ * columns like the button groups do, and is allowed to CLIP rather than to
+ * widen the panel: a sample name plus its size and address is longer than any
+ * column, and the number above it is the authoritative reading anyway. */
+.slider-row.pick > .sl-pick,
+.slider-row.pick > .mt-pick { grid-column: 2 / -1; justify-self: stretch; min-width: 0; max-width: 100%; }
+.slider-row.pick > .mt-pick > select[data-mt] { min-width: 0; }
 /* WIDE detune slider: spinner + readout on the first line, full-width slider below. */
 .slider-row.wide {
   grid-template-columns: 10rem 9rem 1fr;
@@ -1909,6 +1977,11 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
   padding: 0.3rem 0.6rem; margin: 0 0 0.5rem;
 }
+/* A toolbar button that does not apply to the selection has to LOOK like it —
+ * Rename and Delete over the implicit "all sample memory" row, for instance
+ * (item 175), where there is nothing declared to rename or delete. */
+.smp-toolbar button:disabled { opacity: 0.4; cursor: default; }
+.smp-toolbar button:disabled:hover { border-color: var(--border); }
 
 /* ── Sample-memory panel (item 166) — the optional map under the waveform ── */
 .smp-toolbar .smp-pool.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
@@ -1940,6 +2013,48 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   width: 12px; height: 9px; border-radius: 2px; display: inline-block;
   border: 1px solid var(--border);
 }
+
+/* ── Pool map (item 175.1) — the pool drawn as a waveform, wrapped ────────
+ * A hex dump's shape: an address down the left, a fixed number of bytes
+ * across, line after line. The scroller owns the height (a whole pool is tens
+ * of thousands of lines) and the canvases are parked at the scroll offset, so
+ * only one screenful of pixels is ever painted. */
+/* The Samples pane is a flex column so the map can take whatever height is
+ * left over: a wrapped waveform is only as useful as the number of lines you
+ * can see at once, and a fixed eight of them wasted the bottom half of a tall
+ * screen. Everything else in the pane keeps its natural height; only the map
+ * grows, and only down to a floor, past which the pane scrolls as before. */
+.smp-detail { display: flex; flex-direction: column; }
+.smp-detail > * { flex: 0 0 auto; }
+.smp-detail > .pw-root { flex: 1 1 auto; min-height: 15rem; display: flex; flex-direction: column; }
+.smp-detail > .pw-root > .pw-scroll { flex: 1 1 auto; min-height: 0; }
+
+.pw-root { margin: 0.4rem 0 0.2rem; }
+.pw-bar {
+  display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;
+  color: var(--dim); font-size: 0.8rem; margin-bottom: 0.35rem;
+}
+.pw-bar button { padding: 0.1rem 0.5rem; font-size: 0.8rem; }
+.pw-zoom { font-variant-numeric: tabular-nums; min-width: 9rem; }
+.pw-readout {
+  font-family: "Roboto Mono", monospace; font-size: 0.76rem; color: var(--fg2);
+  flex: 1 1 12rem; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pw-sel { color: var(--accent); font-family: "Roboto Mono", monospace; font-size: 0.76rem; }
+.pw-slice { border-color: var(--accent); color: var(--accent); }
+.pw-slice:disabled { border-color: var(--border); color: var(--dim); }
+.pw-scroll {
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--cv-bg);
+}
+.pw-spacer { position: relative; width: 100%; }
+.pw-canvas { position: absolute; left: 0; top: 0; display: block; }
+.pw-overlay { position: absolute; left: 0; top: 0; display: block; touch-action: none; cursor: crosshair; }
 
 /* ── Sample Lab (items 83/84/109) ── */
 .samplelab-modal { max-width: min(1280px, 94vw); }

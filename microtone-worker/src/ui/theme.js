@@ -55,9 +55,40 @@ const VAR_KEYS = {
   // canvas: sample-memory panel (item 166)
   poolUsed: "--cv-pool-used", poolShared: "--cv-pool-shared",
   poolFree: "--cv-pool-free", poolStale: "--cv-pool-stale",
+  // canvas: pool regions + the map's per-sample block colours (item 175)
+  poolRegion: "--cv-pool-region",
+  poolC0: "--cv-pool-c0", poolC1: "--cv-pool-c1", poolC2: "--cv-pool-c2",
+  poolC3: "--cv-pool-c3", poolC4: "--cv-pool-c4",
 };
 
 let _cache = null;
+
+/**
+ * Ink that will READ on `fill`: whichever of the theme's ground and foreground
+ * is further from it in luminance. Canvas blocks are filled in half a dozen
+ * different colours across four themes, so a fixed label colour is wrong
+ * somewhere — amber-on-dark and dark-orange-on-light want opposite ink for the
+ * same block. Used by the memory panel and the pool map (items 166, 175).
+ */
+const _lum = new Map();
+export function luminance(css) {
+  if (_lum.has(css)) return _lum.get(css);
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})/i.exec(String(css).trim());
+  let v = 0.5;
+  if (m) {
+    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    v = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+  _lum.set(css, v);
+  return v;
+}
+
+export function pickInk(fill, C) {
+  const l = luminance(fill);
+  return Math.abs(luminance(C.bg) - l) >= Math.abs(luminance(C.fg) - l) ? C.bg : C.fg;
+}
 
 /** Cached theme colours for canvas painting. Refreshed on applyTheme. */
 export function themeColors() {

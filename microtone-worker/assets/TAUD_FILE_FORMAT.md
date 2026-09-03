@@ -445,7 +445,7 @@ If the record's `U32` at offset 0 has its high 16 bits equal to `$FFFF` — a va
 
 **The instrument's default position.** In a stereo song byte 177 is the pan value it has always been. In a surround song the same byte is the **low eight bits of a 9-bit azimuth** — byte 14's `A` bit supplies the ninth — read in the units of `S $8xxx` (0 = left, 128 = front, 256 = right, 384 = behind), and byte 254 is the elevation in effect `X`'s signed units (128 = 90°). This is the same relationship `S $80xx` has with `S $8xxx`, so every file written before these bits existed stays valid: `A` clear puts the default on the front arc, which is exactly what its pan byte always meant, and a stereo song never reads either extra field.
 
-A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch overrides them**: a patch that carries a pan (its own `$FF` sentinel being the only gate — **not** `p`, see [§9.10](#9-10-ixmp-patch-records)) is the more specific statement of the same thing, so it wins and the base record's fields do not also apply. A patch record has no elevation field, so a patch override moves the azimuth alone and the instrument's elevation stands.
+A planar song forces the elevation to zero, as it does for every other source of elevation. **These base-record fields** are consumed only when the pan envelope's `p` bit ("use default pan") is set, and an **Ixmp patch overrides them**: a patch that carries a pan (its own `$FF` sentinel being the only gate — **not** `p`, see [§9.11](#9-11-ixmp-patch-records)) is the more specific statement of the same thing, so it wins and the base record's fields do not also apply. A patch record has no elevation field, so a patch override moves the azimuth alone and the instrument's elevation stands.
 
 **The instrument's default position is a `note_pan` offset, not a channel pan** (TAUD_NOTE_EFFECTS.md §3a): the position it names is measured from wherever the channel is pointing, so it lands exactly where it says when the channel sits at its `$80` / front default, and it ROTATES with the channel when `S $80xx`, `P`, `X` or `Z` has moved it. An instrument never writes the channel's own position. The pan ENVELOPE offsets the azimuth on top of both and leaves the elevation alone.
 
@@ -574,7 +574,7 @@ The two pitch/filter slots (bytes 19/121/193 and 197/201/199) are distinguished 
 
 ### 7.3 Ixmp patches
 
-The base record can describe exactly one sample. An instrument that needs a keyboard map, velocity layers, per-sample envelopes or a stereo pair carries an **Ixmp** ("instrument extra samples") patch list in the Project Data. See [§9.9](#9-9-ixmp-instrument-extra-samples).
+The base record can describe exactly one sample. An instrument that needs a keyboard map, velocity layers, per-sample envelopes or a stereo pair carries an **Ixmp** ("instrument extra samples") patch list in the Project Data. See [§9.10](#9-10-ixmp-instrument-extra-samples).
 
 ### 7.4 Metainstrument records
 
@@ -772,6 +772,8 @@ Instrument names, separated by `$1E`, in instrument-index order. UTF-8.
 
 Sample names, separated by `$1E`, in sample-pool order. UTF-8. Taud has no sample records — a "sample" is a span in the pool referenced by instruments — so this table is ordered by the deduplicated census of spans that a producer derives from the instrument bin and the Ixmp patches.
 
+Pool regions ([§9.9](#9-9-srgn-sample-pool-regions)) are **not** part of that census and contribute no entry here: nothing references them, and they carry their own names.
+
 ### 9.5 `pNam` — pattern name table
 
 Pattern names, separated by `$1E`, in pattern-index order. UTF-8.
@@ -855,7 +857,37 @@ Nothing in Project Data is required to play a song correctly, with two exception
 
 Everything else is naming, display and editor state.
 
-### 9.9 `Ixmp` — instrument extra samples
+### 9.9 `SRgn` — sample-pool regions
+
+A **region** is a span of the sample pool that carries a name and a rate and that **no instrument claims**.
+
+It exists because `sample length` (bytes 4–5 of an instrument record, and the same field in an Ixmp patch) is a `U16`: no instrument and no patch can address more than 65535 bytes, so the deduplicated census of spans that `SNam` is ordered by ([§9.4](#9-4-snam-sample-name-table)) has no way to describe a recording longer than that. The pool is 8 MB. This section is how a producer says *these bytes are one long recording, and the instruments are windows cut out of it*.
+
+The payload is a repetition of entries:
+
+| Type | Field |
+|---|---|
+| `U32` | Pool pointer of channel 0 |
+| `U32` | Length in bytes, **per channel** |
+| `U16` | Sampling rate at C4 |
+| `U8` | Channel count, 1…8 |
+| `U8` | **RESERVED** (0) |
+| `Byte[*]` | Name, NUL-terminated, UTF-8 |
+
+Channel *k* begins at `pointer + k × length`, so a region is one contiguous block of `length × channels` bytes.
+
+Entries **SHOULD** be written in ascending pointer order. An entry whose length is zero, whose channel count is outside 1…8, or whose block runs past the end of the pool is **INVALID**; a reader **MUST** drop such an entry rather than repair it, because a region that lies about its extent reserves the wrong bytes.
+
+Regions **MAY** overlap the spans instruments claim, and normally do — that overlap is the point. Two regions **MUST NOT** overlap each other.
+
+Nothing about playback depends on this section ([§9.8](#9-8-reading-project-data-on-a-device-that-ignores-it)): a player that skips it hears the same song. An EDITOR that honours it **MUST**:
+
+- keep a region's bytes out of whatever it allocates new samples from, since nothing claims them; and
+- keep them out of whatever it sweeps when freeing unreferenced pool bytes, for the same reason.
+
+An editor that ignores the section while still writing the pool will overwrite the recording.
+
+### 9.10 `Ixmp` — instrument extra samples
 
 This section overlays additional samples on instruments: a keyboard map, velocity layers, per-sample envelopes, per-sample tuning, and stereo pairs. It exists to carry IT and XM instrument semantics, and partial SoundFont 2 compatibility, without widening the 256-byte base record.
 
@@ -874,7 +906,7 @@ Two rules bound the whole section:
 - Overlapping rectangles within one instrument's patch list are **INVALID**. Layered samples **MUST** use a Metainstrument instead.
 - Two `Ixmp` entries naming the same instrument are **INVALID**.
 
-### 9.10 Ixmp patch records
+### 9.11 Ixmp patch records
 
 Patch records are **variable length**. Each begins with a version byte that is really a set of feature flags, followed by 30 common bytes, followed by whichever optional blocks the flags select.
 
@@ -1008,3 +1040,4 @@ A writer producing a file that any conforming reader will accept must satisfy al
 | 2026-08-08 | An Ixmp patch's `default pan` no longer needs the base record's pan-envelope `p` bit — its `$FF` sentinel is the only gate |
 | 2026-08-08 | Panning splits into two axes like volume: instrument and Ixmp pans and the panning column write `note_pan`, S $80xx / P / X / 4 / Z write `channel_pan`, and the mixer adds them |
 | 2026-08-28 | Metainstrument type 4 — FM operator racks: the layer table read as operators, with an RPN algorithm packed after it |
+| 2026-09-03 | `SRgn` — sample-pool regions: long recordings living in the pool that no instrument claims |

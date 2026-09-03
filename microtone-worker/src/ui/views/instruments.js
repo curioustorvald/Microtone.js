@@ -8,7 +8,7 @@
 import {
   setInstFieldOp, setInstBytesOp, setEnvDragOp, setEnvPointOp, setEnvArrayOp,
   setMetaRecordOp, setSectionOp, renumberInstrumentOp, deleteInstrumentOp,
-  importBankOp,
+  importBankOp, compositeOp,
 } from "../../doc/ops.js";
 import {
   metaLayers, metaRecordOf, duplicateLayer, removeLayer, moveLayer, patchLayer,
@@ -45,6 +45,7 @@ import { ANCHOR_NOTE, stepNoteInTable } from "../pitchtables.js";
 import { UNITS_PER_OCTAVE } from "../../doc/chord.js";
 import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
+import { isStereoSample } from "../../doc/document.js";
 import {
   annHex2, annFilter, annFadeout, annSfCutoff, annSfReso, azimuthLabel, elevationLabel,
   SEG_MINIFLOAT_MAP,
@@ -709,6 +710,117 @@ export class InstrumentsView {
     return row;
   }
 
+  /** label · native <select> row (the spinner enhancer turns it into the app's
+   *  own picker). `options` is [[value, text], …]; `groups` optionally splits
+   *  them into <optgroup>s as [[caption, [[value, text], …]], …]. */
+  pickRow(label, value, options, onChange, groups = null) {
+    const row = document.createElement("div");
+    row.className = "slider-row pick";
+    const lab = document.createElement("span");
+    lab.className = "sl-label"; lab.textContent = label;
+    const sel = document.createElement("select");
+    sel.className = "sl-pick";
+    const addOpt = (parent, [v, text, title]) => {
+      const o = document.createElement("option");
+      o.value = String(v);
+      o.textContent = text;
+      if (title) o.title = title;
+      parent.appendChild(o);
+    };
+    for (const opt of options) addOpt(sel, opt);
+    for (const [caption, opts] of groups ?? []) {
+      if (opts.length === 0) continue;
+      const g = document.createElement("optgroup");
+      g.label = caption;
+      for (const opt of opts) addOpt(g, opt);
+      sel.appendChild(g);
+    }
+    sel.value = String(value);
+    sel.addEventListener("change", () => onChange(sel.value));
+    row.append(lab, sel);
+    return row;
+  }
+
+  /**
+   * "Sample ptr" as a LIST as well as a number (item 175.2).
+   *
+   * The architectural conflict, and how it is resolved: there is no link
+   * between an instrument and a sample to bind a picker to. A Taud instrument
+   * owns a raw pointer and a length, and the Samples list is a CENSUS derived
+   * from every instrument's pointer and length — the arrow points the other
+   * way round from the one a dropdown implies. So this picker does not select
+   * a row; it COPIES one. Choosing an entry writes that entry's pointer,
+   * length, rate and loop into this record (everything the census row knows
+   * about the sample, and nothing else — envelopes, filter, pan and NNA are
+   * the instrument's own), and the row shown afterwards is whatever the census
+   * says once it has been recomputed from the records.
+   *
+   * That is why rows can appear and vanish as you use it: repointing the only
+   * user of a sample deletes its row. The list is therefore rebuilt on every
+   * render rather than cached, and the current value is matched by ptr:len
+   * identity, never by index.
+   *
+   * Pool REGIONS (item 175) are listed too, in their own group: choosing one
+   * points the instrument at the first 65535 bytes of that recording, which is
+   * the window the spinners above and the Pool map are then there to move.
+   */
+  samplePickRow(inst) {
+    const doc = this.store.doc;
+    const census = doc.sampleList();
+    const regions = doc.sampleRegions();
+    const key = `${inst.samplePtr}:${inst.sampleLength}`;
+    const fmt = (n) => (n >= 1048576 ? (n / 1048576).toFixed(2) + " MB"
+      : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B");
+    const opts = census.map((e) => [
+      `s${e.ptr}:${e.len}`,
+      `${String(e.index).padStart(3, "0")} ${unescapeName(e.name) || t("smp.namePlaceholder")}` +
+        ` · ${fmt(e.len)}${isStereoSample(e) ? " ×2" : ""} · ${annHex6(e.ptr)}`,
+    ]);
+    const regionOpts = regions.map((r, i) => [
+      `r${r.ptr}:${r.len}`,
+      `R${String(i).padStart(2, "0")} ${unescapeName(r.name) || t("rgn.namePlaceholder")}` +
+        ` · ${fmt(r.len)}${r.chan > 1 ? ` ×${r.chan}` : ""} · ${annHex6(r.ptr)}`,
+    ]);
+    // "Not in the list" is a real state, not a placeholder: a record with a
+    // zero length claims nothing, so the census has no row for it.
+    const hasRow = census.some((e) => `${e.ptr}:${e.len}` === key);
+    const head = hasRow ? [] : [["", t("inst.smpPickNone")]];
+    return this.pickRow(t("inst.smpPick"), hasRow ? `s${key}` : "",
+      [...head, ...opts],
+      (v) => {
+        if (!v) return;
+        const [ptr, len] = v.slice(1).split(":").map(Number);
+        if (v[0] === "r") {
+          const r = regions.find((x) => x.ptr === ptr && x.len === len);
+          if (r) this.adoptSample(inst, { ptr: r.ptr, len: Math.min(r.len, 0xffff), rate: r.rate, loopMode: 0, loopStart: 0, loopEnd: 0 });
+          return;
+        }
+        const e = census.find((x) => x.ptr === ptr && x.len === len);
+        if (e) this.adoptSample(inst, e);
+      },
+      regionOpts.length ? [[t("rgn.pickGroup"), regionOpts]] : null);
+  }
+
+  /** Point the selected instrument at `e` (a census row, or a region window):
+   *  pointer, length, rate and loop in ONE undo step. */
+  adoptSample(inst, e) {
+    const slot = this.selected;
+    this.store.undo.apply(compositeOp([
+      setInstFieldOp(slot, "samplePtr", e.ptr),
+      setInstFieldOp(slot, "sampleLength", e.len & 0xffff),
+      setInstFieldOp(slot, "samplingRate", Math.max(1, Math.min(0xffff, e.rate | 0))),
+      setInstFieldOp(slot, "sampleLoopStart", e.loopStart & 0xffff),
+      setInstFieldOp(slot, "sampleLoopEnd", e.loopEnd & 0xffff),
+      // Loop mode and sustain come from the sample; the percussion bit is the
+      // INSTRUMENT's own and stays where it was.
+      setInstFieldOp(slot, "loopMode", (inst.loopMode & ~0x17) | (e.loopMode & 0x17)),
+      // A play start past the new length would play nothing at all.
+      ...(inst.samplePlayStart >= (e.len & 0xffff)
+        ? [setInstFieldOp(slot, "samplePlayStart", 0)] : []),
+    ]));
+    this.renderPanel();
+  }
+
   /** label · checkbox (with on/off text) row. */
   checkRow(label, checked, onChange) {
     const row = document.createElement("div");
@@ -886,8 +998,10 @@ export class InstrumentsView {
 
     this.group(t("inst.grpSample"),
       this.numRow(t("inst.samplePtr"), inst.samplePtr, 0, 8388607, (v) => this.setField("samplePtr", v), { ann: annHex6 }),
+      this.samplePickRow(inst),
       this.numRow(t("inst.sampleLen"), inst.sampleLength, 0, 65535, (v) => this.setField("sampleLength", v)),
       this.numRow(t("inst.rateC4"), inst.samplingRate, 0, 65535, (v) => this.setField("samplingRate", v), { ann: (v) => v + " Hz" }),
+      this.numRow(t("inst.playStart"), inst.samplePlayStart, 0, 65535, (v) => this.setField("samplePlayStart", v)),
       this.numRow(t("inst.loopStart"), inst.sampleLoopStart, 0, 65535, (v) => this.setField("sampleLoopStart", v)),
       this.numRow(t("inst.loopEnd"), inst.sampleLoopEnd, 0, 65535, (v) => this.setField("sampleLoopEnd", v)),
       this.selectRow(t("inst.loopMode"), inst.loopMode & 3,

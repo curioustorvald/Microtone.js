@@ -14,6 +14,7 @@
 
 import { SAMPLEBIN_SIZE } from "../format/taud-const.js";
 import { sampleSpans } from "./document.js";
+import { regionSpans } from "./sampleregions.js";
 
 /** The pool's address space: [0, POOL_SIZE). */
 export const POOL_SIZE = SAMPLEBIN_SIZE;
@@ -102,13 +103,18 @@ function countNonZero(bin, from, to) {
  *   claims   [{index, chan, ptr, len, end, lane, outside, overlaps[], entry}]
  *            — one per POOL SPAN, so a stereo sample contributes two. `index`
  *            is the census row, which is what the Samples list selects by.
- *   used     merged extents actually claimed, ascending
+ *   regions  [{index, chan, ptr, len, end, entry}] — one per REGION span (item
+ *            175). A region is pool memory nothing claims, so it is not a
+ *            claim; it is used memory all the same, and every extent, hole and
+ *            byte count below counts it.
+ *   used     merged extents actually claimed or reserved, ascending
  *   holes    [{ptr, len, stale}] free gaps BELOW the high-water mark
  *   outside  the claims that fall outside [0, POOL_SIZE) — dangling pointers
  *   stats    the numbers the panel prints
  */
-export function poolMap(doc, { census = null, scanBytes = true } = {}) {
+export function poolMap(doc, { census = null, regions = null, scanBytes = true } = {}) {
   const list = census ?? doc?.sampleList() ?? [];
+  const regionList = regions ?? doc?.sampleRegions?.() ?? [];
   const bin = scanBytes ? (doc?.sampleBin ?? null) : null;
 
   const claims = [];
@@ -138,9 +144,22 @@ export function poolMap(doc, { census = null, scanBytes = true } = {}) {
     }
   }
 
+  // Region spans: used memory that no claim describes (item 175).
+  const regionRects = [];
+  for (const r of regionList) {
+    for (const sp of regionSpans(r)) {
+      if (sp.ptr < 0 || sp.ptr + sp.len > POOL_SIZE) continue;
+      regionRects.push({
+        index: r.index ?? 0, chan: sp.chan, ptr: sp.ptr, len: sp.len,
+        end: sp.ptr + sp.len, entry: r,
+      });
+    }
+  }
+  regionRects.sort((a, b) => a.ptr - b.ptr);
+
   const inPool = claims.filter((c) => !c.outside);
   const outside = claims.filter((c) => c.outside);
-  const used = merged(inPool);
+  const used = merged([...inPool, ...regionRects]);
   const highWater = used.length ? used[used.length - 1].ptr + used[used.length - 1].len : 0;
   const lanes = assignLanes(inPool);
 
@@ -154,12 +173,16 @@ export function poolMap(doc, { census = null, scanBytes = true } = {}) {
 
   const usedBytes = used.reduce((n, u) => n + u.len, 0);
   const claimedBytes = inPool.reduce((n, c) => n + c.len, 0);
+  const regionBytes = regionRects.reduce((n, r) => n + r.len, 0);
   return {
     poolSize: POOL_SIZE,
-    claims, used, holes, outside, lanes, highWater,
+    claims, regions: regionRects, used, holes, outside, lanes, highWater,
     stats: {
       entries: list.length,
       spans: claims.length,
+      regionCount: regionList.length,
+      regionSpans: regionRects.length,
+      regionBytes,
       usedBytes,
       // What the census would ADD UP TO if every row owned its bytes: bigger
       // than usedBytes exactly when rows share, which is the panel's whole point.

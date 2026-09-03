@@ -13,6 +13,7 @@ import {
 import { emptyPatternBytes } from "./patterntools.js";
 import { widenPattern } from "./upgrade.js";
 import { parseNotaPayload, defToPreset, slotForNotationValue } from "./notation.js";
+import { parseRegionPayload } from "./sampleregions.js";
 import { cueInstructionWords } from "../format/taud-parse.js";
 import { writeTaud } from "../format/taud-write.js";
 
@@ -176,7 +177,7 @@ export class Song {
  * the combined document never aliases the bank's.
  */
 export function combineTpif(bank, tpif) {
-  const isBankSec = (s) => ["INam", "SNam", "Ixmp"].includes(s.fourcc);
+  const isBankSec = (s) => ["INam", "SNam", "Ixmp", "SRgn"].includes(s.fourcc);
   return {
     kind: "taud",
     fmtVer: tpif.fmtVer,
@@ -346,6 +347,26 @@ export class Document {
     const nul = sec.payload.indexOf(0);
     const end = nul < 0 ? sec.payload.length : nul;
     return new TextDecoder().decode(sec.payload.subarray(0, end));
+  }
+
+  /**
+   * Sample-pool regions from the "SRgn" section (item 175, §9.11): the long
+   * recordings loaded into memory that no instrument claims, ascending by
+   * pointer. Cached by payload identity like customNotations() — undo/redo
+   * swaps the payload ref, which invalidates naturally.
+   *
+   * A region is editor state: it reserves and names pool bytes, and playback
+   * never reads it. Everything that ALLOCATES or FREES pool bytes must consult
+   * it, though, or the first byte of a 4 MB recording is where the next
+   * imported drum hit lands.
+   */
+  sampleRegions() {
+    const sec = this.projSections.find((s) => s.fourcc === "SRgn");
+    const payload = sec ? sec.payload : null;
+    if (!this._srgnCache || this._srgnCache.payload !== payload) {
+      this._srgnCache = { payload, regions: payload ? parseRegionPayload(payload) : [] };
+    }
+    return this._srgnCache.regions;
   }
 
   /** Custom notation definitions from the "nota" section, cached by payload

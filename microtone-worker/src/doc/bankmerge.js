@@ -20,6 +20,9 @@ import {
 } from "../engine/inst.js";
 import { sampleSpans } from "./document.js";
 import {
+  regionSpans, buildRegionPayload, MAX_REGION_CHANNELS,
+} from "./sampleregions.js";
+import {
   metaLayers, metaRecordOf, defaultLayer, linkCount, repointLayer,
 } from "./metaedit.js";
 
@@ -121,11 +124,19 @@ export function bankInventory(srcDoc) {
 }
 
 // Free extents of the destination pool: [0, SAMPLEBIN_SIZE) minus the merged
-// [ptr, ptr+len) intervals of every census sample.
-function freeExtents(census) {
-  const ivs = census
-    .flatMap(sampleSpans) // a stereo entry occupies its extra channels' spans too
-    .map((e) => [e.ptr, Math.min(e.ptr + e.len, SAMPLEBIN_SIZE)])
+// [ptr, ptr+len) intervals of every census sample AND every pool region (item
+// 175). A region's bytes are claimed by nothing — that is what makes it a
+// region — so without this line a 4 MB recording loaded into memory is simply
+// the free space the next imported drum hit lands in.
+//
+// `exempt` puts spans BACK: planReplaceSample hands it the target's own old
+// spans, so a sample cut out of a region can still be rewritten over the bytes
+// it already occupies instead of being exiled to the end of the pool.
+function freeExtents(census, regions = [], exempt = []) {
+  const ivs = [
+    ...census.flatMap(sampleSpans), // a stereo entry occupies its extra channels' spans too
+    ...regions.flatMap(regionSpans),
+  ].map((e) => [e.ptr, Math.min(e.ptr + e.len, SAMPLEBIN_SIZE)])
     .sort((a, b) => a[0] - b[0]);
   const free = [];
   let pos = 0;
@@ -134,7 +145,22 @@ function freeExtents(census) {
     pos = Math.max(pos, b);
   }
   if (pos < SAMPLEBIN_SIZE) free.push({ ptr: pos, len: SAMPLEBIN_SIZE - pos });
-  return free;
+  if (exempt.length === 0) return free;
+  const back = exempt.map((e) => ({ ptr: e.ptr, len: Math.min(e.len, SAMPLEBIN_SIZE - e.ptr) }));
+  return mergeExtents([...free, ...back]);
+}
+
+/** Merge {ptr,len} extents into ascending, non-touching ones. */
+function mergeExtents(list) {
+  const iv = list.filter((e) => e.len > 0)
+    .map((e) => [e.ptr, e.ptr + e.len]).sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [a, b] of iv) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out.map(([a, b]) => ({ ptr: a, len: b - a }));
 }
 
 function bytesEqual(a, b) {
@@ -223,7 +249,7 @@ export function planImport(destDoc, srcDoc, selectedSlots) {
   const srcPool = srcDoc.sampleBin;
   const destPool = destDoc.sampleBin;
   const destCensus = destDoc.sampleList();
-  const extents = freeExtents(destCensus);
+  const extents = freeExtents(destCensus, destDoc.sampleRegions());
   const sampleMap = new Map(); // srcKey → dest ptr
   const newSamples = [];       // {ptr, bytes, srcKeys}
   let newSampleBytes = 0, dedupedSamples = 0;
@@ -445,7 +471,7 @@ export function planMultiSampleImport(destDoc, items) {
   // ── pool: dedupe (census, then batch), first-fit the rest ──
   const destCensus = destDoc.sampleList();
   const destPool = destDoc.sampleBin;
-  const extents = freeExtents(destCensus);
+  const extents = freeExtents(destCensus, destDoc.sampleRegions());
   const samples = [];
   const ptrs = [];
   const ptrsR = [];
@@ -647,7 +673,7 @@ export function planDuplicateSample(destDoc, sample, nameBytes = new Uint8Array(
   // One fresh span per channel. A stereo pair that only got one new span would
   // be half a duplicate sharing half the original.
   const census = destDoc.sampleList();
-  const extents = freeExtents(census);
+  const extents = freeExtents(census, destDoc.sampleRegions());
   const spans = sampleSpans(sample);
   const samples = [];
   const newPtrs = [];
@@ -814,7 +840,7 @@ export function planReplaceSample(destDoc, sample, { pcm, pcmR = null, rate, nam
     oldIvs.some(([a, b]) => sp.ptr < b && a < sp.ptr + sp.len)))) {
     return { error: "Another sample shares these pool bytes — only an edit that keeps the length can be applied in place." };
   }
-  const extents = freeExtents(others);
+  const extents = freeExtents(others, destDoc.sampleRegions(), oldSpans);
   const alloc = (preferPtr) =>
     (carveExtent(extents, preferPtr, newLen) ? preferPtr : carveFirstFit(extents, newLen));
   const newPtrs = [alloc(sample.ptr)];
@@ -1413,10 +1439,246 @@ export function applyPlan(doc, plan) {
     doc.setSection("Ixmp", doc.ixmp.length > 0 ? buildIxmpSection(doc.ixmp) : null);
   }
   if (plan.inamPayload !== null) doc.setSection("INam", plan.inamPayload);
+  // Pool regions (item 175). `undefined` leaves the section alone — only the
+  // plans that add, rename or drop a region carry the field; `null` removes it,
+  // which is what the last region's deletion means.
+  if (plan.regionPayload !== undefined) doc.setSection("SRgn", plan.regionPayload);
   if (plan.writeSnam) {
     const names = doc.sampleList().map((e) =>
       plan.snamNames.get(sampleKey(e.ptr, e.len)) ?? new Uint8Array(0));
     doc.setSection("SNam", joinNameTable(names));
   }
   doc.dirty = true;
+}
+
+// ── pool regions (item 175) ─────────────────────────────────────────────────
+//
+// A region is a long recording living in the pool that no instrument claims
+// (an instrument's sampleLength is a U16 — 65535 bytes is its ceiling). These
+// four plans are the whole life cycle: load one in, cut instruments out of it,
+// rename it, throw it away. They are planImport-shaped, so importBankOp gives
+// them undo, DocSync re-uploads the pool, and the `regionPayload` field
+// applyPlan learned above carries the SRgn section with the same undo step.
+
+/** An empty planImport-shaped plan: the base every region plan builds on. */
+function emptyBankPlan() {
+  return {
+    insts: [], samples: [], inamPayload: null, snamNames: new Map(),
+    writeSnam: false, slotMap: new Map(), newSampleBytes: 0, dedupedSamples: 0,
+  };
+}
+
+/** The SRgn payload for `regions`, or null when the list is empty (a project
+ *  with no regions carries no section at all). */
+function regionPayloadFor(regions) {
+  return regions.length > 0 ? buildRegionPayload(regions) : null;
+}
+
+/**
+ * Plan loading a long recording into the pool as a REGION (item 175):
+ * `channels` is one U8 PCM array per channel, all the same length, and the
+ * whole thing takes ONE contiguous block of `len × channels` bytes so
+ * regionSpans() can address channel *k* at `ptr + k × len`.
+ *
+ * Nothing is deduped. A region is the user's master copy of a recording, and
+ * silently aliasing it onto an identical one already in the pool would make
+ * editing either of them edit both — the opposite of what "load my own copy
+ * into memory" asks for.
+ *
+ * Returns {error} or a plan with `region: {ptr, len, rate, chan, name}`.
+ */
+export function planImportRegion(destDoc, { channels, rate, nameBytes = new Uint8Array(0) }) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image to load into." };
+  }
+  const chans = (channels ?? []).filter((c) => c && c.length > 0);
+  if (chans.length === 0) return { error: "The decoded recording is empty." };
+  if (chans.length > MAX_REGION_CHANNELS) {
+    return { error: `Too many channels: ${chans.length} (${MAX_REGION_CHANNELS} max).` };
+  }
+  const len = chans[0].length;
+  if (chans.some((c) => c.length !== len)) {
+    return { error: "Every channel of a region must be the same length." };
+  }
+  const total = len * chans.length;
+  if (total > SAMPLEBIN_SIZE) {
+    return { error: `Recording too long: ${total} bytes, and the whole pool is ${SAMPLEBIN_SIZE}.` };
+  }
+
+  const regions = destDoc.sampleRegions();
+  const extents = freeExtents(destDoc.sampleList(), regions);
+  const ptr = carveFirstFit(extents, total);
+  if (ptr === null) {
+    const largest = extents.reduce((n, e) => Math.max(n, e.len), 0);
+    return { error: `Sample pool full: needs ${total} contiguous bytes and the largest free run is ${largest}.` };
+  }
+
+  const name = new TextDecoder().decode(nameBytes);
+  const region = {
+    ptr, len, rate: Math.max(1, Math.min(0xffff, Math.round(rate) || 0)),
+    chan: chans.length, name,
+  };
+  const bytes = new Uint8Array(total);
+  chans.forEach((c, i) => bytes.set(c, i * len));
+
+  return {
+    ...emptyBankPlan(),
+    samples: [{ ptr, bytes, srcKeys: [] }],
+    newSampleBytes: total,
+    regionPayload: regionPayloadFor([...regions, region]),
+    region,
+  };
+}
+
+/**
+ * Plan dropping a region. The bytes are ZEROED by default — a region is
+ * usually megabytes, and leaving them behind would cost that much in every
+ * saved file for a recording the user has just thrown away — except where a
+ * census sample still claims part of them: an instrument cut out of the region
+ * outlives it, and its window keeps its audio.
+ *
+ * Returns {error} or a plan, with `keptSpans` naming the windows that survived.
+ */
+export function planDeleteRegion(destDoc, region) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  const regions = destDoc.sampleRegions();
+  const target = regions.find((r) => r.ptr === region.ptr && r.len === region.len);
+  if (!target) return { error: "That region is not in this project." };
+
+  // The census spans that lie inside the region — the instruments cut out of it.
+  const claimed = [];
+  for (const e of destDoc.sampleList()) {
+    for (const sp of sampleSpans(e)) {
+      for (const rs of regionSpans(target)) {
+        const a = Math.max(sp.ptr, rs.ptr);
+        const b = Math.min(sp.ptr + sp.len, rs.ptr + rs.len);
+        if (b > a) claimed.push([a, b]);
+      }
+    }
+  }
+  const pool = destDoc.sampleBin;
+  const samples = [];
+  let freed = 0;
+  for (const rs of regionSpans(target)) {
+    for (const part of rangeMinus(rs.ptr, rs.len, claimed)) {
+      // Only the bytes that are not already silent are worth an undo record.
+      let nz = 0;
+      for (let i = part.ptr; i < part.ptr + part.len; i++) if (pool[i] !== 0) nz++;
+      if (nz === 0) continue;
+      samples.push({ ptr: part.ptr, bytes: new Uint8Array(part.len), srcKeys: [] });
+      freed += nz;
+    }
+  }
+  return {
+    ...emptyBankPlan(),
+    samples,
+    regionPayload: regionPayloadFor(regions.filter((r) => r !== target)),
+    freedSampleBytes: freed,
+    keptSpans: claimed.length,
+  };
+}
+
+/** Plan renaming a region — SRgn only, no pool bytes, no instruments. */
+export function planRenameRegion(destDoc, region, nameBytes) {
+  const regions = destDoc.sampleRegions();
+  const target = regions.find((r) => r.ptr === region.ptr && r.len === region.len);
+  if (!target) return { error: "That region is not in this project." };
+  const name = new TextDecoder().decode(nameBytes);
+  return {
+    ...emptyBankPlan(),
+    regionPayload: regionPayloadFor(
+      regions.map((r) => (r === target ? { ...r, name } : r))),
+  };
+}
+
+/**
+ * Plan cutting a WINDOW out of a region into a fresh instrument (item 175) —
+ * the move the whole feature exists for. `from`/`len` are byte offsets within
+ * the region's channel-0 span; a multi-channel region cuts the same window out
+ * of every channel and the instrument gets the Ixmp 's' patch that plays them
+ * as a pair. No pool bytes are written: the window IS the region's bytes, and
+ * editing the instrument's audio later edits the recording it came from.
+ *
+ * The census gains a row, so SNam is rebuilt from sample identity after apply
+ * (the pool order is the name order) — `sampleNameBytes` names the new row.
+ *
+ * Returns {error} or a planImport-shaped plan with `slot` and `ptr`.
+ */
+export function planRegionSlice(destDoc, region, {
+  from, len, nameBytes = new Uint8Array(0), sampleNameBytes = null, loop = false,
+} = {}) {
+  if (destDoc.sampleInstImage === null) {
+    return { error: "This project has no sample+instrument image." };
+  }
+  if (!region || !(region.len > 0)) return { error: "That region is empty." };
+  const start = Math.max(0, Math.min(from | 0, region.len - 1));
+  const count = Math.min(len | 0, region.len - start);
+  if (count <= 0) return { error: "The selected window is empty." };
+  if (count > 0xffff) {
+    return { error: `Window too long: ${count} bytes (65535 max — an instrument's sample length is a 16-bit field).` };
+  }
+
+  const taken = new Set(destDoc.usedInstrumentSlots());
+  let slot = 1;
+  while (slot <= 255 && taken.has(slot)) slot++;
+  if (slot > 255) {
+    return { error: "No free instrument slots left in $01–$FF (note-addressable range)." };
+  }
+
+  const spans = regionSpans(region);
+  const ptrs = spans.map((sp) => sp.ptr + start);
+  const rate = Math.max(1, Math.min(0xffff, region.rate || 0));
+  const loopEnd = loop ? count : 0;
+  const loopMode = loop ? 1 : 0;
+  const record = buildFreshInstRecord({
+    samplePtr: ptrs[0], sampleLength: count, samplingRate: rate,
+    sampleLoopStart: 0, sampleLoopEnd: loopEnd, loopMode,
+  });
+  const stereo = ptrs.length > 1;
+  const ixmpBlob = stereo
+    ? writePatchesBlob([makeInstPatch({
+        pitchStart: 0, pitchEnd: 0xffff, volumeStart: 0, volumeEnd: 63,
+        samplePtr: ptrs[0], sampleLength: count, playStart: 0,
+        loopStart: 0, loopEnd, samplingRate: rate, loopMode,
+        hasChanBlock: true, chanCount: ptrs.length, chanMode: CHAN_MODE_DISCRETE,
+        chanPtrs: ptrs.slice(1),
+      })])
+    : null;
+
+  // INam: splice the instrument name in by slot.
+  const destInamPayload = sectionPayload(destDoc, "INam");
+  let inamPayload = null;
+  if (nameBytes.length > 0 || destInamPayload !== null) {
+    const parts = splitNameTable(destInamPayload);
+    while (parts.length <= slot) parts.push(new Uint8Array(0));
+    parts[slot] = nameBytes;
+    inamPayload = joinNameTable(parts);
+  }
+
+  // SNam: the window is a NEW census row unless an identical claim already
+  // exists, so the table is rebuilt by identity after apply.
+  const snamNames = new Map();
+  const destSnam = splitNameTable(sectionPayload(destDoc, "SNam"));
+  destDoc.sampleList().forEach((e, i) =>
+    snamNames.set(sampleKey(e.ptr, e.len), destSnam[i] ?? new Uint8Array(0)));
+  const smpName = sampleNameBytes ?? nameBytes;
+  if (!snamNames.has(sampleKey(ptrs[0], count))) {
+    snamNames.set(sampleKey(ptrs[0], count), smpName);
+  }
+
+  return {
+    insts: [{ srcSlot: -1, destSlot: slot, topLevel: true, record, ixmpBlob, ixmpCount: stereo ? 1 : 0 }],
+    samples: [],
+    inamPayload,
+    snamNames,
+    writeSnam: true,
+    slotMap: new Map([[-1, slot]]),
+    newSampleBytes: 0,
+    dedupedSamples: 1,
+    slot,
+    ptr: ptrs[0],
+    sliceLen: count,
+  };
 }

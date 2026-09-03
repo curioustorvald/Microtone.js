@@ -1003,6 +1003,74 @@ knowing about, because none of them are visible from the list:
 - **Gaps.** Deleting a sample, or replacing one with something that no longer fits its old span, leaves a hole. A new sample is fitted into the first hole big enough for it, so holes are reused rather than wasted — but a pool full of small holes can refuse a large sample while showing plenty free, and the panel gives you the largest run so you can see that coming.
 - **Leftover audio.** Freeing bytes does not always blank them, and bytes nothing points at still travel inside the project file. Housekeeping sweeps them.
 
+### The map: the pool as one long waveform
+
+**Map** in the toolbar swaps the one-line waveform for the pool drawn as a
+waveform *wrapped across as many lines as it takes*, with the byte address of
+each line down the left — a hex dump, with audio where the digits would be.
+The sample-memory panel above answers *where are these bytes?*; the map answers
+*what do they sound like, and what else is in there?*
+
+- Each line is a fixed number of pool bytes. **−** and **+** change how many (Ctrl+wheel over the map does the same, keeping the byte under the pointer still); **Fit** picks a zoom that shows the whole thing at a readable length. The map fills the pane, so a taller window is more lines rather than empty space.
+- Under each line runs a strip of **blocks**, one per sample, each with its number and name inside it and each starting a rule that runs up through the waveform where its audio begins. Blocks are **coloured by row number** through a five-colour cycle, so no two touching blocks ever share a colour and a sample keeps the same colour everywhere it appears — including across the several lines a long one spans. A **recording** loaded into memory is the band behind them, so the samples cut out of one are drawn inside it. The row the list is on wears the selection colour instead. Clicking a block selects that row in the list.
+- The hairline follows the pointer and reads out the pool address, the byte's value, and which recording and sample the byte falls inside.
+- While the song plays, a tick per sounding voice runs through the lines.
+
+**Drag across the waveform to select a window of bytes.** *Cut instrument…*
+then makes an instrument that plays exactly those bytes — see below.
+
+**Every project already has a recording to look at: the memory it is using.**
+*All sample memory* is listed at the top of the Samples list in every project,
+including every project made before any of this existed. Select it and the map
+opens on everything the pool holds — every sample the song uses, end to end, in
+the order they sit in memory. Nothing declares it, so there is nothing to
+rename or delete; it is a view of what the rows below it already are. Cutting a
+window out of it works exactly as it does out of a loaded recording, and the new
+instrument takes the rate of whichever sample the window starts inside — so
+lifting a syllable out of a vocal sample, or one hit out of a drum loop that
+arrived with a module, needs nothing loaded first.
+
+### Long recordings in memory
+
+The ordinary way to fill a project is one sample per instrument: import a file,
+it becomes an instrument. There is another way, and it is what the map is for.
+
+An instrument's sample length is a **16-bit** field: 65535 bytes, about two
+seconds at 32 kHz, is the most any single instrument can play. The pool is 8 MB.
+So instead of importing sounds one at a time, you can load a handful of very
+long recordings straight into memory — a whole breakbeat, a take of a solo, a
+field recording — and cut every instrument you need out of them afterwards.
+
+**Load recording…**, above the sample list, does the loading. It asks for a
+rate (a lower one costs proportionally fewer pool bytes and is the pitch the
+windows will play at), offers to fold a stereo file to mono, and tells you what
+the recording will cost against the largest free run in the pool. There is no
+length limit beyond the pool itself.
+
+A loaded recording appears under **In memory**, beside *all sample memory*. It
+is not a sample: nothing plays it, it has no loop points, and it takes no
+instrument slot. What it does have is its bytes, reserved — no import,
+duplicate or [Housekeeping](#housekeeping) sweep will write over them or free
+them while it is there.
+
+Selecting one shows the map, scoped to that recording. Then:
+
+- **Drag out a window** and hit *Cut instrument…*. The new instrument plays those bytes at the recording's rate. **Nothing is copied** — the instrument reads the recording's own memory, so editing that audio later changes both, and a hundred windows onto one recording cost a hundred instrument records and no extra pool bytes at all. Windows longer than 65535 bytes are refused, which is the whole reason for the ceiling.
+- A **stereo** recording cuts stereo instruments: the same window of both channels, as one Ixmp pair.
+- **Rename** and **Export** do what they say; Export writes the whole recording out as a WAV.
+- **Delete** frees the bytes — except the windows already cut out of them, which keep their audio and go on playing. Deleting a recording is not deleting the instruments made from it.
+
+The windows are ordinary samples once cut: they appear in the list under
+**Samples**, they can be edited, looped, chopped and deleted like any other. Two
+things follow from their sharing bytes with the recording, and both are the
+point rather than a catch — the memory panel's *overlapping samples* note will
+mention them, and the Sample Lab will not *change the length* of one in place.
+
+The **Instruments** view's *From the list* picker (under **Sample ptr**) lists
+the recordings in memory alongside the samples: choosing one points the
+instrument at the first 65535 bytes of that recording, and the spinners beside
+it move the window from there.
+
 ## The Sample Lab
 
 The Sample Lab is *the* sample editor — a tiny Audacity that opens whenever
@@ -1188,7 +1256,8 @@ either way.
 
 ### Editing an instrument
 
-- **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only.
+- **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only. Play start, loop start and loop end are all spinners here too, so a number read off the waveform's hairline can simply be typed in.
+  - **From the list**, under *Sample ptr*, is the same binding as a list rather than an address: every sample in the pool, plus the [recordings loaded into memory](#long-recordings-in-memory) in a group of their own. Choosing one writes its pointer, length, rate and loop into this record in a single undo step; choosing a recording points the instrument at its first 65535 bytes, which the spinners then move. It is a copy, not a link — the list is *derived* from what the instruments point at, so a row can appear or disappear as you use it, and the row shown is always the one this record's own pointer lands on.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
   - **Carry** (beside *Envelope present*) makes a new note **continue** this envelope instead of restarting it: the playhead stays where the last note left it, so a slow pan sweep or a filter opening can run across a whole phrase of repeated notes rather than resetting on each one. Each envelope carries — or does not — on its own. It is ignored where there is nothing worth keeping: after a key-off, and on a note that changes instrument. This is also what makes a run of notes tied by `G` sound the same whether or not each row names its instrument.
 - **Zones** — the Ixmp key/velocity zone map with a live trigger overlay showing which zone each incoming note lands in. The **Advanced Edit…** button opens the full patch editor (below).
@@ -1421,7 +1490,7 @@ Four clean-up operations, each a single undo step:
 
 - **Cleanup patterns** — drop the patterns no cue references, renumber the survivors and rewrite the cues to match.
 - **Renumber patterns** — compact every pattern into play order, dropping the gaps.
-- **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its sub-instruments, layers or operators) and free the sample data only they referenced.
+- **Cleanup instruments & samples** — remove instruments no pattern plays (a used metainstrument keeps its sub-instruments, layers or operators) and free the sample data only they referenced. [Recordings loaded into memory](#long-recordings-in-memory) are never touched: nothing claims them by design, and they are source material rather than leftovers.
 - **Cleanup instrument patches** — remove [Ixmp patches](#advanced-edit-ixmp-patches) that can never be triggered: patches belonging to no instrument, patches with an empty rectangle or no sample, and patches lying entirely under a higher-priority one (remember the *first* matching patch wins, so a fully covered patch is dead weight).
 
 ### Global Operations

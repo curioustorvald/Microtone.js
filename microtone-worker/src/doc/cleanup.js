@@ -15,6 +15,7 @@ import { writePatchesBlob, buildMetaRecord } from "../engine/inst.js";
 import { EffectOp } from "../engine/tables.js";
 import { rowVolumeFromDefault, narrowVolAxis } from "../engine/trigger.js";
 import { sampleSpans } from "./document.js";
+import { regionSpans } from "./sampleregions.js";
 import { emptyPatternBytes } from "./patterntools.js";
 
 const PAT_MASK = 0x7fff;
@@ -257,7 +258,16 @@ export function planBankCleanup(doc) {
 
   // Free sample bytes nothing points at any more: zero the pool outside the
   // surviving census spans (shared samples are kept).
-  const keep = censusForSlots(instAt, survivors, prune.overrides);
+  // Pool REGIONS (item 175) are kept whole: their bytes are claimed by nothing
+  // by definition, so a sweep that only spared the census would wipe every long
+  // recording loaded into memory. They are the user's source material, not
+  // garbage, and Housekeeping never drops one.
+  const censusKeep = censusForSlots(instAt, survivors, prune.overrides);
+  const keep = [
+    ...censusKeep,
+    ...doc.sampleRegions().flatMap(regionSpans)
+      .map((sp) => ({ ptr: sp.ptr, len: sp.len, chan: sp.chan, key: sp.ptr + ":" + sp.len })),
+  ].sort((a, b) => a.ptr - b.ptr);
   const pool = image.subarray(0, SAMPLEBIN_SIZE);
   let freedSampleBytes = 0;
   const zeroRange = (from, to) => {
@@ -279,7 +289,10 @@ export function planBankCleanup(doc) {
   // Extra stereo channels are live pool spans but not named samples.
   const oldNameByKey = new Map();
   for (const e of doc.sampleList()) oldNameByKey.set(e.ptr + ":" + e.len, e.name);
-  const snamArr = keep.filter((sp) => sp.chan === 0).map((sp) => oldNameByKey.get(sp.key) ?? "");
+  // Regions are not named SAMPLES, so they contribute no SNam entry — the table
+  // still lines up with sampleList(), which never sees them, so the CENSUS half
+  // of the keep-set above is what the names realign to.
+  const snamArr = censusKeep.filter((sp) => sp.chan === 0).map((sp) => oldNameByKey.get(sp.key) ?? "");
   while (snamArr.length && snamArr[snamArr.length - 1] === "") snamArr.pop();
 
   return {
@@ -752,6 +765,22 @@ function mergedIntervals(spans) {
   return out;
 }
 
+/** [ptr, ptr+len) minus a sorted list of [a, b) intervals, as {ptr, len}. */
+function rangeMinusIntervals(ptr, len, holes) {
+  let parts = [{ ptr, len }];
+  for (const [ha, hb] of holes) {
+    const next = [];
+    for (const p of parts) {
+      const a = p.ptr, b = p.ptr + p.len;
+      if (hb <= a || ha >= b) { next.push(p); continue; }
+      if (ha > a) next.push({ ptr: a, len: ha - a });
+      if (hb < b) next.push({ ptr: hb, len: b - hb });
+    }
+    parts = next;
+  }
+  return parts;
+}
+
 /**
  * Delete a pooled sample (item 151): free its bytes and cut every reference to
  * it loose. The census is derived from instruments, so a sample only stops
@@ -822,7 +851,13 @@ export function planDeleteSample(doc, sample) {
   const newCensus = oldCensus.filter((e) => e.ptr + ":" + e.len !== key);
 
   const pool = image.subarray(0, SAMPLEBIN_SIZE);
-  const keepIv = mergedIntervals(newCensus.flatMap(sampleSpans));
+  // Region bytes are kept alongside the surviving census (item 175): a window
+  // cut out of a long recording can be deleted without taking the recording
+  // with it.
+  const keepIv = mergedIntervals([
+    ...newCensus.flatMap(sampleSpans),
+    ...doc.sampleRegions().flatMap(regionSpans),
+  ]);
   let freedSampleBytes = 0;
   const zeroRange = (from, to) => {
     for (let i = from; i < to; i++) if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
@@ -1012,8 +1047,17 @@ export function planDeleteInstrument(doc, slot, { freeSamples = false, reassignT
   let freedSampleBytes = 0, freedSamples = 0;
   if (freeSamples) {
     const pool = image.subarray(0, SAMPLEBIN_SIZE);
+    // A window cut out of a pool region (item 175) is the RECORDING's audio,
+    // not the instrument's: deleting the instrument must not take it with them.
+    const reserved = mergedIntervals(doc.sampleRegions().flatMap(regionSpans));
     for (const sp of uniqueSampleSpansForSet(doc, removedSet)) {
-      for (let i = sp.ptr; i < sp.ptr + sp.len; i++) if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
+      // Walk the span minus whatever a region reserves — with no regions (the
+      // usual case) that is the span itself and nothing is tested per byte.
+      for (const part of rangeMinusIntervals(sp.ptr, sp.len, reserved)) {
+        for (let i = part.ptr; i < part.ptr + part.len; i++) {
+          if (pool[i] !== 0) { pool[i] = 0; freedSampleBytes++; }
+        }
+      }
       freedSamples++;
     }
   }

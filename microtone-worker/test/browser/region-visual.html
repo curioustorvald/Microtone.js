@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>pool map visual (item 175)</title>
+  <style>body { margin: 0; }</style>
+</head>
+<body>
+  <!-- Screenshot page for the map view: loads a corpus song, drops a long
+       recording into memory, cuts two windows out of it and leaves the map on
+       screen with a selection dragged out.
+         python3 tools/test-server.py &
+         chromium --headless=new --disable-gpu --no-sandbox \
+           --window-size=1400,1000 --virtual-time-budget=25000 \
+           --screenshot=/tmp/map.png \
+           'http://localhost:8932/test/browser/region-visual.html?theme=dark'
+       ?theme=dark|dim|light|warmth picks the palette. -->
+  <iframe id="app" style="width:1400px;height:1000px;border:0"></iframe>
+  <script type="module">
+    const waitFor = (fn, ms = 12000) => new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const poll = setInterval(() => {
+        let v; try { v = fn(); } catch { v = null; }
+        if (v) { clearInterval(poll); resolve(v); }
+        else if (Date.now() - t0 > ms) { clearInterval(poll); reject(new Error("timeout")); }
+      }, 50);
+    });
+    (async () => {
+      const q = new URLSearchParams(location.search);
+      const frame = document.getElementById("app");
+      // ?theme= is the app's own boot override (src/ui/app.js), so it travels on
+      // the iframe URL rather than being poked in after load.
+      frame.src = "../../index.html?load=test/corpus/WHEN.taud" +
+        (q.get("theme") ? `&theme=${q.get("theme")}` : "");
+      const win = await waitFor(() => {
+        const w = frame.contentWindow;
+        return w && w.__microtone?.store.doc ? w : null;
+      });
+      const { store, samplesView: sv } = win.__microtone;
+      // ?view=whole shoots an UNTOUCHED project: no SRgn at all, the implicit
+      // "all sample memory" recording selected.
+      if (q.get("view") === "whole") {
+        win.document.querySelector('#tabs button[data-view="samples"]').click();
+        sv.selRegion = 0;
+        sv.refresh();
+        // ?zoom=<index> forces a zoom level — the adjacency case the block
+        // separators are for is a coarse zoom, where every sample in the song
+        // lands on one or two lines.
+        if (q.has("zoom")) sv.poolWave.setZoom(parseInt(q.get("zoom"), 10));
+        document.title = "map ready";
+        return;
+      }
+
+      const bank = await import("../../src/doc/bankmerge.js");
+      const ops = await import("../../src/doc/ops.js");
+      // A recording with obvious structure, so the wrapped lines read as audio.
+      const LEN = 240000;
+      const pcm = new Uint8Array(LEN);
+      for (let i = 0; i < LEN; i++) {
+        const env = Math.exp(-((i % 15000) / 3000));
+        const tone = Math.sin(i / (6 + 4 * Math.sin(i / 30000)));
+        pcm[i] = 128 + Math.round(120 * env * tone);
+      }
+      const enc = (s) => new TextEncoder().encode(s);
+      const plan = bank.planImportRegion(store.doc,
+        { channels: [pcm], rate: 16000, nameBytes: enc("amen, whole take") });
+      store.undo.apply(ops.importBankOp(plan));
+      for (const [from, len, name] of [[0, 15000, "hit 1"], [45000, 15000, "hit 4"]]) {
+        store.undo.apply(ops.importBankOp(
+          bank.planRegionSlice(store.doc, plan.region, { from, len, nameBytes: enc(name) })));
+      }
+      store.emit("edit", [{ kind: "bank" }]);
+
+      win.document.querySelector('#tabs button[data-view="samples"]').click();
+      // ?view=pool shoots the WHOLE-POOL map over an ordinary sample instead of
+      // the recording — the other half of what the view does.
+      if (q.get("view") === "pool") {
+        sv.selRegion = -1;
+        sv.selected = 3;
+        sv.mapOpen = false;
+        sv.refresh();
+        sv.toggleMap();
+        document.title = "map ready";
+        return;
+      }
+      sv.selRegion = 0;
+      sv.refresh();
+      sv.poolWave.sel = { from: plan.region.ptr + 90000, to: plan.region.ptr + 105000 };
+      sv.poolWave.syncSelection();
+      sv.poolWave.hoverByte = plan.region.ptr + 92000;
+      sv.poolWave.writeReadout();
+      // Scroll the dragged window into the shot.
+      sv.poolWave.scrollToByte(plan.region.ptr + 90000);
+      document.title = "map ready";
+    })();
+  </script>
+</body>
+</html>

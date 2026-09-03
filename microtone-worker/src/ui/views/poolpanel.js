@@ -15,7 +15,7 @@
 // Clicking any block selects that census row, so the map navigates the list.
 // A live tick per sounding voice rides on top while the song plays.
 
-import { themeColors } from "../theme.js";
+import { themeColors, pickInk } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { poolMap, claimsIn, POOL_SIZE } from "../../doc/poolmap.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
@@ -42,31 +42,6 @@ function fmtBytes(n) {
 const hexAddr = (n) => "0x" + Math.max(0, n).toString(16).toUpperCase();
 /** A census row as the list on the left spells it: three digits, zero-padded. */
 const rowLabel = (i) => String(i).padStart(3, "0");
-
-/**
- * Ink that will READ on `fill`: whichever of the theme's ground and foreground
- * is further from it in luminance. The blocks are filled in four different
- * colours across three themes, so a fixed label colour is wrong somewhere —
- * amber-on-dark and dark-orange-on-light want opposite ink for the same block.
- */
-const _lum = new Map();
-function luminance(css) {
-  if (_lum.has(css)) return _lum.get(css);
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})/i.exec(css.trim());
-  let v = 0.5;
-  if (m) {
-    const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
-      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-    v = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  }
-  _lum.set(css, v);
-  return v;
-}
-function pickInk(fill, C) {
-  const l = luminance(fill);
-  return Math.abs(luminance(C.bg) - l) >= Math.abs(luminance(C.fg) - l) ? C.bg : C.fg;
-}
 
 /** Lay overlapping claims onto as few lanes as they need (see poolmap.js). */
 function localLanes(claims) {
@@ -116,6 +91,7 @@ export class PoolPanel {
     for (const [key, cssVar] of [
       ["pool.legendUsed", "--cv-pool-used"],
       ["pool.legendShared", "--cv-pool-shared"],
+      ["pool.legendRegion", "--cv-pool-region"],
       ["pool.legendSel", "--accent"],
       ["pool.legendFree", "--cv-pool-free"],
       ["pool.legendStale", "--cv-pool-stale"],
@@ -218,6 +194,11 @@ export class PoolPanel {
         largest: fmtBytes(Math.max(...this.map.holes.map((h) => h.len))),
       }));
     }
+    if (s.regionCount > 0) {
+      lines.push(t("pool.noteRegions", {
+        n: s.regionCount, b: fmtBytes(s.regionBytes),
+      }));
+    }
     if (s.staleBytes > 0) lines.push(t("pool.noteStale", { b: fmtBytes(s.staleBytes) }));
     if (lines.length === 0 && s.spans > 0) lines.push(t("pool.notePacked", { n: s.spans }));
     this.notes.innerHTML = "";
@@ -263,6 +244,14 @@ export class PoolPanel {
         chan: c.chan > 0 ? t("pool.hoverChan", { n: c.chan + 1 }) : "",
         users: c.entry.users.length,
       }) + (shared.size ? t("pool.hoverShared", { n: shared.size }) : ""));
+    } else if (hit.region) {
+      const r = hit.region;
+      this.setHover(t("pool.hoverRegion", {
+        at: hexAddr(r.ptr), end: hexAddr(r.end),
+        name: unescapeName(r.entry.name) || t("rgn.namePlaceholder"),
+        len: fmtBytes(r.len),
+        chan: r.chan > 0 ? t("pool.hoverChan", { n: r.chan + 1 }) : "",
+      }));
     } else if (hit.hole) {
       this.setHover(t(hit.hole.stale > 0 ? "pool.hoverStale" : "pool.hoverFree", {
         at: hexAddr(hit.hole.ptr), len: fmtBytes(hit.hole.len),
@@ -311,7 +300,7 @@ export class PoolPanel {
       let from = Math.round(sel.ptr + sel.len / 2 - span / 2);
       from = Math.max(0, Math.min(from, POOL_SIZE - span));
       const to = Math.min(POOL_SIZE, from + span);
-      const win = claimsIn(map, from, to);
+      const win = claimsIn(map, from, to - from);
       const ll = localLanes(win);
       add("zoom", Math.max(0, from), to, ll.count * (ZOOM_LANE_H + LOOP_H),
         { laneOf: ll.of, win, sel });
@@ -371,6 +360,13 @@ export class PoolPanel {
     for (const u of map.used) {
       ctx.fillRect(b.xOf(u.ptr), b.y, Math.max(1, (u.len / POOL_SIZE) * b.w), b.h);
     }
+    // Regions (item 175) are used memory NOTHING claims, so they are drawn over
+    // the merged extents rather than beside them: at this scale a 4 MB
+    // recording is most of the strip, and it must not read as claimed samples.
+    ctx.fillStyle = C.poolRegion;
+    for (const r of map.regions) {
+      ctx.fillRect(b.xOf(r.ptr), b.y, Math.max(1, (r.len / POOL_SIZE) * b.w), b.h);
+    }
     // megabyte gridlines: the only ruler this scale can carry
     ctx.fillStyle = C.border;
     for (let mb = 1; mb < 8; mb++) ctx.fillRect(Math.round(b.xOf(mb * 1048576)), b.y, 1, b.h);
@@ -404,6 +400,17 @@ export class PoolPanel {
       ctx.fillStyle = h.stale > 0 ? C.poolStale : C.poolFree;
       ctx.fillRect(x, b.y, hw, b.h);
       b.rects.push({ x, y: b.y, w: hw, h: b.h, hole: h });
+    }
+    // Regions run the FULL height of the band, behind every lane: the claims
+    // drawn on top of one are the windows cut out of that recording.
+    for (const r of map.regions) {
+      const x = b.xOf(r.ptr);
+      const rw = Math.max(1, b.xOf(r.end) - x);
+      ctx.fillStyle = C.poolRegion;
+      ctx.globalAlpha = 0.55;
+      ctx.fillRect(x, b.y, rw, b.h);
+      ctx.globalAlpha = 1;
+      b.rects.push({ x, y: b.y, w: rw, h: b.h, region: r });
     }
     const laneH = b.h / b.lanes;
     for (const c of map.claims) {
@@ -444,6 +451,15 @@ export class PoolPanel {
   drawZoom(ctx, b, C) {
     ctx.fillStyle = C.poolFree;
     ctx.fillRect(b.x, b.y, b.w, b.h);
+    for (const r of this.map.regions) {
+      if (r.ptr >= b.to || r.end <= b.from) continue;
+      const x = Math.max(b.x, b.xOf(r.ptr));
+      const x2 = Math.min(b.x + b.w, b.xOf(r.end));
+      ctx.fillStyle = C.poolRegion;
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(x, b.y, Math.max(1, x2 - x), b.h);
+      ctx.globalAlpha = 1;
+    }
     const rowH = ZOOM_LANE_H + LOOP_H;
     for (const c of b.win) {
       const lane = b.laneOf.get(c) ?? 0;
@@ -520,6 +536,10 @@ export class PoolPanel {
 function fingerprint(doc, census) {
   let sig = census.length + ":";
   for (const e of census) sig += e.ptr + "," + e.len + ";";
+  // Regions reserve pool bytes (item 175), so adding or dropping one moves the
+  // holes — which is exactly what the scan measures.
+  sig += "|r";
+  for (const r of doc.sampleRegions()) sig += r.ptr + "," + r.len + "," + r.chan + ";";
   return sig + "|" + (doc.sampleInstImage?.byteLength ?? 0) + "|" + docImageId(doc);
 }
 
