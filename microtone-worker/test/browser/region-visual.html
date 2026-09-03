@@ -87,6 +87,9 @@
       sv.refresh();
       sv.poolWave.sel = { from: plan.region.ptr + 90000, to: plan.region.ptr + 105000 };
       sv.poolWave.syncSelection();
+      // ?play=1 leaves an audition running, so the shot shows the transport
+      // and the playhead rather than a dead bar.
+      if (q.get("play")) sv.poolWave.playBtn.click();
       sv.poolWave.hoverByte = plan.region.ptr + 92000;
       sv.poolWave.writeReadout();
       // Scroll the dragged window into the shot.

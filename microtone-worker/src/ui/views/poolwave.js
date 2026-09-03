@@ -24,6 +24,8 @@ import { themeColors, pickInk } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { sampleSpans } from "../../doc/document.js";
 import { regionSpans, POOL_SIZE, DEFAULT_RATE } from "../../doc/sampleregions.js";
+import { u8ToFloat } from "../../doc/wavelab.js";
+import { SamplePreview } from "../samplepreview.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
 import { t } from "../i18n.js";
 
@@ -53,6 +55,11 @@ const ZOOMS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 409
 /** An instrument's sample length is a U16 — the ceiling on any window cut out
  *  of the pool, and the reason a long recording needs this view at all. */
 const MAX_SLICE = 0xffff;
+
+/** How much a double-click auditions when there is no window to play: enough
+ *  to recognise what is there, short enough to double-click again straight
+ *  away while walking through a long recording. */
+const SCRUB_SECONDS = 3;
 
 /** The row's geometry, so a test can find the ribbon lane on the canvas
  *  without guessing at it. Read-only metadata about the drawing. */
@@ -127,13 +134,27 @@ export class PoolWave {
     this.sliceBtn.title = t("pw.sliceTitle");
     this.sliceBtn.disabled = true;
     this.sliceBtn.addEventListener("click", () => this.emitSlice());
+    // ── audition (item 175 follow-up) ──
+    // Cutting a window out of memory blind is guesswork; this is the ear on it.
+    this.preview = new SamplePreview(() => this.store.audio?.context ?? null);
+    this.preview.onChange = () => this.syncPlayBtn();
+    this.playBtn = document.createElement("button");
+    this.playBtn.className = "pw-play";
+    this.playBtn.addEventListener("click", () => this.togglePlay());
+    this.loopBtn = this.barButton("\u21bb", t("pw.loopTitle"), () => {
+      this.loopPreview = !this.loopPreview;
+      this.loopBtn.classList.toggle("on", this.loopPreview);
+      if (this.preview.active) this.playSelection();
+    });
+    this.loopPreview = false;
     this.clearBtn = this.barButton(t("pw.clearSel"), t("pw.clearSelTitle"), () => {
       this.sel = null;
       this.syncSelection();
       this.drawOverlay();
     });
     this.bar.append(this.zoomOut, this.zoomLabel, this.zoomIn, this.fitBtn,
-      this.readout, this.selLabel, this.sliceBtn, this.clearBtn);
+      this.readout, this.selLabel, this.playBtn, this.loopBtn, this.sliceBtn, this.clearBtn);
+    this.syncPlayBtn();
 
     // ── the scroller: a real scrollbar, a canvas the size of the window ──
     this.scroll = document.createElement("div");
@@ -166,6 +187,9 @@ export class PoolWave {
     this.overlay.addEventListener("pointerdown", (e) => this.pointerDown(e));
     this.overlay.addEventListener("pointerup", (e) => this.pointerUp(e));
     this.overlay.addEventListener("pointercancel", () => { this.drag = null; });
+    // Double-click anywhere: hear a few seconds from that byte. Walking a long
+    // recording by ear needs no selection and no round trip through a dialog.
+    this.overlay.addEventListener("dblclick", (e) => this.scrubAt(this.byteAtEvent(e)));
   }
 
   get element() { return this.root; }
@@ -196,6 +220,7 @@ export class PoolWave {
       this.scope.len === scope.len;
     this.scope = { ...scope };
     if (!same) {
+      this.stopPreview();   // a different stretch of memory is on screen now
       this.sel = null;
       this.zoomTouched = false;
       this.scroll.scrollTop = 0;
@@ -373,6 +398,7 @@ export class PoolWave {
   syncSelection() {
     const n = this.sel ? this.sel.to - this.sel.from : 0;
     this.sliceBtn.disabled = !(n > 0 && n <= MAX_SLICE);
+    this.syncPlayBtn();
     this.clearBtn.disabled = !this.sel;
     if (!this.sel) { this.selLabel.textContent = ""; return; }
     this.selLabel.textContent = t("pw.selRange", {
@@ -404,6 +430,105 @@ export class PoolWave {
     }
     this.readout.textContent = parts.join(" · ");
   }
+
+  // ── audition ───────────────────────────────────────────────────────────────
+
+  /** The rate a window at `ptr` should be heard at: the recording it sits in,
+   *  else the sample it sits in, else the engine's own. Exactly the rule the
+   *  cut uses, so what you hear is what the instrument will play. */
+  rateAt(ptr) {
+    return this.regionAt(ptr)?.region.rate ||
+      this.claimAt(ptr)?.entry.rate || DEFAULT_RATE;
+  }
+
+  /**
+   * The bytes of [ptr, ptr+len) as one float channel per SOURCE channel: a
+   * window inside a multi-channel recording, or inside a stereo sample, is
+   * auditioned as the pair it will be cut as — not as its left half.
+   */
+  windowChannels(ptr, len) {
+    const bin = this.store.doc?.sampleBin;
+    if (!bin || len <= 0) return [];
+    const take = (from) => u8ToFloat(bin.subarray(from, from + len));
+    const region = this.regionAt(ptr);
+    if (region && region.region.chan > 1) {
+      const off = ptr - region.ptr;
+      const spans = regionSpans(region.region);
+      if (off + len <= region.len) return spans.map((sp) => take(sp.ptr + off));
+    }
+    const claim = this.claimAt(ptr);
+    const extra = claim?.entry.chanPtrs ?? [];
+    if (claim && extra.length > 0) {
+      const off = ptr - claim.ptr;
+      if (off + len <= claim.len) {
+        return [take(ptr), ...extra.map((p) => take(p + off))];
+      }
+    }
+    return [take(ptr)];
+  }
+
+  /** What Play would sound: the dragged window, else the selected census row's
+   *  own span, else nothing. */
+  playTarget() {
+    if (this.sel) return { ptr: this.sel.from, len: this.sel.to - this.sel.from };
+    const e = (this.census() ?? [])[this.selected];
+    if (e && e.len > 0) return { ptr: e.ptr, len: e.len };
+    return null;
+  }
+
+  togglePlay() {
+    if (this.preview.active) { this.preview.stop(); return; }
+    this.playSelection();
+  }
+
+  playSelection() {
+    const target = this.playTarget();
+    if (!target) return;
+    this.audition(target.ptr, target.len, this.loopPreview);
+  }
+
+  /** Double-click: a few seconds from `byte`, never looped — this is a way of
+   *  walking through memory, not of judging a loop. */
+  scrubAt(byte) {
+    if (byte < 0) return;
+    const { to } = this.range();
+    const rate = this.rateAt(byte);
+    const len = Math.min(Math.round(rate * SCRUB_SECONDS), to - byte);
+    if (len > 0) this.audition(byte, len, false);
+  }
+
+  audition(ptr, len, loop) {
+    const chans = this.windowChannels(ptr, len);
+    if (!chans.length) return;
+    this.preview.play(chans, this.rateAt(ptr), { loop, meta: { ptr, len } });
+    this.pumpPreview();
+  }
+
+  /** Repaint the overlay while the preview runs. The view's own frame() only
+   *  fires while the ENGINE is running, and a preview is deliberately not the
+   *  engine — so the playhead needs a loop of its own. */
+  pumpPreview() {
+    if (this._pumping) return;
+    this._pumping = true;
+    const tick = () => {
+      if (!this.preview.active) { this._pumping = false; this.drawOverlay(); return; }
+      this.drawOverlay();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  syncPlayBtn() {
+    const on = this.preview.active;
+    this.playBtn.textContent = on ? "\u25a0" : "\u25b6";
+    this.playBtn.title = t(on ? "pw.stopTitle" : "pw.playTitle");
+    this.playBtn.classList.toggle("on", on);
+    this.playBtn.disabled = !on && !this.playTarget();
+  }
+
+  /** Stop anything sounding — the view is going away, or what was playing is
+   *  no longer what is selected. */
+  stopPreview() { this.preview.stop(); }
 
   emitSlice() {
     if (!this.sel) return;
@@ -675,6 +800,23 @@ export class PoolWave {
         ctx.fillRect(xOf(a, row), y + WAVE_H, Math.max(2, xOf(b, row) - xOf(a, row)), RIBBON_H);
         if (a === this.sel.from) ctx.fillRect(Math.round(xOf(a, row)), y, 2, WAVE_H);
         if (b === this.sel.to) ctx.fillRect(Math.round(xOf(b, row)) - 2, y, 2, WAVE_H);
+      }
+    }
+
+    // The AUDITION playhead — its own colour, because it is not a voice: the
+    // preview is Web Audio over a copy of these bytes and owes nothing to the
+    // engine. Drawn under the voice ticks so a song playing the same sample
+    // still reads on top.
+    if (this.preview.active) {
+      const m = this.preview.meta;
+      const f = this.preview.frame();
+      if (m && f >= 0) {
+        const addr = m.ptr + f;
+        const row = rowOf(addr);
+        if (addr >= from && addr < to && row >= top && row < top + visible) {
+          ctx.fillStyle = C.accent;
+          ctx.fillRect(Math.round(xOf(addr, row)) - 1, (row - top) * ROW_H, 2, WAVE_H);
+        }
       }
     }
 

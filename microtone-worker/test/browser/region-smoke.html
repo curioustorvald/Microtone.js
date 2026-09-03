@@ -12,7 +12,13 @@
            --virtual-time-budget=45000 \
            http://localhost:8932/test/browser/region-smoke.html
        WHEN is the smallest packed corpus file — the pool has one run of
-       claims and a clean tail, which is where a region has to be able to land. -->
+       claims and a clean tail, which is where a region has to be able to land.
+
+       The audition legs (p0-p15) build a real Web Audio graph but assert only
+       on how it is BUILT — the buffer's bytes, its rate, its channel count,
+       the loop flag — never on time passing. So virtual time is right here,
+       unlike samplelab-smoke, which needs the real-time --timeout recipe
+       because it waits for audio to actually be rendered. -->
   <iframe id="app" src="../../index.html?load=test/corpus/WHEN.taud" style="width:1200px;height:900px"></iframe>
   <script type="module">
     const out = [];
@@ -330,6 +336,87 @@
         ok(runs >= onLine, `m1 the strip breaks into blocks, not one bar (${runs} edges, ${onLine} samples)`);
         ok(LAYOUT.RIBBON_H >= 10,
           `m2 …deep enough to hold the row number inside it (${LAYOUT.RIBBON_H}px)`);
+
+        // ── auditioning the selection ──
+        // Real Web Audio: the assertions below are that a source node is
+        // actually running over the right bytes, at the right rate, with the
+        // right channel count — not that a button changed colour.
+        sv.selRegion = 0;   // "all sample memory" — index 0 is the implicit one
+        sv.refresh();
+        const pv = sv.poolWave;
+        ok(pv.playBtn.disabled, "p0 with nothing selected and no row, Play is off");
+        const pFrom = list[0].ptr + 20000;
+        pv.sel = { from: pFrom, to: pFrom + 6000 };
+        pv.syncSelection();
+        ok(!pv.playBtn.disabled, "p1 a dragged window can be auditioned");
+        pv.playBtn.click();
+        ok(pv.preview.active, "p2 Play starts a preview");
+        ok(pv.preview.meta.ptr === pFrom && pv.preview.meta.len === 6000,
+          `p3 …over exactly the selected bytes (${pv.preview.meta.ptr}, ${pv.preview.meta.len})`);
+        ok(pv.preview.playing.rate === 16000,
+          `p4 …at the recording's own rate (${pv.preview.playing.rate} Hz)`);
+        ok(pv.preview.playing.src.buffer.numberOfChannels === 1,
+          "p5 …in mono, this recording being mono");
+        // The bytes really travelled: the buffer's first frame is the pool's.
+        const f0 = pv.preview.playing.src.buffer.getChannelData(0)[0];
+        ok(Math.abs(f0 - (store.doc.sampleBin[pFrom] - 128) / 127) < 1e-6,
+          `p6 …and the audio is the pool's own bytes (${f0.toFixed(4)})`);
+        ok(!pv.preview.playing.loop, "p7 not looping until asked");
+        pv.playBtn.click();
+        ok(!pv.preview.active, "p8 the same button stops it");
+
+        // loop latch
+        pv.loopBtn.click();
+        pv.playBtn.click();
+        ok(pv.preview.active && pv.preview.playing.loop, "p9 the loop latch loops it");
+        pv.loopBtn.click();
+        pv.stopPreview();
+
+        // a stereo recording auditions as a pair
+        const st = bank.planImportRegion(store.doc, {
+          channels: [new Uint8Array(9000).fill(200), new Uint8Array(9000).fill(60)],
+          rate: 22050, nameBytes: new TextEncoder().encode("pair"),
+        });
+        ok(!st.error, "p10 a stereo recording loads: " + (st.error ?? "no error"));
+        store.undo.apply(ops.importBankOp(st));
+        store.emit("edit", [{ kind: "bank" }]);
+        sv.refresh();
+        pv.sel = { from: st.region.ptr + 100, to: st.region.ptr + 2100 };
+        pv.syncSelection();
+        pv.playBtn.click();
+        ok(pv.preview.playing.src.buffer.numberOfChannels === 2,
+          `p11 a window inside it auditions as a PAIR (${pv.preview.playing.src.buffer.numberOfChannels} ch)`);
+        ok(Math.abs(pv.preview.playing.src.buffer.getChannelData(1)[0] - (60 - 128) / 127) < 1e-6,
+          "p12 …with the right channel actually being channel 2");
+        pv.stopPreview();
+        store.undo.undo();
+        store.emit("edit", [{ kind: "bank" }]);
+
+        // double-click scrubs from wherever it lands
+        sv.refresh();
+        pv.sel = null;
+        pv.syncSelection();
+        const ovRect = pv.overlay.getBoundingClientRect();
+        pv.overlay.dispatchEvent(new win.MouseEvent("dblclick", {
+          clientX: ovRect.left + 300, clientY: ovRect.top + 20, bubbles: true,
+        }));
+        ok(pv.preview.active, "p13 double-clicking the map auditions from that byte");
+        // Three seconds at whatever rate applies WHERE IT LANDED — the
+        // recording it is inside, else the sample it is inside — or what is
+        // left of the scope, whichever is shorter.
+        const scrubPtr = pv.preview.meta.ptr;
+        const scrubWant = Math.min(Math.round(pv.rateAt(scrubPtr) * 3),
+          pv.range().to - scrubPtr);
+        ok(pv.preview.meta.len === scrubWant,
+          `p14 …for three seconds of it (${pv.preview.meta.len} = 3 × ${pv.rateAt(scrubPtr)} Hz)`);
+        ok(pv.preview.playing.rate === pv.rateAt(scrubPtr),
+          "p14b …at the rate of whatever it landed in");
+        // leaving the view must not leave it sounding
+        sv.hide();
+        ok(!pv.preview.active, "p15 leaving the Samples view stops the audition");
+        sv.show();
+        sv.selRegion = 0;
+        sv.refresh();
 
         // ── the block palette, in every theme ──
         // Only CONSECUTIVE entries can touch, so those are the pairs that have

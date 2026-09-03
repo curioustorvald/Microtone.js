@@ -10,6 +10,7 @@
 // instrument and therefore not something the Lab can own.
 
 import { setInstBytesOp } from "../../doc/ops.js";
+import { resolveLoopRegion, residualDb, LOOP_POLICIES } from "../../doc/looptune.js";
 import { themeColors } from "../theme.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
@@ -107,11 +108,81 @@ export function openInstSampleEditor(store, slot) {
       };
     }));
 
+    // ── auto loop resolver (item 176) ──
+    // Three policies, one search each, and the numbers it finds land in the
+    // spinners as an ordinary marker edit — so the audition button beside it
+    // plays the result, and Cancel or Ctrl+Z takes it back. It NEVER writes on
+    // its own: only picking a policy or pressing Find runs a search, which is
+    // what makes it safe to type over the answer afterwards.
+    const autoLab = document.createElement("label");
+    autoLab.className = "smp-auto";
+    autoLab.append(t("smp.auto") + " ");
+    const autoSel = document.createElement("select");
+    for (const p of LOOP_POLICIES) {
+      const o = document.createElement("option");
+      o.value = p;
+      o.textContent = t(`smp.auto.${p}`);
+      autoSel.appendChild(o);
+    }
+    autoSel.value = "balanced";
+    autoSel.title = t("smp.autoTitle");
+    autoLab.appendChild(autoSel);
+    const autoBtn = document.createElement("button");
+    autoBtn.textContent = t("smp.autoFind");
+    autoBtn.title = t("smp.autoFindTitle");
+    const autoStatus = document.createElement("span");
+    autoStatus.className = "smp-auto-status";
+    opRow.append(autoLab, autoBtn, autoStatus);
+
+    let resolverWriting = false;   // suppresses the stale-status clear below
+    let resolving = false;
+    autoSel.addEventListener("change", () => runResolver());
+    autoBtn.addEventListener("click", (e) => { e.preventDefault(); runResolver(); });
+
+    async function runResolver() {
+      if (resolving) return;
+      const f = fields();
+      if (f.loopMode !== 1 && f.loopMode !== 2) { autoStatus.textContent = t("smp.autoNeedMode"); return; }
+      resolving = true;
+      autoSel.disabled = autoBtn.disabled = true;
+      autoStatus.textContent = t("smp.autoWorking");
+      // One frame for that label to reach the screen before the search takes
+      // the thread — a dialog that freezes silently reads as broken. RACED with
+      // a timer, never awaited alone: a hidden tab (or a headless render) stops
+      // firing frames altogether, and a search that waits for one that never
+      // comes leaves the editor stuck on "searching…" with its controls off.
+      await new Promise((r) => {
+        let done = false;
+        const go = () => { if (!done) { done = true; r(); } };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(go);
+        setTimeout(go, 32);
+      });
+      let res = null;
+      try {
+        res = resolveLoopRegion(doc.sampleBin.subarray(ptr, ptr + len), {
+          mode: f.loopMode, policy: autoSel.value,
+          playStart: f.playStart, rate: inst().samplingRate || 32000,
+        });
+      } catch (err) {
+        console.warn("loop resolver:", err);
+      }
+      resolving = false;
+      autoSel.disabled = autoBtn.disabled = false;
+      if (!res) { autoStatus.textContent = t("smp.autoNone"); return; }
+      resolverWriting = true;
+      applyFields({ loopStart: res.loopStart, loopEnd: res.loopEnd });
+      resolverWriting = false;
+      autoStatus.textContent = describeResult(res);
+    }
+
     shell.dlg.insertBefore(fieldRow, shell.btnRow);
     shell.dlg.insertBefore(opRow, shell.btnRow);
 
     // ── field writes: one setInstBytesOp per change/drag-step ──
     function applyFields(change, gestureId = null) {
+      // A hand edit makes the resolver's readout describe numbers that are no
+      // longer on screen, so it goes rather than lies. The numbers stay.
+      if (!resolverWriting) autoStatus.textContent = "";
       const f = { ...fields(), ...change };
       // the edited marker wins; the other loop end follows to keep start ≤ end
       if ("loopStart" in change && f.loopStart > f.loopEnd) f.loopEnd = f.loopStart;
@@ -137,6 +208,10 @@ export function openInstSampleEditor(store, slot) {
       for (const m of MARKERS) spinners[m.key].value = f[m.key];
       modeSel.value = f.loopMode;
       susBox.checked = f.sustain;
+      // Modes 0 and 3 play straight to the end — there is no seam to resolve.
+      const loops = f.loopMode === 1 || f.loopMode === 2;
+      autoSel.disabled = autoBtn.disabled = !loops || resolving;
+      autoLab.title = autoBtn.title = loops ? t("smp.autoFindTitle") : t("smp.autoNeedMode");
     }
     paint();
 
@@ -170,6 +245,36 @@ export function openInstSampleEditor(store, slot) {
 
     shell.show();
   });
+}
+
+const fmtDb = (rel) => {
+  const db = residualDb(rel);
+  return Number.isFinite(db) ? db.toFixed(1) : "−∞";
+};
+
+/**
+ * One line saying what the search kept and what it left behind. The seam is
+ * reported in dB relative to the sound carrying it, because that is how a click
+ * is heard — the same step is nothing under a loud sustain and a tick over a
+ * decayed tail. Ping-pong reports BOTH turning points, since its two ends are
+ * independent and one of them can be the bad one.
+ */
+function describeResult(res) {
+  const bytes = res.loopEnd - res.loopStart;
+  let s = res.mode === 2
+    ? t("smp.autoPP", { bytes, a: fmtDb(res.relStart), b: fmtDb(res.relEnd) })
+    : res.cycles >= 1
+      ? t("smp.autoFwd", { bytes, cycles: res.cycles.toFixed(1), db: fmtDb(res.rel) })
+      : t("smp.autoFwdNP", { bytes, db: fmtDb(res.rel) });
+  const widerBy = res.widest ? (res.widest.loopEnd - res.widest.loopStart) / bytes : 1;
+  if (!res.metBudget) s += t("smp.autoOverBudget");
+  // Only worth saying when the region on offer is substantially bigger, and
+  // WITHOUT its seam figure: a crossfade removes that seam rather than leaving
+  // it, so quoting the number reads as the quality the longer loop would have.
+  else if (widerBy >= 1.5) {
+    s += t("smp.autoWider", { bytes: res.widest.loopEnd - res.widest.loopStart });
+  }
+  return s;
 }
 
 // ── shared dialog shell: title/info/canvas + Apply/Cancel with undo rollback ──

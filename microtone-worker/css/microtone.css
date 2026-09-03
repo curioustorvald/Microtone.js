@@ -1973,6 +1973,18 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+/* Auto loop resolver (item 176): the policy picker sits in the op row and has
+   to read as one control with the Find button beside it, and its readout is a
+   measurement, not a label — dim, and free to wrap under the row. */
+.smp-ops select {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.smp-ops label.smp-auto { color: var(--dim); font-size: 0.85rem; }
+.smp-ops select:disabled, .smp-ops button:disabled { opacity: 0.4; cursor: default; }
+.smp-auto-status { color: var(--dim); font-size: 0.85rem; flex: 1 1 100%; min-height: 1.1em; }
 .smp-toolbar {
   display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
   padding: 0.3rem 0.6rem; margin: 0 0 0.5rem;
@@ -2042,6 +2054,9 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   white-space: nowrap;
 }
 .pw-sel { color: var(--accent); font-family: "Roboto Mono", monospace; font-size: 0.76rem; }
+/* Audition (item 175): the play/stop toggle and the loop latch beside it. */
+.pw-play { min-width: 2rem; font-size: 0.75rem; }
+.pw-play.on, .pw-bar button.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .pw-slice { border-color: var(--accent); color: var(--accent); }
 .pw-slice:disabled { border-color: var(--border); color: var(--dim); }
 .pw-scroll {

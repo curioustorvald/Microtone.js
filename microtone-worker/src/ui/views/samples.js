@@ -265,6 +265,7 @@ export class SamplesView {
   /** Swap the one-line waveform for the wrapped map, and remember the choice. */
   toggleMap() {
     this.mapOpen = !this.mapOpen;
+    if (!this.mapOpen) this.poolWave.stopPreview();
     saveMapPref(this.mapOpen);
     this.mapBtn.classList.toggle("on", this.mapOpen);
     this.refresh();
@@ -288,7 +289,10 @@ export class SamplesView {
   }
 
   show() { this.visible = true; this.refresh(); }
-  hide() { this.visible = false; }
+  hide() {
+    this.visible = false;
+    this.poolWave.stopPreview();   // nothing should still be sounding off-screen
+  }
 
   /** Open a float copy of the selected sample in the Sample Lab; `openChord`
    *  opens the chord maker on top of it. `replaceTarget` is what lets the Lab

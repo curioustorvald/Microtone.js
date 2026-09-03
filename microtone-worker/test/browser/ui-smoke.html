@@ -311,6 +311,68 @@
           await closed;
           const instRolled = doc.instruments[slot].sampleLoopStart === loopBefore;
           log(`inst sample editor (3 markers, single slot, cancel restores): ${openOk && wrote && scoped && instRolled ? "ok" : "FAIL"}`);
+
+          // ── item 176: the auto loop resolver in that same editor ──
+          const LT = await win.eval('import("/src/doc/looptune.js")');
+          closed = openInstSampleEditor(store, slot);
+          dlg = win.document.querySelector("dialog.sample-editor");
+          await new Promise((r) => setTimeout(r, 20));
+          const modeSel = dlg.querySelector(".smp-fields select");
+          const autoSel = dlg.querySelector(".smp-ops select");
+          const status = dlg.querySelector(".smp-auto-status");
+          const setMode = (v) => {
+            modeSel.value = String(v);
+            modeSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+          };
+          // Modes 0 and 3 do not loop, so there is nothing to resolve.
+          setMode(0);
+          const offDisabled = autoSel.disabled;
+          setMode(1);
+          const onEnabled = !autoSel.disabled;
+
+          const inst176 = doc.instruments[slot];
+          const want = LT.resolveLoopRegion(
+            doc.sampleBin.subarray(inst176.samplePtr, inst176.samplePtr + inst176.sampleLength),
+            { mode: 1, policy: "longest", playStart: inst176.samplePlayStart,
+              rate: inst176.samplingRate || 32000 });
+          const depth176 = store.undo.undoStack.length;
+          autoSel.value = "longest";
+          autoSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+          for (let i = 0; i < 200 && !status.textContent.includes("dB"); i++) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          const found = !!want && doc.instruments[slot].sampleLoopStart === want.loopStart &&
+            doc.instruments[slot].sampleLoopEnd === want.loopEnd &&
+            status.textContent.includes("dB") &&
+            store.undo.undoStack.length === depth176 + 1;
+          // A hand edit afterwards keeps the numbers and drops the stale readout.
+          const spin176 = dlg.querySelectorAll(".smp-fields .mt-spin input");
+          spin176[1].value = String((want?.loopStart ?? 0) + 1);
+          spin176[1].dispatchEvent(new win.Event("change", { bubbles: true }));
+          const handEdit = doc.instruments[slot].sampleLoopStart === (want?.loopStart ?? 0) + 1 &&
+            status.textContent === "";
+          store.undo.undo();
+          store.undo.undo();
+          const resolverUndone = doc.instruments[slot].sampleLoopStart === loopBefore;
+          // Ping-pong is a different search (two independent turning points)
+          // and a different readout, so it gets its own pass.
+          setMode(2);
+          const wantPP = LT.resolveLoopRegion(
+            doc.sampleBin.subarray(inst176.samplePtr, inst176.samplePtr + inst176.sampleLength),
+            { mode: 2, policy: "clean", playStart: inst176.samplePlayStart,
+              rate: inst176.samplingRate || 32000 });
+          autoSel.value = "clean";
+          autoSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+          for (let i = 0; i < 200 && !status.textContent.includes("turns"); i++) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          const ppOk = !!wantPP && doc.instruments[slot].sampleLoopStart === wantPP.loopStart &&
+            doc.instruments[slot].sampleLoopEnd === wantPP.loopEnd &&
+            status.textContent.includes("turns");
+          [...dlg.querySelectorAll(".modal-buttons button")][1].click(); // Cancel
+          await closed;
+          const allRolled = doc.instruments[slot].sampleLoopStart === loopBefore;
+          log(`auto loop resolver (mode-gated, both modes, one undo step, readout clears on hand edit): ${offDisabled && onEnabled && found && handEdit && resolverUndone && ppOk && allRolled ? "ok" : "FAIL"}`);
         }
 
         // ── item 40: new instrument from an existing pooled sample ──

@@ -1019,6 +1019,17 @@ The sample-memory panel above answers *where are these bytes?*; the map answers
 **Drag across the waveform to select a window of bytes.** *Cut instrument…*
 then makes an instrument that plays exactly those bytes — see below.
 
+**Hear it before you cut it.** ▶ auditions the selected window, or the sample
+the list is on when nothing is selected; ↻ beside it repeats until stopped,
+which is how a loop point gets judged. **Double-click anywhere on the map** to
+hear a few seconds from that byte — the way to walk a long recording without
+selecting anything first. A window inside a stereo recording is auditioned as
+the pair it would be cut as, and everything plays at the rate the cut would
+give it, so what you hear is what the instrument will play. The audition is
+ordinary playback rather than the tracker engine: it works whether or not the
+song is playing, adds no instrument and no voice, and stops when you leave the
+view.
+
 **Every project already has a recording to look at: the memory it is using.**
 *All sample memory* is listed at the top of the Samples list in every project,
 including every project made before any of this existed. Select it and the map
@@ -1256,7 +1267,7 @@ either way.
 
 ### Editing an instrument
 
-- **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only. Play start, loop start and loop end are all spinners here too, so a number read off the waveform's hairline can simply be typed in.
+- **General** — global volume, volume swing, fadeout; default pan (which becomes **default azimuth**, and on a spatial song **default elevation**, once the song has a surround model — see [Surround panning](#surround-panning)), pan swing, pitch-pan separation and centre; wide-range detune (with hex-word and cents readouts); **New Note Action** (cut / continue / off / fade / key-lift), Duplicate Check Type and Action; filter mode (**ImpulseTracker** or **SoundFont2**) with cutoff and resonance shown in Hz/dB for SF2 mode. The Sample section binds the sample and opens the **play/loop/sustain marker editor** — draggable play-start, loop-start and loop-end markers, loop mode (off / forward / ping-pong / one-shot) and sustain, affecting this instrument slot only. Play start, loop start and loop end are all spinners here too, so a number read off the waveform's hairline can simply be typed in. **Auto loop** searches the sample for a loop region that plays without an audible click and writes the two markers for you: pick *cleanest*, *balanced* or *longest* (how much of a tick you will accept in exchange for keeping more of the sample) and it reports how long the loop is and how loud its seam is, in dB below the sound carrying it. It searches for whichever loop mode is set — forward and ping-pong click in different ways and want different loop points — and it only ever writes when you ask, so the numbers stay yours to adjust afterwards.
   - **From the list**, under *Sample ptr*, is the same binding as a list rather than an address: every sample in the pool, plus the [recordings loaded into memory](#long-recordings-in-memory) in a group of their own. Choosing one writes its pointer, length, rate and loop into this record in a single undo step; choosing a recording points the instrument at its first 65535 bytes, which the spinners then move. It is a copy, not a link — the list is *derived* from what the instruments point at, so a row can appear or disappear as you use it, and the row shown is always the one this record's own pointer lands on.
 - **Vol env / Pan env / Pitch / Filter** — envelope graphs. Drag nodes vertically for values, horizontally for timing; a checkbox switches to a logarithmic timescale. The pitch/filter tab follows the instrument's envelope role.
   - **Carry** (beside *Envelope present*) makes a new note **continue** this envelope instead of restarting it: the playhead stays where the last note left it, so a slow pan sweep or a filter opening can run across a whole phrase of repeated notes rather than resetting on each one. Each envelope carries — or does not — on its own. It is ignored where there is nothing worth keeping: after a key-off, and on a note that changes instrument. This is also what makes a run of notes tied by `G` sound the same whether or not each row names its instrument.
