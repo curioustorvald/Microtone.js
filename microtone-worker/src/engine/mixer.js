@@ -25,7 +25,7 @@ import {
   spatialVoiceGains, analysisVoiceGains, voiceAzimuth, voicePanByte,
 } from "./spatial.js";
 import { applyTrackerRow, advanceRow } from "./row.js";
-import { applyTrackerTick } from "./tick.js";
+import { applyTrackerTick, advanceSampleModExtended } from "./tick.js";
 
 const fround = Math.fround;
 
@@ -202,6 +202,11 @@ export function generateTrackerAudio(eng, playhead, out) {
         continue;
       }
       const voiceInst = eng.instruments[voice.instrumentId];
+      // Argument extension (item 162): an extended 2/3's clock runs in
+      // samples, not ticks, so it steps HERE rather than in applyTrackerTick
+      // — same per-sample-accumulator shape ts.samplesIntoTick uses above,
+      // scoped to this one voice's instrument.
+      advanceSampleModExtended(eng, ts, voice, spt);
       renderVoicePair(eng, ts, voice, voiceInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];
@@ -287,6 +292,10 @@ export function generateTrackerAudio(eng, playhead, out) {
       const bgFader = srcVoice && srcVoice.fader > bg.fader ? srcVoice.fader : bg.fader;
       if (!bg.active || bgFader === 255) continue;
       const bgInst = eng.instruments[bg.instrumentId];
+      // A metainstrument's layer children carry the sample-mod clock too
+      // (item 154) — mirrors applyTrackerTick's own `if (bg.isLayerChild)`
+      // gate on advanceSampleMod, just at sample instead of tick rate.
+      if (bg.isLayerChild) advanceSampleModExtended(eng, ts, bg, spt);
       renderVoicePair(eng, ts, bg, bgInst, ts.interpolationMode, spt, stereoPair);
       const sL = stereoPair[0];
       const sR = stereoPair[1];

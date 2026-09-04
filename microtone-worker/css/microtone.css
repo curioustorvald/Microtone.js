@@ -48,6 +48,7 @@
   --cv-fx-a1: #ffdd00;      /* argument field 1 */
   --cv-fx-a2: #8be400;      /* argument field 2 */
   --cv-fx-a3: #78DCE7;      /* argument field 3 */
+  --cv-fx-ext: #ff4d4d;     /* item 162: a `:` cell and the one it pairs with */
 
   /* canvas: samples / instruments */
   --cv-wave: #43d675;        /* waveform trace */
@@ -144,6 +145,7 @@
   --cv-fx-a1: #ffdd00;      /* argument field 1 */
   --cv-fx-a2: #8be400;      /* argument field 2 */
   --cv-fx-a3: #78DCE7;      /* argument field 3 */
+  --cv-fx-ext: #ff4d4d;     /* item 162: a `:` cell and the one it pairs with */
 
   /* canvas: samples / instruments */
   --cv-wave: #4ddd7d;
@@ -212,6 +214,7 @@
   --cv-fx-a1: #a44500;
   --cv-fx-a2: #3c9200;
   --cv-fx-a3: #1d66b8;
+  --cv-fx-ext: #c62828;     /* item 162: a `:` cell and the one it pairs with */
 
   /* canvas: samples / instruments */
   --cv-wave: #1c9450;
@@ -294,6 +297,7 @@
   --cv-fx-a1: #93330a;
   --cv-fx-a2: #34760f;
   --cv-fx-a3: #1a5478;
+  --cv-fx-ext: #a83232;     /* item 162: a `:` cell and the one it pairs with */
 
   /* canvas: samples / instruments */
   --cv-wave: #2c6f1f;

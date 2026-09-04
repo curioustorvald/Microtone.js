@@ -11,7 +11,7 @@ import {
 import { computePlaybackRate } from "./sampler.js";
 import {
   decodeSampleRegion, regionScratch, REGION_NONE, REGION_COMB,
-  MOD_OFF, modStepPeriod,
+  MOD_OFF, modStepPeriod, extYkPeriodTicks,
 } from "./samplemod.js";
 import { patchAt } from "./inst.js";
 import { applyPastNoteAction } from "./trigger.js";
@@ -26,9 +26,17 @@ const spatialArg = new Float64Array(2);
 /** Resolve a non-zero argument or recall from cohort memory. */
 export function resolveArg(arg, mem) { return arg !== 0 ? arg : mem; }
 
-export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
+/**
+ * `ext` (item 162): the argument of a `:` sharing this row with `op`, or null
+ * when there isn't one (any Format 1/2 row, or a Format 3 row where `op`
+ * isn't paired). Only OP_J / OP_O / OP_2 / OP_3 read it; every other case
+ * ignores it, and a colon reaching this switch in its OWN slot (unpaired, or
+ * paired with another colon) hits OP_COLON's bare `break` — a genuine no-op.
+ */
+export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg, ext = null) {
   switch (op) {
     case EffectOp.OP_NONE: break;
+    case EffectOp.OP_COLON: break; // argument extension — a modifier, never a command of its own
     case EffectOp.OP_7:
       // Pattern Ditto marker — consumed by applyTrackerRow's row-time expansion.
       break;
@@ -39,8 +47,8 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       break;
     }
     // 2 spares the region it names; 3 modifies it. Same command otherwise.
-    case EffectOp.OP_2: applySampleModEffect(eng, ts, voice, vi, rawArg, true); break;
-    case EffectOp.OP_3: applySampleModEffect(eng, ts, voice, vi, rawArg, false); break;
+    case EffectOp.OP_2: applySampleModEffect(eng, ts, voice, vi, rawArg, true, ext); break;
+    case EffectOp.OP_3: applySampleModEffect(eng, ts, voice, vi, rawArg, false, ext); break;
     case EffectOp.OP_5: applyFilterParamEffect(eng, ts, voice, vi, rawArg, false); break;
     case EffectOp.OP_6: applyFilterParamEffect(eng, ts, voice, vi, rawArg, true); break;
     case EffectOp.OP_8: {
@@ -178,11 +186,24 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
       break;
     }
     case EffectOp.OP_J: {
-      const arg = resolveArg(rawArg, voice.mem.j);
-      if (rawArg !== 0) voice.mem.j = arg;
       voice.arpActive = true;
-      voice.arpOff1 = (arg >>> 8) & 0xff;
-      voice.arpOff2 = arg & 0xff;
+      if (ext !== null) {
+        // Extended (item 162): both bytes become full 16-bit 4096-TET deltas
+        // instead of <<8-scaled ones — off1 is J's own arg, off2 the paired
+        // colon's, order-independent. Private memory, separate from classic
+        // J's (the units don't agree, so one must never recall the other).
+        const off1 = resolveArg(rawArg, voice.mem.jExt1);
+        const off2 = resolveArg(ext, voice.mem.jExt2);
+        if (rawArg !== 0) voice.mem.jExt1 = off1;
+        if (ext !== 0) voice.mem.jExt2 = off2;
+        voice.arpOff1 = off1;
+        voice.arpOff2 = off2;
+      } else {
+        const arg = resolveArg(rawArg, voice.mem.j);
+        if (rawArg !== 0) voice.mem.j = arg;
+        voice.arpOff1 = ((arg >>> 8) & 0xff) << 8;
+        voice.arpOff2 = (arg & 0xff) << 8;
+      }
       break;
     }
     case EffectOp.OP_K: {
@@ -251,9 +272,20 @@ export function applyEffectRow(eng, ts, playhead, voice, vi, op, rawArg) {
     }
     case EffectOp.OP_O: {
       // Sample offset — clamps into the active sample's loop region.
-      const arg = resolveArg(rawArg, voice.mem.o);
-      if (rawArg !== 0) voice.mem.o = arg;
-      let off = arg;
+      let off;
+      if (ext !== null) {
+        // Extended (item 162): O's own arg is the high word, the paired
+        // colon's is the low word — a 32-bit offset. Combined ARITHMETICALLY,
+        // never with `<<16`: that overflows into JS's signed 32-bit bitwise
+        // domain the moment rawArg's top bit is set. Private memory, since a
+        // 32-bit value doesn't fit where the classic 16-bit recall lives.
+        const combined = rawArg * 65536 + ext;
+        off = combined !== 0 ? combined : voice.mem.oExt;
+        if (combined !== 0) voice.mem.oExt = combined;
+      } else {
+        off = resolveArg(rawArg, voice.mem.o);
+        if (rawArg !== 0) voice.mem.o = off;
+      }
       if ((voice.activeLoopMode & 3) !== 0 &&
           voice.activeSampleLoopEnd > voice.activeSampleLoopStart &&
           off > voice.activeSampleLoopEnd) {
@@ -492,7 +524,11 @@ export function applySEffect(eng, ts, voice, vi, arg) {
  * driving it to the CHANNEL. A reserved region is ignored WHOLE, speed and all,
  * so a typo cannot drive a modification the writer never named.
  */
-export function applySampleModEffect(eng, ts, voice, vi, rawArg, invert) {
+export function applySampleModEffect(eng, ts, voice, vi, rawArg, invert, ext = null) {
+  if (ext !== null) {
+    applySampleModEffectExt(eng, ts, voice, vi, rawArg, invert, ext);
+    return;
+  }
   const op = (rawArg >>> 4) & 0xf;
   // A metainstrument is one note made of several instruments, so the command
   // reaches all of them — otherwise only layer 0's sample would ever be
@@ -510,6 +546,7 @@ export function applySampleModEffect(eng, ts, voice, vi, rawArg, invert) {
       v.modPeriod = 0;
       v.modTickCount = 0;
       v.modWritePos = 0;
+      v.modExtended = false;
       return;
     }
     const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
@@ -526,6 +563,51 @@ export function applySampleModEffect(eng, ts, voice, vi, rawArg, invert) {
       v.modWritePos = 0;
     }
     v.modPeriod = modStepPeriod(rawArg & 0xf);
+    v.modExtended = false;
+  });
+}
+
+/**
+ * Extended notefx 2/3 (item 162, `2`/`3 $sexy : $fuuk`): `$se` region as
+ * above, `$f` a further sub-range (samplemod.js fModTouches), `$xuu` a 12-bit
+ * operation replacing `$x`'s 4-bit one, `$yk` a two-digit speed replacing
+ * `$y`'s one-digit ladder, clocked in samples rather than whole ticks (see
+ * voice.modStepTicks / mixer.js's per-sample accumulator).
+ */
+function applySampleModEffectExt(eng, ts, voice, vi, rawArg, invert, ext) {
+  const f = (ext >>> 12) & 0xf;
+  const xuu = (((rawArg >>> 4) & 0xf) << 8) | ((ext >>> 4) & 0xff);
+  const yk = ((rawArg & 0xf) << 4) | (ext & 0xf);
+  const seen = new Set();
+  forEachLayerTarget(ts, voice, vi, (v) => {
+    const inst = eng.instruments[v.instrumentId];
+    const dup = seen.has(v.instrumentId);
+    seen.add(v.instrumentId);
+    if (xuu === 0) {
+      if (!dup) inst.resetMod();
+      v.modPeriod = 0;
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+      v.modExtended = false;
+      v.modStepTicks = 0;
+      v.modSamplesIntoStep = 0;
+      return;
+    }
+    const code = decodeSampleRegion((rawArg >>> 8) & 0xff, regionScratch);
+    if (code === REGION_NONE) return;
+    if (dup) { v.modPeriod = 0; v.modExtended = false; return; }
+    const moved = code === REGION_COMB
+      ? inst.setModComb(regionScratch[2], regionScratch[3] !== 0)
+      : inst.setModRegion(regionScratch[0], regionScratch[1]);
+    const swapped = inst.setModOpExt(xuu, invert, f);
+    if (moved || swapped) {
+      v.modTickCount = 0;
+      v.modWritePos = 0;
+      v.modSamplesIntoStep = 0;
+    }
+    v.modPeriod = 0;
+    v.modExtended = true;
+    v.modStepTicks = extYkPeriodTicks(yk);
   });
 }
 

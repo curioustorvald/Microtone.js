@@ -9,6 +9,7 @@ import {
   volPanOp, volPanSelect,
 } from "./edit.js";
 import { t } from "./i18n.js";
+import { EffectOp, EXT_CAPABLE_OPS } from "../engine/tables.js";
 
 // Effect reference (TAUD_NOTE_EFFECTS.md digest): opcode → button label (l).
 // The displayed name/argument-format text is looked up in the language table
@@ -50,12 +51,41 @@ export const FX_INFO = {
   0x21: { l: "X" },
   0x22: { l: "Y" },
   0x23: { l: "Z" },
+  // Item 162: the ASCII-symbol opcode space opened once base-36 filled.
+  // `:`'s own name/argument text (pal.fx.:.n/.a) is the UNPAIRED / not-yet-
+  // extending-anything description — see fxArgHint below for the paired one.
+  0xba: { l: ":" },
 };
 
 /** An effect's display name / argument format. Exported because the right-click
  *  quick palette (blocktools.js) labels the same opcodes and must not drift. */
 export const fxName = (info) => t(`pal.fx.${info.l}.n`);
 export const fxArg = (info) => t(`pal.fx.${info.l}.a`);
+
+/**
+ * The SUB_FX_ARG/SUB_FX2_ARG hint for opcode `cur`, given `other` — the
+ * OTHER effect slot on the same row (item 162). Everywhere but the two
+ * `:` pairings this reduces to the plain `fxArg` text; those two read the
+ * CONTEXTUAL description instead of "unknown opcode" / the base command's
+ * isolated one, matching the field colouring notenames.fxArgFields already
+ * gives the same pairings. Pure (no DOM) — testable directly.
+ */
+export function fxArgHint(cur, other) {
+  const info = FX_INFO[cur];
+  if (!info) return cur === 0 ? t("pal.noEffect") : t("pal.unknownOpcode");
+  let desc;
+  if (cur === EffectOp.OP_COLON) {
+    if (other === EffectOp.OP_J) desc = t("pal.fx.:.aJ");
+    else if (other === EffectOp.OP_O) desc = t("pal.fx.:.aO");
+    else if (other === EffectOp.OP_2 || other === EffectOp.OP_3) desc = t("pal.fx.:.aMod");
+    else desc = fxArg(info);
+  } else if (other === EffectOp.OP_COLON && EXT_CAPABLE_OPS.has(cur)) {
+    desc = t(`pal.fx.${info.l}.aExt`);
+  } else {
+    desc = fxArg(info);
+  }
+  return `${info.l} ${fxName(info)}: ${desc}`;
+}
 
 export class CommandPalette {
   /** getContext() → {sub, cell, apply(fields)} | null */
@@ -77,7 +107,10 @@ export class CommandPalette {
     // (and not the whole value, which would re-render on every digit typed).
     const wide = ctx.wide === true;
     const panVal = ctx.cell ? (wide ? ctx.cell.azimuth : ctx.cell.pan) : 0;
-    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:${wide}:` +
+    // Item 162: effect2 has to be in the key too — a `:` pairing's hint and
+    // colouring depend on the OTHER slot, so editing it must re-render this
+    // one even though ctx.sub and ctx.cell.effect haven't moved.
+    const key = `${ctx.sub}:${ctx.cell?.effect ?? -1}:${ctx.cell?.effect2 ?? -1}:${wide}:` +
       `${ctx.cell ? volPanOp(ctx.cell.volume, ctx.cell.volumeEff, false, wide) : ""}:` +
       `${ctx.cell ? volPanOp(panVal, ctx.cell.panEff, true, wide) : ""}`;
     if (key === this.lastKey && !this.host.hidden) return; // avoid re-render churn
@@ -170,12 +203,11 @@ export class CommandPalette {
       }
       case SUB_FX_ARG:
       case SUB_FX2_ARG: {
-        const cur = ctx.sub === SUB_FX2_ARG ? ctx.cell.effect2 : ctx.cell.effect;
-        const info = FX_INFO[cur];
+        const second = ctx.sub === SUB_FX2_ARG;
+        const cur = second ? ctx.cell.effect2 : ctx.cell.effect;
+        const other = second ? ctx.cell.effect : ctx.cell.effect2;
         label(t("pal.argument"));
-        hint(info
-          ? `${info.l} ${fxName(info)}: ${fxArg(info)}`
-          : cur === 0 ? t("pal.noEffect") : t("pal.unknownOpcode"));
+        hint(fxArgHint(cur, other));
         break;
       }
     }

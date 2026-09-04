@@ -6,12 +6,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { fxArgFields } from "../../src/ui/notenames.js";
+import { fxArgFields, fxColonWarns } from "../../src/ui/notenames.js";
+import { EffectOp } from "../../src/engine/tables.js";
 
 const OP = 0, RSVD = -1;
 
 /** fxArgFields as a layout string, for readable assertions. */
-const map = (effect, arg) => fxArgFields(effect, arg)
+const map = (effect, arg, pairedOp = 0) => fxArgFields(effect, arg, pairedOp)
   .map((f) => (f === OP ? "o" : f === RSVD ? "." : String(f))).join("");
 
 // Base-36 opcode letter → effect number, the same mapping the cell stores.
@@ -102,4 +103,84 @@ test("every effect number yields four fields, and the last is never the opcode's
       assert.ok(last >= 1 && last <= 3, `effect ${effect} arg ${arg} last field ${last}`);
     }
   }
+});
+
+// ── item 162.1: the red "this `:` pairing needs a second look" flag ────────
+// Only two arrangements warrant it; the correct-and-supported case (and
+// anything that isn't actually a pairing) paints through the ordinary
+// per-field colours above like any other row.
+
+test("`:` correctly on the second slot, paired with something that reads it: no warning", () => {
+  for (const op of [EffectOp.OP_J, EffectOp.OP_O, EffectOp.OP_2, EffectOp.OP_3]) {
+    assert.equal(fxColonWarns(op, EffectOp.OP_COLON), false, `op ${op}`);
+  }
+});
+
+test("`:` on the FIRST slot warns, even paired with a command that reads it", () => {
+  for (const op of [EffectOp.OP_J, EffectOp.OP_O, EffectOp.OP_2, EffectOp.OP_3]) {
+    assert.equal(fxColonWarns(EffectOp.OP_COLON, op), true, `op ${op}`);
+  }
+});
+
+test("`:` paired with a command that ignores it warns, regardless of slot", () => {
+  assert.equal(fxColonWarns(EffectOp.OP_H, EffectOp.OP_COLON), true, "H does not read `:`");
+  assert.equal(fxColonWarns(EffectOp.OP_COLON, EffectOp.OP_H), true, "still `:` on the first slot too");
+});
+
+test("no `:` in either slot: never warns, whatever the row otherwise says", () => {
+  assert.equal(fxColonWarns(EffectOp.OP_J, 0), false, "unpaired J");
+  assert.equal(fxColonWarns(0, 0), false, "empty row");
+});
+
+test("`:` alone in a slot still hits rule 1 or rule 2 — the row is still wrong to read", () => {
+  // First slot: rule 1 fires on POSITION alone, empty second slot or not.
+  assert.equal(fxColonWarns(EffectOp.OP_COLON, 0), true, "`:` first, nothing to extend");
+  // Second slot with nothing in front of it: rule 2 fires too — $00 (OP_NONE)
+  // is not in EXT_CAPABLE_OPS, so it reads exactly like any other command
+  // that doesn't consume the argument.
+  assert.equal(fxColonWarns(0, EffectOp.OP_COLON), true, "`:` second, nothing in front of it");
+});
+
+test("`:` in BOTH slots is symmetric — neither position is more \"wrong\" than the other", () => {
+  assert.equal(fxColonWarns(EffectOp.OP_COLON, EffectOp.OP_COLON), false);
+});
+
+// ── contextual field colouring for a correctly-paired `:` (fxArgFields'
+// 3rd `pairedOp` arg) — only reached when fxColonWarns is false, so these
+// pairings are exactly the ones that read normally instead of flat red. ──
+
+test("J correctly paired with `:`: J's own cell is ONE full-resolution field", () => {
+  // Unpaired J keeps its base two-byte split.
+  assert.equal(map(EffectOp.OP_J, 0x2277), "1122");
+  // Paired with `:`, J's argument is no longer two bytes — it's the whole
+  // 16-bit off1, one field.
+  assert.equal(map(EffectOp.OP_J, 0x2277, EffectOp.OP_COLON), "1111");
+});
+
+test("`:` paired with J/O takes field 2, whole cell — \"the other half\"", () => {
+  assert.equal(map(EffectOp.OP_COLON, 0x0567, EffectOp.OP_J), "2222");
+  assert.equal(map(EffectOp.OP_COLON, 0x0002, EffectOp.OP_O), "2222");
+});
+
+test("O correctly paired with `:`: unchanged (O was already one field)", () => {
+  assert.equal(map(EffectOp.OP_O, 0x0001, 0), "1111");
+  assert.equal(map(EffectOp.OP_O, 0x0001, EffectOp.OP_COLON), "1111");
+});
+
+test("2/3 correctly paired with `:`: base layout unchanged, `:` inherits each nibble's field", () => {
+  assert.equal(map(EffectOp.OP_2, 0x0f20, EffectOp.OP_COLON), "1123", "region/op/speed, same as unpaired");
+  assert.equal(map(EffectOp.OP_3, 0x0f20, EffectOp.OP_COLON), "1123");
+  // `:`'s $fuuk: f joins region's field (1), uu joins the op's field (2,2),
+  // k joins the speed's field (3).
+  assert.equal(map(EffectOp.OP_COLON, 0x0018, EffectOp.OP_2), "1223");
+  assert.equal(map(EffectOp.OP_COLON, 0x0018, EffectOp.OP_3), "1223");
+});
+
+test("a flagged (fxColonWarns) pairing never reaches contextual colouring — the view paints flat red instead", () => {
+  // pairedOp alone doesn't gate correctness — callers only pass it when
+  // fxColonWarns is false (glyphs.js paintFxCell takes the red branch
+  // first). Sanity: an UNSUPPORTED target still falls through fxLayout's
+  // pairedOp branch to its own default layout, since only J/O/2/3 match it.
+  assert.equal(map(EffectOp.OP_COLON, 0x1234, EffectOp.OP_H), "1111", "H doesn't match either branch");
+  assert.equal(map(EffectOp.OP_H, 0x1234, EffectOp.OP_COLON), "1122", "H's own layout, untouched");
 });

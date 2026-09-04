@@ -381,3 +381,218 @@ export function modAddress(g, i, rot, scatter, seed) {
   if (k < 0) k += dl;
   return g.ds + k;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Argument extension (item 162) — notefx 2/3 paired with `:`. Base behaviour
+// above is untouched; everything below is new, parallel machinery reached
+// only when an instrument's modOpExt is non-zero (mutually exclusive with the
+// classic 4-bit modOp — writing one clears the other, see inst.js
+// setModOpExt/setModOp). Spec: TAUD_NOTE_EFFECTS.md "`:` $xxxx — Argument
+// extension" and its "Extended" subsections under 2/3, J and O.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── $f — sub-range modifier, layered on top of $se's already-resolved extent ──
+//
+// $1..$9 are STATIC further cuts of the extent (same shape as $se's own
+// $10/$20..$32 rows, just measured against [es,ee) instead of the domain).
+// $A..$D ALTERNATE between two such cuts, one step at a time — which, because
+// the two halves/quarters of an alternating pair are exactly a comb's even and
+// odd chunks, is nothing more than a 2- or 4-way comb whose `odd` flips with
+// the step counter (`voice.modStepIndex`) rather than staying fixed. $E/$F are
+// a fixed BYTE-count comb (4-of-8, 1-of-2) rather than a fraction of the
+// extent, for when the extent itself is too short for $se's own comb ladder to
+// bite.
+const F_STATIC_RANGE = Object.freeze({
+  0x1: [0, 1 / 2], 0x2: [1 / 2, 1],
+  0x3: [0, 1 / 3], 0x7: [1 / 3, 2 / 3], 0x8: [2 / 3, 1],
+  0x4: [0, 1 / 4], 0x5: [1 / 2, 3 / 4], 0x6: [1 / 4, 3 / 4], 0x9: [3 / 4, 1],
+});
+
+/**
+ * Does `$f` (0..$F) keep sample byte `i`, given the extent [es,ee) $se already
+ * resolved and this instrument's step counter (for the $A-$D alternation)?
+ * Called ANDed with the ordinary extent+comb test — a byte must clear both.
+ */
+export function fModTouches(f, i, es, ee, stepIndex) {
+  if (f === 0) return true;
+  const len = ee - es;
+  if (len < 1) return true;
+  const rel = i - es;
+  const range = F_STATIC_RANGE[f];
+  if (range !== undefined) {
+    const lo = es + Math.round(len * range[0]);
+    const hi = es + Math.round(len * range[1]);
+    return i >= lo && i < hi;
+  }
+  if (f >= 0xa && f <= 0xd) {
+    const n = f >= 0xc ? 4 : 2; // A/B halves, C/D quarters
+    const chunk = Math.min(Math.floor((rel * n) / len), n - 1);
+    const startOdd = (f === 0xb || f === 0xd) ? 1 : 0; // B/D open on the "second" piece
+    return (chunk & 1) === ((stepIndex + startOdd) & 1);
+  }
+  if (f === 0xe) return (rel & 7) < 4;   // 1234----
+  if (f === 0xf) return (rel & 1) === 0; // 1-3-5-
+  return true;
+}
+
+// ── $xuu — the extended operation table (0x000..0xFFF) ──
+export const EXT_OP_NOOP = 0x100;
+export const EXT_OP_INVERT = 0x101;
+export const EXT_OP_FUNK = 0x102;
+export const EXT_OP_SIMPLE_INVERT = 0x103;
+export const EXT_OP_REVERSE = 0x104;
+
+/** Quantised-jump / bounded-jitter N-table, indexed by the code's low nibble
+ *  (16 entries) — shared by $13x/$14x/$15x. */
+export const EXT_JUMP_N = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 18, 21, 24, 32]);
+
+/** Jitter reach as a fraction of the domain for $11x/$12x's low nibble:
+ *  ±100/2^(15-x) %, i.e. 2^(x-15) — a 16-rung geometric ladder from ~0.003%
+ *  to 100%. */
+export function extJitterFrac(x) { return Math.pow(2, (x & 0xf) - 15); }
+
+/** Scatter reach ladder for $161..$16F (16 levels, finer than the base
+ *  command's 3): 1/16384 at $1 down to "fully" (reach = whole domain) at $F. */
+export const EXT_SCATTER_FRAC = Object.freeze([
+  0, 1 / 16384, 1 / 8192, 1 / 4096, 1 / 2048, 1 / 1024, 1 / 512, 1 / 256,
+  1 / 128, 1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1,
+]);
+
+// Bit-permutation table for $920..$927 — each entry is a byte->byte LUT.
+// Built from three involutions (reverse the 8 bits, swap the two nibbles,
+// swap each adjacent bit pair) whose compositions match the TODO's worked
+// examples exactly (abcdefgh -> ... for each of the eight codes):
+//   920 NOT              921 reverse            922 swap nibbles
+//   923 reverse+nibbles  924 swap twobits        925 reverse+twobits
+//   926 nibbles+twobits  927 all three (commute)
+function revBits8(b) {
+  b = ((b & 0xf0) >> 4) | ((b & 0x0f) << 4);
+  b = ((b & 0xcc) >> 2) | ((b & 0x33) << 2);
+  b = ((b & 0xaa) >> 1) | ((b & 0x55) << 1);
+  return b & 0xff;
+}
+const swapNibbles8 = (b) => ((b & 0xf0) >> 4) | ((b & 0x0f) << 4);
+const swapTwobits8 = (b) => ((b & 0xaa) >> 1) | ((b & 0x55) << 1);
+
+function buildBitpermLUT(fn) {
+  const t = new Uint8Array(256);
+  for (let b = 0; b < 256; b++) t[b] = fn(b);
+  return t;
+}
+/** [920, 921, ..., 927] -> Uint8Array(256) LUT, indexed by (code & 7). */
+export const EXT_BITPERM_LUT = Object.freeze([
+  buildBitpermLUT((b) => b ^ 0xff),                                  // 920 NOT
+  buildBitpermLUT(revBits8),                                          // 921
+  buildBitpermLUT(swapNibbles8),                                      // 922
+  buildBitpermLUT((b) => swapNibbles8(revBits8(b))),                  // 923
+  buildBitpermLUT(swapTwobits8),                                      // 924
+  buildBitpermLUT((b) => swapTwobits8(revBits8(b))),                  // 925
+  buildBitpermLUT((b) => swapTwobits8(swapNibbles8(b))),              // 926
+  buildBitpermLUT((b) => swapTwobits8(swapNibbles8(revBits8(b)))),    // 927
+]);
+
+/**
+ * Classify a 12-bit $xuu code into a step-function KIND plus its numeric
+ * parameter — the one place that knows the table's shape, so the stepper
+ * (tick.js advanceSampleModExtended) and nothing else has to.
+ */
+export function decodeExtOp(code) {
+  if (code === 0 || code === EXT_OP_NOOP) return { kind: "noop", param: 0 };
+  if (code === EXT_OP_INVERT) return { kind: "invert", param: 0 };
+  if (code === EXT_OP_FUNK) return { kind: "funk", param: 0 };
+  if (code === EXT_OP_SIMPLE_INVERT) return { kind: "xor", param: 0xff };
+  if (code === EXT_OP_REVERSE) return { kind: "mirror", param: 0 };
+  if (code >= 0x110 && code <= 0x11f) return { kind: "invertJit", param: code & 0xf };
+  if (code >= 0x120 && code <= 0x12f) return { kind: "funkJit", param: code & 0xf };
+  // $13x "no domain restriction" and $14x "restricted to $se+$f" land in the
+  // same wrap domain either way — this command's architecture already scopes
+  // every address transform to the resolved extent (g.ds/g.dl), so the two
+  // codes are the same jump under it; see TAUD_NOTE_EFFECTS.md's note on this.
+  if (code >= 0x130 && code <= 0x14f) return { kind: "jumpN", param: EXT_JUMP_N[code & 0xf] };
+  if (code >= 0x150 && code <= 0x15f) return { kind: "jumpNBounded", param: EXT_JUMP_N[code & 0xf] };
+  if (code === 0x160) return { kind: "swap", param: 0 };
+  if (code >= 0x161 && code <= 0x16f) return { kind: "scatter", param: EXT_SCATTER_FRAC[code & 0xf] };
+  if (code >= 0x200 && code <= 0x2ff) return { kind: "rol", param: code & 0xff };
+  if (code >= 0x300 && code <= 0x3ff) return { kind: "rol", param: -(code & 0xff) };
+  if (code >= 0x400 && code <= 0x4ff) return { kind: "rol", param: (code & 0xff) * 256 };
+  if (code >= 0x500 && code <= 0x5ff) return { kind: "rol", param: -(code & 0xff) * 256 };
+  if (code >= 0x600 && code <= 0x6ff) return { kind: "sub", param: code & 0xff };
+  if (code >= 0x700 && code <= 0x7ff) return { kind: "sub", param: -(code & 0xff) };
+  if (code >= 0x800 && code <= 0x8ff) return { kind: "xor", param: code & 0xff };
+  if (code >= 0x900 && code <= 0x90f) return { kind: "bitrot", param: code & 0xf };
+  if (code >= 0x910 && code <= 0x91f) return { kind: "bitrot", param: -(code & 0xf) };
+  if (code >= 0x920 && code <= 0x927) return { kind: "bitperm", param: code & 0x7 };
+  return { kind: "noop", param: 0 };
+}
+
+// ── $yk — extended speed ──
+//
+// $y = 0x0..0xE: period (ticks) = y + k/16 — the linear formula the TODO
+// gives for y=0,1,2 simply continues through the whole fine ladder, 1/16-tick
+// resolution from 0 up to ~14.94 ticks. $00 is the one exception: "stop"
+// (frozen), not "period 0". $y = 0xF: the TODO's own coarse ladder, for
+// periods the fine ladder's ~15-tick ceiling can't reach.
+const EXT_YK_COARSE = Object.freeze([15, 16, 18, 20, 22, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64]);
+
+/** $yk -> period in TICKS (float), or 0 = frozen ($00 only). */
+export function extYkPeriodTicks(yk) {
+  const y = (yk >>> 4) & 0xf;
+  const k = yk & 0xf;
+  if (yk === 0) return 0;
+  if (y === 0xf) return EXT_YK_COARSE[k];
+  return y + k / 16;
+}
+
+/**
+ * Where a touched byte is read from, for the address-transform kinds only
+ * (`rol`/jump family reuse the classic accumulator via `modAddress`; `mirror`
+ * and `swap` need their own map). Level-transform kinds (`sub`/`xor`/`bitrot`/
+ * `bitperm`) don't move the address — see applyExtLevel below.
+ */
+export function modAddressExt(g, i, inst) {
+  if (inst.modExtSwapA >= 0) {
+    if (i === inst.modExtSwapA) return inst.modExtSwapB;
+    if (i === inst.modExtSwapB) return inst.modExtSwapA;
+    return i;
+  }
+  if (inst.modExtMirror) {
+    const dl = g.dl;
+    if (dl < 2) return i;
+    let k = (i - g.ds) % dl;
+    if (k < 0) k += dl;
+    return g.ds + (dl - 1 - k);
+  }
+  return modAddress(g, i, inst.modRot, inst.modScatter, inst.modSeed);
+}
+
+/** Rotate the low 3 bits of `amt` worth of bit-rotation into byte `b` (left
+ *  for amt>0, right for amt<0 — modBitRot is stored net-left, mod 8). */
+export function bitRotate8(b, amt) {
+  const n = ((amt % 8) + 8) % 8;
+  if (n === 0) return b;
+  return ((b << n) | (b >>> (8 - n))) & 0xff;
+}
+
+/** Apply the CURRENT extended level transform (sub/add share `modSub`'s
+ *  accumulator — see inst.js; xor/103/920 share `modXor`'s). */
+export function applyExtLevel(inst, b) {
+  if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
+  if (inst.modXor !== 0) b ^= inst.modXor;
+  if (inst.modBitRot !== 0) b = bitRotate8(b, inst.modBitRot);
+  if (inst.modBitPermOn) b = EXT_BITPERM_LUT[inst.modBitPermIdx][b];
+  return b;
+}
+
+/** Apply the PREVIOUS step's level transform, for the crossfade — only the
+ *  kinds that get one (sub/add, xor/103/920) carry a Prev snapshot. */
+export function applyExtLevelPrev(inst, b) {
+  if (inst.modPrevSub !== 0) b = (b - inst.modPrevSub) & 0xff;
+  if (inst.modPrevXor !== 0) b ^= inst.modPrevXor;
+  return b;
+}
+
+/** modTouches, ANDed with $f's further narrowing — the one gate both the
+ *  extended read path and the INVERT-family walk test against. */
+export function extModTouches(g, invert, f, stepIndex, i) {
+  return modTouches(g, invert, i) && fModTouches(f, i, g.es, g.ee, stepIndex);
+}

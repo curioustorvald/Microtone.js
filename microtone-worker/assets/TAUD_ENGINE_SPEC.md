@@ -985,10 +985,11 @@ A host loading a new document **MUST** perform a full reset before uploading it.
 
 The effect column is specified in full in the **Note Effects** reference, including per-effect memory cohorts, recall rules and the conversion tables for ProTracker, ScreamTracker 3, FastTracker 2 and ImpulseTracker sources. This document defines only the machinery those commands drive.
 
-Opcodes are base-36 digit values: `0`…`9` are `$00`…`$09` and `A`…`Z` are `$0A`…`$23`. A few carry engine-scope rather than voice-scope meaning and are worth naming here:
+Opcodes are base-36 digit values: `0`…`9` are `$00`…`$09` and `A`…`Z` are `$0A`…`$23` — except `:` (item 162, Format 3 only), which lives in a second, ASCII-symbol opcode space (`$A0`…`$FE`, decoded as `opcode − $80`) opened once the base-36 one filled. A few carry engine-scope rather than voice-scope meaning and are worth naming here:
 
 | Opcode | Scope | Engine effect |
 |---|---|---|
+| `:` | Row | Argument extension — hands its argument to whichever other effect shares the row, resolved once per row before either slot dispatches ([Note Effects](TAUD_NOTE_EFFECTS.md#-xxxx--argument-extension-format-3-only)); a bare no-op outside Format 3 |
 | `1` | Playhead | Set the global behaviour flags — tone mode and interpolation — from the argument's high byte |
 | `5` / `6` | Instrument | Cutoff / resonance override, `$FFFF` to clear |
 | `7` | Channel, row-time | Pattern Ditto ([§5.9](#5-9-pattern-ditto)) |

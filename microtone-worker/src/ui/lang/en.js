@@ -1277,8 +1277,12 @@ export default {
   "pal.fx.1.a": "$xx00 — bits0-1 tone-slide mode, bits2-4 interpolation",
   "pal.fx.2.n": "Sample mod (outside)",
   "pal.fx.2.a": "$sexy — se mask, within the LOOP region ($00/$0F all · $10 mid half · $20/$21 two thirds · $30/$31/$32 thirds · $Fn/$En comb of 2^(n+1) chunks, even/odd) · x op (0 off, 1 invert, 2-5 rotate left 1/2/4/8 bytes, 6-9 subtract 2/8/32/128, A-C jump the whole region to a random offset - A eighths, B sixteenths, C anywhere - D-F scatter every byte within 1/512, 1/64, 1/8 of the region) · y period in ticks (F every tick, 1 every 15th, 0 freeze)",
+  // Item 162: shown instead of .a when this 2 is paired with `:` (second slot).
+  "pal.fx.2.aExt": "$sexy — paired with `:`: se region as usual (outside it, as always) · x/y extend into `:`'s argument for a 12-bit operation and a two-digit speed — see `:`'s own hint for what it adds",
   "pal.fx.3.n": "Sample mod (region)",
   "pal.fx.3.a": "$sexy — se region, within the LOOP ($00/$0F all · $10 mid half · $20/$21 two thirds · $30/$31/$32 thirds · $Fn/$En comb of 2^(n+1) chunks, even/odd) · x op (0 off, 1 invert, 2-5 rotate left 1/2/4/8 bytes, 6-9 subtract 2/8/32/128, A-C jump the whole region to a random offset - A eighths, B sixteenths, C anywhere - D-F scatter every byte within 1/512, 1/64, 1/8 of the region) · y period in ticks (F every tick, 1 every 15th, 0 freeze)",
+  // Item 162: shown instead of .a when this 3 is paired with `:` (second slot).
+  "pal.fx.3.aExt": "$sexy — paired with `:`: se region as usual (the part it modifies) · x/y extend into `:`'s argument for a 12-bit operation and a two-digit speed — see `:`'s own hint for what it adds",
   "pal.fx.4.n": "Spatial slide target",
   "pal.fx.4.a": "$eeaa — aim a Z slide: aa azimuth (00 left, 40 front, 80 right, C0 behind), ee elevation (signed) · surround songs only",
   "pal.fx.5.n": "Filter cutoff",
@@ -1311,6 +1315,8 @@ export default {
   "pal.fx.I.a": "$xxyy — x+1 ticks on, y+1 ticks off",
   "pal.fx.J.n": "Arpeggio",
   "pal.fx.J.a": "$xxyy — offsets ×256 (4096-TET) for voices 2/3",
+  // Item 162: shown instead of .a when this J is paired with `:` (second slot).
+  "pal.fx.J.aExt": "$xxxx — paired with `:`: the arpeggio's FIRST offset, full-resolution 4096-TET units (`:`'s argument is the second)",
   "pal.fx.K.n": "Vibrato + vol slide",
   "pal.fx.K.a": "$xy00 — vol slide nibbles; vibrato continues",
   "pal.fx.L.n": "Porta + vol slide",
@@ -1321,6 +1327,8 @@ export default {
   "pal.fx.N.a": "$xy00 — x up / y down per tick · $xF00 fine up, $Fy00 fine down",
   "pal.fx.O.n": "Sample offset",
   "pal.fx.O.a": "$xxxx — start sample at byte offset",
+  // Item 162: shown instead of .a when this O is paired with `:` (second slot).
+  "pal.fx.O.aExt": "$abcd — paired with `:`: the HIGH word of a 32-bit sample offset (`:`'s argument is the low word)",
   "pal.fx.P.n": "Pan slide",
   "pal.fx.P.a": "$xy00 — x left / y right (IT convention)",
   "pal.fx.Q.n": "Retrigger",
@@ -1343,6 +1351,16 @@ export default {
   "pal.fx.Y.a": "$xxyy — x speed, y depth",
   "pal.fx.Z.n": "Pan slide · funk",
   "pal.fx.Z.a": "$0xxx slide toward the 4-command target at xxx/16 azimuth units per tick ($0000 recalls, surround songs only) · $Ffxx funk repeat: hop the loop through the sample, xx on the invert-loop ladder ($80 every tick, $40 every other one, $00 off) · f = hop: $0-3 forward, $4-7 backward, $8-B forward with each landing jittered by up to an eighth of the sweep, $C-F thrown anywhere, each in whole/half/quarter/eighth blocks · needs a short loop",
+
+  // Item 162: `:` — argument extension, Format 3 (wide-cell) patterns only.
+  // .a is shown when `:` isn't (yet) paired with something that reads it;
+  // .aJ/.aO/.aMod are the CONTEXTUAL descriptions once it is — see palette.js
+  // fxArgHint, which picks between them by looking at the row's other slot.
+  "pal.fx.:.n": "Argument extension",
+  "pal.fx.:.a": "$xxxx — Format 3 only. Hands this argument to the OTHER effect on the row (J, O, 2 or 3), which reads it as the rest of a wider argument. Expected on the SECOND effect slot; does nothing paired with anything else, or alone",
+  "pal.fx.:.aJ": "$yyyy — paired with J: the arpeggio's SECOND offset, full-resolution 4096-TET units (J's own argument here is the first)",
+  "pal.fx.:.aO": "$efgh — paired with O: the LOW word of a 32-bit sample offset (O's own argument here is the high word)",
+  "pal.fx.:.aMod": "$fuuk — paired with 2/3: f narrows the region further, uu extends the operation to 12 bits, k extends the speed to two digits",
 
   // ── project view ──
   "proj.untitledProject": "(untitled project)",

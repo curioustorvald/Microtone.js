@@ -254,9 +254,24 @@ export function applyTrackerRow(eng, ts, playhead) {
     // ── Effect columns ──
     // A wide cell carries two, applied in order, so the second lands last where
     // both write the same channel state.
-    applyEffectRow(eng, ts, playhead, voice, vi, row.effect, row.effectArg);
+    //
+    // Argument extension (item 162): a `:` in either slot is a modifier, not a
+    // command of its own — it hands its argument to whichever OTHER effect
+    // shares the row, order-independent ("J : " reads the same as ": J").
+    // Format 1/2 has no second slot, so pairing is structurally impossible
+    // there — the no-op the TODO requires falls out for free rather than
+    // needing a format-version check inside every consumer.
+    let ext1 = null, ext2 = null;
+    if (ts.wideCells) {
+      if (row.effect === EffectOp.OP_COLON && row.effect2 !== EffectOp.OP_COLON) {
+        ext2 = row.effectArg;
+      } else if (row.effect2 === EffectOp.OP_COLON && row.effect !== EffectOp.OP_COLON) {
+        ext1 = row.effectArg2;
+      }
+    }
+    applyEffectRow(eng, ts, playhead, voice, vi, row.effect, row.effectArg, ext1);
     if (ts.wideCells && row.effect2 !== 0) {
-      applyEffectRow(eng, ts, playhead, voice, vi, row.effect2, row.effectArg2);
+      applyEffectRow(eng, ts, playhead, voice, vi, row.effect2, row.effectArg2, ext2);
     }
   }
 }

@@ -173,6 +173,8 @@ Every other memory-carrying effect (D, I, J, K, L, N, O, P, Q, and others) has a
 
 Opcodes are single base-36 digits (0-9, then A-Z); arguments are 16-bit hexadecimal values prefixed with `$`. A cell is notated `OPCODE $HHLL` where HH is the high byte and LL is the low byte. Where an effect partitions its argument into sub-fields (for instance, H's speed and depth), the split is spelled out in the command description.
 
+The base-36 space (`$00`…`$23`) is fully assigned. An effect introduced after it filled lives in a second, ASCII-symbol space instead: on-disk opcode bytes `$A0`…`$FE` decode as `opcode − $80`, the effect's own ASCII character — `:` (item 162) is `$3A`, so its on-disk opcode is `$BA`. An editor renders such an opcode as that character, exactly as it renders a base-36 opcode as its digit or letter; nothing else about the format changes.
+
 # The effects
 
 ## A $xx00 — Set tick speed to $xx
@@ -478,6 +480,9 @@ on every tick:
 
 The `tick_within_row mod 3` counter resets every row start (so every row begins at `base_pitch`). A subsequent E/F slide after a J row resumes from the last arpeggiated voice's pitch, not from `base_pitch` — this mirrors ST3's `kST3PortaAfterArpeggio` quirk and is deliberately preserved.
 
+
+**Extended (paired with `:`, item 162).** `J $xxxx : $yyyy` replaces the two <<8-scaled BYTE offsets above with two full 16-bit 4096-TET offsets: `off1` is J's own argument verbatim, `off2` the paired `:`'s argument verbatim, order-independent as every pairing is. Where the base form reaches 256 discrete intervals at $0100 ($0100 ≈ 0.75 semitone) per step, the extended form reaches the full 65536-step resolution E and F already have — arpeggios can be as microtonal as any other pitch effect. Memory is private and separate from the base form's (the two are different units, so a row using one form **MUST NOT** recall the other's last value): `off1` recalls when J's own argument is `$0000`, `off2` when the paired `:`'s argument is `$0000`, independently.
+
 ## K $xy00 — Dual: vibrato continuation and volume slide $xy
 
 **Plain.** Continues the previously started vibrato (H or U) without retriggering it, while applying a volume slide of `$xy` per non-first tick. Fine volume slides are not available in this form. The K command is implemented solely for tracker compatibility — new compositions **SHOULD** prefer an explicit `H $0000` (vibrato recall) plus a volume-column slide (`1.$xy` / `2.$xy`), which carries the same semantics with one less hidden dependency.
@@ -633,6 +638,9 @@ The mixer reads `channel_pan` (8-bit) through the same path as `S $80xx`, and s
 **Compatibility.** ST3 `Oxx` is 8-bit, addressing offset `xx × $100`. On import, copy the ST3 byte into Taud's high byte and zero the low byte: Taud `O $xx00`. ProTracker `9xx` maps identically. The Taud 16-bit form allows byte-precise seeking within samples larger than $100 bytes. Memory is private.
 
 **Implementation.** On the row start, set the sample playhead to `arg` (in bytes, relative to the sample's start). Apply the loop-wrap calculation if the sample has loop points and `arg > loop_end`: `arg = loop_start + ((arg - loop_start) mod loop_length)`. The O command does not retrigger the sample; it only relocates the playhead for an already-triggered note.
+
+
+**Extended (paired with `:`, item 162).** `O $abcd : $efgh` combines both arguments into a 32-bit offset, `$abcdefgh` — O's own argument is the HIGH word, the paired `:`'s the LOW word — reaching samples past the 64 KB the base form's 16 bits address. Loop-wrap and the rest of the base form's behaviour are unchanged, just against the wider value. An implementation **MUST** combine the two arithmetically (`high × 65536 + low`, or the 64-bit-widened equivalent) rather than with a 32-bit shift-and-OR: shifting a 16-bit value 16 bits left overflows a 32-bit SIGNED integer the moment its top bit is set, in Kotlin's `Int` as much as in a JS bitwise op. Memory is private and separate from the base form's 16-bit one (same reasoning as J's), recalling the last 32-bit value when the combined argument is `$00000000`.
 
 ## Q $xy00 — Retrigger note every $y ticks with volume modifier $x
 
@@ -906,6 +914,85 @@ Because the ladder is written in **bristles** rather than in bytes, it means the
 
 It may look strange compared with conventional effects such as chorus or phaser, but sample-domain manipulation is very much in the tradition of tracker and programmable-sound synthesis: the waveform itself becomes part of the instrument's performance. Between them the operations perform the three things a sample has — its **content** (Invert Loop flips the bytes), its **level** (Subtraction slides them) and its **order** (the rotations step it, Jump throws it whole, Scatter shuffles it apart) — with nothing written to the pool and nothing to undo when the song stops.
 
+
+**Extended (paired with `:`, item 162).** `2 $sexy : $fuuk` and `3 $sexy : $fuuk` — `$se` is unchanged (the region, exactly as above); `$x` and `$y` no longer stand alone, each widened by nibbles borrowed from the paired `:`'s own argument `$fuuk`:
+
+| Field | Width | Made of | Meaning |
+|---|---|---|---|
+| `$f` | 4 bit | `:`'s high nibble | a further sub-range on top of `$se`'s (below) |
+| `$xuu` | 12 bit | `2`/`3`'s `$x` nibble, then `:`'s middle byte (`uu`) | the operation, replacing the base form's 4-bit `$x` |
+| `$yk` | 8 bit | `2`/`3`'s `$y` nibble, then `:`'s low nibble (`k`) | the speed, replacing the base form's 4-bit `$y` |
+
+**`$f` — sub-range.** Narrows the extent `$se` already resolved, the same way `$se`'s own `$10`/`$20`..`$32` rows narrow the whole domain:
+
+| `$f` | keeps |
+|---|---|
+| `$0` | no change |
+| `$1` / `$2` | the left / right half of the extent |
+| `$3` / `$7` / `$8` | the left / middle / right third |
+| `$4` / `$5` / `$6` / `$9` | the leftmost / middle-right / middle (halves 2-3) / rightmost quarter |
+| `$A` / `$B` | alternates the extent's two halves, one step at a time — `$A` opens on the first half, `$B` on the second |
+| `$C` / `$D` | alternates the extent's odd/even quarters (chunks 1+3 vs 2+4) the same way, `$C` opening on 1+3 |
+| `$E` | keeps 4 of every 8 BYTES (`1234----`), independent of the extent's own length |
+| `$F` | keeps every other BYTE (`1-3-5-`), independent of the extent's own length |
+
+`$A`..`$D`'s alternation advances once per STEP of the operation (the same clock `$yk` drives) — a byte the region touches this step may not be touched the next, which is what makes the pair a texture rather than a fixed edit. `$1`..`$9` and `$E`/`$F` are static and do not depend on the step count. Every `$f` value is ANDed with `$se`'s own extent-and-comb test: a byte must clear both to be touched.
+
+**`$xuu` — operation, 0x000..0xFFF.** Replaces the base form's 16-entry `$x` table with a much wider one. Entries not listed are reserved (treated as `$100`, no-op):
+
+| Code | Operation |
+|---|---|
+| `$100` | no-op |
+| `$101` | invert loop — the base form's `$1`, bit-flip one byte per step |
+| `$102` | funk repeat — walks the region the way `Z $Ffxx` walks a loop, clocked by THIS command instead |
+| `$103` | simply invert — XORs the WHOLE touched region by `$FF` every step (a toggle, not a walk) |
+| `$104` | reverse — mirrors the touched region's byte order, toggled every step |
+| `$11x` | invert loop, jittered: the walk's next byte is offset by a random throw instead of always "the next one", reach ±100/2^(15−x) % of the domain |
+| `$12x` | funk repeat, jittered the same way |
+| `$13x` / `$14x` | quantised random jump to 1/N of the region, N indexed by `x` from {2,3,4,5,6,7,8,9,10,12,15,16,18,21,24,32} — `$13x` and `$14x` are the same operation under this command's architecture, which already scopes every address transform to `$se`'s resolved extent; see the implementation note below |
+| `$15x` | a BOUNDED jump — thrown to within ±1/N of the region rather than quantised to a slice, N from the same table |
+| `$160` | randomly swap one byte pair within the region, per step |
+| `$161`..`$16F` | scatter, 16 levels from 1/16384 of the domain up to the whole domain ("fully"), finer than the base form's 3-level `$D`/`$E`/`$F` |
+| `$2xx` | rotate the region left by `xx` BYTES per step (a direct count, not the base form's 1/2/4/8 ladder) |
+| `$3xx` | rotate right by `xx` bytes — new; the base form has no rotate-right |
+| `$4xx` / `$5xx` | rotate left / right by `xx × 256` bytes |
+| `$6xx` / `$7xx` | subtract / add `xx` per step (a direct value, not the base form's 2/8/32/128 ladder) — accumulates the same way the base form's SUB does, wrapping through zero |
+| `$8xx` | XOR by `xx` per step — new; accumulates by XOR |
+| `$90x` / `$91x` | rotate the BITS (not bytes) of every touched byte left / right by `x`, accumulating mod 8 |
+| `$920`..`$927` | bitwise NOT / reverse-bits / swap-nibbles / swap-twobits and their compositions (below) |
+
+`$920`..`$927`'s eight codes are three involutions (reverse the 8 bits; swap the two nibbles; swap each adjacent bit pair) and their compositions:
+
+| Code | Byte `abcdefgh` becomes |
+|---|---|
+| `$920` NOT | `~abcdefgh` |
+| `$921` reverse | `hgfedcba` |
+| `$922` swap nibbles | `efghabcd` |
+| `$923` reverse, then swap nibbles | `dcbahgfe` |
+| `$924` swap twobits | `badcfehg` |
+| `$925` reverse, then swap twobits | `ghefcdab` |
+| `$926` swap nibbles, then swap twobits | `fehgbadc` |
+| `$927` all three (they commute) | `cdabghef` |
+
+Unlike a bit-ROTATE, each of these is its own inverse — applying one twice restores the original byte — so a conforming implementation **MUST** treat a step on `$920`..`$927` (and `$103`/`$104`, the same shape) as a TOGGLE: the permutation is either applied to every touched byte or it isn't, and a step flips which. Applying it every step accumulating would just be applying it once, on every OTHER step.
+
+**`$yk` — speed, 0x00..0xFF.** Replaces the base form's 4-bit `$y` (a period in whole ticks, `16 − y`) with a two-digit period in TICKS that can fall UNDER one:
+
+| `$y` | period (ticks) |
+|---|---|
+| `$0` | `$00` = stop (frozen); `$0k`, k≠0 = `k/16` |
+| `$1`..`$E` | `y + k/16` — the same linear formula, continued |
+| `$F` | a separate, coarser ladder for periods past the fine ladder's ~15-tick reach: `$F0`=15, `$F1`=16, `$F2`=18, `$F3`=20, `$F4`=22, `$F5`=24, `$F6`=28, `$F7`=32, `$F8`=36, `$F9`=40, `$FA`=44, `$FB`=48, `$FC`=52, `$FD`=56, `$FE`=60, `$FF`=64 |
+
+Because `$yk` can be UNDER one tick, an engine **MUST** clock this command at output-sample resolution rather than once per whole tick (unlike the base form): accumulate output samples against `period_ticks × samples_per_tick`, recomputed every sample the way the row/tick clock itself is (a mid-row tempo change retimes both together), and step when the accumulator crosses it. The reference implementation gives each extended voice its own such accumulator (`src/engine/tick.js` `advanceSampleModExtended`, driven from `src/engine/mixer.js`'s per-sample render loop) rather than reusing the base form's per-tick one.
+
+**Implementation notes, and where this deliberately simplifies.**
+
+- `$xuu`, `$yk` and `$f` together replace the base form's `$x` and `$y` for the SAME instrument slot — an instrument still carries only one modification, extended or not, and writing one form clears the other's accumulated state exactly as writing a new base-form operation does.
+- `$13x` ("no domain restriction") and `$14x` ("restricted to `$se`+`$f`") are specified as distinct, but this command's own architecture already resolves every address transform against `$se`'s extent (the base form's ROL/JUMP/SCATTER never reach outside it either) — so under this implementation the two codes behave identically. An implementation with a genuinely wider addressing model **MAY** distinguish them; this one does not, and documents the fold rather than leaving it silent.
+- The anti-click crossfade (base-form §"A step is crossfaded, not cut") carries over for the operations that replace a whole address or level mapping the same way ROL/JUMP/SCATTER/SUB do: `$2xx`..`$5xx`, `$13x`..`$15x`, `$161`..`$16F`, `$6xx`..`$8xx`. It does **NOT** cover the single-byte-flip and toggle families (`$101`/`$11x` invert, `$102`/`$12x` funk, `$103`/`$104`/`$920`..`$927` toggles, `$160` swap, `$90x`/`$91x` bit-rotate) — none of these replace a whole mapping the way a click-worthy step does; the base form's own INVERT is exempt for the same reason.
+- `$102`/`$12x` (funk repeat) walk this command's OWN clock and OWN grid, independent of `Z $Ffxx`'s per-channel one — the two are separate modifications (as the base form's `$1` invert-loop is separate from `S $F0xx`) and do not share state. Neither exposes its own hop selector the way `Z`'s `$f` nibble does; the reference implementation walks the region at the grid's smallest hop.
+
 ## 5 $xxyy and 6 $xxyy — Filter Cutoff/Resonance Control
 
 **Plain.** `5` sets the cutoff and `6` sets the resonance of the instrument's filter directly. When the filter is in ImpulseTracker mode, only the high byte (the `xx` part) is read; when the filter is in SoundFont2 mode, both bytes are read. Argument `$FFFF` resets the parameter to its default value (for both IT and SF2 mode). Every note that shares the instrument is affected — the change is **instrument-wide**, not per-voice. If cutoff vibrato is what you are after, modify the filter envelope directly.
@@ -1002,6 +1089,18 @@ The rest of `applyTrackerRow` then dispatches on `cell` exactly as for an unditt
 Pattern-delay (`S $Ex`) re-runs `applyTrackerRow` on the same `N` — the ditto bookkeeping is idempotent across those re-entries because `dittoActive`, `dittoSourceStart`, `dittoLength`, and `dittoEndRow` already encode the destination range, and the armer guard `length <= N` makes repeated arming on the same row a no-op (the new state is identical to the old). The `armRow <= N` half of the gating condition is what protects against an `S $Bx` pattern-loop that jumps back to a row sitting strictly before the armer: rather than synthesising from a phantom source slot, the engine falls through to the raw cell.
 
 Effect dispatch sees the synthesised effect, never the literal `7` opcode of the armer cell — `OP_7` therefore exists in the engine's opcode table only as an explicit no-op for the rare malformed-armer fallthrough (`length == 0`, `repeats == 0`, or `length > N`).
+
+## : $xxxx — Argument extension (Format 3 only)
+
+**Plain.** `:` is not a command of its own — it hands its 16-bit argument to whichever OTHER effect shares its row, extending that effect's own argument. It only means anything where a row can carry two effects at once: the wide cell of [file-format version 3](TAUD_FILE_FORMAT.md#5-5-format-version-3-the-wide-cell). Writing `:` in a version-1 or version-2 cell, or alone in a version-3 cell with nothing in the other slot, is a well-formed but **inert** command — a conforming engine **MUST** treat it as a no-op there, the same as an unrecognised opcode. `:` in **both** slots of one row is likewise inert: there is nothing left for it to extend.
+
+`:` is intended to sit in the row's second effect slot, the extended command in the first — `J $xxxx : $yyyy` — but a conforming engine **MUST NOT** depend on that order: `: $yyyy J $xxxx` means exactly the same thing. Since both spellings mean the same thing to the engine but not necessarily to a reader, an editor **SHOULD** flag the two arrangements a reader could misread — `:` sitting on the FIRST slot (right by the engine, but not where the example above puts it), and `:` paired with a command that does not read its argument at all (a silent no-op) — by painting the whole 5-character cell of both the `:` and its pair in a distinct colour. A `:` correctly on the second slot, paired with a command that DOES read it, needs no flag and renders through its ordinary per-field colouring like any other row (the reference implementation, `src/ui/glyphs.js` `paintFxCell` + `src/ui/notenames.js` `fxColonWarns`, uses red for the flagged cases).
+
+Only three commands currently define extended behaviour when paired with `:` — `J`, `O`, and `2`/`3`, each described under its own heading, in a subsection headed **Extended (paired with `:`)**. `:` paired with any other effect is defined to do nothing beyond what that effect already does with its own argument; a future item may give another command an extended meaning the same way, without touching this section's mechanism.
+
+**Compatibility.** Unique to Taud, and unique to Format 3 — no ST3/IT/PT/FT2 source ever emits it, and no converter needs to handle it. A version-2 song has no second effect slot to put it in.
+
+**Implementation.** `applyTrackerRow` (`src/engine/row.js`) resolves the pairing once per row, before either effect slot dispatches: if exactly one slot holds `:`, the OTHER slot's dispatch call receives the `:`'s argument as an extra, optional parameter (`ext`); if neither or both slots hold `:`, both dispatch calls receive nothing extra. `:` reaching `applyEffectRow` (`src/engine/effects.js`) in its own slot — unpaired, or paired with another `:` — hits a bare no-op case, which is what makes Format 1/2 inert for free: those formats have no second slot, so `:` can never be anything BUT unpaired there.
 
 ## 8 $xyzz — Bitcrusher
 

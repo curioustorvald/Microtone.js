@@ -16,6 +16,7 @@
 // cell has no second effect to show.
 
 import { MIDDLE_C } from "../engine/constants.js";
+import { EffectOp } from "../engine/tables.js";
 import { stepNoteInTable, isAbsolute, snapToAbsoluteDegree } from "./pitchtables.js";
 
 export const SUB_NOTE = 0;
@@ -699,6 +700,12 @@ export function interpretEditKey(ev, sub, nib, cell, ctx) {
     const argKey = second ? "effectArg2" : "effectArg";
     if (isClearKey(code)) {
       return { fields: { [opKey]: 0, [argKey]: 0 }, advanceRow: true };
+    }
+    // Argument extension (item 162): ':' is outside the base-36 opcode space
+    // (the ASCII-symbol range, $A0..$FE — see tables.js EffectOp), so it
+    // bypasses base36Digit entirely rather than trying to fit it in.
+    if (key === ":") {
+      return { fields: { [opKey]: EffectOp.OP_COLON }, advanceNib: true };
     }
     const d = base36Digit(key);
     if (d < 0) return null;

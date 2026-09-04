@@ -4,6 +4,7 @@
 // marker (microtonal pitch-table content).
 
 import { MIDDLE_C } from "../engine/constants.js";
+import { EffectOp, EXT_CAPABLE_OPS } from "../engine/tables.js";
 import { volPanOp, volPanArg } from "./edit.js";
 import { t } from "./i18n.js";
 
@@ -113,6 +114,7 @@ const FX_LAYOUT = {
   33: "1122", // X $eeaa  spherical pan: elevation, azimuth
   34: "1122", // Y $xxyy  panbrello: speed, depth
   35: null, //  Z        multiplexed — see fxArgFields
+  186: "1111", // : $xxxx  argument extension (item 162, opcode $BA) — one 16-bit value
 };
 
 // S's sub-commands, keyed by the high nibble. The nibble itself is always 'o'.
@@ -138,9 +140,16 @@ const S_LAYOUT = {
  * effect-column colouring. Returns Int8Array-like array of 4 numbers:
  * 0 = opcode (the S / Z multiplexer nibble), 1..3 = argument field, -1 =
  * reserved. Pure — the grids map the numbers onto inks themselves.
+ *
+ * `pairedOp` (item 162): the OTHER effect slot on this row, if any — reused
+ * by fxLayout to colour a correctly-paired `:` (and the command it extends)
+ * by what the COMBINED argument means, rather than each cell's own isolated
+ * layout. Callers only need to pass this when the pairing isn't flagged by
+ * fxColonWarns; a flagged cell paints flat (glyphs.js paintFxCell), so an
+ * unflagged caller passing 0 just gets the ordinary per-effect layout back.
  */
-export function fxArgFields(effect, arg) {
-  const layout = fxLayout(effect, arg);
+export function fxArgFields(effect, arg, pairedOp = 0) {
+  const layout = fxLayout(effect, arg, pairedOp);
   const out = new Array(4);
   for (let i = 0; i < 4; i++) {
     const c = layout[i];
@@ -149,7 +158,75 @@ export function fxArgFields(effect, arg) {
   return out;
 }
 
-function fxLayout(effect, arg) {
+/**
+ * The effect cell's own opcode letter (item 120's "icon" — see icons.js).
+ * Base-36 digits ($00..$23) read as `0-9A-Z`; item 162's ASCII-symbol space
+ * ($A0..$FE) reads as `opcode - $80` — ':' at $BA reads back out as ':'.
+ */
+export function fxOpChar(effect) {
+  return effect >= 0xa0 ? String.fromCharCode(effect - 0x80) : effect.toString(36).toUpperCase();
+}
+
+/**
+ * Does this row's `:` pairing need flagging (item 162.1)? Only the two cases
+ * that would actually mislead a reader — everything else renders through the
+ * ordinary per-field colouring (fxArgFields), same as any other row:
+ *
+ *   1. `:` sits in the FIRST effect slot. Functionally identical to the
+ *      second-slot spelling, but the TODO's own worry was a human reader
+ *      expecting `:` second and reading the row wrong when it isn't.
+ *   2. `:` is paired with a command that does not read its argument at all
+ *      (EXT_CAPABLE_OPS) — the pairing is a no-op, which is worth a flag
+ *      exactly because it LOOKS like it should do something.
+ *
+ * False whenever the row isn't paired at all (neither slot is `:`, or both
+ * are — nothing to extend either way): that is not a warning, just an
+ * ordinary unpaired `:` or command, and paints normally.
+ */
+export function fxColonWarns(effect, effect2) {
+  const colon1 = effect === EffectOp.OP_COLON;
+  const colon2 = effect2 === EffectOp.OP_COLON;
+  if (colon1 === colon2) return false; // not paired: neither, or both
+  if (colon1) return true; // rule 1
+  return !EXT_CAPABLE_OPS.has(effect); // rule 2
+}
+
+/**
+ * Extended-pairing layouts (item 162): what each combined argument's nibbles
+ * mean when a `:` is correctly paired (second slot, with J/O/2/3) — the base
+ * layouts above describe each effect in ISOLATION and stay exactly as they
+ * were, but a correctly-paired cell reads differently in context:
+ *
+ *   - J/O: the base command's own argument becomes ONE full-resolution
+ *     value (J's base "1122" byte-split stops applying — off1 is now the
+ *     WHOLE 16 bits), field 1; `:`'s argument is the other half of the same
+ *     pair (off2, or O's low word), field 2 — a different shade from field 1
+ *     so the two full-width cells read as "first half / second half" rather
+ *     than two unrelated numbers.
+ *   - 2/3: the base layout ("1123": region, region, op, speed) is UNCHANGED
+ *     — `$s`/`$e` still name the region, `$x` is still "the operation
+ *     nibble", `$y` still "the speed nibble", just each now the TOP of a
+ *     wider field. `:`'s own `$fuuk` inherits the field of whichever base
+ *     nibble it combines with: `$f` narrows the same region `$se` names
+ *     (field 1), `uu` extends `$x` into a 12-bit op (field 2), `k` extends
+ *     `$y` into a two-digit speed (field 3).
+ */
+const EXT_PAIR_LAYOUT = Object.freeze({
+  colonWithHalf: "2222",   // `:` paired with J or O
+  colonWith23: "1223",     // `:` paired with 2 or 3
+  halfBase: "1111",        // J or O's own cell, paired with `:`
+});
+
+function fxLayout(effect, arg, pairedOp = 0) {
+  if (pairedOp !== 0) {
+    if (effect === EffectOp.OP_COLON) {
+      if (pairedOp === EffectOp.OP_J || pairedOp === EffectOp.OP_O) return EXT_PAIR_LAYOUT.colonWithHalf;
+      if (pairedOp === EffectOp.OP_2 || pairedOp === EffectOp.OP_3) return EXT_PAIR_LAYOUT.colonWith23;
+    } else if (pairedOp === EffectOp.OP_COLON) {
+      if (effect === EffectOp.OP_J || effect === EffectOp.OP_O) return EXT_PAIR_LAYOUT.halfBase;
+      // 2/3's own layout is already correct unextended — falls through below.
+    }
+  }
   switch (effect) {
     case 14: case 15:
       // E / F: $F000..$FFFF is the FINE form — the marker nibble is a field of

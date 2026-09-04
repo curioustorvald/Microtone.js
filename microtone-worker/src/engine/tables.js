@@ -193,7 +193,19 @@ export const EffectOp = Object.freeze({
   OP_M: 0x16, OP_N: 0x17, OP_O: 0x18, OP_P: 0x19, OP_Q: 0x1a, OP_R: 0x1b,
   OP_S: 0x1c, OP_T: 0x1d, OP_U: 0x1e, OP_V: 0x1f, OP_W: 0x20, OP_X: 0x21,
   OP_Y: 0x22, OP_Z: 0x23,
+  // ── ASCII-symbol space (item 162): the base-36 range above is full, so a
+  //    symbol effect's on-disk opcode is its ASCII code + $80 ($A0..$FE);
+  //    the in-memory value is that same byte, no translation table needed.
+  OP_COLON: 0xba, // ':' — argument extension, Format 3 only (TAUD_NOTE_EFFECTS.md)
 });
+
+/** Which opcodes read `:`'s argument when paired with it (effects.js's `ext`
+ *  parameter) — J, O and the sample-mod pair. Shared with the UI so the
+ *  pattern grid's "this pairing needs a second look" highlight (see
+ *  glyphs.js paintFxCell) agrees with what the engine actually does. */
+export const EXT_CAPABLE_OPS = Object.freeze(new Set([
+  EffectOp.OP_J, EffectOp.OP_O, EffectOp.OP_2, EffectOp.OP_3,
+]));
 
 // ── Metainstrument mix-gain: "Perceptually Significant Octet to Decibel Table"
 //    as linear amplitude (1480-1513). Octet 0 = silence, 159 = unity, 255 = +24 dB.

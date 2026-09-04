@@ -7,7 +7,7 @@ import { PATTERN_EMPTY } from "../../engine/constants.js";
 import {
   AZIMUTH_TURN, ELEVATION_QUARTER, SURROUND_SPATIAL, lateralProjection,
 } from "../../engine/spatial.js";
-import { hex2, hex4 } from "../notenames.js";
+import { hex2, hex4, fxColonWarns } from "../notenames.js";
 import { stepNoteInTable } from "../pitchtables.js";
 import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import {
@@ -1290,7 +1290,7 @@ export class TimelineView {
     // ── rows ──
     const cursor = store.cursor;
     const dittoPal = monoPalette(C.ditto); // ghost cells (pattern ditto)
-    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim };
+    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim, ext: C.fxExt };
     const sb = this.selBounds(); // block selection bounds (or null)
     const rowBand = this.isRowBand(); // …and whether it spans every channel
     const beats = store.beats(); // primary/secondary divisions from sMet
@@ -1403,16 +1403,21 @@ export class TimelineView {
             elevation: wide ? cell.elevation : 0, elevationInk: C.accent2,
           // On the sphere, ear level is a stated position, not an absent one.
           spatial: (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) === SURROUND_SPATIAL });
-        // Effect column: one shade of amber per argument field (item 120).
+        // Effect column: one shade of amber per argument field (item 120), or
+        // — when this row's `:` pairing needs a second look (fxColonWarns:
+        // `:` on the first slot, or paired with a command that ignores it) —
+        // the whole cell in red for BOTH slots. A `:` correctly on the
+        // second slot, paired with something that reads it, colours normally.
+        const paired = wide && fxColonWarns(cell.effect, cell.effect2);
         const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
         paintFxCell(ctx, fx[0], fx[1], x + 2 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
-          ghost?.fx ? dittoPal : fxPal);
+          ghost?.fx ? dittoPal : fxPal, paired, cell.effect2);
         // …and the second effect in the same inks, since it is the same column
         // twice (§5.5). Ditto never reaches it: effect 7 repeats the SOURCE
         // row's first effect, and the ghost map has no second slot to fill.
         if (fx2) {
           paintFxCell(ctx, cell.effect2, cell.effectArg2,
-            x + 2 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal);
+            x + 2 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal, paired, cell.effect);
         }
       }
     }

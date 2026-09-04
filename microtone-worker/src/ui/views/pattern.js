@@ -7,7 +7,7 @@
 // ACTIVE column. Column count follows the viewport width (minimum 2).
 // Reference: taut.js VIEW_PATTERN_DETAILS + PREVIEW_CUE_IDX.
 
-import { hex2 } from "../notenames.js";
+import { hex2, fxColonWarns } from "../notenames.js";
 import { paintNoteCell, paintVolPanCell, paintFxCell, monoPalette } from "../glyphs.js";
 import { stepNoteInTable, transposePatternNotes, transposeUnitKeys } from "../pitchtables.js";
 import {
@@ -878,7 +878,7 @@ class PatternPane {
     // view has no cue context, so the full 64 rows are assumed.
     const ghosts = dittoGhosts(pattern, pattern.length);
     const dittoPal = monoPalette(C.ditto);
-    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim };
+    const fxPal = { op: C.fxOp, a1: C.fxA1, a2: C.fxA2, a3: C.fxA3, dim: C.dim, ext: C.fxExt };
     const sb = this.selRowBounds(); // row-range selection (or null)
     const beats = store.beats(); // primary/secondary divisions from sMet
     for (let r = 0; r < vis; r++) {
@@ -944,16 +944,21 @@ class PatternPane {
           elevation: wide ? cell.elevation : 0, elevationInk: C.accent2,
         // On the sphere, ear level is a stated position, not an absent one.
         spatial: (store.doc?.songs[store.songIndex]?.surroundModel ?? 0) === SURROUND_SPATIAL });
-      // Effect column: one shade of amber per argument field (item 120).
+      // Effect column: one shade of amber per argument field (item 120), or —
+      // when this row's `:` pairing needs a second look (fxColonWarns: `:`
+      // on the first slot, or paired with a command that ignores it) — the
+      // whole cell in red for BOTH slots. A `:` correctly on the second slot,
+      // paired with something that reads it, gets the ordinary colouring.
+      const paired = wide && fxColonWarns(cell.effect, cell.effect2);
       const fx = ghost?.fx ?? [cell.effect, cell.effectArg];
       paintFxCell(ctx, fx[0], fx[1], x0 + (wide ? 19 : 16) * CHAR_W, y, CHAR_W, ROW_H,
-        ghost?.fx ? dittoPal : fxPal);
+        ghost?.fx ? dittoPal : fxPal, paired, cell.effect2);
       // …and the second effect in the same inks (§5.5). Ditto never reaches it:
       // effect 7 repeats the SOURCE row's first effect, so the ghost map has no
       // second slot to fill.
       if (fx2) {
         paintFxCell(ctx, cell.effect2, cell.effectArg2,
-          x0 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal);
+          x0 + 25 * CHAR_W, y, CHAR_W, ROW_H, fxPal, paired, cell.effect);
       }
     }
 

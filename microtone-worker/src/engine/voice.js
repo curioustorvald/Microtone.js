@@ -21,7 +21,10 @@ export class MemorySlots {
     this.d = 0;
     this.i = 0;
     this.j = 0;
+    this.jExt1 = 0;      // item 162: J extended by `:` — private, different units to `j`
+    this.jExt2 = 0;
     this.o = 0;
+    this.oExt = 0;       // item 162: O extended by `:` — 32-bit offset, private, different units to `o`
     this.q = 0;
     this.tslide = 0;
     this.w = 0;
@@ -427,6 +430,18 @@ export class Voice {
     // Countdown of the anti-click crossfade between the mapping the last step
     // replaced and the one it installed (item 153.5), in output samples.
     this.modXfade = 0;
+    // Argument extension (item 162): a `:`-paired 2/3 clocks itself in SAMPLES
+    // rather than whole ticks, since $yk reaches periods under one tick —
+    // modExtended picks which clock owns this voice's step (mixer.js's
+    // per-sample accumulator vs tick.js's per-tick one; never both).
+    this.modExtended = false;
+    this.modStepTicks = 0;        // period in TICKS (float, may be < 1) — tempo-
+                                   // independent, like modPeriod; mixer.js turns
+                                   // it into samples fresh every sample (spt
+                                   // itself is recomputed there every sample,
+                                   // for T-slide correctness) rather than baking
+                                   // a stale sample count in at row-apply time.
+    this.modSamplesIntoStep = 0;
     // This voice's resolved view of the instrument's region — the fractions cut
     // against the loop THIS voice is sounding. Rebuilt only when either moves.
     this.modGeom = new ModGeom();

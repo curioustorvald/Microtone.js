@@ -15,6 +15,7 @@ import {
 import { sincTap, SNES_GAUSS } from "./tables.js";
 import {
   MOD_OFF, MOD_XFADE_SAMPLES, modTouches, modAddress, resolveModGeom,
+  extModTouches, modAddressExt, applyExtLevel, applyExtLevelPrev,
 } from "./samplemod.js";
 
 /**
@@ -66,32 +67,48 @@ export function readSamplePoint(eng, voice, inst, idx, sampleLen, binMax,
   const i0 = Math.min(Math.max(idx, 0), sampleLen - 1);
   const ls = voice.activeSampleLoopStart;
   const le = voice.activeSampleLoopEnd;
+  const extended = inst.modOpExt !== 0;
   // Nothing live and nothing fading out: the plain fetch. `modOn` alone is not
   // the guard, because a step that lands on the identity mapping (a jump that
   // throws to zero) still has the PREVIOUS one to fade out of.
-  if (inst.modOp === MOD_OFF || (!inst.modOn && voice.modXfade === 0)) {
+  if ((inst.modOp === MOD_OFF && !extended) || (!inst.modOn && voice.modXfade === 0)) {
     return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
   }
   const g = resolveModGeom(voice.modGeom, inst, ls, le, sampleLen);
   // The touch test is evaluated at the byte's ORIGINAL position — that is where
   // the region and its comb are defined — and it does not move under a step, so
-  // both sides of the crossfade agree on which bytes are in play.
-  if (!g.live || !modTouches(g, inst.modInvert, i0)) {
+  // both sides of the crossfade agree on which bytes are in play. Extended mode
+  // ANDs in $f's further narrowing (item 162) — same idea, one more gate.
+  const touches = extended
+    ? extModTouches(g, inst.modInvert, inst.modF, inst.modStepIndex, i0)
+    : modTouches(g, inst.modInvert, i0);
+  if (!g.live || !touches) {
     return (poolByte(eng, voice, inst, i0, binMax, basePtr, ls, le) - 127.5) / 127.5;
   }
   // ONE operation is live at a time, so an address transform and an INVERT/SUB
   // value transform never meet.
-  const i = modAddress(g, i0, inst.modRot, inst.modScatter, inst.modSeed);
+  const i = extended ? modAddressExt(g, i0, inst) : modAddress(g, i0, inst.modRot, inst.modScatter, inst.modSeed);
   let b = poolByte(eng, voice, inst, i, binMax, basePtr, ls, le);
-  if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
+  if (extended) b = applyExtLevel(inst, b);
+  else if (inst.modMask !== null) { if (inst.modBit(i)) b = b ^ 0xff; }
   else if (inst.modSub !== 0) b = (b - inst.modSub) & 0xff;
   if (voice.modXfade > 0) {
     // Anti-click crossfade (item 153.5): the mapping the last step replaced,
     // read through the same geometry, mixed in on a falling weight. Costs one
-    // extra pool read per tap for 2 ms after each step.
+    // extra pool read per tap for 2 ms after each step. Extended mode's
+    // address-transform kinds (rol/jump/scatter) reuse the same modPrevRot/
+    // modPrevScatter/modPrevSeed fields the classic path snapshots, so this
+    // read is unchanged; its own level-transform kinds (sub/add, xor) read
+    // applyExtLevelPrev instead. The kinds that don't get a crossfade (bit
+    // rotate, bit permutation, mirror, swap, invert) never arm voice.modXfade
+    // in the first place, so this block simply never runs for them.
+    // Only rot/scatter kinds (classic or extended) ever arm the crossfade, and
+    // both share modPrevRot/modPrevScatter/modPrevSeed, so one formula covers
+    // both sides regardless of `extended`.
     const j = modAddress(g, i0, inst.modPrevRot, inst.modPrevScatter, inst.modPrevSeed);
     let p = poolByte(eng, voice, inst, j, binMax, basePtr, ls, le);
-    if (inst.modMask !== null) { if (inst.modBit(j)) p = p ^ 0xff; }
+    if (extended) p = applyExtLevelPrev(inst, p);
+    else if (inst.modMask !== null) { if (inst.modBit(j)) p = p ^ 0xff; }
     else if (inst.modPrevSub !== 0) p = (p - inst.modPrevSub) & 0xff;
     const w = voice.modXfade / MOD_XFADE_SAMPLES;
     b = p * w + b * (1.0 - w);

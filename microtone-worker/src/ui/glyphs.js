@@ -19,7 +19,7 @@
 // the cut-like spike at x=0 sits inside a decaying sinc envelope).
 
 import { resolveNoteSymbol } from "./pitchtables.js";
-import { hex2, hex4, fxArgFields } from "./notenames.js";
+import { hex2, hex4, fxArgFields, fxOpChar } from "./notenames.js";
 import { volPanOp, volPanArg } from "./edit.js";
 
 export const NOTE_CELL_CHARS = 4;
@@ -327,7 +327,7 @@ function drawTickCode(ctx, code, x, y, w, h) {
 export function monoPalette(colour) {
   return {
     note: colour, sentinel: colour, dim: colour, offGrid: colour,
-    op: colour, a1: colour, a2: colour, a3: colour,
+    op: colour, a1: colour, a2: colour, a3: colour, ext: colour,
   };
 }
 
@@ -491,10 +491,28 @@ export function paintVolPanCell(ctx, value, sel, isPan, x, y, charW, rowH, palet
  * amber, the S / Z multiplexer nibble in the opcode's own ink so the command
  * reads as one token, and reserved nibbles dim because the engine ignores them.
  *
- * palette: {op, a1, a2, a3, dim} — monoPalette() collapses all five for the
- * pattern-ditto ghosts.
+ * palette: {op, a1, a2, a3, dim, ext} — monoPalette() collapses all six for
+ * the pattern-ditto ghosts. `paired` (item 162, caller decides via
+ * notenames.fxColonWarns): true only for the two `:` pairings worth a second
+ * look — `:` sitting on the FIRST effect slot (functionally fine, but not
+ * where a reader expects it), or `:` paired with a command that does not
+ * read it at all (a silent no-op). A `:` correctly on the second slot,
+ * paired with something that reads it, is the unremarkable common case and
+ * paints through the ordinary per-field colours below like any other row.
+ * When `paired` IS true, the whole 5-character cell paints in `palette.ext`
+ * instead — the argument-field ramp doesn't describe this cell meaningfully
+ * once it's flagged, and both the `:` and the command it's paired with get
+ * the same treatment so the pairing itself reads at a glance.
+ *
+ * `pairedOp` (item 162): the OTHER effect slot on this row — passed through
+ * to notenames.fxArgFields so an UNflagged (`paired` false) correctly-paired
+ * `:`/J/O/2/3 cell colours by what the COMBINED argument means rather than
+ * each cell's own isolated layout (see fxArgFields' own doc for exactly
+ * which pairings this changes). Ignored when `paired` is true, and harmless
+ * to pass for an ordinary unpaired row — fxLayout only branches on it for
+ * the specific opcode combinations that define one.
  */
-export function paintFxCell(ctx, effect, arg, x, y, charW, rowH, palette) {
+export function paintFxCell(ctx, effect, arg, x, y, charW, rowH, palette, paired = false, pairedOp = 0) {
   const midY = y + rowH / 2;
   if (effect === 0 && arg === 0) {
     ctx.fillStyle = palette.dim;
@@ -503,9 +521,14 @@ export function paintFxCell(ctx, effect, arg, x, y, charW, rowH, palette) {
     ctx.globalAlpha = 1;
     return;
   }
+  if (paired) {
+    ctx.fillStyle = palette.ext;
+    ctx.fillText(fxOpChar(effect) + hex4(arg), x, midY);
+    return;
+  }
   ctx.fillStyle = palette.op;
-  ctx.fillText(effect.toString(36).toUpperCase(), x, midY);
-  const fields = fxArgFields(effect, arg);
+  ctx.fillText(fxOpChar(effect), x, midY);
+  const fields = fxArgFields(effect, arg, pairedOp);
   const inks = [palette.a1, palette.a2, palette.a3];
   const digits = hex4(arg);
   for (let i = 0; i < 4; i++) {

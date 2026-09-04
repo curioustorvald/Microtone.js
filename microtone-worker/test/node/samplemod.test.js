@@ -22,9 +22,14 @@ import {
   MOD_XFADE_SAMPLES, modStepPeriod, isJumpOp, isRndOp, jumpRot, scatterReach,
   scatterSource, ModGeom, resolveModGeom, modTouches, modAddress,
   REGION_NONE, REGION_SET, REGION_COMB,
+  // Argument extension (item 162)
+  fModTouches, extModTouches, decodeExtOp, EXT_JUMP_N, extJitterFrac,
+  EXT_SCATTER_FRAC, EXT_BITPERM_LUT, extYkPeriodTicks, modAddressExt,
+  bitRotate8, applyExtLevel, applyExtLevelPrev,
 } from "../../src/engine/samplemod.js";
 import { setRandomSource, makeSeededRandom } from "../../src/engine/rng.js";
 import { readSamplePoint } from "../../src/engine/sampler.js";
+import { EffectOp } from "../../src/engine/tables.js";
 
 setSamplingRate(32000);
 
@@ -1072,4 +1077,212 @@ test("INVERT steps do not arm a crossfade — one byte is not a discontinuity", 
   loadRows(eng, [[0x03, 0x0f1f]]);
   render(eng, TICK + 1);
   assert.equal(eng.playheads[0].trackerState.voices[0].modXfade, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Argument extension (item 162): notefx 2/3 paired with `:`. Pure-function
+// tests against the exports themselves — the wide-cell engine legs (J, O and
+// a couple of $xuu ops driven through real rows) live in widecell.test.js,
+// next to the rest of the Format-3-only machinery.
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("fModTouches $0 is a no-op; $1/$2 keep the extent's own halves", () => {
+  const es = 100, ee = 200; // a 100-byte extent
+  for (let i = es; i < ee; i++) assert.ok(fModTouches(0x0, i, es, ee, 0));
+  for (let i = es; i < ee; i++) {
+    assert.equal(fModTouches(0x1, i, es, ee, 0), i < 150, `$1 (left half) at ${i}`);
+    assert.equal(fModTouches(0x2, i, es, ee, 0), i >= 150, `$2 (right half) at ${i}`);
+  }
+});
+
+test("fModTouches $4/$9 keep the leftmost/rightmost quarter", () => {
+  const es = 0, ee = 400;
+  assert.equal(fModTouches(0x4, 50, es, ee, 0), true);
+  assert.equal(fModTouches(0x4, 150, es, ee, 0), false);
+  assert.equal(fModTouches(0x9, 350, es, ee, 0), true);
+  assert.equal(fModTouches(0x9, 150, es, ee, 0), false);
+});
+
+test("fModTouches $A/$B alternate halves with the step index; $C/$D alternate quarters", () => {
+  const es = 0, ee = 400;
+  // $A opens on the first half (step 0), flips to the second on step 1.
+  assert.equal(fModTouches(0xa, 50, es, ee, 0), true);
+  assert.equal(fModTouches(0xa, 350, es, ee, 0), false);
+  assert.equal(fModTouches(0xa, 50, es, ee, 1), false);
+  assert.equal(fModTouches(0xa, 350, es, ee, 1), true);
+  // $B is $A's mirror image at every step.
+  assert.equal(fModTouches(0xb, 50, es, ee, 0), fModTouches(0xa, 50, es, ee, 1));
+  // $C opens on quarters 1+3 (chunks 0,2 of 4), $D on 2+4 (chunks 1,3).
+  assert.equal(fModTouches(0xc, 50, es, ee, 0), true);   // chunk 0
+  assert.equal(fModTouches(0xc, 150, es, ee, 0), false); // chunk 1
+  assert.equal(fModTouches(0xc, 250, es, ee, 0), true);  // chunk 2
+  assert.equal(fModTouches(0xc, 350, es, ee, 0), false); // chunk 3
+  assert.equal(fModTouches(0xd, 50, es, ee, 0), false);
+  assert.equal(fModTouches(0xd, 150, es, ee, 0), true);
+});
+
+test("fModTouches $E/$F are BYTE-granularity combs, independent of extent length", () => {
+  const es = 0, ee = 1000; // wide extent — $E/$F must not scale with it
+  const kept = (f) => {
+    const out = [];
+    for (let i = 0; i < 16; i++) if (fModTouches(f, i, es, ee, 0)) out.push(i);
+    return out;
+  };
+  assert.deepEqual(kept(0xe), [0, 1, 2, 3, 8, 9, 10, 11], "4-of-every-8");
+  assert.deepEqual(kept(0xf), [0, 2, 4, 6, 8, 10, 12, 14], "every other byte");
+});
+
+test("extModTouches ANDs the base region test with $f", () => {
+  const g = new ModGeom();
+  resolveModGeom(g, { modFrom: 0, modTo: 1, modCombBits: -1, modCombOdd: false, modEpoch: 1 }, 0, 0, 400);
+  // Base region is the whole domain; $1 narrows it to the left half.
+  assert.equal(extModTouches(g, false, 0x1, 0, 100), true);
+  assert.equal(extModTouches(g, false, 0x1, 0, 300), false);
+});
+
+test("decodeExtOp: one representative per group, matching TAUD_NOTE_EFFECTS.md", () => {
+  assert.deepEqual(decodeExtOp(0x000), { kind: "noop", param: 0 });
+  assert.deepEqual(decodeExtOp(0x100), { kind: "noop", param: 0 });
+  assert.deepEqual(decodeExtOp(0x101), { kind: "invert", param: 0 });
+  assert.deepEqual(decodeExtOp(0x102), { kind: "funk", param: 0 });
+  assert.deepEqual(decodeExtOp(0x103), { kind: "xor", param: 0xff }, "simply invert IS xor $FF");
+  assert.deepEqual(decodeExtOp(0x104), { kind: "mirror", param: 0 });
+  assert.deepEqual(decodeExtOp(0x11a), { kind: "invertJit", param: 0xa });
+  assert.deepEqual(decodeExtOp(0x12f), { kind: "funkJit", param: 0xf });
+  assert.deepEqual(decodeExtOp(0x135), decodeExtOp(0x145), "$13x and $14x fold together (see the doc note)");
+  assert.equal(decodeExtOp(0x135).kind, "jumpN");
+  assert.equal(decodeExtOp(0x135).param, EXT_JUMP_N[5]);
+  assert.deepEqual(decodeExtOp(0x150), { kind: "jumpNBounded", param: EXT_JUMP_N[0] });
+  assert.deepEqual(decodeExtOp(0x160), { kind: "swap", param: 0 });
+  assert.deepEqual(decodeExtOp(0x168), { kind: "scatter", param: EXT_SCATTER_FRAC[8] });
+  assert.deepEqual(decodeExtOp(0x2ff), { kind: "rol", param: 255 });
+  assert.deepEqual(decodeExtOp(0x301), { kind: "rol", param: -1 }, "rotate-right is negative rol");
+  assert.deepEqual(decodeExtOp(0x401), { kind: "rol", param: 256 });
+  assert.deepEqual(decodeExtOp(0x501), { kind: "rol", param: -256 });
+  assert.deepEqual(decodeExtOp(0x605), { kind: "sub", param: 5 });
+  assert.deepEqual(decodeExtOp(0x705), { kind: "sub", param: -5 }, "add is negative sub");
+  assert.deepEqual(decodeExtOp(0x8aa), { kind: "xor", param: 0xaa });
+  assert.deepEqual(decodeExtOp(0x903), { kind: "bitrot", param: 3 });
+  assert.deepEqual(decodeExtOp(0x913), { kind: "bitrot", param: -3 });
+  assert.deepEqual(decodeExtOp(0x924), { kind: "bitperm", param: 4 });
+  assert.deepEqual(decodeExtOp(0x999), { kind: "noop", param: 0 }, "reserved code");
+});
+
+test("EXT_JUMP_N is the documented 16-entry table", () => {
+  assert.deepEqual([...EXT_JUMP_N], [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 18, 21, 24, 32]);
+});
+
+test("extJitterFrac: 2^(x-15), 100% at $F", () => {
+  assert.equal(extJitterFrac(0xf), 1);
+  assert.equal(extJitterFrac(0x0), Math.pow(2, -15));
+  assert.equal(extJitterFrac(0x7), Math.pow(2, -8));
+});
+
+test("EXT_SCATTER_FRAC: 16 levels, 1/16384 .. fully", () => {
+  assert.equal(EXT_SCATTER_FRAC[0], 0);
+  assert.equal(EXT_SCATTER_FRAC[1], 1 / 16384);
+  assert.equal(EXT_SCATTER_FRAC[15], 1);
+});
+
+test("extYkPeriodTicks: $00 stops, the fine ladder is linear, $Fx is the coarse table", () => {
+  assert.equal(extYkPeriodTicks(0x00), 0, "stop");
+  assert.equal(extYkPeriodTicks(0x01), 1 / 16);
+  assert.equal(extYkPeriodTicks(0x10), 1);
+  assert.equal(extYkPeriodTicks(0x1f), 1 + 15 / 16);
+  assert.equal(extYkPeriodTicks(0xe5), 14 + 5 / 16);
+  const coarse = [15, 16, 18, 20, 22, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64];
+  for (let k = 0; k < 16; k++) assert.equal(extYkPeriodTicks(0xf0 | k), coarse[k], `$F${k.toString(16)}`);
+});
+
+test("EXT_BITPERM_LUT matches the worked bit examples in TAUD_NOTE_EFFECTS.md", () => {
+  // An independent, literal re-derivation of "abcdefgh" from the doc table,
+  // for two asymmetric test bytes — deliberately NOT sharing code with
+  // samplemod.js's own bit-twiddling implementation.
+  const bitsOf = (byte) => Array.from({ length: 8 }, (_, i) => (byte >> (7 - i)) & 1); // [a..h]
+  const fromBits = (bits) => bits.reduce((acc, b) => (acc << 1) | b, 0);
+  const reorder = (byte, order) => { // order is a string like "hgfedcba"
+    const bits = bitsOf(byte);
+    const idx = { a: 0, b: 1, c: 2, d: 3, e: 4, f: 5, g: 6, h: 7 };
+    return fromBits([...order].map((c) => bits[idx[c]]));
+  };
+  const expected = {
+    0: (b) => b ^ 0xff,
+    1: (b) => reorder(b, "hgfedcba"),
+    2: (b) => reorder(b, "efghabcd"),
+    3: (b) => reorder(b, "dcbahgfe"),
+    4: (b) => reorder(b, "badcfehg"),
+    5: (b) => reorder(b, "ghefcdab"),
+    6: (b) => reorder(b, "fehgbadc"),
+    7: (b) => reorder(b, "cdabghef"),
+  };
+  for (const testByte of [0xb4, 0x2d, 0x00, 0xff]) {
+    for (let idx = 0; idx < 8; idx++) {
+      assert.equal(EXT_BITPERM_LUT[idx][testByte], expected[idx](testByte),
+        `permutation ${920 + idx} on 0x${testByte.toString(16)}`);
+    }
+  }
+});
+
+test("EXT_BITPERM_LUT permutations are involutions (applying one twice is identity)", () => {
+  for (let idx = 0; idx < 8; idx++) {
+    for (let b = 0; b < 256; b++) {
+      assert.equal(EXT_BITPERM_LUT[idx][EXT_BITPERM_LUT[idx][b]], b);
+    }
+  }
+});
+
+test("bitRotate8: left/right, mod 8, and a no-op at amount 0", () => {
+  assert.equal(bitRotate8(0b00000001, 1), 0b00000010);
+  assert.equal(bitRotate8(0b10000000, 1), 0b00000001, "wraps");
+  assert.equal(bitRotate8(0b00000001, -1), 0b10000000, "negative = right");
+  assert.equal(bitRotate8(0b00000001, 8), 0b00000001, "a full turn is the identity");
+  assert.equal(bitRotate8(0x5a, 0), 0x5a);
+});
+
+test("modAddressExt: swap pair takes priority, then mirror, then the classic rot/scatter fallback", () => {
+  const g = new ModGeom();
+  resolveModGeom(g, { modFrom: 0, modTo: 1, modCombBits: -1, modCombOdd: false, modEpoch: 1 }, 0, 0, 100);
+  // swap
+  const swapInst = { modExtSwapA: 10, modExtSwapB: 20, modExtMirror: false, modRot: 0, modScatter: 0, modSeed: 0 };
+  assert.equal(modAddressExt(g, 10, swapInst), 20);
+  assert.equal(modAddressExt(g, 20, swapInst), 10);
+  assert.equal(modAddressExt(g, 15, swapInst), 15, "untouched byte passes through");
+  // mirror
+  const mirrorInst = { modExtSwapA: -1, modExtSwapB: -1, modExtMirror: true, modRot: 0, modScatter: 0, modSeed: 0 };
+  assert.equal(modAddressExt(g, 0, mirrorInst), 99);
+  assert.equal(modAddressExt(g, 99, mirrorInst), 0);
+  // neither -> falls back to the classic address transform (rot)
+  const rotInst = { modExtSwapA: -1, modExtSwapB: -1, modExtMirror: false, modRot: 5, modScatter: 0, modSeed: 0 };
+  assert.equal(modAddressExt(g, 0, rotInst), 5);
+});
+
+test("applyExtLevel/applyExtLevelPrev: sub/add share modSub, xor its own, bit ops layer on top", () => {
+  const inst = {
+    modSub: 10, modXor: 0, modBitRot: 0, modBitPermOn: false, modBitPermIdx: 0,
+    modPrevSub: 0, modPrevXor: 0,
+  };
+  assert.equal(applyExtLevel(inst, 50), (50 - 10) & 0xff);
+  inst.modSub = 0; inst.modXor = 0xff;
+  assert.equal(applyExtLevel(inst, 0x0f), 0xf0);
+  inst.modXor = 0; inst.modBitRot = 1;
+  assert.equal(applyExtLevel(inst, 0b00000001), 0b00000010);
+  inst.modBitRot = 0; inst.modBitPermOn = true; inst.modBitPermIdx = 0; // NOT
+  assert.equal(applyExtLevel(inst, 0x0f), 0xf0);
+  inst.modBitPermOn = false;
+  inst.modPrevSub = 5;
+  assert.equal(applyExtLevelPrev(inst, 50), (50 - 5) & 0xff);
+});
+
+test("extended `:` in a narrow (Format 1/2) cell's single effect slot is a structural no-op", () => {
+  const withColon = makeEngine();
+  loadRows(withColon, [[EffectOp.OP_COLON & 0xff, 0x1234]]);
+  const bare = makeEngine();
+  loadRows(bare, []);
+  const bufA = new Uint8Array(TRACKER_CHUNK * 2);
+  const bufB = new Uint8Array(TRACKER_CHUNK * 2);
+  for (let i = 0; i < 8; i++) {
+    withColon.renderChunk(0, bufA);
+    bare.renderChunk(0, bufB);
+    assert.deepEqual([...bufA], [...bufB], `chunk ${i} diverged`);
+  }
 });

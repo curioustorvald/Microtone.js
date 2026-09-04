@@ -16,6 +16,7 @@ import {
 } from "../../src/engine/constants.js";
 import { TaudPlayData } from "../../src/engine/state.js";
 import { EffectOp } from "../../src/engine/tables.js";
+import { applyEffectRow } from "../../src/engine/effects.js";
 import { SURROUND_PLANAR, SURROUND_SPATIAL } from "../../src/engine/spatial.js";
 
 // Pinned to the Kotlin engine's 32 kHz (item 108 moved the web default to
@@ -821,4 +822,123 @@ test("an effect block pastes into whichever effect column the caret is on", asyn
   const out = C.overlayCols(Uint8Array.from(narrowDst), moved, [E.COL_FX], false);
   assert.deepEqual([...out.subarray(5, 8)], [0x16, 0x00, 0x80], "M $8000 in the v2 effect column");
   assert.deepEqual([...out.subarray(0, 5)], [...narrowDst.subarray(0, 5)], "…and nothing else moved");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Argument extension (item 162): `:` paired with J / O / 2 / 3, Format 3 only.
+// Pure-function coverage of $f / $xuu / $yk lives in samplemod.test.js; these
+// drive real rows through the tracker so the row-level pairing (row.js) and
+// the sub-tick clock (mixer.js) are the ones actually wired into playback.
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("J extended: two full 4096-TET offsets, order-independent of which slot carries `:`", () => {
+  const eng = makeWideEngine();
+  loadWideSong(eng, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_J, arg: 0x0234,
+      effect2: EffectOp.OP_COLON, arg2: 0x0567 },
+  ]);
+  const base = 0x5000;
+  render(eng, 1);
+  assert.equal(voice0(eng).renderPitch, base, "tick 0: base pitch");
+  render(eng, 1);
+  assert.equal(voice0(eng).renderPitch, base + 0x0234, "tick 1: J's own arg, full resolution");
+  render(eng, 1);
+  assert.equal(voice0(eng).renderPitch, base + 0x0567, "tick 2: the paired `:`'s arg");
+
+  // Swapped slots — `:` first, J second — must read exactly the same.
+  const swapped = makeWideEngine();
+  loadWideSong(swapped, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_COLON, arg: 0x0567,
+      effect2: EffectOp.OP_J, arg2: 0x0234 },
+  ]);
+  render(swapped, 1);
+  assert.equal(voice0(swapped).renderPitch, base);
+  render(swapped, 1);
+  assert.equal(voice0(swapped).renderPitch, base + 0x0234);
+  render(swapped, 1);
+  assert.equal(voice0(swapped).renderPitch, base + 0x0567);
+});
+
+test("J extended does not disturb classic J's own memory (different units, private)", () => {
+  const eng = makeWideEngine();
+  loadWideSong(eng, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_J, arg: 0x0500 }, // classic: off1 = $05<<8
+  ]);
+  render(eng, 1);
+  render(eng, 1);
+  assert.equal(voice0(eng).renderPitch, 0x5000 + (0x05 << 8), "classic J still <<8-scales its byte");
+});
+
+test("O extended: a 32-bit offset, O's own argument the HIGH word", () => {
+  // Driven directly against applyEffectRow rather than through the tracker's
+  // per-sample loop: O only ever touches the voice it is passed (no eng/ts/
+  // playhead reads), and normal playback keeps advancing samplePos every
+  // output sample once set — a chunk-quantised render() would drift a few
+  // hundred samples past the value O just wrote before a test could see it.
+  const voice = {
+    activeLoopMode: 0, activeSampleLoopStart: 0, activeSampleLoopEnd: 0,
+    samplePos: 0, mem: { o: 0, oExt: 0 },
+  };
+  applyEffectRow(null, null, null, voice, 0, EffectOp.OP_O, 0x0001, 0x0002);
+  assert.equal(voice.samplePos, 1 * 65536 + 2, "O's arg is the high word, `:`'s the low word");
+
+  // Recall: a combined argument of $00000000 recalls the last 32-bit value —
+  // separately from the classic 16-bit memory (different units, item 162).
+  applyEffectRow(null, null, null, voice, 0, EffectOp.OP_O, 0x0000, 0x0000);
+  assert.equal(voice.samplePos, 1 * 65536 + 2, "recalled the extended memory");
+});
+
+test("O extended combines arithmetically, not with a 32-bit shift (no signed overflow)", () => {
+  // rawArg's top bit set is exactly where `high << 16` would overflow a
+  // signed 32-bit int; `high * 65536 + low` must not.
+  const voice = {
+    activeLoopMode: 0, activeSampleLoopStart: 0, activeSampleLoopEnd: 0,
+    samplePos: 0, mem: { o: 0, oExt: 0 },
+  };
+  applyEffectRow(null, null, null, voice, 0, EffectOp.OP_O, 0x8001, 0x0002);
+  assert.equal(voice.samplePos, 0x8001 * 65536 + 2);
+  assert.ok(voice.samplePos > 0, "positive, not wrapped negative");
+});
+
+test("`:` in BOTH effect slots of one row is inert — nothing left for it to extend", () => {
+  const withColons = makeWideEngine();
+  loadWideSong(withColons, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_COLON, arg: 0x1234,
+      effect2: EffectOp.OP_COLON, arg2: 0x5678 },
+  ]);
+  const bare = makeWideEngine();
+  loadWideSong(bare, [{ row: 0, note: 0x5000, inst: 1 }]);
+  const bufA = new Uint8Array(TRACKER_CHUNK * 2);
+  const bufB = new Uint8Array(TRACKER_CHUNK * 2);
+  for (let i = 0; i < 8; i++) {
+    withColons.renderChunk(0, bufA);
+    bare.renderChunk(0, bufB);
+    assert.deepEqual([...bufA], [...bufB], `chunk ${i} diverged`);
+  }
+});
+
+test("2/3 extended: $xuu rotate steps on the sub-tick $yk clock", () => {
+  const eng = makeWideEngine();
+  // $se = $0F (whole domain), $x = 2 (rotate-left group); `:` supplies uu=$01
+  // (rotate 1 byte/step) and k=$8 -> $yk = $08, period 0 + 8/16 = 0.5 tick —
+  // two steps per tick, so a full 6-tick row steps twelve times.
+  loadWideSong(eng, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_3, arg: 0x0f20,
+      effect2: EffectOp.OP_COLON, arg2: 0x0018 },
+  ]);
+  render(eng, 6);
+  const inst = eng.instruments[1];
+  assert.equal(inst.modOpExt, 0x201, "$xuu combined from both slots' nibbles");
+  assert.equal(inst.modRot, 12 % 1000, "twelve 1-byte steps over the row, wrapped into the domain");
+});
+
+test("2/3 extended: the classic per-tick clock never runs for an extended voice", () => {
+  const eng = makeWideEngine();
+  loadWideSong(eng, [
+    { row: 0, note: 0x5000, inst: 1, effect: EffectOp.OP_3, arg: 0x0f20,
+      effect2: EffectOp.OP_COLON, arg2: 0x0018 },
+  ]);
+  render(eng, 1);
+  assert.equal(voice0(eng).modExtended, true);
+  assert.equal(voice0(eng).modPeriod, 0, "the tick-count clock stays parked");
 });

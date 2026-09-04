@@ -559,6 +559,28 @@ export class TaudInst {
     this.modPrevSub = 0;
     this.modPrevScatter = 0;
     this.modPrevSeed = 0;
+
+    // Argument extension (item 162): notefx 2/3 paired with `:`. Mutually
+    // exclusive with modOp above — writing either clears the other (see
+    // setModOp/setModOpExt) — so every field below is only ever live while
+    // modOpExt is non-zero. $se's own extent/comb (modFrom/modTo/modCombBits)
+    // is shared with the classic path; everything here is the extended-only
+    // remainder: $f's sub-range, the step counter it alternates on, and the
+    // wider operation table's own accumulators. modRot/modSub/modScatter/
+    // modSeed above are reused as-is for the extended rotate/jump/scatter/
+    // sub/add kinds (see samplemod.js decodeExtOp) rather than duplicated.
+    this.modOpExt = 0;            // 0x000..0xFFF, 0 = off ($xuu)
+    this.modF = 0;                 // $f sub-range modifier
+    this.modStepIndex = 0;        // counts steps, for $f's A-D alternation
+    this.modXor = 0;               // xor / "simply invert" (103) / NOT (920) accumulator
+    this.modPrevXor = 0;
+    this.modBitRot = 0;            // 90x/91x: net bit-rotation, mod 8 (no crossfade)
+    this.modBitPermIdx = 0;        // 921-927: which permutation (920 folds into modXor)
+    this.modBitPermOn = false;     // toggled each step (an involution applied twice is identity)
+    this.modExtSwapA = -1;         // 160: swapped byte-pair addresses (no crossfade)
+    this.modExtSwapB = -1;
+    this.modExtMirror = false;     // 104: reverse, toggled each step (no crossfade)
+    this.modFunkWalk = 0;          // 102/12x: this instrument's own funk-repeat walk position
   }
 
   get sampleLoopSustain() { return (this.loopMode & 0x04) !== 0; }
@@ -751,12 +773,28 @@ export class TaudInst {
 
   /** Select the operation and which side of the region it works on. Changing
    *  either starts the new operation from scratch — a rotation offset means
-   *  nothing to a subtract. */
+   *  nothing to a subtract. Classic and extended ($xuu, item 162) are mutually
+   *  exclusive, so writing the classic op also turns any extended one off. */
   setModOp(op, invert) {
-    if (this.modOp === op && this.modInvert === invert) return false;
+    if (this.modOp === op && this.modInvert === invert && this.modOpExt === 0) return false;
     this.modOp = op;
     this.modInvert = invert;
+    this.modOpExt = 0;
+    this.modF = 0;
     this.modEpoch++;   // the inversion decides the wrap domain, so it is geometry
+    this.clearModState();
+    return true;
+  }
+
+  /** Extended counterpart of setModOp (item 162): a 12-bit $xuu code plus the
+   *  $f sub-range modifier, mutually exclusive with the classic modOp. */
+  setModOpExt(code, invert, f) {
+    if (this.modOpExt === code && this.modInvert === invert && this.modF === f && this.modOp === 0) return false;
+    this.modOp = 0;
+    this.modOpExt = code;
+    this.modInvert = invert;
+    this.modF = f;
+    this.modEpoch++;
     this.clearModState();
     return true;
   }
@@ -773,6 +811,16 @@ export class TaudInst {
     this.modPrevSub = 0;
     this.modPrevScatter = 0;
     this.modPrevSeed = 0;
+    this.modStepIndex = 0;
+    this.modXor = 0;
+    this.modPrevXor = 0;
+    this.modBitRot = 0;
+    this.modBitPermIdx = 0;
+    this.modBitPermOn = false;
+    this.modExtSwapA = -1;
+    this.modExtSwapB = -1;
+    this.modExtMirror = false;
+    this.modFunkWalk = 0;
   }
 
   /** Remember what the next step is replacing, for the crossfade that covers
@@ -782,11 +830,14 @@ export class TaudInst {
     this.modPrevSub = this.modSub;
     this.modPrevScatter = this.modScatter;
     this.modPrevSeed = this.modSeed;
+    this.modPrevXor = this.modXor;
   }
 
   /** $x = 0 — the modification, region and all. */
   resetMod() {
     this.modOp = 0;
+    this.modOpExt = 0;
+    this.modF = 0;
     this.modInvert = false;
     this.modFrom = 0;
     this.modTo = 1;

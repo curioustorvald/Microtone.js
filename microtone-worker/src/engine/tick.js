@@ -25,6 +25,7 @@ import {
   MOD_OFF, MOD_INVERT, MOD_STEP, MOD_WALK_SCAN, MOD_XFADE_SAMPLES,
   isRolOp, isJumpOp, isRndOp, modTouches, resolveModGeom,
   jumpRot, scatterReach, scatterSeed,
+  decodeExtOp, extModTouches, extJitterFrac,
 } from "./samplemod.js";
 import {
   applyPanSet, applyPanSlide, applyNotePanSlide, boundNotePan, stepTowardTarget,
@@ -374,10 +375,13 @@ export function applyTrackerTick(eng, ts, playhead) {
       voice.panbrelloOffset = 0;
     }
 
-    // Arpeggio (J) — overrides pitchToMixer for this tick.
+    // Arpeggio (J) — overrides pitchToMixer for this tick. arpOff1/arpOff2
+    // are stored as full pitch deltas already (item 162's extension writes
+    // its two 4096-TET units straight in; classic J pre-scales its bytes by
+    // <<8 at write time — see effects.js OP_J), so no shift belongs here.
     if (voice.arpActive) {
       const voiceIdx = ts.tickInRow % 3;
-      const arpDelta = voiceIdx === 1 ? voice.arpOff1 << 8 : voiceIdx === 2 ? voice.arpOff2 << 8 : 0;
+      const arpDelta = voiceIdx === 1 ? voice.arpOff1 : voiceIdx === 2 ? voice.arpOff2 : 0;
       pitchToMixer = clamp(voice.basePitch + arpDelta, 0x20, 0xffff);
       voice.lastArpVoice = voiceIdx;
     }
@@ -645,7 +649,10 @@ export function applyTrackerTick(eng, ts, playhead) {
  * (item 154) — the clock is the voice's, the operation the instrument's.
  */
 function advanceSampleMod(eng, ts, voice) {
-  if (voice.modPeriod === 0 || !voice.active) return;
+  // Argument extension (item 162): an extended voice clocks itself in samples
+  // via advanceSampleModExtended (mixer.js's per-sample loop), never here —
+  // the two clocks never touch the same voice's step count.
+  if (voice.modPeriod === 0 || !voice.active || voice.modExtended) return;
   const inst = eng.instruments[voice.instrumentId];
   if (inst.modOp === MOD_OFF) return;
   const sampleLen = Math.max(voice.activeSampleLength, 1);
@@ -694,6 +701,164 @@ function advanceSampleMod(eng, ts, voice) {
     inst.modOn = inst.modSub !== 0;
   }
   armModXfade(ts, voice.instrumentId);
+}
+
+/**
+ * Argument-extension counterpart of advanceSampleMod (item 162): same shape
+ * — resolve the geometry, wait out the period, step once — but clocked in
+ * SAMPLES (voice.modStepTicks may be under 1 tick) rather than whole ticks,
+ * which is why it is called from mixer.js's per-sample loop instead of the
+ * per-tick one. `spt` is that loop's own samples-per-tick, recomputed fresh
+ * every sample there (T-slide correctness) and threaded straight through
+ * rather than cached, so a mid-row tempo change retimes this the same way it
+ * retimes the tick clock itself.
+ */
+export function advanceSampleModExtended(eng, ts, voice, spt) {
+  if (!voice.modExtended || !voice.active) return;
+  const inst = eng.instruments[voice.instrumentId];
+  if (inst.modOpExt === 0 || voice.modStepTicks <= 0) return;
+  const sampleLen = Math.max(voice.activeSampleLength, 1);
+  const g = resolveModGeom(voice.modGeom, inst, voice.activeSampleLoopStart,
+    voice.activeSampleLoopEnd, sampleLen);
+  if (!g.live) return;
+  voice.modSamplesIntoStep += 1.0;
+  const periodSamples = voice.modStepTicks * spt;
+  if (periodSamples <= 0 || voice.modSamplesIntoStep < periodSamples) return;
+  voice.modSamplesIntoStep -= periodSamples;
+  stepExtendedModOnce(ts, voice, inst, g, sampleLen);
+}
+
+/**
+ * One step of an extended (`:`-paired) 2/3, dispatched on the decoded $xuu
+ * kind — see samplemod.js decodeExtOp for the code table this switches on and
+ * the design note on 920's fold into `xor`, 13x/14x's shared `jumpN`, and
+ * which kinds get the anti-click crossfade (rot/sub/xor family: the same
+ * accumulate-and-replace shape the base command's ROL/SUB/JUMP/SCATTER get)
+ * versus which don't (bit-rotate, bit-permutation, mirror, swap, invert — all
+ * either a single-byte flip like classic INVERT, or a toggle between two
+ * states, neither of which clicks the way replacing a whole mapping does).
+ */
+function stepExtendedModOnce(ts, voice, inst, g, sampleLen) {
+  inst.modStepIndex++; // $f's A-D alternation reads this
+  const { kind, param } = decodeExtOp(inst.modOpExt);
+  const dl = Math.max(g.dl, 1);
+  switch (kind) {
+    case "noop":
+      break;
+    case "invert": {
+      for (let n = 0; n < MOD_WALK_SCAN; n++) {
+        voice.modWritePos = (voice.modWritePos + 1) % dl;
+        const i = g.ds + voice.modWritePos;
+        if (extModTouches(g, inst.modInvert, inst.modF, inst.modStepIndex, i)) {
+          inst.toggleModBit(i, sampleLen);
+          break;
+        }
+      }
+      break;
+    }
+    case "invertJit": {
+      const reach = Math.max(1, Math.round(extJitterFrac(param) * dl));
+      for (let n = 0; n < MOD_WALK_SCAN; n++) {
+        const jitter = Math.floor(random() * (2 * reach + 1)) - reach;
+        voice.modWritePos = (((voice.modWritePos + 1 + jitter) % dl) + dl) % dl;
+        const i = g.ds + voice.modWritePos;
+        if (extModTouches(g, inst.modInvert, inst.modF, inst.modStepIndex, i)) {
+          inst.toggleModBit(i, sampleLen);
+          break;
+        }
+      }
+      break;
+    }
+    case "funk":
+    case "funkJit": {
+      inst.snapshotModState();
+      inst.modFunkWalk = funkWalkStep(0, inst.modFunkWalk, g.ds, dl, sampleLen);
+      const pointer = funkWalkPointer(0, inst.modFunkWalk, g.ds, dl, sampleLen);
+      let rot = (((pointer - g.ds) % dl) + dl) % dl;
+      if (kind === "funkJit") {
+        const reach = Math.max(1, Math.round(extJitterFrac(param) * dl));
+        rot = ((rot + Math.floor(random() * (2 * reach + 1)) - reach) % dl + dl) % dl;
+      }
+      inst.modRot = rot;
+      inst.modOn = true;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "mirror": {
+      inst.modExtMirror = !inst.modExtMirror;
+      inst.modOn = inst.modExtMirror;
+      break;
+    }
+    case "swap": {
+      if (dl >= 2) {
+        const a = g.ds + Math.floor(random() * dl);
+        let b2 = g.ds + Math.floor(random() * dl);
+        if (b2 === a) b2 = g.ds + ((a - g.ds + 1) % dl);
+        inst.modExtSwapA = a;
+        inst.modExtSwapB = b2;
+        inst.modOn = true;
+      }
+      break;
+    }
+    case "rol": {
+      inst.snapshotModState();
+      inst.modRot = ((inst.modRot + param) % dl + dl) % dl;
+      inst.modOn = inst.modRot !== 0;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "jumpN": {
+      inst.snapshotModState();
+      const slice = Math.max(1, Math.round(dl / param));
+      const idx = Math.min(Math.floor(random() * param), param - 1);
+      inst.modRot = (idx * slice) % dl;
+      inst.modOn = true;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "jumpNBounded": {
+      inst.snapshotModState();
+      const reach = Math.max(1, Math.round(dl / param));
+      const thrown = Math.floor(random() * (2 * reach + 1)) - reach;
+      inst.modRot = ((thrown % dl) + dl) % dl;
+      inst.modOn = true;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "scatter": {
+      inst.snapshotModState();
+      inst.modScatter = Math.max(1, Math.min(Math.round(dl * param), dl));
+      inst.modSeed = scatterSeed();
+      inst.modOn = inst.modScatter > 0;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "sub": {
+      inst.snapshotModState();
+      inst.modSub = (inst.modSub + param) & 0xff;
+      inst.modOn = inst.modSub !== 0;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "xor": {
+      inst.snapshotModState();
+      inst.modXor = (inst.modXor ^ param) & 0xff;
+      inst.modOn = inst.modXor !== 0;
+      armModXfade(ts, voice.instrumentId);
+      break;
+    }
+    case "bitrot": {
+      inst.modBitRot = (((inst.modBitRot + param) % 8) + 8) % 8;
+      inst.modOn = inst.modBitRot !== 0;
+      break;
+    }
+    case "bitperm": {
+      inst.modBitPermIdx = param;
+      inst.modBitPermOn = !inst.modBitPermOn;
+      inst.modOn = inst.modBitPermOn;
+      break;
+    }
+  }
 }
 
 /**

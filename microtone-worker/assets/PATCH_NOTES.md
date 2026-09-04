@@ -4,6 +4,16 @@ Microtone is deployed continuously — there are no numbered releases, so every 
 
 Bug reports and suggestions are welcome on [GitHub](https://github.com/curioustorvald/Microtone.js).
 
+## 2026-09-05
+
+Patterns can now say more per row: a new `:` effect extends the argument of another command sharing its row, in wide (Format 3) patterns only.
+
+- New effect `:` pairs with another command on the same row, either order, to extend what that command's own argument can reach — it does nothing on its own, and nothing at all outside a Format-3 pattern.
+- `J $xxxx : $yyyy` reaches two full-precision arpeggio offsets instead of two coarse ones, for arpeggios as microtonal as any other pitch effect.
+- `O $abcd : $efgh` reaches a 32-bit sample offset, for seeking deep into samples too large for the plain 16-bit form.
+- `2`/`3` paired with `:` open up a much wider set of sample-glitch operations — new rotate, add, XOR and bit-shuffling variants, finer scatter and sub-range choices, and speeds faster than one tick.
+- The pattern grid paints a paired `:` and the command it extends in red, so the pairing reads at a glance.
+
 ## 2026-09-04
 
 The envelope editor's two node buttons now do what they say, on every tab.

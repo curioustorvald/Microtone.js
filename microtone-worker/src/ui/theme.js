@@ -45,6 +45,7 @@ const VAR_KEYS = {
   caretNav: "--cv-caret-nav", cueLine: "--cv-cue-line", colPan: "--cv-col-pan",
   sel: "--cv-sel", ditto: "--cv-ditto",
   fxOp: "--cv-fx-op", fxA1: "--cv-fx-a1", fxA2: "--cv-fx-a2", fxA3: "--cv-fx-a3",
+  fxExt: "--cv-fx-ext", // item 162: a `:` cell and the one it pairs with, painted red
   // canvas: samples / instruments
   wave: "--cv-wave", waveLoop: "--cv-wave-loop", waveMid: "--cv-wave-mid",
   waveInvert: "--cv-wave-invert", waveFunk: "--cv-wave-funk",
