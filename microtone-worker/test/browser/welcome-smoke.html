@@ -81,33 +81,42 @@
         log(`Demo songs (${demoRows.length} row(s)): ${demosOk ? "ok" : "FAIL"}`);
 
         // ── What's new: the newest PATCH_NOTES.md section, live ──
+        // Three shapes the panel can take, mirroring welcome.js's own
+        // branching on sectionHeadlines: 0 headlines is a bare bullet list
+        // (most of the changelog, generated retroactively); 1 is that
+        // headline as a <p class="wc-lead"> above up to three of its
+        // bullets; 2+ (today's real section, which now touches several
+        // unrelated things) is the headlines THEMSELVES as the list, with NO
+        // <p>.wc-lead — descending into any one group's bullets would
+        // misrepresent the batch as a single change.
         const notesMd = await (await fetch("../../assets/PATCH_NOTES.md")).text();
-        const { firstSection, firstParagraph, topLevelBullets } =
+        const { firstSection, sectionHeadlines, topLevelBullets } =
           await win.eval('import("/src/ui/markdown.js")');
         const section = firstSection(notesMd);
+        const heads = sectionHeadlines(section.body);
+        const NEWS_BULLETS = 4; // welcome.js's own budget; not exported, kept in sync by eye
         const items = [...host.querySelectorAll(".wc-news-list li")];
-        const firstBullet = topLevelBullets(section.body)[0].replace(/[*`]/g, "");
-        const newsOk = items.length > 0 && items.length <= 5 &&
-          host.querySelector(".wc-date").textContent === section.title &&
-          items[0].textContent.startsWith(firstBullet.slice(0, 30)) &&
-          items.every((li) => li.querySelector(".wc-clamp")); // marker kept off the clamp
-        log(`What's new = PATCH_NOTES "${section.title}" (${items.length} items): ${newsOk ? "ok" : "FAIL"}`);
-
-        // ── the section's own HEADLINE leads the panel (the paragraph before
-        //    its list). Sections written as bare bullet lists have none, and
-        //    the panel is then bullets only, exactly as it always was.
-        const lead = firstParagraph(section.body);
         const leadEl = host.querySelector(".wc-news-body .wc-lead");
-        const leadOk = lead === ""
-          ? !leadEl
-          : !!leadEl && leadEl.tagName === "P" &&
-            leadEl.textContent.startsWith(lead.replace(/[*`]/g, "").slice(0, 30)) &&
-            // before the bullets, and it takes one bullet's place
+        const clean = (s) => s.replace(/[*`]/g, "");
+        const itemsMatch = (want) => items.length === want.length &&
+          items.every((li, i) => li.textContent.startsWith(clean(want[i]).slice(0, 30)));
+        let newsOk;
+        if (heads.length >= 2) {
+          newsOk = !leadEl && itemsMatch(heads.slice(0, NEWS_BULLETS));
+        } else if (heads.length === 1) {
+          newsOk = !!leadEl && leadEl.tagName === "P" &&
+            leadEl.textContent.startsWith(clean(heads[0]).slice(0, 30)) &&
+            // before the bullets, and it took one bullet's place
             (leadEl.compareDocumentPosition(host.querySelector(".wc-news-list")) &
               Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
-            items.length <= 3;
-        log(`What's new headline: lead="${lead.slice(0, 40)}" el=${!!leadEl} ` +
-            `items=${items.length} (${leadOk ? "ok" : "FAIL"})`);
+            itemsMatch(topLevelBullets(section.body).slice(0, NEWS_BULLETS - 1));
+        } else {
+          newsOk = !leadEl && itemsMatch(topLevelBullets(section.body).slice(0, NEWS_BULLETS));
+        }
+        newsOk = newsOk && host.querySelector(".wc-date").textContent === section.title &&
+          items.every((li) => li.querySelector(".wc-clamp")); // marker kept off the clamp
+        log(`What's new = PATCH_NOTES "${section.title}" (${heads.length} headline(s), ` +
+            `${items.length} item(s)): ${newsOk ? "ok" : "FAIL"}`);
 
         // ── support banner replaced the topbar buttons (item 104.3) ──
         const links = [...host.querySelectorAll(".wc-banner a")].map((a) => a.href);

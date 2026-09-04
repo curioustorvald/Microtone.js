@@ -14,15 +14,19 @@
 //                   above the fold rather than inside the File tab alone.
 //   What's new      the newest dated section of assets/PATCH_NOTES.md, read
 //                   live so it can never drift from the changelog: its own
-//                   HEADLINE (the paragraph the section opens with) and then
-//                   the first few of its bullets as the detail under it.
+//                   HEADLINE (the paragraph a group opens with) and then the
+//                   first few of that group's bullets as the detail under it
+//                   — or, when the batch touched several unrelated things and
+//                   the section carries several headlines, just those
+//                   headlines, since the four-item budget cannot also show
+//                   any one group's detail without misrepresenting the rest.
 //   Support         the banner that retired the topbar's Donate/Sponsor
 //                   buttons (item 104.3; the About popup keeps its own links).
 //
 // Everything here is DOM — the canvas grids stay hidden while it is up.
 
 import * as opfs from "../../storage/opfs.js";
-import { renderMarkdown, firstSection, firstParagraph, topLevelBullets } from "../markdown.js";
+import { renderMarkdown, firstSection, sectionHeadlines, topLevelBullets } from "../markdown.js";
 import { fillDemos } from "../demos.js";
 import { t, currentLang, onLangChange } from "../i18n.js";
 import { setIconLabel } from "../icons.js";
@@ -236,13 +240,24 @@ export class WelcomeView {
       return;
     }
     this.newsDate.textContent = section.title;
-    // The section's own headline, where it has one. Sections written before
-    // 2026-09-03 are bare bullet lists (firstParagraph returns "" for those),
-    // and the panel is then exactly what it always was.
-    const lead = firstParagraph(section.body);
-    // One bullet gives way to the headline, so the panel keeps its height.
-    const bullets = topLevelBullets(section.body)
-      .slice(0, lead ? NEWS_BULLETS - 1 : NEWS_BULLETS);
+    // The section's own headline(s) — one per bullet-list group it carries.
+    // A batch that touches several unrelated things gets several groups
+    // (CLAUDE.md's patch-notes rules), newest first; sections written before
+    // 2026-09-03 are bare bullet lists and yield none at all, and the panel
+    // is then exactly what it always was.
+    const heads = sectionHeadlines(section.body);
+    let lead = "";
+    let bullets;
+    if (heads.length >= 2) {
+      // Several changes, one four-item budget: descending into any ONE
+      // group's bullets would misrepresent the batch as a single change, so
+      // the panel shows the headlines themselves instead of any detail.
+      bullets = heads.slice(0, NEWS_BULLETS);
+    } else {
+      // One bullet gives way to the headline, so the panel keeps its height.
+      lead = heads[0] ?? "";
+      bullets = topLevelBullets(section.body).slice(0, lead ? NEWS_BULLETS - 1 : NEWS_BULLETS);
+    }
     // Local asset, rendered by our own Markdown pass — never user content.
     this.newsBody.innerHTML = renderMarkdown(
       [...(lead ? [lead, ""] : []), ...bullets.map((b) => `- ${b}`)].join("\n"));

@@ -6,7 +6,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  renderMarkdown, extractToc, slug, firstSection, firstParagraph, topLevelBullets,
+  renderMarkdown, extractToc, slug, firstSection, firstParagraph, sectionHeadlines,
+  topLevelBullets,
 } from "../../src/ui/markdown.js";
 
 test("slug: stable, ascii-kebab, non-empty", () => {
@@ -151,6 +152,23 @@ test("firstParagraph: a section's headline, or nothing when it has none", () => 
   assert.equal(firstParagraph("Headline.\n- one\n"), "Headline.");
 });
 
+test("sectionHeadlines: one per paragraph-then-list group, blank line required", () => {
+  const md = "Lead one.\n\n- a\n- b\n\nLead two.\n\n- c\n";
+  assert.deepEqual(sectionHeadlines(md), ["Lead one.", "Lead two."]);
+  // a bare bullet list — most of the changelog's older sections — has none
+  assert.deepEqual(sectionHeadlines("- a\n- b\n"), []);
+  // prose with nothing but more prose after it has none either
+  assert.deepEqual(sectionHeadlines("Just prose.\n\nMore prose.\n"), []);
+  // a trailing paragraph with no list to follow it is not counted
+  assert.deepEqual(sectionHeadlines("Lead.\n\n- a\n\nTrailing, no list.\n"), ["Lead."]);
+  // unlike firstParagraph, a run-together "headline\n- item" (no blank line)
+  // is NOT recognised here — nothing in the real patch notes writes it that
+  // way, and the blank line is what tells a paragraph from a list intro.
+  assert.deepEqual(sectionHeadlines("Headline.\n- one\n"), []);
+  // a fence spanning a blank line doesn't get mistaken for a group boundary
+  assert.deepEqual(sectionHeadlines("Lead.\n\n```\nblank\n\nline inside\n```\n\n- a\n"), []);
+});
+
 test("PATCH_NOTES.md: the newest section yields a renderable teaser", () => {
   const md = readFileSync(fileURLToPath(new URL("../../assets/PATCH_NOTES.md", import.meta.url)), "utf8");
   const sec = firstSection(md);
@@ -168,6 +186,17 @@ test("PATCH_NOTES.md: the newest section yields a renderable teaser", () => {
     assert.match(withLead, /^<p>/, "the headline renders as the first paragraph");
     assert.ok(withLead.includes("<ul><li>"), "and the bullets still follow it");
     assert.ok(!lead.startsWith("-"), "a headline is prose, not a bullet");
+  }
+  // sectionHeadlines' first entry is always that same paragraph — the section's
+  // own opening group — whatever else the rest of the batch goes on to say.
+  const heads = sectionHeadlines(sec.body);
+  assert.equal(heads.length > 0 ? heads[0] : "", lead);
+  assert.ok(heads.every((h) => h.length > 0 && !/^[-*+]\s/.test(h)), "a headline is prose, never a bullet");
+  if (heads.length >= 2) {
+    // Several unrelated changes in one batch: welcome.js shows the headlines
+    // THEMSELVES here, not any one group's bullets — this is what it renders.
+    const withHeads = renderMarkdown(heads.slice(0, 4).map((h) => `- ${h}`).join("\n"));
+    assert.match(withHeads, /^<ul><li>/, "the headline list itself renders");
   }
 });
 

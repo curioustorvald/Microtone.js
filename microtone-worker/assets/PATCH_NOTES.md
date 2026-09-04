@@ -6,12 +6,6 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-09-04
 
-The **What's new** panel on the welcome screen now leads with the headline this changelog itself carries.
-
-- The newest entry's opening line sits above its items, in full width and in the panel's brightest text, so the first thing you read is what the release *was* rather than the first detail of it.
-- One item gives way to it, so the panel stays the height it was; **Read all patch notes →** still opens the whole changelog.
-- Entries written before this month are plain lists with no opening line, and the panel shows those exactly as it always did.
-
 The envelope editor's two node buttons now do what they say, on every tab.
 
 - **Fixed: ＋ Add node on the Pan, Pitch or Filter tab produced nothing you could hear.** A node array is only read when *Envelope present* is ticked, and nothing ticked it — while the Volume tab, whose envelope always runs, worked; adding a node now ticks the box for you, in the same undo step (and on Pitch or Filter it claims that role, as a first node-drag already did).
