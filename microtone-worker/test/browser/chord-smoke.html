@@ -57,20 +57,40 @@
         ok(dlg.querySelectorAll(".chord-voice").length === 6, "a1 six voice slots");
         ok(ch.voices().filter((v) => v.on).length === 3, "a2 opens on a major triad");
 
-        // a2b (item 138): the whole vocabulary is on the menu, in its groups —
-        // minus the tetrachords of OTHER tunings (item 141), which is all of
-        // them in this 12-TET project, so its Tetrachords group never appears.
+        // a2b (items 138, 167): family first, chords second. One dropdown
+        // cannot hold the whole vocabulary any more — 143 chords in 31-TET —
+        // so the family picker lists the families THIS tuning has and the
+        // chord menu holds one of them at a time. A 12-TET project has no
+        // tuning-specific family at all (item 141, 167).
         const { CHORD_GROUPS, CHORD_PRESETS, chordPresetsFor } =
           await win.eval('import("/src/doc/chord.js")');
         const menu = chordPresetsFor(store.pitchPreset);
-        const groups = new Set(menu.map((p) => p.group));
+        const groups = CHORD_GROUPS.filter((g) => menu.some((p) => p.group === g));
+        const famSel = dlg.querySelector(".chord-family");
         const presetSel = dlg.querySelector(".chord-preset");
-        ok(presetSel.querySelectorAll("optgroup").length === groups.size &&
-          presetSel.querySelectorAll("option").length === menu.length,
-          `a2b preset menu is grouped (${presetSel.querySelectorAll("optgroup").length} groups, ` +
-          `${presetSel.querySelectorAll("option").length} chords)`);
+        const inFamily = (g) => menu.filter((p) => p.group === g).length;
+        ok(famSel.options.length === groups.length &&
+          [...famSel.options].every((o, i) => o.value === groups[i]),
+          `a2b family menu lists this tuning's families (${[...famSel.options].map((o) => o.value).join(", ")})`);
+        ok(famSel.value === "triad" && presetSel.options.length === inFamily("triad") &&
+          presetSel.value === "major",
+          `a2b1 …opening on the family the default chord belongs to ` +
+          `(${famSel.value}, ${presetSel.options.length} chords)`);
         ok(menu.length < CHORD_PRESETS.length && !menu.some((p) => p.notation !== undefined),
-          `a2b2 a 12-TET project is offered no tetrachords (${CHORD_PRESETS.length - menu.length} hidden)`);
+          `a2b2 a 12-TET project is offered no per-tuning chords (${CHORD_PRESETS.length - menu.length} hidden)`);
+        // …and no single chord menu is ever longer than one family
+        ch.setChordPreset("dom13");
+        await sleep(30);
+        ok(famSel.value === "extended" && presetSel.options.length === inFamily("extended") &&
+          presetSel.value === "dom13",
+          `a2b3 picking a chord follows its family (${famSel.value}, ${presetSel.options.length} chords)`);
+        famSel.value = "spread"; famSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+        await sleep(30);
+        ok(presetSel.options.length === inFamily("spread") && presetSel.value === "power" &&
+          ch.preset().id === "power",
+          `a2b4 changing family lands on its first chord (${presetSel.value})`);
+        ch.setChordPreset("major");
+        await sleep(30);
         ok([...presetSel.querySelectorAll("option")].every((o) => o.textContent && !/^chord\./.test(o.textContent)),
           "a2c every chord is named (no raw i18n keys)");
 
@@ -124,11 +144,15 @@
           return l.length === 2 ? l[1] : null;
         });
         const sel17 = dlg17.querySelector(".chord-preset");
-        const tetraGroup = [...sel17.querySelectorAll("optgroup")]
-          .find((g) => [...g.children].some((o) => o.value.startsWith("tetra")));
-        ok(tetraGroup && tetraGroup.children.length === 15,
-          `a6c 17-TET is offered its 15 tetrachords (${tetraGroup?.children.length})`);
-        ok([...tetraGroup.children].some((o) => o.textContent === "3-3-1 · ionian (jins ʻAjam)"),
+        const fam17 = dlg17.querySelector(".chord-family");
+        const famChords = (g) => {
+          fam17.value = g; fam17.dispatchEvent(new win.Event("change", { bubbles: true }));
+          return [...sel17.options];
+        };
+        const tetras = famChords("tetrachord");
+        ok(tetras.length === 15 && tetras.every((o) => o.value.startsWith("tetra")),
+          `a6c 17-TET is offered its 15 tetrachords (${tetras.length})`);
+        ok(tetras.some((o) => o.textContent === "3-3-1 · ionian (jins ʻAjam)"),
           "a6c2 …named as the wiki names them");
         dlg17.__chord.setChordPreset("tetra170-3-3-1");
         await sleep(50);
@@ -137,6 +161,29 @@
           `a6c3 …and it spans 17-TET's own fourth (${tetraUnits.join(", ")})`);
         ok(dlg17.querySelector(".chord-inv").disabled,
           "a6c4 a tetrachord has no inversions");
+
+        // a6d (item 167): the same tuning also carries the arto/tendo chords —
+        // in their own family, and — unlike a tetrachord — they invert
+        const xcs = famChords("extraclassical");
+        ok(xcs.length === 13 && xcs.every((o) => o.value.startsWith("xc")),
+          `a6d 17-TET is offered its 13 arto/tendo chords (${xcs.length})`);
+        // …and no family is ever longer than the longest one this tuning has
+        const longest = Math.max(...[...fam17.options].map((o) => famChords(o.value).length));
+        ok(longest === 15, `a6d1 no chord menu exceeds one family (longest ${longest})`);
+        dlg17.__chord.setChordPreset("xc170-3-cross");
+        await sleep(50);
+        const xcUnits = [0, 1, 2, 3].map((i) => dlg17.__chord.units(i));
+        ok(xcUnits[0] === 0 && xcUnits[1] === pitchTables[170].table[3] &&
+           xcUnits[2] === pitchTables[170].table[7] && xcUnits[3] === pitchTables[170].table[10],
+          `a6d2 cross-tonal stands on 0/arto/tendo/fifth (${xcUnits.join(", ")})`);
+        ok(!dlg17.querySelector(".chord-inv").disabled &&
+           dlg17.querySelector(".chord-inv").options.length === 4,
+          "a6d3 …and it has the three inversions a four-voice chord has");
+        dlg17.__chord.setInversion(1);
+        await sleep(50);
+        ok(dlg17.__chord.units(0) === pitchTables[170].table[3] &&
+           dlg17.__chord.units(3) === 0x1000,
+          "a6d4 the 1st inversion lifts the root over the top");
         dlg17.__chord.cancel();
         await pMaker17;
         store.pitchPreset = prevPreset;
@@ -168,11 +215,13 @@
         ok(dlg.querySelector(".chord-inv").options.length === 6 && ch.preset().inversion === 5,
           `a7f a six-voice chord has five inversions (${ch.preset().options})`);
         ok(ch.voices().filter((v) => v.on).length === 6, "a7g …and fills all six slots");
-        presetSel.value = "major";
-        presetSel.dispatchEvent(new win.Event("change", { bubbles: true }));
+        // …and switching family is a chord change like any other: it lands on
+        // that family's first chord and clamps the inversion to what it has
+        famSel.value = "triad"; famSel.dispatchEvent(new win.Event("change", { bubbles: true }));
         await sleep(300);
-        ok(ch.preset().inversion === 2 && ch.voices().filter((v) => v.on).length === 3,
-          `a7h back to a triad clamps the inversion (${ch.preset().inversion})`);
+        ok(ch.preset().id === "major" && ch.preset().inversion === 2 &&
+          ch.voices().filter((v) => v.on).length === 3,
+          `a7h back to a triad clamps the inversion (${ch.preset().id}, ${ch.preset().inversion})`);
         ch.setChordPreset("major", 0);
         await sleep(300);
 

@@ -666,8 +666,22 @@ button.icon-btn:disabled:hover { border-color: var(--border); }
   overflow: hidden;
 }
 /* Views live here — one stage per pane, under that pane's tab strip. The
-   master strip (item 98) sits beside the whole split, not over it. */
+   master strip (item 98) sits beside the whole split, not over it, and the
+   instrument lookup (item 27) docks the same way against whichever pane it is
+   currently in (item 168): .view-stage is a flex ROW, so .inst-lookup and
+   .view-canvases (the actual content — canvases and DOM views alike, still
+   stacked via absolute positioning since only one is ever shown at a time)
+   are real siblings sharing its width, not an overlay and an oblivious
+   full-width canvas underneath it. */
 .view-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.view-canvases {
   flex: 1;
   position: relative;
   min-width: 0;
@@ -1032,21 +1046,22 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 .toolbox button { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
 .toolbox button.active { color: var(--accent); border-color: var(--accent); }
 
-/* Quick instrument lookup — floating panel over the Timeline/Patterns grid. */
+/* Quick instrument lookup (item 27) — docked to the LEFT of whichever pane's
+   Timeline/Patterns grid it belongs to (item 168), mirroring the master
+   strip's dock on the right: a real flex sibling of that pane's
+   .view-canvases (.view-stage is the flex row over both), so the grid takes
+   real width off, rather than an overlay sitting over an oblivious full-width
+   canvas underneath it. It still moves between panes as a whole DOM node
+   (app.js's applyViews prepends it into whichever .view-stage now needs it) —
+   `hidden` (⇒ display:none) is all a pane it leaves needs to hand the width
+   back. */
 .inst-lookup {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 210px;
-  max-height: calc(100% - 16px);
+  flex: 0 0 176px;
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  border-right: 1px solid var(--border);
   font-size: 0.8rem;
-  z-index: 5;
   overflow: hidden;
 }
 .inst-lookup .il-head {
@@ -1236,6 +1251,22 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .meta-picker .picked { background: var(--panel); }
+
+/* Chord-stack bar (item 167). A preset label can be long — a tetrachord names
+   its modes, a 31-TET arto/tendo chord names the just ratios of its pair — so
+   each control gets its own field, keeping its label with it when the row
+   wraps, and the preset field is the one that gives way. The picker inside it
+   has to be told to shrink as well; that rule lives with the other .mt-pick
+   widths at the end of this file, which is where source order lets it win. */
+.chord-bar {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem;
+  align-items: center; margin: 0.4rem 0;
+}
+.chord-bar .chord-bar-field {
+  display: flex; gap: 0.4rem; align-items: center; min-width: 0;
+}
+.chord-bar .chord-bar-field:first-child { flex: 1 1 16rem; }
+.chord-bar .chord-bar-field:last-child { flex: 0 0 auto; }
 
 /* Chord stack preview. */
 .meta-chord-preview {
@@ -2604,6 +2635,21 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .panner-fields .mt-spin { width: 7.5rem; }
 .lab-row .mt-spin { width: 8.5rem; }
 .chord-voice .mt-spin { width: 6.2rem; }
+/* The chord menu carries the longest labels in the app, and a picker is
+ * `flex: 0 0 auto` sized to its widest OPTION — left alone it does not merely
+ * widen its row, it OVERFLOWS its own field and paints over the control next
+ * to it, which is what put the chord stack's picker on top of the word
+ * "Inversion". This is the exception to the widths above: the preset picker
+ * takes whatever the row has spare and clips its own text instead (spinner.js's
+ * fitAlign moves a clipped value left), so the menu beside it keeps its place.
+ * The Sample Lab's own .chord-head needs none of this — it wraps. */
+.chord-bar .chord-bar-field:first-child > .mt-pick { flex: 1 1 auto; min-width: 0; width: auto; }
+/* …and a clipped chord name says so. `appearance: none` is already on these,
+ * which is what lets a select take text-overflow at all; where a browser
+ * ignores it the value simply cuts off, as it did before. */
+.chord-bar .chord-bar-field:first-child > .mt-pick > select[data-mt] {
+  text-overflow: ellipsis;
+}
 
 /* Item 156.1 — tiny pushbuttons that sit in a row need air between them. The
  * groups above are the exception: their segments are meant to touch. */
@@ -2695,8 +2741,7 @@ body.dragsorting { cursor: grabbing; user-select: none; }
   box-shadow: var(--abs-bevel);
 }
 [data-theme="warmth"] .modal,
-[data-theme="warmth"] .ctxmenu,
-[data-theme="warmth"] .inst-lookup {
+[data-theme="warmth"] .ctxmenu {
   /* Something lifted OFF the case, so it keeps a cast shadow as well. */
   box-shadow: var(--abs-bevel), 0 8px 18px rgba(63, 49, 18, 0.35);
 }

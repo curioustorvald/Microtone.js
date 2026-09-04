@@ -134,7 +134,9 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   chordBtn.click();
   for (let i = 0; i < 100 && !dialogs().some((d) => /Chord stack/.test(d.textContent)); i++) await sleep(20);
   const chordDlg = lastDialog();
-  const [sel2, invSel] = chordDlg.querySelectorAll("select");
+  // item 167: family picker, then the chord menu, then Inversion.
+  const [famSel2, sel2, invSel] = chordDlg.querySelectorAll("select");
+  famSel2.value = "triad"; fire(famSel2, "change");
   sel2.value = "major"; fire(sel2, "change");
 
   // item 138: the same vocabulary as the Sample Lab, inversions included. A
@@ -149,6 +151,59 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
     chordDlg.querySelectorAll(".meta-chord-voice").length === 3;
   log(`chord stack offers inversions ("${invPreview}"): ${s3b ? "ok" : "FAIL"}`);
   invSel.value = "0"; fire(invSel, "change");
+
+  // item 167: Preview auditions the stack — the base layer's OWN sub-instrument
+  // at each pitch the panel is showing, on the jam bank, one voice per note.
+  const playBtn = btnIn(chordDlg, "Preview");
+  if (!store.audio) log("chord stack preview: FAIL (no audio system)");
+  const jamCalls = [];
+  const realJam = store.audio.jamNote.bind(store.audio);
+  const realStop = store.audio.jamStopVoice.bind(store.audio);
+  let stops = 0;
+  store.audio.jamNote = (...a) => { jamCalls.push(a); return realJam(...a); };
+  store.audio.jamStopVoice = (...a) => { stops++; return realStop(...a); };
+  playBtn.click();
+  const shownNotes = [...chordDlg.querySelectorAll(".meta-chord-voice")].length;
+  const s3c = !!playBtn && jamCalls.length === shownNotes &&
+    new Set(jamCalls.map((a) => a[1])).size === shownNotes &&
+    jamCalls.every((a) => (a[3] & 0x3ff) >= 0x100) && playBtn.textContent === "Stop";
+  log(`chord stack previews every voice (${jamCalls.length} notes on ` +
+    `${new Set(jamCalls.map((a) => a[1])).size} voices): ${s3c ? "ok" : "FAIL"}`);
+  playBtn.click();
+  const s3d = playBtn.textContent === "Preview" && stops === 1;
+  log(`…and the same button stops it: ${s3d ? "ok" : "FAIL"}`);
+  // changing the chord must not leave the OLD one ringing
+  playBtn.click();
+  sel2.value = "minor"; fire(sel2, "change");
+  const s3e = playBtn.textContent === "Preview" && stops >= 2;
+  log(`…and picking another chord stops it too: ${s3e ? "ok" : "FAIL"}`);
+  store.audio.jamNote = realJam;
+  store.audio.jamStopVoice = realStop;
+  sel2.value = "major"; fire(sel2, "change");
+
+  // item 167: a long chord label must not walk over the Inversion control. The
+  // <select> is wrapped in a .mt-pick button group by the control enhancer, and
+  // it is the GROUP that overflowed its field and painted across the label
+  // beside it — measure the group, not the select inside it.
+  const longOpt = win.document.createElement("option");
+  longOpt.value = "major";
+  longOpt.textContent = "A preposterously long chord name that would blow the row wide open";
+  sel2.appendChild(longOpt);
+  sel2.selectedIndex = sel2.options.length - 1;
+  await sleep(30);
+  const dlgBox = chordDlg.getBoundingClientRect();
+  const pickBox = (sel2.closest(".mt-pick") || sel2).getBoundingClientRect();
+  const invFieldBox = (invSel.closest(".chord-bar-field") || invSel).getBoundingClientRect();
+  // Either the row wrapped and Inversion sits below, or it is clear to the
+  // right — both are fine, overlapping is not.
+  const clear = pickBox.right <= invFieldBox.left + 1 ||
+    invFieldBox.top >= pickBox.bottom - 1;
+  const s3f = clear && pickBox.right <= dlgBox.right + 1 && invFieldBox.width > 0;
+  log(`a long chord label never covers the Inversion control ` +
+    `(chord picker ends ${Math.round(pickBox.right)}, Inversion starts ` +
+    `${Math.round(invFieldBox.left)}, dialog ends ${Math.round(dlgBox.right)}): ${s3f ? "ok" : "FAIL"}`);
+  longOpt.remove();
+  sel2.value = "major"; fire(sel2, "change");
 
   const voiceCount = chordDlg.querySelectorAll(".meta-chord-voice").length;
   btnIn(chordDlg, "Add voices").click();

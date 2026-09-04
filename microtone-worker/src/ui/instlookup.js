@@ -1,7 +1,8 @@
-// Quick instrument lookup (item 27) — a toggleable floating panel on the
-// Timeline + Patterns grids listing the top-level instruments ($01..$FF) with
-// their names. Clicking a row makes it the current jam/entry instrument. Meta
-// LAYER CHILDREN (sub-instruments) that happen to fall in $01..$FF are hidden —
+// Quick instrument lookup (item 27) — a toggleable panel docked to the LEFT
+// of the Timeline + Patterns grids (item 168, mirroring the master strip's
+// dock on the right) listing the top-level instruments ($01..$FF) with their
+// names. Clicking a row makes it the current jam/entry instrument. Meta LAYER
+// CHILDREN (sub-instruments) that happen to fall in $01..$FF are hidden —
 // only real, directly-triggerable instruments are shown.
 
 import { unescapeName } from "./names.js";
@@ -47,7 +48,10 @@ export class InstLookup {
 
   /** Shown only when enabled AND on a grid view (Timeline/Patterns) with a doc.
    *  With the view split (item 148) either pane will do — the shell moves the
-   *  panel into whichever one is holding a grid. */
+   *  panel into whichever one is holding a grid. A real flex sibling of
+   *  .view-canvases (item 168), so hiding it (`hidden` ⇒ `display:none`) is
+   *  everything needed to hand its width back — no separate class to keep in
+   *  step. */
   applyVisibility() {
     const onGrid = this.store.viewOpen("timeline") || this.store.viewOpen("pattern");
     const show = this.enabled && onGrid && !!this.store.doc;

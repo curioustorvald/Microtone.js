@@ -758,8 +758,8 @@ const VIEW_SPEC = {
 };
 
 // Fixtures that stay single whatever the split does: the instrument lookup is
-// one floating panel (the shell parks it over a pane holding a grid) and the
-// master strip sits beside the whole split.
+// one panel the shell docks to the left of whichever pane holds a grid (item
+// 168), and the master strip sits beside the whole split.
 const instLookup = new InstLookup(store, jam, $("instLookup"), () => updateStatus());
 const masterStrip = new MasterStrip(store, $("masterStrip"));
 masterStrip.onToggle = () => refreshToolbox();
@@ -933,13 +933,16 @@ function applyViews() {
     if (shown) ensureView(i, shown);
     for (const [name, entry] of paneViews[i]) applyEntry(name, entry, name === shown);
   }
-  // The instrument lookup floats over a GRID — hand it to the focused pane
-  // when that is one, else to whichever pane holds a grid at all.
+  // The instrument lookup docks against a GRID (item 168) — hand it to the
+  // focused pane when that is one, else to whichever pane holds a grid at
+  // all. Prepended, not appended: it is the flex row's LEFT-most sibling of
+  // stage(i), same as the master strip's own right-hand edge.
   const gridPane = store.view === "timeline" || store.view === "pattern"
     ? split.focus
     : Math.max(split.paneOf("timeline"), split.paneOf("pattern"));
-  if (gridPane >= 0 && $("instLookup").parentElement !== split.stage(gridPane)) {
-    split.stage(gridPane).appendChild($("instLookup"));
+  if (gridPane >= 0) {
+    const dockHost = split.dockHost(gridPane);
+    if ($("instLookup").parentElement !== dockHost) dockHost.prepend($("instLookup"));
   }
 
   $("toolbox").hidden = !(has("timeline") || has("pattern")) || noDoc;

@@ -57,15 +57,18 @@ function painted(cv) {
   check(stage.clientWidth + strip.offsetWidth <= doc.getElementById("viewHost").clientWidth + 2,
     "the grid stage and the strip share the width", `${stage.clientWidth}+${strip.offsetWidth}`);
 
-  // The instrument lookup panel floats at the stage's right edge — it must land
-  // beside the strip, not under it.
+  // The instrument lookup panel docks at the stage's LEFT edge (item 168) — it
+  // must take width off the grid canvas, not float over it, and must still
+  // land clear of the strip docked on the right.
   doc.getElementById("tbInstList").click();
   await sleep(200);
   const il = doc.getElementById("instLookup").getBoundingClientRect();
   const ms = strip.getBoundingClientRect();
+  const tl = doc.getElementById("timeline").getBoundingClientRect();
+  check(il.left <= tl.left, "the instrument panel sits at the grid's left edge", `${il.left} vs ${tl.left}`);
+  check(tl.left >= il.right, "the grid canvas clears the instrument panel", `${tl.left} vs ${il.right}`);
   check(il.right <= ms.left, "the instrument panel clears the strip", `${il.right} vs ${ms.left}`);
-  check(doc.getElementById("timeline").getBoundingClientRect().right <= ms.left + 1,
-    "the grid canvas clears the strip");
+  check(tl.right <= ms.left + 1, "the grid canvas clears the strip", `${tl.right} vs ${ms.left}`);
   doc.getElementById("tbInstList").click();
 
   doc.querySelector('[data-view="samples"]').click();

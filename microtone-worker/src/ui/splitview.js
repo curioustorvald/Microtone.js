@@ -66,7 +66,12 @@ export class SplitView {
     head.querySelector(".tabs").id = "tabs2";
     const stage = document.createElement("div");
     stage.className = "view-stage";
-    stage.id = "viewStage2";
+    const canvases = document.createElement("div");
+    canvases.className = "view-canvases";
+    canvases.id = "viewStage2";
+    stage.append(canvases); // the instrument lookup (item 168) is a singleton;
+    // app.js prepends it in here as a flex sibling of `canvases` when it lands
+    // in this pane.
     second.append(head, stage);
     host.appendChild(second);
     applyDom(head); // the clone's data-i18n labels (it is in the document now)
@@ -93,7 +98,7 @@ export class SplitView {
       head: el.querySelector(".pane-head"),
       tabs: el.querySelector(".tabs"),
       btn: el.querySelector(".pane-btn"),
-      stage: el.querySelector(".view-stage"),
+      stage: el.querySelector(".view-canvases"),
       view,
     };
     pane.tabs.addEventListener("click", (e) => {
@@ -120,6 +125,9 @@ export class SplitView {
   paneOf(name) { return this.panes.findIndex((p) => p.view === name); }
   /** Pane `i`'s stage element — where the shell builds that pane's views. */
   stage(i) { return this.panes[i].stage; }
+  /** Pane `i`'s OUTER .view-stage — stage(i)'s flex row, the same one the
+   *  instrument lookup (item 168) docks into as a sibling of stage(i). */
+  dockHost(i) { return this.panes[i].stage.parentElement; }
 
   setFocus(i) {
     if (this.focus === i || this.panes[i].view === null) return;

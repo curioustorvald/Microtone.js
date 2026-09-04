@@ -8,7 +8,7 @@ import {
   JI_INTERVALS, CHORD_GROUPS, CHORD_PRESETS, MAX_UNITS, MAX_VOICES, UNITS_PER_OCTAVE,
   applyChordPreset, buildChord, chordLength, chordPresetLabel, chordPresetsFor,
   defaultVoice, defaultVoices, degreeUnits, invertVoiceSpecs, jiById,
-  maxInversion, presetVoiceCount, voiceNote, voiceRatio, voiceUnits,
+  chordPresetById, maxInversion, presetVoiceCount, voiceNote, voiceRatio, voiceUnits,
 } from "../../src/doc/chord.js";
 import en from "../../src/ui/lang/en.js";
 import ko from "../../src/ui/lang/ko.js";
@@ -152,7 +152,7 @@ test("tetrachords divide their tuning's perfect fourth three ways", () => {
   // fourth into three positive steps, which is (fourth−1 choose 2) of them.
   const expected = { 170: [7, 15], 220: [9, 28], 310: [13, 66] };
   for (const [notation, [fourth, count]] of Object.entries(expected)) {
-    const tetra = CHORD_PRESETS.filter((p) => p.notation === Number(notation));
+    const tetra = CHORD_PRESETS.filter((p) => p.notation === Number(notation) && p.steps);
     assert.equal(tetra.length, count, `${notation} has ${count} tetrachords`);
     for (const p of tetra) {
       const steps = p.steps.split("-").map(Number);
@@ -173,7 +173,7 @@ test("a tetrachord's top voice IS the perfect fourth of its own tuning", () => {
   const cents = (u) => (u * 1200) / UNITS_PER_OCTAVE;
   for (const [notation, table] of [[170, pitchTablePresets[170]],
     [220, pitchTablePresets[220]], [310, pitchTablePresets[310]]]) {
-    const p = CHORD_PRESETS.find((q) => q.notation === notation);
+    const p = CHORD_PRESETS.find((q) => q.notation === notation && q.steps);
     const units = applyChordPreset(p.id).filter((v) => v.on).map((v) => voiceUnits(v, table));
     assert.equal(units.length, 4, "four pitches");
     assert.equal(units[0], 0, "…standing on the root");
@@ -190,9 +190,11 @@ test("tetrachords are offered only in their own tuning, and never invert", () =>
   assert.equal(chordPresetsFor({ index: 120 }).length, plain.length,
     "12-TET sees the tuning-independent vocabulary and nothing else");
   assert.equal(chordPresetsFor(null).length, plain.length, "…as does no notation at all");
-  assert.equal(ids(170).size, plain.length + 15);
-  assert.equal(ids(220).size, plain.length + 28);
-  assert.equal(ids(310).size, plain.length + 66);
+  const xc = (index) => CHORD_PRESETS.filter((p) => p.notation === index && !p.steps).length;
+  assert.equal(ids(170).size, plain.length + 15 + xc(170));
+  assert.equal(ids(220).size, plain.length + 28 + xc(220));
+  assert.equal(ids(310).size, plain.length + 66 + xc(310));
+  assert.equal(xc(220), 14, "22-TET has both families on its menu");
   assert.ok(!ids(220).has("tetra170-3-3-1"), "17-TET's tetrachords stay in 17-TET");
   assert.ok(ids(170).has("major"), "…and the ordinary chords are always there");
 
@@ -207,11 +209,375 @@ test("tetrachord menu labels are the step pattern, plus the source's name", () =
     "«chord.preset.major»");
   assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra170-3-3-1"), t),
     "3-3-1 · ionian (jins ʻAjam)");
+  // Several modes to one pattern: the wiki lists them all, the menu keeps the
+  // first — the pattern is the real name and the select has a width.
+  assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra220-4-4-1"), t),
+    "4-4-1 · diatonic · Superpyth major");
   assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra220-3-3-3"), t),
-    "3-3-3 · diatonic · Porcupine, perfectly even");
+    "3-3-3 · diatonic · Porcupine");
+  for (const p of CHORD_PRESETS) {
+    assert.ok(chordPresetLabel(p, t).length <= 44, `${p.id} label fits a menu`);
+  }
   // 31edo's chart names nothing, so the pattern stands alone
   assert.equal(chordPresetLabel(CHORD_PRESETS.find((p) => p.id === "tetra310-5-3-5"), t), "5-3-5");
   assert.equal(chordPresetLabel(null, t), "");
+});
+
+// ── neutral harmony (item 167, follow-up) ──────────────────────────────────
+
+const NT_NOTATIONS = [...new Set(CHORD_PRESETS.filter((p) => p.group === "neutral")
+  .map((p) => p.notation))];
+
+test("a neutral third is half the fifth, inside the wiki's 341-361 ¢ band", () => {
+  // The tunings that can spell one, and the third(s) each spells. 53-TET's
+  // fifth is an odd number of steps, so it cannot halve it — the two degrees
+  // either side are the wiki's artoneutral (11/9) and tendoneutral (16/13).
+  const expected = { 170: [5], 240: [7], 310: [9], 410: [12],
+    530: [15, 16], 531: [15, 16], 960: [28] };
+  assert.deepEqual(NT_NOTATIONS.slice().sort((a, b) => a - b),
+    Object.keys(expected).map(Number).sort((a, b) => a - b));
+  for (const [notation, want] of Object.entries(expected)) {
+    const edo = pitchTablePresets[notation].table.length;
+    const { fifth } = diatonic(edo);
+    const triads = CHORD_PRESETS
+      .filter((p) => p.notation === Number(notation) && p.id.endsWith("-neutral"));
+    assert.deepEqual(triads.map((p) => p.voices[1].step), want, `${notation} thirds`);
+    const centre = (fifth * 1200) / (2 * edo);
+    assert.ok(centre >= 341 && centre <= 361, `${notation} halves its fifth into the band`);
+    for (const p of triads) {
+      const n3 = p.voices[1].step;
+      assert.deepEqual(p.voices.map((v) => v.step), [0, n3, fifth], `${p.id} is root/third/fifth`);
+      // it IS the degree nearest half the fifth — latitude 0, the centre of
+      // the category rather than a side of it
+      assert.ok(Math.abs(n3 - fifth / 2) <= 0.5, `${notation}/${n3} halves the fifth`);
+      // …and a tuning only gets the split when both halves still read neutral
+      assert.ok(Math.abs((n3 * 1200) / edo - centre) <= 15, `${notation}/${n3} stays neutral`);
+    }
+    assert.equal(triads.length, fifth % 2 === 0 ? 1 : 2,
+      `${notation} splits its third only when the fifth is odd`);
+  }
+  // 12-TET halves its fifth at exactly 350 ¢ but cannot SPELL it: the nearest
+  // degrees are its plain major and minor thirds, 50 ¢ either side.
+  assert.equal((diatonic(12).fifth * 1200) / 24, 350);
+  for (const index of [120, 150, 160, 190, 220, 0, 1, 35130]) {
+    assert.ok(!chordPresetsFor({ index }).some((p) => p.group === "neutral"),
+      `notation ${index} cannot spell a neutral third`);
+  }
+});
+
+test("the neutral ladder stacks and inverts like the arto/tendo one", () => {
+  const JI = { n3: 350.978, n7: 1049.363, n6: 852.592, n2: 150.637 };
+  for (const notation of NT_NOTATIONS) {
+    const edo = pitchTablePresets[notation].table.length;
+    const { fifth } = diatonic(edo);
+    for (const triad of CHORD_PRESETS
+      .filter((p) => p.notation === notation && p.id.endsWith("-neutral"))) {
+      const n3 = triad.voices[1].step;
+      const deg = (shape) => CHORD_PRESETS
+        .find((p) => p.id === `nt${notation}-${n3}-${shape}`)?.voices.map((v) => v.step);
+      const n7 = fifth + n3, n6 = edo - n3, n2 = edo - n7;
+      assert.deepEqual(deg("neutral7"), [0, n3, fifth, n7], `${notation}/${n3} 7th`);
+      assert.deepEqual(deg("neutral6"), [0, n3, fifth, n6]);
+      assert.deepEqual(deg("neutraladd9"), [0, n3, fifth, edo + n2]);
+      assert.deepEqual(deg("neutral9"), [0, n3, fifth, n7, edo + n2]);
+      // the chain is the fifth halved, then its own fifth halved again
+      assert.deepEqual(deg("neutralchain"), [0, n3, fifth, n7, 2 * fifth]);
+      // every rung lands on the just interval the wiki names for it
+      const cents = (d) => (d * 1200) / edo;
+      for (const [name, d] of [["n3", n3], ["n7", n7], ["n6", n6], ["n2", n2]]) {
+        assert.ok(Math.abs(cents(d) - JI[name]) <= 15,
+          `${notation}/${n3} ${name} is ${Math.round(cents(d))} ¢, near ${Math.round(JI[name])} ¢`);
+      }
+      // the two mixed sevenths are the tuning's OWN, and the neutral seventh
+      // is what they sit either side of
+      const { L, s } = diatonic(edo);
+      assert.deepEqual(deg("neutralmin7"), [0, n3, fifth, 4 * L + 2 * s]);
+      assert.deepEqual(deg("neutralmaj7"), [0, n3, fifth, 5 * L + s]);
+      assert.ok(4 * L + 2 * s < n7 && n7 < 5 * L + s,
+        `${notation}/${n3} neutral 7th sits between minor and major`);
+    }
+  }
+});
+
+test("neutral chords are their own group, tuning-locked and named", () => {
+  assert.ok(CHORD_GROUPS.includes("neutral"));
+  assert.ok(CHORD_GROUPS.indexOf("neutral") < CHORD_GROUPS.indexOf("extraclassical"),
+    "between major and minor comes before outside them");
+  assert.ok(en["chord.group.neutral"] && ko["chord.group.neutral"]);
+  const all = CHORD_PRESETS.filter((p) => p.group === "neutral");
+  assert.equal(all.length, 72);
+  for (const p of all) {
+    assert.ok(en[p.key] && ko[p.key], `${p.id} is named in both languages`);
+    assert.ok(p.voices.every((v) => v.mode === "key"), `${p.id} counts degrees`);
+    assert.ok(!chordPresetsFor({ index: 120 }).includes(p), `${p.id} stays out of 12-TET`);
+  }
+  // 53-TET names its two by the just thirds they temper, the rest need no tag
+  const t = (k) => `«${k}»`;
+  assert.equal(chordPresetLabel(chordPresetById("nt530-15-neutral"), t),
+    "«chord.preset.nt.neutral» · 11/9");
+  assert.equal(chordPresetLabel(chordPresetById("nt530-16-neutral"), t),
+    "«chord.preset.nt.neutral» · 16/13");
+  assert.equal(chordPresetLabel(chordPresetById("nt240-7-neutral"), t),
+    "«chord.preset.nt.neutral»");
+  // a neutral triad inverts like any other voicing
+  const cents = (id, inv) => applyChordPreset(id, inv, P24).filter((v) => v.on)
+    .map((v) => Math.round((voiceUnits(v, P24) * 1200) / UNITS_PER_OCTAVE));
+  assert.deepEqual(cents("nt240-7-neutral", 0), [0, 350, 700]);
+  assert.deepEqual(cents("nt240-7-neutral", 1), [350, 700, 1200]);
+  // …and 24-TET's neutral third really is half its fifth, to the cent
+  assert.equal(cents("nt240-7-neutral", 0)[1] * 2, cents("nt240-7-neutral", 0)[2]);
+});
+
+// ── extraclassical harmony: arto and tendo (item 167) ──────────────────────
+
+/** Best fifth and diatonic step sizes of an EDO, straight from its chain of
+ *  fifths — derived here rather than imported, so the presets are checked
+ *  against arithmetic and not against themselves. `half` is half a chroma,
+ *  null when the tuning has no proper diatonic or an odd chroma. */
+function diatonic(edo) {
+  const fifth = Math.round(edo * Math.log2(1.5));
+  const chain = [-1, 0, 1, 2, 3, 4, 5]
+    .map((i) => (((i * fifth) % edo) + edo) % edo).sort((a, b) => a - b);
+  const steps = chain.map((v, i) => (i === 6 ? edo + chain[0] - v : chain[i + 1] - v));
+  const uniq = [...new Set(steps)].sort((a, b) => a - b);
+  const L = uniq[uniq.length - 1], s = uniq[0];
+  return {
+    fifth, L, s,
+    // a real 5L2s: 16-TET's chain scale is 2L5s and 5/10/15-TET's collapses
+    proper: s > 0 && 3 * L + s === fifth,
+    half: s > 0 && (L - s) % 2 === 0 ? (L - s) / 2 : null,
+  };
+}
+/** Sharpest fifth that still reads as diatonic-with-ordinary-thirds: 22-TET's
+ *  own, which is where the wiki says the native triads reach arto and tendo. */
+const SUPERPYTH_FIFTH = (13 * 1200) / 22;
+/** Where a third sits between root and fifth: 0° dead centre, ±90° the fifth
+ *  itself. Arto and tendo are ±22.5–30° by the wiki's broadened table. */
+const latitude = (third, fifth) => (third / fifth - 0.5) * 180;
+const LAT_EPS = 1e-9;
+
+/** The pairs each notation offers, read back off its own presets. */
+function extraclassicalPairs(notation) {
+  const of = (shape) => CHORD_PRESETS
+    .filter((p) => p.notation === notation && p.id.endsWith(`-${shape}`) && !p.steps)
+    .map((p) => p.voices.map((v) => v.step));
+  const artos = of("arto"), tendos = of("tendo");
+  assert.equal(artos.length, tendos.length, `${notation} pairs arto with tendo`);
+  return artos.map(([, a, fifth], i) => ({ a, t: tendos[i][1], fifth }));
+}
+
+const XC_NOTATIONS = [...new Set(CHORD_PRESETS.filter((p) => p.group === "extraclassical")
+  .map((p) => p.notation))];
+
+test("every arto/tendo pair is one the Xenharmonic Wiki recognises", () => {
+  // The tunings, and the pairs each one gets. 31/41/96 have more than one:
+  // reproduced below from latitude and from quality arithmetic independently.
+  const expected = {
+    150: [[3, 6]], 160: [[3, 6]], 170: [[3, 7]], 190: [[4, 7]],
+    220: [[5, 8]], 240: [[5, 9]],
+    310: [[6, 12], [7, 11]], 410: [[8, 16], [9, 15]],
+    530: [[11, 20]], 531: [[11, 20]],
+    960: [[19, 37], [20, 36], [21, 35]],
+  };
+  assert.deepEqual(XC_NOTATIONS.slice().sort((a, b) => a - b),
+    Object.keys(expected).map(Number).sort((a, b) => a - b));
+  for (const [notation, want] of Object.entries(expected)) {
+    const edo = pitchTablePresets[notation].table.length;
+    const { fifth, L, s, half, proper } = diatonic(edo);
+    const got = extraclassicalPairs(Number(notation));
+    assert.deepEqual(got.map((p) => [p.a, p.t]), want, `${notation} pairs`);
+    for (const p of got) {
+      assert.equal(p.fifth, fifth, `${notation} stands on its own best fifth`);
+      // Every pair is symmetric about the middle of the fifth…
+      assert.equal(p.a + p.t, fifth, `${notation} ${p.a}/${p.t} is a latitude pair`);
+      const lat = -latitude(p.a, fifth);
+      // …and is EITHER wide enough to sound extraclassical, OR the one the
+      // tuning's own notation spells with a demiflat and a demisharp.
+      const byEar = lat >= 22.5 - LAT_EPS && lat <= 30 + LAT_EPS;
+      const spelt = half !== null && p.a === L + s - half && p.t === 2 * L + half;
+      // …OR the tuning's own thirds, dragged out there by a superpyth fifth.
+      const native = proper && (fifth * 1200) / edo >= SUPERPYTH_FIFTH - LAT_EPS
+        && p.a === L + s && p.t === 2 * L;
+      assert.ok(byEar || spelt || native,
+        `${notation} ${p.a}/${p.t} is arto/tendo by ear (${lat.toFixed(1)}°), ` +
+        "by spelling, or by a superpyth fifth");
+    }
+  }
+  // 22-TET is the whole of that third case: its own minor and major thirds are
+  // within 6 ¢ of 7/6 and 9/7, the wiki's first 7-limit tuning of the pair,
+  // though their latitude is only ±20.8° and its chroma is odd.
+  const p22 = diatonic(22);
+  assert.equal(p22.half, null, "22-TET has an odd chroma, so no ladder");
+  assert.ok(Math.round(-latitude(5, p22.fifth) * 10) / 10 === 20.8);
+  assert.ok(Math.abs((5 * 1200) / 22 - 1200 * Math.log2(7 / 6)) < 6);
+  assert.ok(Math.abs((8 * 1200) / 22 - 1200 * Math.log2(9 / 7)) < 6);
+  for (const edo of [12, 17, 19, 24, 31, 41, 53, 96]) {
+    const d = diatonic(edo);
+    assert.ok(!d.proper || (d.fifth * 1200) / edo < SUPERPYTH_FIFTH - LAT_EPS,
+      `${edo}-TET's fifth is not superpyth, so its own thirds stay put`);
+  }
+  // 17-TET has only the spelling (its thirds are at ±36°, and its tendo third
+  // IS its perfect fourth — the collision the wiki warns about); 31-TET's
+  // spelt pair is at ±20°, so it also offers the wide one it can only hear.
+  assert.equal(Math.round(-latitude(3, 10)), 36);
+  assert.equal(Math.round(-latitude(7, 18)), 20);
+  assert.equal(extraclassicalPairs(170)[0].t, diatonic(17).fifth - 3);
+  // …while 12-TET has none of the three, so it is offered nothing.
+  for (const index of [120, 190 + 1, 0, 1, 35130]) {
+    assert.ok(!chordPresetsFor({ index }).some((p) => p.group === "extraclassical"),
+      `notation ${index} has no arto/tendo pair`);
+  }
+});
+
+test("the arto/tendo ladder is the pair stacked on the fifth, then inverted", () => {
+  // The wiki tabulates a ladder; we derive one from the pair and the fifth
+  //   arto/tendo seventh = fifth + arto/tendo third
+  //   tendo second = octave − arto seventh, tendo sixth = octave − arto third
+  // and these are the identities that make the derivation legal.
+  for (const notation of XC_NOTATIONS) {
+    const edo = pitchTablePresets[notation].table.length;
+    for (const { a, t, fifth } of extraclassicalPairs(notation)) {
+      const deg = (shape) => CHORD_PRESETS
+        .find((p) => p.id === `xc${notation}-${a}-${shape}`)?.voices.map((v) => v.step);
+      const a7 = fifth + a, t7 = fifth + t, t2 = edo - a7, t6 = edo - a;
+      assert.deepEqual(deg("arto7"), [0, a, fifth, a7], `${notation}/${a} arto 7th`);
+      if (t7 % edo !== 0) {
+        assert.deepEqual(deg("tendo7"), [0, t, fifth, t7], `${notation}/${a} tendo 7th`);
+        assert.deepEqual(deg("artotendo7"), [0, a, fifth, t7]);
+      } else {
+        assert.equal(deg("tendo7"), undefined, `${notation}/${a} tendo 7th IS the octave`);
+      }
+      assert.deepEqual(deg("tendodom7"), [0, t, fifth, a7]);
+      assert.deepEqual(deg("tendoadd9"), [0, t, fifth, edo + t2]);
+      // A sixth chord only appears where the sixth is not already the seventh,
+      // which is exactly when the fourth is twice the arto third.
+      if (edo - fifth === 2 * a) assert.equal(deg("arto6"), undefined, `${notation}/${a} 6 = 7`);
+      else assert.deepEqual(deg("arto6"), [0, a, fifth, t6]);
+      // The equal-stepped six-voice chain belongs to the pairs that trisect
+      // the fifth — the slendric generator, three of them making a fifth.
+      const chain = deg("chain");
+      if (fifth % 3 === 0 && a === fifth / 3 && t7 % edo !== 0) {
+        assert.deepEqual(chain, [0, a, 2 * a, 3 * a, 4 * a, 5 * a], `${notation} slendric chain`);
+      } else {
+        assert.equal(chain, undefined, `${notation}/${a} has no equal chain`);
+      }
+    }
+  }
+});
+
+test("the derived ladder reproduces the wiki's interval-quality table", () => {
+  // "Arto and tendo as interval qualities": arto is semi-diminished, tendo
+  // semi-augmented, so each is half a chroma off the classical interval. The
+  // table is the wiki's, verbatim, in cents.
+  const wiki = {
+    tendoUnison:  { 24: 50, 31: 39, 17: 71, 41: 59 },
+    artoSecond:   { 24: 50, 31: 77, 17: 0, 41: 29 },
+    tendoSecond:  { 24: 250, 31: 232, 17: 282, 41: 263 },
+    artoThird:    { 24: 250, 31: 271, 17: 212, 41: 234 },
+    tendoThird:   { 24: 450, 31: 426, 17: 494, 41: 468 },
+    artoFourth:   { 24: 450, 31: 465, 17: 424, 41: 439 },
+    tendoFourth:  { 24: 550, 31: 541, 17: 565, 41: 556 },
+    artoFifth:    { 24: 650, 31: 659, 17: 635, 41: 654 },
+    tendoFifth:   { 24: 750, 31: 735, 17: 776, 41: 761 },
+    artoSixth:    { 24: 750, 31: 774, 17: 706, 41: 732 },
+    tendoSixth:   { 24: 950, 31: 929, 17: 988, 41: 966 },
+    artoSeventh:  { 24: 950, 31: 968, 17: 918, 41: 937 },
+    tendoSeventh: { 24: 1150, 31: 1123, 17: 1200, 41: 1171 },
+    artoOctave:   { 24: 1150, 31: 1161, 17: 1129, 41: 1141 },
+  };
+  // Three cells of it are typos, and the corrections are what we implement:
+  // an arto fifth and a tendo fourth must add up to an octave, and 41-TET's
+  // 654 ¢ is not even a degree of 41-TET.
+  const errata = { "31/tendoFourth": 542, "31/artoFifth": 658, "41/artoFifth": 644 };
+
+  for (const edo of [24, 31, 17, 41]) {
+    const { fifth, L, s, half } = diatonic(edo);
+    assert.ok(half !== null, `${edo}-TET has an even chroma`);
+    const ladder = {
+      tendoUnison: half, artoSecond: s - half, tendoSecond: L + half,
+      artoThird: L + s - half, tendoThird: 2 * L + half,
+      artoFourth: 2 * L + s - half, tendoFourth: 2 * L + s + half,
+      artoFifth: fifth - half, tendoFifth: fifth + half,
+      artoSixth: 3 * L + 2 * s - half, tendoSixth: 4 * L + half + s,
+      artoSeventh: 4 * L + 2 * s - half, tendoSeventh: 5 * L + s + half,
+      artoOctave: edo - half,
+    };
+    for (const [name, steps] of Object.entries(ladder)) {
+      const cents = Math.round((steps * 1200) / edo);
+      assert.equal(cents, errata[`${edo}/${name}`] ?? wiki[name][edo],
+        `${edo}-TET ${name}`);
+    }
+    // and the ladder's own third pair is one this tuning actually offers
+    assert.ok(extraclassicalPairs(edo * 10)
+      .some((p) => p.a === ladder.artoThird && p.t === ladder.tendoThird),
+      `${edo}-TET offers its spelt pair`);
+    // the derivation the presets use agrees with the ladder cell by cell
+    assert.equal(ladder.artoSeventh, fifth + ladder.artoThird);
+    assert.equal(ladder.tendoSeventh, fifth + ladder.tendoThird);
+    assert.equal(ladder.tendoSecond, edo - ladder.artoSeventh);
+    assert.equal(ladder.artoSecond, edo - ladder.tendoSeventh);
+    assert.equal(ladder.tendoSixth, edo - ladder.artoThird);
+    assert.equal(ladder.artoSixth, edo - ladder.tendoThird);
+    // …and the altered fourths and fifths, which only a half chroma can reach
+    assert.equal(ladder.artoFourth + ladder.tendoFifth, edo);
+    assert.equal(ladder.tendoFourth + ladder.artoFifth, edo);
+  }
+});
+
+test("arto/tendo chords are tuning-locked, unique, and named in both languages", () => {
+  for (const notation of XC_NOTATIONS) {
+    const table = pitchTablePresets[notation];
+    const mine = chordPresetsFor({ index: notation }).filter((p) => p.group === "extraclassical");
+    assert.ok(mine.length >= 9, `${notation} offers a vocabulary (${mine.length})`);
+    const sigs = new Set();
+    for (const p of mine) {
+      assert.ok(p.voices.every((v) => v.mode === "key"), `${p.id} counts degrees`);
+      assert.ok(en[p.key] && ko[p.key], `${p.id} is named in both languages`);
+      // no voice doubles the root at the octave — that is a level change
+      assert.ok(p.voices.slice(1).every((v) => v.step % table.table.length !== 0),
+        `${p.id} never lands on an octave of the root`);
+      const sig = p.voices.map((v) => v.step).join(",");
+      assert.ok(!sigs.has(sig), `${p.id} is not a second name for another chord`);
+      sigs.add(sig);
+      // and it is off every other tuning's menu
+      assert.ok(!chordPresetsFor({ index: 120 }).includes(p), `${p.id} stays out of 12-TET`);
+    }
+    // the pair's own triads really are the tuning's degrees, in cents
+    const [{ a, t, fifth }] = extraclassicalPairs(notation);
+    const cents = (d) => Math.round((voiceUnits({ ...defaultVoice(), mode: "key", step: d }, table)
+      * 1200) / UNITS_PER_OCTAVE);
+    assert.equal(cents(a), Math.round((a * 1200) / table.table.length));
+    assert.ok(cents(t) - cents(a) > 150 && cents(fifth) - cents(t) > 100,
+      `${notation} arto, tendo and the fifth are three distinct pitches`);
+  }
+  // a tuning with two pairs tells them apart in the menu by their just ratios
+  const t = (k) => `«${k}»`;
+  assert.equal(chordPresetLabel(chordPresetById("xc310-6-arto"), t),
+    "«chord.preset.xc.arto» · 8/7·21/16");
+  assert.equal(chordPresetLabel(chordPresetById("xc310-7-arto"), t),
+    "«chord.preset.xc.arto» · 7/6·9/7");
+  // …a tuning with one does not
+  assert.equal(chordPresetLabel(chordPresetById("xc240-5-tendo"), t), "«chord.preset.xc.tendo»");
+});
+
+test("a degree-mode chord inverts only when it is handed the pitch table", () => {
+  const P17 = pitchTablePresets[170];
+  const cents = (id, inv, table) => applyChordPreset(id, inv, table).filter((v) => v.on)
+    .map((v) => Math.round((voiceUnits(v, table) * 1200) / UNITS_PER_OCTAVE));
+  // 24-TET's tendo triad is 0/450/700; its inversions put those on top in turn
+  assert.deepEqual(cents("xc240-5-tendo", 0, P24), [0, 450, 700]);
+  assert.deepEqual(cents("xc240-5-tendo", 1, P24), [450, 700, 1200]);
+  assert.deepEqual(cents("xc240-5-tendo", 2, P24), [700, 1200, 1650]);
+  assert.equal(maxInversion("xc240-5-tendo"), 2);
+  // 17-TET's tendo third IS its fourth, and inverting still only moves voices
+  assert.deepEqual(cents("xc170-3-tendo", 0, P17), [0, 494, 706]);
+  assert.deepEqual(cents("xc170-3-tendo", 1, P17), [494, 706, 1200]);
+  // With no table a degree is a bare count, so the chord stays put rather than
+  // come out scrambled — the ji-mode presets are unaffected either way.
+  assert.deepEqual(applyChordPreset("xc240-5-tendo", 2), applyChordPreset("xc240-5-tendo", 0));
+  assert.deepEqual(applyChordPreset("major", 2, P24), applyChordPreset("major", 2));
+  assert.deepEqual(invertVoiceSpecs([{ mode: "key", step: 0 }, { mode: "key", step: 9 }], 1),
+    [{ mode: "key", step: 0 }, { mode: "key", step: 9 }]);
 });
 
 test("the vocabulary is grouped, named in both languages, and fits the slots", () => {
@@ -260,8 +626,8 @@ test("the vocabulary is grouped, named in both languages, and fits the slots", (
 });
 
 test("inversions lift the lowest voices an octave and re-sort", () => {
-  const cents = (id, inv) => applyChordPreset(id, inv).filter((v) => v.on)
-    .map((v) => Math.round((voiceUnits(v, P12) * 1200) / UNITS_PER_OCTAVE));
+  const cents = (id, inv, table = P12) => applyChordPreset(id, inv, table).filter((v) => v.on)
+    .map((v) => Math.round((voiceUnits(v, table) * 1200) / UNITS_PER_OCTAVE));
 
   // the textbook case: a major triad's root goes on top, then its third
   assert.deepEqual(cents("major", 0), [0, 386, 702]);
@@ -272,9 +638,10 @@ test("inversions lift the lowest voices an octave and re-sort", () => {
 
   // every inversion keeps the same PITCH CLASSES — nothing is added or dropped
   for (const p of CHORD_PRESETS) {
-    const base = cents(p.id, 0);
+    const table = p.notation === undefined ? P12 : pitchTablePresets[p.notation];
+    const base = cents(p.id, 0, table);
     for (let inv = 1; inv <= maxInversion(p.id); inv++) {
-      const got = cents(p.id, inv);
+      const got = cents(p.id, inv, table);
       assert.equal(got.length, base.length, `${p.id} inv ${inv} keeps its voice count`);
       const mod = (xs) => xs.map((c) => ((c % 1200) + 1200) % 1200).sort((a, b) => a - b);
       assert.deepEqual(mod(got), mod(base), `${p.id} inv ${inv} keeps its notes`);
@@ -311,13 +678,28 @@ test("inversions lift the lowest voices an octave and re-sort", () => {
 
 // ── the mix ────────────────────────────────────────────────────────────────
 
-test("chordLength: the lowest voice sets the length, or the source does", () => {
+test("chordLength: the lowest voice sets the length, or the source, or the highest", () => {
   const vs = [voice({ mode: "ji", ji: "1/1" }), voice({ mode: "ji", ji: "1/1", oct: -1 })];
   assert.equal(chordLength(1000, vs, P12, "longest"), 2000, "an octave down runs twice as long");
   assert.equal(chordLength(1000, vs, P12, "source"), 1000);
+  assert.equal(chordLength(1000, vs, P12, "shortest"), 1000, "…and the unison stops it there");
   const up = [voice({ mode: "ji", ji: "1/1" }), voice({ mode: "ji", ji: "2/1" })];
   assert.equal(chordLength(1000, up, P12, "longest"), 1000, "voices above unison never grow it");
-  assert.equal(chordLength(1000, [], P12, "longest"), 1000, "no voices: source length");
+  assert.equal(chordLength(1000, up, P12, "shortest"), 500, "an octave up runs out halfway");
+  // the three modes bracket each other, whatever the chord
+  const wide = [voice({ mode: "ji", ji: "1/1", oct: -2 }), voice({ mode: "ji", ji: "5/4" }),
+    voice({ mode: "ji", ji: "3/2", oct: 1 })];
+  const shortest = chordLength(1000, wide, P12, "shortest");
+  const longest = chordLength(1000, wide, P12, "longest");
+  assert.ok(shortest < 1000 && longest === 4000 && shortest < longest);
+  assert.equal(shortest, Math.floor(1000 / 3), "the top voice is a fifth up an octave");
+  for (const mode of ["longest", "source", "shortest"]) {
+    assert.equal(chordLength(1000, [], P12, mode), 1000, `no voices: source length (${mode})`);
+  }
+  // …and the built mix really is that long, every voice still sounding at the end
+  const buf = sine(1000, 8);
+  assert.equal(buildChord(buf, wide, P12, { lengthMode: "shortest" }).data.length, shortest);
+  assert.equal(buildChord(buf, wide, P12, { lengthMode: "longest" }).data.length, longest);
 });
 
 test("buildChord mixes pitch-shifted copies; unison is the source itself", () => {

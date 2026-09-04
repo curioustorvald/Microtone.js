@@ -22,9 +22,15 @@ import {
 } from "../../doc/metaedit.js";
 import { setMetaRecordOp } from "../../doc/ops.js";
 import { ANCHOR_NOTE } from "../pitchtables.js";
+import { JAM_VOICES, JAM_VOICE_BASE } from "../../engine/constants.js";
 import { noteGlyphCanvas } from "../noteglyph.js";
+import { setIconLabel } from "../icons.js";
 import { unescapeName } from "../names.js";
 import { t } from "../i18n.js";
+
+/** How long a preview rings before it releases itself. A stack of sustaining
+ *  layers would otherwise drone until the dialog closed. */
+const PREVIEW_MS = 2500;
 
 const centsOf = (units) => (units * 1200) / UNITS_PER_OCTAVE;
 const signedCents = (units) =>
@@ -46,7 +52,7 @@ function el(tag, cls, text) {
  * and the stack sits above it.
  */
 export function chordOffsets(presetId, pitchPreset, inversion = 0) {
-  const voices = applyChordPreset(presetId, inversion).filter((v) => v.on);
+  const voices = applyChordPreset(presetId, inversion, pitchPreset).filter((v) => v.on);
   if (voices.length === 0) return [];
   const units = voices.map((v) => voiceUnits(v, pitchPreset));
   let ref = 0;
@@ -76,7 +82,14 @@ export function showChordStack(store, metaSlot, layerIdx) {
   // Tetrachords are offered only in the tuning they belong to (item 141).
   const menu = chordPresetsFor(pitchPreset);
   let presetId = menu[0].id;
+  const families = CHORD_GROUPS.filter((g) => menu.some((p) => p.group === g));
+  let family = menu[0].group;
   let inversion = 0;
+  /** Note words the preview panel is currently showing, root first — what the
+   *  Preview button sounds, so the two can never disagree. */
+  const voiceNotes = [];
+  let playing = false;
+  let previewTimer = 0;
 
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
@@ -88,25 +101,43 @@ export function showChordStack(store, metaSlot, layerIdx) {
       layer: layerIdx, inst: `$${(base.instIdx & 0x3ff).toString(16).toUpperCase().padStart(3, "0")} ${baseName}`,
     }));
 
-    const bar = el("div", "import-bar");
+    const bar = el("div", "chord-bar");
+    const familyField = el("div", "chord-bar-field");
+    const presetField = el("div", "chord-bar-field");
+    const invField = el("div", "chord-bar-field");
+    // Family first, chords second — the same two-step the Sample Lab's maker
+    // uses, because one dropdown cannot hold 143 chords (item 167).
+    const familySel = document.createElement("select");
+    for (const g of families) {
+      const o = document.createElement("option");
+      o.value = g;
+      o.textContent = t(`chord.group.${g}`);
+      familySel.appendChild(o);
+    }
+    familySel.value = family;
     const sel = document.createElement("select");
-    for (const g of CHORD_GROUPS) {
-      const items = menu.filter((p) => p.group === g);
-      if (!items.length) continue;
-      const grp = document.createElement("optgroup");
-      grp.label = t(`chord.group.${g}`);
-      for (const p of items) {
+    const renderPresets = () => {
+      sel.replaceChildren();
+      for (const p of menu.filter((q) => q.group === family)) {
         const o = document.createElement("option");
         o.value = p.id;
         o.textContent = chordPresetLabel(p, t);
-        grp.appendChild(o);
+        sel.appendChild(o);
       }
-      sel.appendChild(grp);
-    }
+      sel.value = presetId;
+      if (!sel.value) {
+        presetId = sel.options[0]?.value ?? presetId;
+        sel.value = presetId;
+      }
+      sel.mtSync?.();
+    };
+    renderPresets();
     const invSel = document.createElement("select");
     invSel.title = t("chord.inversionTitle");
-    bar.append(el("span", "", t("meta.chordPreset")), sel,
-      el("span", "", t("chord.inversion")), invSel);
+    familyField.append(el("span", "", t("chord.family")), familySel);
+    presetField.append(el("span", "", t("meta.chordPreset")), sel);
+    invField.append(el("span", "", t("chord.inversion")), invSel);
+    bar.append(familyField, presetField, invField);
 
     const preview = el("div", "meta-chord-preview");
     const tally = el("p", "dim", "");
@@ -114,9 +145,11 @@ export function showChordStack(store, metaSlot, layerIdx) {
     errEl.hidden = true;
 
     const btnRow = el("div", "modal-buttons");
+    const playBtn = el("button", "");
+    setIconLabel(playBtn, "play", t("chord.preview"));
     const okBtn = el("button", "", t("meta.chordApply"));
     const cancelBtn = el("button", "", t("common.cancel"));
-    btnRow.append(okBtn, cancelBtn);
+    btnRow.append(playBtn, okBtn, cancelBtn);
 
     /** Only the inversions this chord has, same as the Sample Lab's menu. */
     const renderInversions = () => {
@@ -140,6 +173,7 @@ export function showChordStack(store, metaSlot, layerIdx) {
       const room = META_MAX_LAYERS - layers.length;
       const use = offsets.slice(0, Math.max(0, room));
       preview.replaceChildren();
+      voiceNotes.length = 0;
       const rows = [{ d: 0, root: true }, ...use.map((o) => ({ d: o, root: false }))];
       for (const r of rows) {
         const units = clampLayerPitch(base, base.detune + r.d);
@@ -148,13 +182,13 @@ export function showChordStack(store, metaSlot, layerIdx) {
         // a stack built from degrees of a 31-TET table must not report itself
         // in 12-EDO letter names.
         const noteEl = el("span", "meta-chord-note");
-        noteEl.appendChild(
-          // A fixed-pitch base layer (item 179) holds a note word, not an
+        // A fixed-pitch base layer (item 179) holds a note word, not an
         // offset — the stack it seeds is a chord of absolute pitches, so the
         // preview reads the value itself rather than middle C plus it.
-        noteGlyphCanvas(
-          Math.min(Math.max(base.fixedPitch ? units : ANCHOR_NOTE + units, 0x20), 0xffff),
-          pitchPreset));
+        const note = Math.min(
+          Math.max(base.fixedPitch ? units : ANCHOR_NOTE + units, 0x20), 0xffff);
+        voiceNotes.push(note);
+        noteEl.appendChild(noteGlyphCanvas(note, pitchPreset));
         line.append(noteEl, el("span", "dim", r.root ? t("meta.chordRoot") : signedCents(r.d)));
         preview.appendChild(line);
       }
@@ -162,10 +196,49 @@ export function showChordStack(store, metaSlot, layerIdx) {
       tally.textContent = `${t("meta.chordAdds", { n: use.length })} · ` +
         `${t("meta.tally", { n: total, max: META_MAX_LAYERS })} · ${t("meta.voiceCost", { n: total })}`;
       okBtn.disabled = use.length === 0;
+      playBtn.disabled = !store.audio;
+      // The chord it would sound just changed, so anything still ringing is
+      // the OLD one — a preview never outlives the choice that made it.
+      stopPreview();
       errEl.hidden = use.length >= offsets.length;
       if (!errEl.hidden) errEl.textContent = t("meta.chordTruncated", { max: META_MAX_LAYERS });
     };
 
+    // Preview: sound the stack the way it will actually sound — the base
+    // layer's OWN sub-instrument at each of the chord's pitches, on the jam
+    // bank (so it never touches the song's voices), one voice per note. This
+    // is the same path the piano auditions through, which is why a strict
+    // metainstrument gets the same note-snapping courtesy here.
+    const stopPreview = () => {
+      if (previewTimer) { clearTimeout(previewTimer); previewTimer = 0; }
+      if (!playing) return;
+      playing = false;
+      setIconLabel(playBtn, "play", t("chord.preview"));
+      store.audio?.jamStopVoice(0, -1);
+    };
+    const startPreview = () => {
+      const audio = store.audio;
+      if (!audio || voiceNotes.length === 0) return;
+      playing = true;
+      setIconLabel(playBtn, "stop", t("chord.stop"));
+      const instIdx = base.instIdx & 0x3ff;
+      voiceNotes.slice(0, JAM_VOICES).forEach((note, i) => {
+        audio.jamNote(0, JAM_VOICE_BASE + i, note, instIdx, true);
+      });
+      previewTimer = setTimeout(stopPreview, PREVIEW_MS);
+    };
+    playBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (playing) stopPreview(); else startPreview();
+    });
+
+    familySel.addEventListener("change", () => {
+      family = familySel.value;
+      presetId = menu.find((p) => p.group === family)?.id ?? presetId;
+      renderPresets();
+      renderInversions(); // …keeping the inversion, clamped to the new chord
+      refresh();
+    });
     sel.addEventListener("change", () => { presetId = sel.value; renderInversions(); refresh(); });
     invSel.addEventListener("change", () => {
       inversion = parseInt(invSel.value, 10) || 0;
@@ -177,7 +250,7 @@ export function showChordStack(store, metaSlot, layerIdx) {
     renderInversions();
     refresh();
 
-    const finish = (result) => { dlg.close(); dlg.remove(); resolve(result); };
+    const finish = (result) => { stopPreview(); dlg.close(); dlg.remove(); resolve(result); };
     cancelBtn.addEventListener("click", (e) => { e.preventDefault(); finish(null); });
     dlg.addEventListener("cancel", () => finish(null));
     dlg.addEventListener("keydown", (e) => e.stopPropagation());

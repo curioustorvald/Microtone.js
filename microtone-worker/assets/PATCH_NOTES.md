@@ -6,6 +6,44 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-09-05
 
+Neutral chords — the third that sits exactly between major and minor — now have their own menu group.
+
+- A **Neutral** group appears in the Chord… menu when the song is tuned to 17-, 24-, 31-, 41-, 53- or 96-TET: a neutral third is precisely half the fifth, and those are the tunings that can spell that half.
+- Neutral triad, neutral 7th, the neutral triad under the tuning's own minor or major 7th, 6ths, add-9ths and 9ths, and a **Neutral chain** — the fifth halved, then its own fifth halved again.
+- 53-TET's fifth is an odd number of steps, so it cannot be halved exactly: it gets both of the thirds either side, labelled `11/9` for the flat one and `16/13` for the sharp one.
+- 12-TET halves its fifth at 350 cents but has no degree there — its nearest thirds are the plain major and minor, 50 cents either side — so it is offered nothing.
+
+Picking a chord is now a two-step: a **Family** menu beside the **Chord** menu, so no dropdown has to hold the whole vocabulary.
+
+- The chord vocabulary outgrew a single dropdown this batch — a 31-TET project has 135 chords, more than a screen can show — so the family is its own control and the chord menu holds one family at a time.
+- Changing family lands on that family's first chord and keeps your inversion, clamped to what the new chord has, exactly as picking another chord always did.
+- Fixed: in a finely divided tuning the chord dropdown ran off the bottom of the screen and left its last entries unpainted, so chords existed that the list would not show.
+
+The chord maker can crop a chord to its shortest voice.
+
+- **Length** has a third setting, *shortest voice*: the mix ends where the fastest voice runs out, so nothing is left playing on alone and every frame of the result has the whole chord in it. Useful when the chord is going to loop, or when a decaying sample would otherwise thin out into its bass notes.
+
+The metainstrument chord stack gained a preview, and no longer loses its inversion menu to a long chord name.
+
+- **Preview** in the chord stack sounds the whole stack before you commit to it — the layer's own instrument at every pitch the panel is showing. Press it again to stop, and it stops by itself after a couple of seconds or as soon as you pick a different chord.
+- Fixed: picking a chord with a long name drew the chord menu straight over the word **Inversion** beside it — the chord menu now takes whatever the row has spare and trims its own text with an ellipsis, leaving the inversion selector where it was.
+- Tetrachord names that listed several modes at once now keep the first: `4-4-1 · diatonic · Superpyth major` rather than a name three modes long that no menu could show.
+
+Arto and tendo — the extraclassical chords — are now on the chord menu, in every tuning that can play them.
+
+- A new **Extraclassical (arto & tendo)** group appears in the Chord… menu, in the Sample Lab and in the metainstrument chord stack, whenever the song is tuned to 15-, 16-, 17-, 19-, 22-, 24-, 31-, 41-, 53- or 96-TET — 12-TET's thirds are nowhere near far enough out, so it never sees the group.
+- An arto triad is a minor triad with its third pushed a further quarter tone down, and a tendo triad a major one with its third pushed up: they carry themselves like minor and major, but sit far enough out to sound like neither.
+- Unlike a major and a minor third, which clash, an arto and a tendo third can sound over one root — **Cross-tonal** stacks both, and **Cross-tonal 7th** and **Slendric chain** carry that stack further up.
+- The rest of the family follows: arto and tendo 7ths, the tendo dominant and the arto-tendo 7th, 6ths, add-9ths and 9ths, plus arto-diminished and tendo-augmented triads in the tunings whose own notation can spell them.
+- 31-, 41- and 96-TET have more than one arto/tendo pair, so those entries name the just ratios each pair is nearest — `8/7·21/16` beside `7/6·9/7`, and 96-TET adds `15/13·13/10`.
+- 22-TET is the odd one out and needs no quarter tones at all: its fifth is sharp enough that its own minor and major thirds have already drifted out to arto and tendo, so **Cross-tonal** there is simply its minor and major third sounding over one root.
+- Each tuning is offered only the chords it can actually voice: in 15-TET and 17-TET the tendo 7th would land on the octave, so neither tuning is shown one.
+- Chords counted in degrees of the song's tuning can be inverted now, so the inversion selector works on these the way it does on a major triad.
+
+The instrument lookup panel now docks to the left of the Timeline and Patterns grid, instead of floating over it.
+
+- It takes its own column at the grid's left edge, the same way the master strip docks to the right — the grid shifts over to make room instead of the list covering part of it.
+
 Patterns can now say more per row: a new `:` effect extends the argument of another command sharing its row, in wide (Format 3) patterns only.
 
 - New effect `:` pairs with another command on the same row, either order, to extend what that command's own argument can reach — it does nothing on its own, and nothing at all outside a Format-3 pattern.

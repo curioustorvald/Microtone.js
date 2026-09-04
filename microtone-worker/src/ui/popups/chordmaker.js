@@ -18,7 +18,7 @@
 
 import {
   JI_INTERVALS, CHORD_GROUPS, MAX_VOICES, UNITS_PER_OCTAVE,
-  applyChordPreset, buildChord, chordLength, chordPresetLabel, chordPresetsFor,
+  applyChordPreset, buildChord, chordLength, chordPresetById, chordPresetLabel, chordPresetsFor,
   maxInversion, voiceNote, voiceRatio, voiceUnits,
 } from "../../doc/chord.js";
 import { presetForNotation, gridDelta } from "../pitchtables.js";
@@ -55,7 +55,7 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     const srcRate = Math.max(1, Math.round(rate));
     let presetId = "major";
     let inversion = 0;
-    let voices = applyChordPreset(presetId, inversion);
+    let voices = applyChordPreset(presetId, inversion, preset);
     let lengthMode = "longest";
     let normalise = true;
     let mix = null;        // {data, peak, voices} — null when dirty
@@ -73,30 +73,36 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
     }).join("");
     const modeOptions = ["ji", "key", "ratio", "units"]
       .map((m) => `<option value="${m}">${esc(t(`chord.mode.${m}`))}</option>`).join("");
-    // Grouped, because the vocabulary is long enough to hunt through otherwise.
-    // The list follows the project's notation: tetrachords belong to ONE tuning
-    // each (item 141), so an empty group simply does not appear.
+    // The family is its OWN control, and the chord menu holds one family at a
+    // time. It used to be a single grouped list, which stopped scaling once the
+    // tuning-specific vocabularies landed: 31-TET reaches 143 rows in one
+    // dropdown — longer than a screen, and long enough that the platform's own
+    // popup starts leaving rows unpainted. Which families exist follows the
+    // project's notation, since tetrachords and arto/tendo belong to ONE tuning
+    // each (items 141, 167), so an empty family simply does not appear.
     const menu = chordPresetsFor(preset);
-    const presetOptions = CHORD_GROUPS.map((g) => {
-      const items = menu.filter((p) => p.group === g);
-      if (!items.length) return "";
-      return `<optgroup label="${esc(t(`chord.group.${g}`))}">` +
-        items.map((p) => `<option value="${esc(p.id)}">${esc(chordPresetLabel(p, t))}</option>`).join("") +
-        "</optgroup>";
-    }).join("");
+    const families = CHORD_GROUPS.filter((g) => menu.some((p) => p.group === g));
+    let family = chordPresetById(presetId)?.group ?? families[0];
+    const familyOptions = families
+      .map((g) => `<option value="${g}">${esc(t(`chord.group.${g}`))}</option>`).join("");
+    const presetOptionsFor = (g) => menu.filter((p) => p.group === g)
+      .map((p) => `<option value="${esc(p.id)}">${esc(chordPresetLabel(p, t))}</option>`).join("");
 
     dlg.innerHTML = `
       <h3>${esc(t("chord.title", { name: name || t("lab.untitled") }))}</h3>
       <p class="dim chord-lead">${esc(t("chord.lead"))}</p>
       <div class="chord-head">
+        <label>${esc(t("chord.family"))}
+          <select class="chord-family">${familyOptions}</select></label>
         <label>${esc(t("chord.preset"))}
-          <select class="chord-preset">${presetOptions}</select></label>
+          <select class="chord-preset">${presetOptionsFor(family)}</select></label>
         <label>${esc(t("chord.inversion"))}
           <select class="chord-inv" title="${esc(t("chord.inversionTitle"))}"></select></label>
         <label>${esc(t("chord.length"))}
           <select class="chord-len">
             <option value="longest">${esc(t("chord.lenLongest"))}</option>
             <option value="source">${esc(t("chord.lenSource"))}</option>
+            <option value="shortest">${esc(t("chord.lenShortest"))}</option>
           </select></label>
         <label><input type="checkbox" class="chord-norm" checked> ${esc(t("chord.normalise"))}</label>
       </div>
@@ -357,12 +363,35 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       sel.value = String(inversion);
       sel.disabled = top === 0;
     }
+    /** Refill the chord menu with `family`'s chords, keeping the current one
+     *  selected when it belongs to the family and taking the first when it does
+     *  not. mtSync re-reads the option list for the ◄ ► buttons. */
+    function renderPresets() {
+      const sel = $(".chord-preset");
+      sel.innerHTML = presetOptionsFor(family);
+      sel.value = presetId;
+      if (!sel.value) {
+        presetId = sel.options[0]?.value ?? presetId;
+        sel.value = presetId;
+      }
+      sel.mtSync?.();
+    }
     /** Preset and inversion are ONE choice — the six slots are re-seeded from
      *  both, so an inversion never compounds onto an already-inverted set. */
     function seedFromPreset() {
-      voices = applyChordPreset(presetId, inversion);
+      voices = applyChordPreset(presetId, inversion, preset);
       touch();
     }
+    $(".chord-family").addEventListener("change", (e) => {
+      family = e.target.value;
+      // A family change is a chord change: it lands on the family's first
+      // chord and keeps the inversion, clamped to what that chord has — the
+      // same contract as picking another chord within a family.
+      presetId = menu.find((p) => p.group === family)?.id ?? presetId;
+      renderPresets();
+      renderInversions();
+      seedFromPreset();
+    });
     $(".chord-preset").addEventListener("change", (e) => {
       presetId = e.target.value;
       renderInversions(); // …keeping the inversion, clamped to the new chord
@@ -454,7 +483,9 @@ export function openChordMaker(store, { data, dataR = null, rate, name = "" }) {
       setVoice: (i, patch) => { Object.assign(voices[i], patch); touch(); },
       setChordPreset: (id, inv = 0) => {
         presetId = id; inversion = inv;
-        $(".chord-preset").value = id;
+        family = chordPresetById(id)?.group ?? family;
+        $(".chord-family").value = family;
+        renderPresets();
         renderInversions();
         seedFromPreset();
       },
