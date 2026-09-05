@@ -13,6 +13,7 @@ import { themeColors } from "../theme.js";
 import { unescapeName, escapeNonAscii } from "../names.js";
 import { sampleSpans, isStereoSample } from "../../doc/document.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
+import { Lamp, liveBrightnessByKey } from "../lamp.js";
 import {
   ModGeom, resolveModGeom, modTouches, modAddress,
 } from "../../engine/samplemod.js";
@@ -72,6 +73,8 @@ export class SamplesView {
     // out of. -1 means a census row is selected, which is the ordinary state.
     this.regions = [];
     this.selRegion = -1;
+    this.lamps = new Map(); // sample ptr -> Lamp (item 169); outlives refresh() rebuilds
+    this._lampLastMs = 0;
     this.root = document.createElement("div");
     this.root.className = "split-view";
     this.listEl = document.createElement("div");
@@ -664,15 +667,24 @@ export class SamplesView {
     this.drawWave();
   }
 
-  /** Light the list rows of samples any voice is sounding right now. */
+  /** Light the list rows of samples any voice is sounding right now — the
+   *  dot's brightness (item 169), not just on/off, follows lamp.js's volume-
+   *  driven, slewed, probabilistic-sum ballistics (several instruments or
+   *  notes sharing one sample combine rather than simply flag it "on"). */
   updateLiveDots() {
+    if (!this.rowEls) return;
     const audio = this.store.audio;
-    if (!audio || !this.rowEls) return;
-    const livePtrs = new Set();
-    for (let vi = 0; vi < TOTAL_VOICES; vi++) {
-      if (audio.getVoiceActive(vi)) livePtrs.add(audio.getVoiceSamplePtr(vi));
+    const now = performance.now();
+    const dt = this._lampLastMs ? now - this._lampLastMs : 16;
+    this._lampLastMs = now;
+    const brightByKey = audio
+      ? liveBrightnessByKey(audio, TOTAL_VOICES, (vi) => audio.getVoiceSamplePtr(vi))
+      : new Map();
+    for (const r of this.rowEls) {
+      let lamp = this.lamps.get(r.ptr);
+      if (!lamp) this.lamps.set(r.ptr, lamp = new Lamp());
+      r.el.style.setProperty("--lamp", lamp.update(brightByKey.get(r.ptr) ?? 0, dt).toFixed(3));
     }
-    for (const r of this.rowEls) r.el.classList.toggle("live", livePtrs.has(r.ptr));
   }
 
   /**

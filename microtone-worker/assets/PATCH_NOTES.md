@@ -6,6 +6,12 @@ Bug reports and suggestions are welcome on [GitHub](https://github.com/curiousto
 
 ## 2026-09-05
 
+Every play-indicator lamp in the app — the instrument lookup panel's own numbers, and the Instruments and Samples tabs' row dots — now brightens with how loud it's actually playing, instead of a flat on/off.
+
+- A lamp brightens with its instrument's (or sample's) current volume rather than simply switching on, and fades back out over a short afterglow once the note releases, instead of cutting off.
+- Several notes sharing one instrument, or one sample, combine — the lamp climbs toward full brightness with more of them sounding, but a quiet extra note never pushes it past what one loud note alone would show.
+- A metainstrument's number lights for any of its layers, same as before.
+
 Neutral chords — the third that sits exactly between major and minor — now have their own menu group.
 
 - A **Neutral** group appears in the Chord… menu when the song is tuned to 17-, 24-, 31-, 41-, 53- or 96-TET: a neutral third is precisely half the fifth, and those are the tunings that can spell that half.

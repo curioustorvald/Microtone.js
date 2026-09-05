@@ -1646,6 +1646,7 @@ function frame() {
     if (name) paneViews[i].get(name)?.obj.frame?.();
   }
   if (store.viewOpen("timeline")) masterStrip.frame();
+  instLookup.frame(); // play-indicator lamps (item 169); no-ops while hidden
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

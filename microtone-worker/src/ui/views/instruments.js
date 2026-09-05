@@ -33,6 +33,7 @@ import { showModal } from "../widgets/modal.js";
 import { AdvancedZoneEditor } from "./instadvanced.js";
 import { META_MIX_GAIN } from "../../engine/tables.js";
 import { TOTAL_VOICES } from "../../engine/constants.js";
+import { Lamp, liveBrightnessByKey } from "../lamp.js";
 import { showImportInstruments, importFromSf2 } from "../popups/importinst.js";
 import { getSoundfont } from "../soundfont.js";
 import { minifloatToDouble, minifloatFromDouble } from "../../engine/minifloat.js";
@@ -119,6 +120,8 @@ export class InstrumentsView {
     this.envLogTime = false; // logarithmic time axis for the envelope graph
     this.advanced = false; // Advanced Edit (Ixmp patch editor, item 49b) active
     this.advEditor = new AdvancedZoneEditor(this);
+    this.lamps = new Map(); // slot -> Lamp (item 169); outlives refresh() rebuilds
+    this._lampLastMs = 0;
 
     this.root = document.createElement("div");
     this.root.className = "split-view";
@@ -265,16 +268,25 @@ export class InstrumentsView {
     this.renderPanel();
   }
 
-  /** Light the list rows of instruments any voice is playing right now.
-   *  A meta's layer children play sub-instrument slots, so those light too. */
+  /** Light the list rows of instruments any voice is playing right now — the
+   *  dot's brightness (item 169), not just on/off, follows lamp.js's volume-
+   *  driven, slewed, probabilistic-sum ballistics. A meta's layer children
+   *  play sub-instrument slots, so those light too (getVoiceInstrument
+   *  already resolves a layer child's voice back to the meta's own slot). */
   updateLiveDots() {
+    if (!this.rowEls) return;
     const audio = this.store.audio;
-    if (!audio || !this.rowEls) return;
-    const liveSlots = new Set();
-    for (let vi = 0; vi < TOTAL_VOICES; vi++) {
-      if (audio.getVoiceActive(vi)) liveSlots.add(audio.getVoiceInstrument(vi));
+    const now = performance.now();
+    const dt = this._lampLastMs ? now - this._lampLastMs : 16;
+    this._lampLastMs = now;
+    const brightByKey = audio
+      ? liveBrightnessByKey(audio, TOTAL_VOICES, (vi) => audio.getVoiceInstrument(vi))
+      : new Map();
+    for (const r of this.rowEls) {
+      let lamp = this.lamps.get(r.slot);
+      if (!lamp) this.lamps.set(r.slot, lamp = new Lamp());
+      r.el.style.setProperty("--lamp", lamp.update(brightByKey.get(r.slot) ?? 0, dt).toFixed(3));
     }
-    for (const r of this.rowEls) r.el.classList.toggle("live", liveSlots.has(r.slot));
   }
 
   renderTabs() {

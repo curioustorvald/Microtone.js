@@ -1080,7 +1080,20 @@ a.wc-more:hover, button.wc-more:hover { color: var(--accent); }
 }
 .inst-lookup .il-row:hover { background: var(--panel-2); }
 .inst-lookup .il-row.sel { background: var(--cv-cursor); }
-.inst-lookup .il-idx { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+/* The index number itself is the play-indicator lamp (item 169) — no
+   separate dot — while a voice is actually sounding that instrument, styled
+   after iyagimusic-js's text-blinkenlight convention (.ch-name/.on there).
+   --lamp (0..1, set per ROW by instlookup.js's frame()) is the volume-driven,
+   attack/decay-slewed brightness from lamp.js; read here with a fallback
+   rather than also DECLARED here — declaring it on this element too would
+   shadow the inherited value from the row instead of reading it. */
+.inst-lookup .il-idx {
+  font-variant-numeric: tabular-nums;
+  border-radius: 3px;
+  padding: 0 0.25em;
+  color: color-mix(in srgb, var(--bg) calc(var(--lamp, 0) * 100%), var(--accent-2));
+  background-color: color-mix(in srgb, var(--accent) calc(var(--lamp, 0) * 100%), transparent);
+}
 .inst-lookup .il-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .inst-lookup .il-kind { color: var(--dim); }
 .inst-lookup .il-empty { padding: 0.5rem 0.6rem; }
@@ -1598,16 +1611,20 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .side-row:hover { background: var(--panel-2); }
 .side-row.sel { background: var(--cv-cursor); }
 .side-row .idx { color: var(--accent); font-family: "Roboto Mono", monospace; }
+/* Play-indicator lamp (item 27/169) — brightness (--lamp, 0..1, set on the
+   ROW by each view's frame(); the dot just inherits it) follows lamp.js's
+   volume-driven, slewed, probabilistic-sum ballistics — see there for why.
+   Read with a fallback rather than also declared here — declaring it on the
+   dot too would shadow the inherited value instead of reading it. */
 .side-row .dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: transparent;
   flex-shrink: 0;
   align-self: center;
-  transition: background 80ms;
+  background: color-mix(in srgb, var(--meter) calc(var(--lamp, 0) * 100%), transparent);
+  box-shadow: 0 0 calc(var(--lamp, 0) * 6px) color-mix(in srgb, var(--meter) calc(var(--lamp, 0) * 100%), transparent);
 }
-.side-row.live .dot { background: var(--meter); box-shadow: 0 0 6px var(--meter); }
 .side-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Stereo marker on a sample row (item 90) — a quiet chip, not a shout. */
 .side-row .smp-tag {
@@ -2510,6 +2527,8 @@ body.dragsorting { cursor: grabbing; user-select: none; }
 .splash-msg.fade { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .splash-ph, .splash-spin { animation: none; }
+  /* Every blinkenlight's own slew lives in lamp.js's Lamp class, which checks
+     this same media query and jumps straight to target instead of easing. */
 }
 
 /* ── VALUE CONTROLS (item 156) ─────────────────────────────────────────

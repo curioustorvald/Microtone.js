@@ -4,9 +4,19 @@
 // names. Clicking a row makes it the current jam/entry instrument. Meta LAYER
 // CHILDREN (sub-instruments) that happen to fall in $01..$FF are hidden —
 // only real, directly-triggerable instruments are shown.
+//
+// Each row's index number doubles as a play-indicator lamp while a voice is
+// actually sounding that instrument (item 169) — the same "which slots are
+// live" query the Instruments tab's own blinkenlights use (instruments.js
+// updateLiveDots), but lighting the NUMBER TEXT itself rather than a separate
+// dot, per iyagimusic-js's text-blinkenlight convention (`.ch-name`/`.on`,
+// see visualiser.js + style.css there). Brightness (not just on/off) follows
+// the shared lamp.js ballistics — see there for the why.
 
 import { unescapeName } from "./names.js";
 import { t } from "./i18n.js";
+import { TOTAL_VOICES } from "../engine/constants.js";
+import { Lamp, liveBrightnessByKey } from "./lamp.js";
 
 const PREF_KEY = "microtone-instlist";
 
@@ -24,6 +34,8 @@ export class InstLookup {
     this.el = el;
     this.onPick = onPick; // called after a pick so the shell can refresh status
     this.enabled = loadPref();
+    this.lamps = new Map(); // slot -> Lamp; outlives render() rebuilds
+    this._lastFrameMs = 0;
 
     store.on("doc", () => this.render());
     store.on("view", () => this.applyVisibility());
@@ -75,7 +87,7 @@ export class InstLookup {
   render() {
     if (this.el.hidden) return;
     const doc = this.store.doc;
-    if (!doc) { this.el.innerHTML = ""; return; }
+    if (!doc) { this.el.innerHTML = ""; this.rowEls = []; return; }
     const slots = this.topLevelSlots();
     const head =
       `<div class="il-head">${esc(t("instList.title"))} ` +
@@ -92,9 +104,11 @@ export class InstLookup {
     }).join("");
     this.el.innerHTML = head +
       `<div class="il-list">${rows || `<div class="dim il-empty">${esc(t("instList.none"))}</div>`}</div>`;
-    for (const row of this.el.querySelectorAll(".il-row")) {
-      row.addEventListener("click", () => {
-        this.jam.currentInst = parseInt(row.dataset.slot, 10);
+    this.rowEls = [...this.el.querySelectorAll(".il-row")]
+      .map((el) => ({ el, slot: parseInt(el.dataset.slot, 10) }));
+    for (const { el, slot } of this.rowEls) {
+      el.addEventListener("click", () => {
+        this.jam.currentInst = slot;
         this.highlight();
         this.onPick?.();
       });
@@ -104,8 +118,28 @@ export class InstLookup {
   /** Toggle the .sel class to match the current instrument (no rebuild). */
   highlight() {
     if (this.el.hidden) return;
-    for (const row of this.el.querySelectorAll(".il-row")) {
-      row.classList.toggle("sel", parseInt(row.dataset.slot, 10) === this.jam.currentInst);
+    for (const { el, slot } of this.rowEls ?? []) el.classList.toggle("sel", slot === this.jam.currentInst);
+  }
+
+  /** Per-frame (app.js's rAF loop): light each row's index number — the
+   *  `.il-idx` text itself is the lamp, no separate dot — while a voice is
+   *  actually sounding that slot right now. Mirrors instruments.js's
+   *  updateLiveDots() query exactly; only the styling differs. Brightness
+   *  (--lamp, read by the CSS) rather than a plain on/off class — see
+   *  lamp.js for the volume-driven, slewed, probabilistic-sum ballistics. */
+  frame() {
+    if (this.el.hidden || !this.rowEls?.length) return;
+    const audio = this.store.audio;
+    const now = performance.now();
+    const dt = this._lastFrameMs ? now - this._lastFrameMs : 16;
+    this._lastFrameMs = now;
+    const brightByKey = audio
+      ? liveBrightnessByKey(audio, TOTAL_VOICES, (vi) => audio.getVoiceInstrument(vi))
+      : new Map();
+    for (const { el, slot } of this.rowEls) {
+      let lamp = this.lamps.get(slot);
+      if (!lamp) this.lamps.set(slot, lamp = new Lamp());
+      el.style.setProperty("--lamp", lamp.update(brightByKey.get(slot) ?? 0, dt).toFixed(3));
     }
   }
 }
