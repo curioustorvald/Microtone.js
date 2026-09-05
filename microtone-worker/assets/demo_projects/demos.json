@@ -9,6 +9,16 @@
       "surroundModel": 2,
       "bytes": 565695,
       "permission": true
+    },
+    {
+      "file": "Temjin_speaki.taud",
+      "title": "(音MAD) 스피키의 해커에 대한 격노",
+      "composer": "CuriousTorvald",
+      "year": 2026,
+      "songs": 1,
+      "surroundModel": 0,
+      "bytes": 253949,
+      "permission": null
     }
   ]
 }
